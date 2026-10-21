@@ -1,0 +1,38 @@
+# syntax=docker/dockerfile:1.7
+# apps/site — marketing site, /docs (Fumadocs), /changelog, /credits. Next.js standalone output, non-root.
+# Build from the repo root:  docker build -f deploy/Dockerfile.site --build-arg GIT_SHA=$(git rev-parse --short HEAD) .
+
+ARG NODE_IMAGE=node:22.22.3-alpine3.24
+
+FROM ${NODE_IMAGE} AS deps
+WORKDIR /repo
+COPY package.json package-lock.json ./
+COPY apps/web/package.json apps/web/
+COPY apps/site/package.json apps/site/
+COPY apps/worker/package.json apps/worker/
+COPY packages packages
+RUN npm ci --no-audit --no-fund --ignore-scripts
+
+FROM deps AS build
+ENV NEXT_TELEMETRY_DISABLED=1
+COPY . .
+# fumadocs-mdx generates the content source (.source/) that the build imports.
+RUN npm run postinstall --workspace @anhourmail/site --if-present \
+ && npm run build --workspace @anhourmail/site
+
+FROM ${NODE_IMAGE} AS runtime
+ARG GIT_SHA=unknown
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    HOSTNAME=0.0.0.0 \
+    PORT=3000 \
+    GIT_SHA=${GIT_SHA}
+WORKDIR /app
+RUN addgroup -S app -g 10001 && adduser -S app -u 10001 -G app
+COPY --from=build --chown=app:app /repo/apps/site/.next/standalone ./
+COPY --from=build --chown=app:app /repo/apps/site/.next/static ./apps/site/.next/static
+USER app
+EXPOSE 3000
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
+  CMD wget -q -O /dev/null "http://127.0.0.1:${PORT}/" || exit 1
+CMD ["node", "apps/site/server.js"]
