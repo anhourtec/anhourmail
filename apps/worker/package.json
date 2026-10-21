@@ -1,0 +1,25 @@
+{
+  "name": "@anhourmail/worker",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx --env-file-if-exists=../../.env watch src/scheduler.ts",
+    "scheduler": "tsx src/scheduler.ts",
+    "job:audit-verify": "tsx src/jobs/audit-verify.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@anhourmail/adapters": "0.0.0",
+    "@anhourmail/core": "0.0.0",
+    "@anhourmail/server": "0.0.0",
+    "@anhourmail/shared": "0.0.0",
+    "@anhourmail/stalwart-client": "0.0.0",
+    "drizzle-orm": "0.45.4",
+    "tsx": "4.23.15"
+  },
+  "devDependencies": {
+    "@anhourmail/config": "0.0.0"
+  }
+}
