@@ -21,6 +21,7 @@ export type AliasState = { address: string; kind: "alias" | "masked"; enabled: b
 
 export type MailboxState = {
   id: string;
+  accountId: string;
   address: string;
   quotaBytes: number;
   status: string;

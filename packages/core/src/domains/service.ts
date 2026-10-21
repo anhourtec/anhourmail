@@ -72,6 +72,7 @@ export async function addDomain(
     { action: "domain.added", permission: "domain.manage", accountId, target: { type: "domain" } },
     async (repos) => {
       const name = normaliseDomain(input.name);
+      await repos.accounts.lock(accountId); // the domain ceiling holds under concurrent adds
       const account = await repos.accounts.get(accountId);
       if (!account) throw new NotFoundError();
       if (!PLANS[account.plan].customDomains) {
@@ -161,6 +162,7 @@ export async function removeDomain(deps: Deps, actor: Actor, accountId: string, 
     req,
     { action: "domain.removed", permission: "domain.manage", accountId, target: { type: "domain", id } },
     async (repos) => {
+      await repos.accounts.lock(accountId); // serialised with mailbox creation, so no mailbox lands mid-removal
       const d = await scoped(repos, accountId, id);
       if (d.status === "removing") throw new ConflictError("This domain is already being removed.");
       // Only an active (claimed) domain can carry addresses; another account's addresses never block a pending row.

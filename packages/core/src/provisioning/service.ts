@@ -45,7 +45,13 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
   }
   const mailbox = await deps.uow.run((r) => r.directory.getMailbox(job.subjectId));
   if (!mailbox) throw new Error("mailbox not found");
+  // Never create or update an address on a domain another account has verified (e.g. after a removal raced).
+  const owner = await deps.uow.run((r) =>
+    r.directory.claimedDomainOwner(mailbox.address.slice(mailbox.address.lastIndexOf("@") + 1)),
+  );
+  if (owner !== null && owner !== mailbox.accountId) throw new Error("domain belongs to another account");
   const { externalId } = await mail.ensureMailbox({
+    externalId: mailbox.stalwartId,
     address: mailbox.address,
     quotaBytes: mailbox.quotaBytes,
     aliases: mailbox.aliases.map((a) => ({ address: a.address, enabled: a.enabled, description: a.description })),
@@ -87,7 +93,12 @@ export async function runNextJob(deps: Deps, mail: MailServer): Promise<Provisio
         async (repos) => {
           await repos.provisioning.giveUp(job.id, error, now);
           if (job.kind === "mailbox.ensure") {
-            await repos.directory.markMailbox(job.subjectId, { status: "failed", lastError: error });
+            // A suspension stays in force; only the error is recorded.
+            const current = await repos.directory.getMailbox(job.subjectId);
+            await repos.directory.markMailbox(job.subjectId, {
+              status: current?.status === "suspended" ? "suspended" : "failed",
+              lastError: error,
+            });
           } else {
             await repos.directory.markDomain(job.subjectId, { lastError: error });
           }

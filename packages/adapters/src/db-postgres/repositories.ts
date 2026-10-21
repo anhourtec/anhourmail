@@ -7,6 +7,7 @@ import type { AccessRepository, Repositories, UnitOfWork } from "@anhourmail/cor
 import type { AccountRepository } from "@anhourmail/core/account";
 import type { CustomerDomain, DomainRepository, DomainStatus } from "@anhourmail/core/domains";
 import type { Invite, InviteRepository, InviteSource } from "@anhourmail/core/invite";
+import type { Mailbox, MailboxRepository, MailboxStatus } from "@anhourmail/core/mailboxes";
 import type {
   DomainState,
   JobKind,
@@ -32,6 +33,7 @@ import type { Db, Executor } from "./client";
 import {
   accountMembership,
   auditLog,
+  authUser,
   customerAccount,
   customerDomain,
   invite,
@@ -285,6 +287,24 @@ class PgAccessRepository implements AccessRepository {
       .where(inArray(customerAccount.id, ids));
     return Object.fromEntries(rows.map((r) => [r.id, r.name] as const));
   }
+
+  members(accountId: string): Promise<{ userId: string; email: string; role: AccountRole }[]> {
+    return accountMembers(this.x, accountId);
+  }
+}
+
+async function accountMembers(
+  x: Executor,
+  accountId: string,
+): Promise<{ userId: string; email: string; role: AccountRole }[]> {
+  if (!/^[0-9a-f-]{36}$/i.test(accountId)) return [];
+  const rows = await x
+    .select({ userId: accountMembership.userId, email: authUser.email, role: accountMembership.role })
+    .from(accountMembership)
+    .innerJoin(authUser, eq(authUser.id, accountMembership.userId))
+    .where(eq(accountMembership.accountId, accountId))
+    .orderBy(authUser.email);
+  return rows.flatMap((r) => (isAccountRole(r.role) ? [{ userId: r.userId, email: r.email, role: r.role }] : []));
 }
 
 class PgAccountRepository implements AccountRepository {
@@ -305,6 +325,11 @@ class PgAccountRepository implements AccountRepository {
     if (!r) return null;
     const plan = (PLAN_ORDER as readonly string[]).includes(r.plan) ? (r.plan as PlanId) : "free";
     return { id: r.id, name: r.name, plan, status: r.status };
+  }
+
+  async lock(id: string): Promise<void> {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return;
+    await this.x.execute(sql`select id from customer_account where id = ${id} for update`);
   }
 
   async addMember(input: { accountId: string; userId: string; role: AccountRole }): Promise<void> {
@@ -433,6 +458,7 @@ class PgMailDirectoryRepository implements MailDirectoryRepository {
     const aliases = await this.x.select().from(mailAlias).where(eq(mailAlias.mailboxId, id)).orderBy(mailAlias.address);
     return {
       id: m.id,
+      accountId: m.accountId,
       address: m.address,
       quotaBytes: m.quotaBytes,
       status: m.status,
@@ -451,6 +477,15 @@ class PgMailDirectoryRepository implements MailDirectoryRepository {
       .update(customerDomain)
       .set({ lastError: update.lastError, ...(update.stalwartId ? { stalwartId: update.stalwartId } : {}) })
       .where(eq(customerDomain.id, id));
+  }
+
+  async claimedDomainOwner(name: string): Promise<string | null> {
+    const [r] = await this.x
+      .select({ accountId: customerDomain.accountId })
+      .from(customerDomain)
+      .where(and(eq(customerDomain.name, name), inArray(customerDomain.status, ["active", "removing"])))
+      .limit(1);
+    return r?.accountId ?? null;
   }
 
   async deleteDomain(id: string): Promise<void> {
@@ -583,6 +618,76 @@ class PgDomainRepository implements DomainRepository {
   }
 }
 
+const MAILBOX_STATUSES: readonly MailboxStatus[] = ["provisioning", "active", "failed", "suspended"];
+
+function toMailbox(r: typeof mailbox.$inferSelect): Mailbox {
+  return {
+    id: r.id,
+    accountId: r.accountId,
+    userId: r.userId,
+    address: r.address,
+    status: MAILBOX_STATUSES.includes(r.status as MailboxStatus) ? (r.status as MailboxStatus) : "provisioning",
+    quotaBytes: r.quotaBytes,
+    stalwartId: r.stalwartId,
+    lastError: r.lastError,
+    createdAt: r.createdAt,
+  };
+}
+
+class PgMailboxRepository implements MailboxRepository {
+  constructor(private readonly x: Executor) {}
+
+  async listByAccount(accountId: string): Promise<Mailbox[]> {
+    const rows = await this.x.select().from(mailbox).where(eq(mailbox.accountId, accountId)).orderBy(mailbox.address);
+    return rows.map(toMailbox);
+  }
+
+  async get(accountId: string, id: string): Promise<Mailbox | null> {
+    const [r] = await this.x
+      .select()
+      .from(mailbox)
+      .where(and(eq(mailbox.id, id), eq(mailbox.accountId, accountId)));
+    return r ? toMailbox(r) : null;
+  }
+
+  async count(accountId: string): Promise<number> {
+    const [r] = await this.x
+      .select({ n: sql<number>`count(*)::int` })
+      .from(mailbox)
+      .where(eq(mailbox.accountId, accountId));
+    return r?.n ?? 0;
+  }
+
+  async addressTaken(address: string): Promise<boolean> {
+    const [m] = await this.x.select({ id: mailbox.id }).from(mailbox).where(eq(mailbox.address, address)).limit(1);
+    if (m) return true;
+    const [a] = await this.x
+      .select({ id: mailAlias.id })
+      .from(mailAlias)
+      .where(eq(mailAlias.address, address))
+      .limit(1);
+    return a !== undefined;
+  }
+
+  async insert(m: Mailbox): Promise<void> {
+    await this.x.insert(mailbox).values({
+      id: m.id,
+      accountId: m.accountId,
+      userId: m.userId,
+      address: m.address,
+      status: m.status,
+      quotaBytes: m.quotaBytes,
+      stalwartId: m.stalwartId,
+      lastError: m.lastError,
+      createdAt: m.createdAt,
+    });
+  }
+
+  async setQuota(id: string, quotaBytes: number): Promise<void> {
+    await this.x.update(mailbox).set({ quotaBytes }).where(eq(mailbox.id, id));
+  }
+}
+
 class PgInviteRepository implements InviteRepository {
   constructor(private readonly x: Executor) {}
 
@@ -637,6 +742,7 @@ const repositories = (x: Executor): Repositories => ({
   provisioning: new PgProvisioningRepository(x),
   directory: new PgMailDirectoryRepository(x),
   domains: new PgDomainRepository(x),
+  mailboxes: new PgMailboxRepository(x),
   invites: new PgInviteRepository(x),
 });
 

@@ -9,7 +9,10 @@ describeAdapterContract("memory", async () => {
   return {
     uow,
     cleanup: async () => undefined,
-    createUser: async (email) => `user-${email}`,
+    createUser: async (email) => {
+      uow.state.userEmails[`user-${email}`] = email;
+      return `user-${email}`;
+    },
     seedMail: async ({ domain, address, alias, quotaBytes }) => {
       const domainId = randomUUID();
       const mailboxId = randomUUID();
@@ -25,6 +28,9 @@ describeAdapterContract("memory", async () => {
       });
       uow.state.mailboxes.push({
         id: mailboxId,
+        accountId: "a1",
+        userId: null,
+        createdAt: new Date(0),
         address,
         quotaBytes,
         status: "active",

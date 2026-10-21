@@ -236,6 +236,11 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         const { id } = await uow.run((r) => r.accounts.create({ name: "Contract plan", plan: "plus" }));
         expect(await uow.run((r) => r.accounts.get(id))).toMatchObject({ id, name: "Contract plan", plan: "plus" });
         expect(await uow.run((r) => r.accounts.get(randomUUID()))).toBeNull();
+        // Locking is a no-op outside a contended write, and locking an unknown id is harmless.
+        await uow.run(async (r) => {
+          await r.accounts.lock(id);
+          await r.accounts.lock(randomUUID());
+        });
       } finally {
         await cleanup();
       }
@@ -284,6 +289,50 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         await uow.run((r) => r.domains.transition(mine.id, "active", "removing"));
         await uow.run((r) => r.directory.deleteDomain(mine.id));
         expect(await uow.run((r) => r.domains.get(a.id, mine.id))).toBeNull();
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("mailboxes and members: account-scoped reads, global address check, quota, members by email", async () => {
+      const { uow, cleanup, createUser } = await factory();
+      try {
+        const a = await uow.run((r) => r.accounts.create({ name: "Contract mbx A", plan: "plus" }));
+        const b = await uow.run((r) => r.accounts.create({ name: "Contract mbx B", plan: "plus" }));
+        const tag = randomUUID().slice(0, 8);
+        const userId = await createUser(`zz-${tag}@example.com`);
+        const other = await createUser(`aa-${tag}@example.com`);
+        await uow.run(async (r) => {
+          await r.accounts.addMember({ accountId: a.id, userId, role: "member" });
+          await r.accounts.addMember({ accountId: a.id, userId: other, role: "owner" });
+        });
+        expect(await uow.run((r) => r.access.members(a.id))).toEqual([
+          { userId: other, email: `aa-${tag}@example.com`, role: "owner" },
+          { userId, email: `zz-${tag}@example.com`, role: "member" },
+        ]);
+        expect(await uow.run((r) => r.access.members(b.id))).toEqual([]);
+
+        const m = {
+          id: randomUUID(),
+          accountId: a.id,
+          userId,
+          address: `box-${tag}@contract.example.ca`,
+          status: "provisioning" as const,
+          quotaBytes: 1024,
+          stalwartId: null,
+          lastError: null,
+          createdAt: new Date(),
+        };
+        await uow.run((r) => r.mailboxes.insert(m));
+        expect(await uow.run((r) => r.mailboxes.get(a.id, m.id))).toMatchObject({ address: m.address, userId });
+        expect(await uow.run((r) => r.mailboxes.get(b.id, m.id))).toBeNull();
+        expect(await uow.run((r) => r.mailboxes.count(a.id))).toBe(1);
+        expect((await uow.run((r) => r.mailboxes.listByAccount(a.id))).map((x) => x.id)).toEqual([m.id]);
+        expect(await uow.run((r) => r.mailboxes.addressTaken(m.address))).toBe(true);
+        expect(await uow.run((r) => r.mailboxes.addressTaken(`free-${tag}@contract.example.ca`))).toBe(false);
+        await expect(uow.run((r) => r.mailboxes.insert({ ...m, id: randomUUID() }))).rejects.toThrow();
+        await uow.run((r) => r.mailboxes.setQuota(m.id, 2048));
+        expect((await uow.run((r) => r.mailboxes.get(a.id, m.id)))?.quotaBytes).toBe(2048);
       } finally {
         await cleanup();
       }

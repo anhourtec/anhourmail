@@ -8,4 +8,6 @@ export type AccessRepository = {
   isSuspended(userId: string): Promise<boolean>;
   /** Display names for accounts, keyed by id (unknown ids are omitted). */
   accountNames(accountIds: readonly string[]): Promise<Record<string, string>>;
+  /** People in an account with their sign-in email and role, by email. */
+  members(accountId: string): Promise<{ userId: string; email: string; role: AccountRole }[]>;
 };

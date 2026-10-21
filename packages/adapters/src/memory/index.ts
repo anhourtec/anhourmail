@@ -5,9 +5,10 @@ import type { AccessRepository, Repositories, UnitOfWork } from "@anhourmail/cor
 import type { AccountRepository } from "@anhourmail/core/account";
 import type { CustomerDomain, DomainRepository } from "@anhourmail/core/domains";
 import type { Invite, InviteRepository } from "@anhourmail/core/invite";
+import type { Mailbox, MailboxRepository } from "@anhourmail/core/mailboxes";
 import type {
+  AliasState,
   DomainState,
-  MailboxState,
   MailDirectoryRepository,
   ProvisioningJob,
   ProvisioningRepository,
@@ -45,7 +46,9 @@ export type MemoryState = {
   })[];
   jobs: ProvisioningJob[];
   domains: CustomerDomain[];
-  mailboxes: (MailboxState & { lastError: string | null })[];
+  mailboxes: (Mailbox & { aliases: AliasState[] })[];
+  /** Sign-in emails by user id (memberships reference them). */
+  userEmails: Record<string, string>;
 };
 
 export const emptyState = (): MemoryState => ({
@@ -61,6 +64,7 @@ export const emptyState = (): MemoryState => ({
   jobs: [],
   domains: [],
   mailboxes: [],
+  userEmails: {},
 });
 
 const clone = <T>(v: T): T => structuredClone(v);
@@ -146,6 +150,11 @@ function repositories(s: MemoryState): Repositories {
     isSuspended: async (userId) => s.suspended.includes(userId),
     accountNames: async (ids) =>
       Object.fromEntries(s.accounts.filter((a) => ids.includes(a.id)).map((a) => [a.id, a.name] as const)),
+    members: async (accountId) =>
+      s.memberships
+        .filter((m) => m.accountId === accountId)
+        .map((m) => ({ userId: m.userId, email: s.userEmails[m.userId] ?? m.userId, role: m.role }))
+        .sort((a, b) => a.email.localeCompare(b.email)),
   };
 
   const accounts: AccountRepository = {
@@ -164,6 +173,8 @@ function repositories(s: MemoryState): Repositories {
       s.userStates[userId] = state;
     },
     membershipCount: async (userId) => s.memberships.filter((m) => m.userId === userId).length,
+    // Runs are already serialised in memory: nothing to lock.
+    lock: async () => undefined,
     get: async (id) => {
       const a = s.accounts.find((x) => x.id === id);
       return a ? { id: a.id, name: a.name, plan: a.plan, status: a.status ?? "active" } : null;
@@ -218,8 +229,15 @@ function repositories(s: MemoryState): Repositories {
     getMailbox: async (id) => {
       const m = s.mailboxes.find((x) => x.id === id);
       if (!m) return null;
-      const { lastError: _e, ...state } = m;
-      return clone(state);
+      return clone({
+        id: m.id,
+        accountId: m.accountId,
+        address: m.address,
+        quotaBytes: m.quotaBytes,
+        status: m.status,
+        stalwartId: m.stalwartId,
+        aliases: m.aliases,
+      });
     },
     markDomain: async (id, update) => {
       const d = s.domains.find((x) => x.id === id);
@@ -229,6 +247,8 @@ function repositories(s: MemoryState): Repositories {
           ...(update.stalwartId ? { stalwartId: update.stalwartId } : {}),
         });
     },
+    claimedDomainOwner: async (name) =>
+      s.domains.find((d) => d.name === name && d.status !== "pending_dns")?.accountId ?? null,
     deleteDomain: async (id) => {
       s.domains = s.domains.filter((d) => !(d.id === id && d.status === "removing"));
     },
@@ -288,6 +308,33 @@ function repositories(s: MemoryState): Repositories {
       ),
   };
 
+  const mailboxes: MailboxRepository = {
+    listByAccount: async (accountId) =>
+      clone(
+        s.mailboxes
+          .filter((m) => m.accountId === accountId)
+          .sort((a, b) => a.address.localeCompare(b.address))
+          .map(({ aliases: _a, ...m }) => m),
+      ),
+    get: async (accountId, id) => {
+      const m = s.mailboxes.find((x) => x.id === id && x.accountId === accountId);
+      if (!m) return null;
+      const { aliases: _a, ...rest } = m;
+      return clone(rest);
+    },
+    count: async (accountId) => s.mailboxes.filter((m) => m.accountId === accountId).length,
+    addressTaken: async (address) =>
+      s.mailboxes.some((m) => m.address === address || m.aliases.some((a) => a.address === address)),
+    insert: async (m) => {
+      if (s.mailboxes.some((x) => x.address === m.address)) throw new Error("duplicate mailbox address");
+      s.mailboxes.push({ ...clone(m), aliases: [] });
+    },
+    setQuota: async (id, quotaBytes) => {
+      const m = s.mailboxes.find((x) => x.id === id);
+      if (m) m.quotaBytes = quotaBytes;
+    },
+  };
+
   const invites: InviteRepository = {
     create: async (input) => {
       const id = randomUUID();
@@ -324,7 +371,7 @@ function repositories(s: MemoryState): Repositories {
     },
   };
 
-  return { waitlist, audit, access, accounts, provisioning, directory, domains, invites };
+  return { waitlist, audit, access, accounts, provisioning, directory, domains, mailboxes, invites };
 }
 
 export class MemoryUnitOfWork implements UnitOfWork {

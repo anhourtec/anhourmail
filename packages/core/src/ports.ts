@@ -4,6 +4,7 @@ import type { AccountRepository } from "./account/repository";
 import type { AuditRepository } from "./audit/repository";
 import type { DomainRepository } from "./domains/repository";
 import type { InviteRepository } from "./invite/repository";
+import type { MailboxRepository } from "./mailboxes/repository";
 import type { MailDirectoryRepository, ProvisioningRepository } from "./provisioning/ports";
 import type { WaitlistRepository } from "./waitlist/repository";
 
@@ -16,6 +17,7 @@ export type Repositories = {
   provisioning: ProvisioningRepository;
   directory: MailDirectoryRepository;
   domains: DomainRepository;
+  mailboxes: MailboxRepository;
   invites: InviteRepository;
 };
 

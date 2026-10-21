@@ -6,6 +6,11 @@ import type { AccountRole, UserState } from "@anhourmail/shared/rbac";
 export type AccountRepository = {
   create(input: { name: string; plan: PlanId }): Promise<{ id: string }>;
   get(id: string): Promise<{ id: string; name: string; plan: PlanId; status: string } | null>;
+  /**
+   * Locks the account row until the unit of work ends, so per-account limits (mailboxes, domains) are counted and
+   * enforced one request at a time.
+   */
+  lock(id: string): Promise<void>;
   addMember(input: { accountId: string; userId: string; role: AccountRole }): Promise<void>;
   setUserState(input: { userId: string; state: UserState }): Promise<void>;
   /** Accounts the user already belongs to (sign-up must be idempotent). */

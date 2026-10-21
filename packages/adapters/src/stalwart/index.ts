@@ -23,8 +23,13 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
       return { externalId: await mgmt.upsertDomain({ name: name.toLowerCase() }) };
     },
 
-    async ensureMailbox({ address, quotaBytes, aliases }) {
+    async ensureMailbox({ externalId: known, address, quotaBytes, aliases }) {
       const [local, domain] = split(address);
+      // A new mailbox never takes over an account that already exists on the mail server: it may hold someone's
+      // mail from before (e.g. a domain that changed hands). That needs a person to look at it.
+      if (known === null && (await mgmt.listUsers()).some((u) => u.address === `${local}@${domain}`)) {
+        throw new Error("address already exists on the mail server; not adopting it");
+      }
       const externalId = await mgmt.upsertUser({
         name: local,
         domain,

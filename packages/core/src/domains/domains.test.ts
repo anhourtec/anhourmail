@@ -198,6 +198,9 @@ describe("domains service", () => {
     await checkDomain(d, z, owner, ACCOUNT_A, active.id, req);
     d.uow.state.mailboxes.push({
       id: "m1",
+      accountId: "a1",
+      userId: null,
+      createdAt: new Date(0),
       address: "me@a.example.ca",
       quotaBytes: 1,
       status: "active",

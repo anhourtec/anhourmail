@@ -79,6 +79,12 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
 /** Custom domains per account on plans that include them (an abuse ceiling, not a selling point). */
 export const MAX_CUSTOM_DOMAINS = 20;
 
+/**
+ * Mailboxes per account; each gets up to the plan's `storageGb` (placeholder until pricing is decided — see
+ * docs/internal/06-pricing-and-billing.md).
+ */
+export const MAX_MAILBOXES = 10;
+
 export const PLAN_ORDER: readonly PlanId[] = ["free", "plus", "supporter"];
 
 export type AddOnId = "bulk";

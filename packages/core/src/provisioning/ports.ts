@@ -17,6 +17,8 @@ export type MailDirectoryRepository = {
   getDomain(id: string): Promise<DomainState | null>;
   getMailbox(id: string): Promise<MailboxState | null>;
   markDomain(id: string, update: { stalwartId?: string; lastError: string | null }): Promise<void>;
+  /** Account holding a verified claim (active or removing) on this domain name, or null if none does. */
+  claimedDomainOwner(name: string): Promise<string | null>;
   /** Deletes the domain row once the mail server no longer has it (`removing` domains only). */
   deleteDomain(id: string): Promise<void>;
   markMailbox(id: string, update: { status: string; stalwartId?: string; lastError: string | null }): Promise<void>;
@@ -31,6 +33,8 @@ export type MailDirectoryRepository = {
 export type MailServer = {
   ensureDomain(name: string): Promise<{ externalId: string }>;
   ensureMailbox(input: {
+    /** The mail server's id once created; null for a new mailbox, which must not adopt an existing account. */
+    externalId: string | null;
     address: string;
     quotaBytes: number;
     aliases: { address: string; enabled: boolean; description: string | null }[];

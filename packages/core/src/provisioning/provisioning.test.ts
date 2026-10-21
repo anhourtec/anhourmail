@@ -57,6 +57,9 @@ function setup(clock = fixedClock("2026-10-21T12:00:00Z")) {
   });
   d.uow.state.mailboxes.push({
     id: "m1",
+    accountId: "a1",
+    userId: null,
+    createdAt: new Date(0),
     address: "owner@example.test",
     quotaBytes: 1000,
     status: "provisioning",
@@ -153,7 +156,7 @@ describe("reconcile", () => {
     d.uow.state.mailboxes[0]!.status = "active";
     const mail = fakeMailServer();
     await mail.ensureDomain("example.test");
-    await mail.ensureMailbox({ address: "owner@example.test", quotaBytes: 1000, aliases: [] });
+    await mail.ensureMailbox({ externalId: null, address: "owner@example.test", quotaBytes: 1000, aliases: [] });
     const report = await reconcile(d, mail);
     expect(report.clean).toBe(true);
     expect(d.uow.state.audit).toHaveLength(0);
@@ -165,10 +168,10 @@ describe("reconcile", () => {
     const mail = fakeMailServer();
     await mail.ensureDomain("stray.test");
     await mail.ensureDomain("dev.test");
-    await mail.ensureMailbox({ address: "ghost@stray.test", quotaBytes: 5, aliases: [] });
-    await mail.ensureMailbox({ address: "alice@dev.test", quotaBytes: 5, aliases: [] });
+    await mail.ensureMailbox({ externalId: null, address: "ghost@stray.test", quotaBytes: 5, aliases: [] });
+    await mail.ensureMailbox({ externalId: null, address: "alice@dev.test", quotaBytes: 5, aliases: [] });
     await mail.ensureDomain("example.test");
-    await mail.ensureMailbox({ address: "owner@example.test", quotaBytes: 999, aliases: [] });
+    await mail.ensureMailbox({ externalId: null, address: "owner@example.test", quotaBytes: 999, aliases: [] });
     const report = await reconcile(d, mail, { ignoreDomains: ["dev.test"] });
     expect(report).toMatchObject({
       clean: false,
@@ -186,6 +189,9 @@ describe("reconcile", () => {
     const { d } = setup();
     d.uow.state.mailboxes.push({
       id: "m2",
+      accountId: "a1",
+      userId: null,
+      createdAt: new Date(0),
       address: "free@platform.test",
       quotaBytes: 10,
       status: "active",
@@ -260,5 +266,29 @@ describe("domain removed while being added", () => {
     await runNextJob(d, mail);
     expect(mail.domains).toEqual([]);
     expect(d.uow.state.domains[0]?.stalwartId).toBeNull();
+  });
+});
+
+describe("mailbox ownership and suspension guards", () => {
+  it("refuses to create a mailbox on a domain another account has verified", async () => {
+    const { d } = setup();
+    d.uow.state.domains[0]!.accountId = "someone-else"; // example.test is now claimed by another account
+    const mail = fakeMailServer();
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(mail.boxes).toEqual([]);
+    expect(d.uow.state.jobs[0]?.lastError).toContain("domain belongs to another account");
+  });
+
+  it("keeps a suspended mailbox suspended when its job gives up", async () => {
+    const { d } = setup();
+    d.uow.state.mailboxes[0]!.status = "suspended";
+    d.uow.state.domains[0]!.accountId = "someone-else";
+    const mail = fakeMailServer();
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    d.uow.state.jobs[0]!.attempts = MAX_ATTEMPTS - 1;
+    await runNextJob(d, mail);
+    expect(d.uow.state.jobs[0]?.status).toBe("failed");
+    expect(d.uow.state.mailboxes[0]?.status).toBe("suspended");
   });
 });
