@@ -6,10 +6,23 @@ import type { Permission } from "@anhourmail/shared/rbac";
  * Console navigation, derived from the permission matrix (CLAUDE.md rule 35): an item shows only when the
  * actor holds its permission. The server still enforces every action.
  */
-export type NavItem = { label: string; permission: Permission; scope: "platform" | "account"; phase: number };
+export type NavItem = {
+  label: string;
+  permission: Permission;
+  scope: "platform" | "account";
+  phase: number;
+  /** Page for this item once it's built; items without one show their phase instead. */
+  href?: (accountId: string) => string;
+};
 
 export const NAV: readonly NavItem[] = [
-  { label: "Domains", permission: "domain.read", scope: "account", phase: 3 },
+  {
+    label: "Domains",
+    permission: "domain.read",
+    scope: "account",
+    phase: 3,
+    href: (accountId) => `/accounts/${accountId}/domains`,
+  },
   { label: "Mailboxes", permission: "mailbox.read", scope: "account", phase: 3 },
   { label: "Aliases", permission: "alias.manage.own", scope: "account", phase: 3 },
   { label: "People and roles", permission: "account.admins.manage", scope: "account", phase: 3 },

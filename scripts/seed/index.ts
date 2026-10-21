@@ -20,6 +20,7 @@ import { hashPassword } from "@anhourmail/adapters/auth";
 import { createDb, type Db, PgUnitOfWork, schema } from "@anhourmail/adapters/postgres";
 import { type Deps, systemClock } from "@anhourmail/core";
 import type { AuditAction, AuditEntryInput } from "@anhourmail/core/audit";
+import { enqueueProvisioning } from "@anhourmail/core/provisioning";
 import { confirmWaitlist, joinWaitlist, MIN_FILL_MS } from "@anhourmail/core/waitlist";
 import { JmapClient } from "@anhourmail/jmap-client";
 import { customerDomainRecords, PLANS } from "@anhourmail/shared";
@@ -318,6 +319,9 @@ if (demo) {
       .insert(schema.customerDomain)
       .values({ accountId, name: a.domain, status: "active", verifyToken: randomBytes(12).toString("hex") })
       .onConflictDoNothing();
+    // The dev plan already created the domain on Stalwart; the worker's ensure job records its id (→ "Active").
+    const [row] = await db.select().from(schema.customerDomain).where(eq(schema.customerDomain.name, a.domain));
+    if (row?.stalwartId === null) await enqueueProvisioning(deps, { kind: "domain.ensure", subjectId: row.id });
   }
   const unverifiedToken = randomBytes(12).toString("hex");
   await db

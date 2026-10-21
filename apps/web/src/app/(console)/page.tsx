@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { Metadata } from "next";
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
 
 import { can, type UserActor } from "@anhourmail/core";
 import { type AuditEntry, listAccountAudit, listPlatformAudit } from "@anhourmail/core/audit";
@@ -10,10 +8,9 @@ import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 
 import { PageHeader } from "@anhourmail/ui/page-header";
 
-import { ConsoleShell, type ShellNavGroup } from "@/components/console-shell";
+import { ConsoleShell } from "@/components/console-shell";
 import { InviteButton } from "@/components/invite-button";
-import { getActor } from "@/server/auth/actor";
-import { visibleNav } from "@/server/console-nav";
+import { navGroups, requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
 
 export const metadata: Metadata = { title: "Console" };
@@ -84,32 +81,18 @@ async function AccountSection({ actor, accountId, name }: { actor: UserActor; ac
 }
 
 export default async function ConsoleHome() {
-  const actor = await getActor(await headers());
-  if (actor.kind !== "user") redirect("/sign-in");
-
+  const actor = await requireUser();
   const deps = container().deps;
-  const names = await deps.uow.run((r) => r.access.accountNames(actor.memberships.map((m) => m.accountId)));
-  const platformNav = visibleNav(actor).filter((n) => n.scope === "platform");
+  const { groups, names } = await navGroups(actor);
   const canInvite = can(actor, "waitlist.manage");
   const [waitlist, platformAudit] = await Promise.all([
     can(actor, "waitlist.read") ? listWaitlist(deps, actor, { limit: 5 }) : null,
     can(actor, "platform.audit.read") ? listPlatformAudit(deps, actor, { limit: 8 }) : null,
   ]);
 
-  const groups: ShellNavGroup[] = [
-    ...(platformNav.length > 0 ? [{ title: "Anhourtec staff", items: platformNav }] : []),
-    ...actor.memberships.map((m) => ({
-      title: names[m.accountId] ?? "Account",
-      items: visibleNav(actor, m.accountId).filter((n) => n.scope === "account"),
-    })),
-  ];
-
   return (
     <ConsoleShell email={actor.email} groups={groups}>
-      <PageHeader
-        title="Overview"
-        description="What you can do here comes from your roles. Domains, mailboxes and billing arrive in later phases."
-      />
+      <PageHeader title="Overview" description="What you can do here comes from your roles." />
       {actor.suspended && <p className="am-status am-status--danger w-fit">This account is suspended.</p>}
 
       {actor.platformRoles.length > 0 && (

@@ -24,6 +24,7 @@ vi.mock("next/server", async (importOriginal) => ({
 }));
 
 const params = { params: Promise.resolve({}) };
+const noDns = { lookup: async () => [] };
 let uow: MemoryUnitOfWork;
 let mailer: ReturnType<typeof memoryMailer>;
 
@@ -39,7 +40,7 @@ beforeEach(() => {
   resetEnvForTests();
   uow = new MemoryUnitOfWork();
   mailer = memoryMailer();
-  setContainerForTests({ deps: { uow, clock: systemClock }, counter: memoryCounter(), mailer });
+  setContainerForTests({ deps: { uow, clock: systemClock }, counter: memoryCounter(), mailer, dns: noDns });
   setLogSinkForTests(() => undefined);
 });
 afterEach(() => {
@@ -165,7 +166,7 @@ describe("POST /api/public/waitlist", () => {
     const { POST } = await import("../../app/api/public/waitlist/route");
     // The per-address email tier is exhausted; the per-IP form tier is not.
     const counter = async (key: string) => (key.includes(":waitlistMail:") ? 99 : 1);
-    setContainerForTests({ deps: { uow, clock: systemClock }, counter, mailer });
+    setContainerForTests({ deps: { uow, clock: systemClock }, counter, mailer, dns: noDns });
     const res = await POST(
       post("http://localhost:43200/api/public/waitlist", {
         email: "capped@example.com",

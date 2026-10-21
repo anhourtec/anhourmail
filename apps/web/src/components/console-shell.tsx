@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { BrandMark } from "./brand-mark";
+import { NavLink } from "./nav-link";
 import { SignOutButton } from "./sign-out-button";
 import { ThemeToggle } from "./theme-toggle";
 
 export type ShellNavGroup = {
   title: string;
-  items: { label: string; permission: string; phase: number }[];
+  items: { label: string; permission: string; phase: number; href?: string }[];
 };
 
 /**
@@ -40,18 +41,27 @@ export function ConsoleShell({
           className="border-b bg-sidebar lg:sticky lg:top-14 lg:h-[calc(100dvh-3.5rem)] lg:w-64 lg:shrink-0 lg:overflow-y-auto lg:border-r lg:border-b-0"
         >
           <div className="flex gap-6 overflow-x-auto px-4 py-3 sm:px-6 lg:flex-col lg:gap-6 lg:px-4 lg:py-6">
+            <ul className="flex shrink-0 gap-1 lg:flex-col">
+              <li className="shrink-0">
+                <NavLink href="/" exact>
+                  Overview
+                </NavLink>
+              </li>
+            </ul>
             {groups.map((g) => (
               <div key={g.title} className="flex shrink-0 flex-col gap-1.5">
                 <span className="am-mono px-2">{g.title}</span>
                 <ul className="flex gap-1 lg:flex-col">
                   {g.items.map((n) => (
-                    <li
-                      key={`${g.title}-${n.label}`}
-                      data-nav={n.permission}
-                      className="flex shrink-0 items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-[14px] text-sidebar-foreground"
-                    >
-                      <span>{n.label}</span>
-                      {n.phase > 0 && <span className="am-micro">phase {n.phase}</span>}
+                    <li key={`${g.title}-${n.label}`} data-nav={n.permission} className="shrink-0">
+                      {n.href ? (
+                        <NavLink href={n.href}>{n.label}</NavLink>
+                      ) : (
+                        <span className="flex items-center justify-between gap-3 px-2 py-1.5 text-[14px] text-muted-foreground">
+                          <span>{n.label}</span>
+                          {n.phase > 0 && <span className="am-micro">phase {n.phase}</span>}
+                        </span>
+                      )}
                     </li>
                   ))}
                 </ul>
