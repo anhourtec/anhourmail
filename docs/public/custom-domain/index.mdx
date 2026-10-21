@@ -1,0 +1,37 @@
+---
+title: Use your own domain
+description: Connect a domain you own, add the DNS records, and check them one by one.
+---
+
+Using your own domain is part of the paid plans. You keep your domain where it is; you only add a few DNS
+records at your DNS provider (often the company you bought the domain from).
+
+## Before you start
+
+- You need to be able to edit DNS records for the domain.
+- If mail already arrives somewhere else for this domain, it moves to AnhourMail once the inbound record below
+  is in place. Plan the switch for a quiet moment.
+
+## The records
+
+The console shows these records with your own verification code and checks each one live. Here is what they
+look like for `example.com`:
+
+<DnsRecordTable domain="example.com" />
+
+**Required** records are needed before the domain works. **Recommended** records make mail apps set themselves
+up and help your mail reach inboxes.
+
+## How long does it take?
+
+DNS changes usually show up within minutes, but some providers take a few hours. The console re-checks
+automatically, and you can press **Check again** at any time.
+
+## Common problems
+
+- **The name already has a value.** Some providers add the domain for you. If the name field shows your domain
+  already, enter only the part before it.
+- **There is already an SPF record.** A domain can have only one. Merge ours into the existing one instead of
+  adding a second.
+- **Verification is still pending after a day.** Make sure there is no typo in the verification code, then press
+  **Check again**.

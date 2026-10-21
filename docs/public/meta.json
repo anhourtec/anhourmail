@@ -1,0 +1,13 @@
+{
+  "title": "Docs",
+  "pages": [
+    "index",
+    "clients",
+    "custom-domain",
+    "aliases",
+    "folders-and-signatures",
+    "sending-limits",
+    "faq",
+    "self-hosting"
+  ]
+}

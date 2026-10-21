@@ -1,0 +1,48 @@
+---
+title: Self-hosting
+description: Run the AnhourMail stack on your own machine from the public repository.
+---
+
+The whole stack is open source and runs with Docker Compose. This guide starts a local development copy:
+nothing it sends ever leaves your machine.
+
+## What you need
+
+- Docker with Docker Compose
+- Node.js 22 and npm
+- Git
+
+## Run it
+
+```sh
+git clone https://github.com/anhourtec/anhourmail.git
+cd anhourmail
+cp .env.example .env
+npm ci
+npm run stack:up
+npm run db:seed -- --demo
+npm run dev
+```
+
+- `npm run stack:up` starts Postgres, Redis, the Stalwart mail server and Mailpit. It checks that the ports in
+  `.env` are free first.
+- `npm run db:seed -- --demo` creates demo accounts and writes their sign-in details to `credentials.md` in the
+  repository root. That file is for your machine only and is never committed.
+- `npm run dev` starts the site, the docs and the console. The addresses are printed in the terminal and listed
+  in the README.
+
+## How mail stays local
+
+In development, every message to an outside address is delivered to Mailpit, a local inbox you can open in the
+browser. The mail server's container also has no route to the internet, so nothing can be delivered outside your
+machine even by mistake.
+
+## About the mail server
+
+AnhourMail uses [Stalwart](https://github.com/stalwartlabs/stalwart), licensed under AGPL-3.0. The version is
+pinned in `docker-compose.yml`, and we run it unmodified, configured only through its API.
+
+## Running it for real
+
+Production needs more than this guide covers: a server whose provider allows outbound mail, reverse DNS, TLS
+certificates, DNS records and a warm-up period for a new IP address. A production guide will follow.

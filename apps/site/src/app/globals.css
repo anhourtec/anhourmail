@@ -1,0 +1,13 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "fumadocs-ui/css/shadcn.css";
+@import "fumadocs-ui/css/preset.css";
+@import "@anhourmail/ui/styles/tokens.css";
+@import "@anhourmail/ui/styles/type.css";
+@import "../styles/site.css";
+
+@source "../../../../packages/ui/src";
+@source "../../../../docs/public";
+@source "../../node_modules/fumadocs-ui/dist";
+@source "../../../../node_modules/fumadocs-ui/dist";
