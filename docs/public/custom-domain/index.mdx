@@ -24,8 +24,11 @@ up and help your mail reach inboxes.
 
 ## How long does it take?
 
-DNS changes usually show up within minutes, but some providers take a few hours. The console re-checks
-automatically, and you can press **Check again** at any time.
+DNS changes usually show up within minutes, but some providers take a few hours. The console re-checks a new
+domain every few minutes for its first week, and you can press **Check now** at any time. Each record shows
+**Found**, **Missing**, **Different value** (with what we found instead) or **Couldn't check** (try again shortly).
+
+Once the required records are found, the domain shows **Setting up** for a minute or two, then **Active**.
 
 ## Common problems
 
@@ -34,4 +37,14 @@ automatically, and you can press **Check again** at any time.
 - **There is already an SPF record.** A domain can have only one. Merge ours into the existing one instead of
   adding a second.
 - **Verification is still pending after a day.** Make sure there is no typo in the verification code, then press
-  **Check again**.
+  **Check now**.
+
+## Removing a domain
+
+Open the domain and choose **Remove domain**. Remove or move its mailboxes and aliases first; the console tells
+you if any still use it. You can add the domain again later.
+
+## If someone else already added your domain
+
+Adding a domain doesn't claim it: only the account whose verification record is published can make it active. If
+the console says the domain is connected to another account and it's yours, contact support.

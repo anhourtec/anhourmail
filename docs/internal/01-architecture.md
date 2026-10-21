@@ -68,6 +68,11 @@ mail clients ─► Stalwart 465/587/993/995/4190 (TLS by Stalwart itself)    MX
 ## Source of truth and reconciliation
 
 - **Postgres is the source of truth for intent:** which accounts, domains, mailboxes and aliases should exist, with which quotas and limits.
+- **Customer domains:** the control plane checks DNS through the `DnsResolver` port (adapters/dns: system resolver
+  in production; in development `.test` names answer as fully configured, `unverified-*` as empty). A domain turns
+  `active` only when the required records pass for _its_ ownership token; then a `domain.ensure` job adds it to
+  Stalwart. Removal marks it `removing` and a `domain.remove` job takes it off Stalwart (refused while accounts
+  remain) before the row is deleted.
 - **Stalwart is the source of truth for mail state:** messages, mail credentials, DKIM keys and their published zone (`dnsZoneFile`).
 - Provisioning is a **job**, never an inline request (CLAUDE.md rule 26): write intent (`status = pending`), enqueue, the worker applies it through `stalwart-client` (idempotent upserts by natural key), then set `active` or `failed` with an error code.
 - The **reconciler** (scheduler, every 15 min) compares Postgres intent with Stalwart (`x:Domain`, `x:Account` lists). It **reports** drift (audit `platform.reconciler.drift` + alert) and re-applies missing non-destructive state. It **never deletes** a Stalwart account or mail automatically. Deletions are explicit jobs with a grace period.

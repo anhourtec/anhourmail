@@ -35,11 +35,12 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 | #    | Migration                          | Commit      | Date       | Change                                                                                   | Rollback |
 | ---- | ---------------------------------- | ----------- | ---------- | ---------------------------------------------------------------------------------------- | -------- |
-| 0004 | `0004_waitlist_opt_in_and_invites` | uncommitted | 2026-10-21 | Waitlist double opt-in columns; invite source/waitlist link/acceptance                   | Safe     |
-| 0003 | `0003_provisioning_queue`          | uncommitted | 2026-10-21 | `provisioning_job` table; `customer_domain.stalwart_id/last_error`, `mailbox.last_error` | Safe     |
-| 0002 | `0002_user_first_last_name`        | uncommitted | 2026-10-21 | `auth_user.first_name` (not null, default '') and `last_name`                            | Safe     |
-| 0001 | `0001_audit_append_only`           | uncommitted | 2026-10-21 | Trigger blocking UPDATE/DELETE/TRUNCATE on `audit_log`                                   | Caution  |
-| 0000 | `0000_init`                        | uncommitted | 2026-10-21 | Initial control-plane schema (14 tables)                                                 | Safe     |
+| 0005 | `0005_domain_claims`               | uncommitted | 2026-10-21 | Domain names unique per account; across accounts only once claimed (verified)            | Caution  |
+| 0004 | `0004_waitlist_opt_in_and_invites` | `3e75c1f`   | 2026-10-21 | Waitlist double opt-in columns; invite source/waitlist link/acceptance                   | Safe     |
+| 0003 | `0003_provisioning_queue`          | `843be65`   | 2026-10-21 | `provisioning_job` table; `customer_domain.stalwart_id/last_error`, `mailbox.last_error` | Safe     |
+| 0002 | `0002_user_first_last_name`        | `710e664`   | 2026-10-21 | `auth_user.first_name` (not null, default '') and `last_name`                            | Safe     |
+| 0001 | `0001_audit_append_only`           | `710e664`   | 2026-10-21 | Trigger blocking UPDATE/DELETE/TRUNCATE on `audit_log`                                   | Caution  |
+| 0000 | `0000_init`                        | `710e664`   | 2026-10-21 | Initial control-plane schema (14 tables)                                                 | Safe     |
 
 ## Details
 
@@ -54,7 +55,17 @@ Each migration gets a section in this shape:
 - Rollback:
 ```
 
-### 0004_waitlist_opt_in_and_invites · uncommitted · 2026-10-21 · Safe
+### 0005_domain_claims · uncommitted · 2026-10-21 · Caution
+
+- Added: unique index `customer_domain_account_name_idx` (account_id, name); partial unique index
+  `customer_domain_claimed_name_idx` on name where `status <> 'pending_dns'`.
+- Changed: —
+- Removed: the global unique constraint `customer_domain_name_unique`.
+- Data: none. Older code may now meet two pending rows with the same name in different accounts.
+- Rollback: drop both indexes and re-add the unique constraint (fails if two accounts hold the same pending name —
+  delete the unverified duplicates first).
+
+### 0004_waitlist_opt_in_and_invites · `3e75c1f` · 2026-10-21 · Safe
 
 - Added: `waitlist_entry.confirm_token_hash` (unique index), `confirm_expires_at`, `confirm_sent_at`, `confirmed_at`;
   `invite.source` (default `staff`), `invite.waitlist_entry_id`, `invite.accepted_user_id`, `invite.accepted_at`.
@@ -63,7 +74,7 @@ Each migration gets a section in this shape:
 - Data: none. Existing waitlist rows stay `pending` with no token (a re-join issues one).
 - Rollback: drop the columns and the index (outstanding confirmation and invite links stop working).
 
-### 0003_provisioning_queue · uncommitted · 2026-10-21 · Safe
+### 0003_provisioning_queue · `843be65` · 2026-10-21 · Safe
 
 - Added: `provisioning_job` (kind, subject_id, status, attempts, last_error, run_after, locked_at) with indexes
   on (status, run_after) and (kind, subject_id); `customer_domain.stalwart_id`, `customer_domain.last_error`,
@@ -73,7 +84,7 @@ Each migration gets a section in this shape:
 - Data: none.
 - Rollback: drop the table and columns (queued jobs are lost; desired state is unaffected and can be re-enqueued).
 
-### 0002_user_first_last_name · uncommitted · 2026-10-21 · Safe
+### 0002_user_first_last_name · `710e664` · 2026-10-21 · Safe
 
 - Added: `auth_user.first_name text not null default ''`, `auth_user.last_name text`. `name` is the display name.
 - Changed: —
@@ -81,7 +92,7 @@ Each migration gets a section in this shape:
 - Data: existing rows get `first_name = ''` (seeded/dev users only).
 - Rollback: drop the two columns.
 
-### 0001_audit_append_only · uncommitted · 2026-10-21 · Caution
+### 0001_audit_append_only · `710e664` · 2026-10-21 · Caution
 
 - Added: `audit_log_append_only()` function and two triggers on `audit_log` (row-level BEFORE UPDATE OR DELETE,
   statement-level BEFORE TRUNCATE) that raise `insufficient_privilege` — the table is append-only for every role,
@@ -92,7 +103,7 @@ Each migration gets a section in this shape:
 - Rollback: drop the triggers and function. Only do it for an audited retention purge (`audit.md` "Retention"),
   then re-apply.
 
-### 0000_init · uncommitted · 2026-10-21 · Safe
+### 0000_init · `710e664` · 2026-10-21 · Safe
 
 - Added: better-auth tables (`auth_user`, `auth_session`, `auth_account`, `auth_verification`);
   `platform_role_assignment`, `user_profile`, `customer_account`, `account_membership`, `invite`, `waitlist_entry`
