@@ -1,0 +1,137 @@
+# AnhourMail — local development stack (`npm run stack:up`).
+#
+#   Postgres   127.0.0.1:43432  -> 5432   control plane (+ anhourmail_test for integration tests)
+#   Redis      127.0.0.1:43379  -> 6379
+#   Stalwart   127.0.0.1:43080  -> 8080   HTTP: JMAP + management (dev only; production is HTTPS behind NGINX)
+#     mail protocols on the REAL standard ports, exactly as in production (CLAUDE.md rule 18):
+#              127.0.0.1:25     -> 25     SMTP (inbound)
+#              127.0.0.1:465    -> 465    SMTP submission, implicit TLS (self-signed in dev)
+#              127.0.0.1:587    -> 587    SMTP submission, STARTTLS
+#              127.0.0.1:143    -> 143    IMAP, STARTTLS
+#              127.0.0.1:993    -> 993    IMAP, implicit TLS
+#              127.0.0.1:110    -> 110    POP3, STARTTLS
+#              127.0.0.1:995    -> 995    POP3, implicit TLS
+#              127.0.0.1:4190   -> 4190   ManageSieve
+#   Mailpit    127.0.0.1:43125  -> 1025   SMTP sink; UI http://127.0.0.1:43026
+#
+# Mail isolation (CLAUDE.md rule 19): Stalwart and Mailpit sit on `mailnet`, an internal network with no
+# route to the internet. Even a misconfigured route cannot deliver outside the machine. `mail-edge` only
+# forwards host -> container connections. On top of that, Stalwart's outbound strategy sends every
+# non-local recipient to Mailpit (infra/stalwart/dev-plan.ts).
+#
+# Ports are overridable via .env: 43xxx for dev services, standard ports for mail (`npm run ports:check`).
+name: anhourmail
+
+x-mail-ports: &mail-ports
+  - "${DEV_BIND_ADDRESS:-127.0.0.1}:${STALWART_HTTP_PORT:-43080}:43080"
+  - "${DEV_BIND_ADDRESS:-127.0.0.1}:${STALWART_SMTP_PORT:-25}:43025"
+  - "${DEV_BIND_ADDRESS:-127.0.0.1}:${STALWART_IMAP_PORT:-143}:43143"
+  - "${DEV_BIND_ADDRESS:-127.0.0.1}:${STALWART_SUBMISSIONS_PORT:-465}:43465"
+  - "${DEV_BIND_ADDRESS:-127.0.0.1}:${STALWART_SUBMISSION_PORT:-587}:43587"
+  - "${DEV_BIND_ADDRESS:-127.0.0.1}:${STALWART_IMAPS_PORT:-993}:43993"
+  - "${DEV_BIND_ADDRESS:-127.0.0.1}:${STALWART_POP3_PORT:-110}:43110"
+  - "${DEV_BIND_ADDRESS:-127.0.0.1}:${STALWART_POP3S_PORT:-995}:43995"
+  - "${DEV_BIND_ADDRESS:-127.0.0.1}:${STALWART_SIEVE_PORT:-4190}:43190"
+  - "${DEV_BIND_ADDRESS:-127.0.0.1}:${MAILPIT_SMTP_PORT:-43125}:43125"
+  - "${DEV_BIND_ADDRESS:-127.0.0.1}:${MAILPIT_UI_PORT:-43026}:43026"
+
+services:
+  postgres:
+    image: postgres:17.11-alpine
+    profiles: [dev, ci]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-anhourmail}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-anhourmail}
+    ports:
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_HOST_PORT:-43432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:8.8.3-alpine
+    profiles: [dev, ci]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}"]
+    ports:
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:${REDIS_HOST_PORT:-43379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", 'redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+  stalwart:
+    # Pinned tag + digest; upgrades are deliberate (CLAUDE.md rule 22, docs/internal/08-operations.md).
+    image: stalwartlabs/stalwart:v0.16.27@sha256:c429b311c93db5606598abc1c68225a85a6953183848ae01bee9c6a98885836c
+    profiles: [dev, ci]
+    hostname: mail.dev.test
+    environment:
+      # Dev only: fixed admin for seeding. Never set in production (it works in normal mode too).
+      STALWART_RECOVERY_ADMIN: "${STALWART_DEV_ADMIN_USER:-admin}:${STALWART_DEV_ADMIN_PASSWORD:?set STALWART_DEV_ADMIN_PASSWORD in .env}"
+      STALWART_PUBLIC_URL: "http://127.0.0.1:${STALWART_HTTP_PORT:-43080}"
+    volumes:
+      - ./infra/stalwart/config.json:/etc/stalwart/config.json:ro
+      # Admin WebUI bundle, fetched once by scripts/dev-seed.ts (pinned version + sha256); Stalwart has no egress.
+      - ./infra/stalwart/.generated:/opt/anhourmail:ro
+      - stalwartdata:/var/lib/stalwart
+    networks: [mailnet]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/healthz/ready >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  mailpit:
+    image: axllent/mailpit:v1.31.6
+    profiles: [dev, ci]
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+      MP_MAX_MESSAGES: "5000"
+    networks: [mailnet]
+
+  # Host -> container forwarder for the isolated mail network. Carries inbound connections only.
+  mail-edge:
+    image: alpine/socat:1.8.0.3
+    profiles: [dev, ci]
+    depends_on:
+      stalwart: { condition: service_healthy }
+      mailpit: { condition: service_started }
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        socat TCP-LISTEN:43080,fork,reuseaddr TCP:stalwart:8080 &
+        socat TCP-LISTEN:43025,fork,reuseaddr TCP:stalwart:25 &
+        socat TCP-LISTEN:43465,fork,reuseaddr TCP:stalwart:465 &
+        socat TCP-LISTEN:43587,fork,reuseaddr TCP:stalwart:587 &
+        socat TCP-LISTEN:43143,fork,reuseaddr TCP:stalwart:143 &
+        socat TCP-LISTEN:43110,fork,reuseaddr TCP:stalwart:110 &
+        socat TCP-LISTEN:43993,fork,reuseaddr TCP:stalwart:993 &
+        socat TCP-LISTEN:43995,fork,reuseaddr TCP:stalwart:995 &
+        socat TCP-LISTEN:43190,fork,reuseaddr TCP:stalwart:4190 &
+        socat TCP-LISTEN:43125,fork,reuseaddr TCP:mailpit:1025 &
+        socat TCP-LISTEN:43026,fork,reuseaddr TCP:mailpit:8025 &
+        wait
+    ports: *mail-ports
+    networks: [default, mailnet]
+
+volumes:
+  pgdata:
+  redisdata:
+  stalwartdata:
+
+networks:
+  default:
+  mailnet:
+    internal: true

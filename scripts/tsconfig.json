@@ -1,0 +1,5 @@
+{
+  "extends": "@anhourmail/config/tsconfig.base.json",
+  "compilerOptions": { "module": "esnext", "target": "ES2023" },
+  "include": ["**/*.ts", "../infra/**/*.ts"]
+}
