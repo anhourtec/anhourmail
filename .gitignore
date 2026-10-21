@@ -1,0 +1,55 @@
+# dependencies
+node_modules/
+
+# build output
+.next/
+out/
+dist/
+build/
+.source/
+*.tsbuildinfo
+next-env.d.ts
+/coverage
+
+# misc
+.DS_Store
+*.pem
+*.key
+npm-debug.log*
+
+# env files (all of them — only .env.example is committed)
+.env
+.env.*
+!.env.example
+
+# local demo/test credentials
+credentials.md
+
+# Playwright MCP output: screenshots, traces, snapshots (see CLAUDE.md rule 6)
+.playwright-mcp/
+/playwright-report/
+/test-results/
+
+# local-only session log (kept on the working machine)
+docs/internal/handoff.md
+
+# dev-stack generated state (Stalwart data, generated secrets)
+infra/stalwart/data/
+infra/stalwart/.generated/
+
+# local-only notes and anything that may hold private operational detail (CLAUDE.md rules 44, 52)
+docs/internal/private/
+*.local.md
+.cicd/.secrets*
+deploy/.env*
+deploy/certs/
+
+# production deployment config lives in the private ops repo, never here
+docker-compose.prod.yml
+deploy/docker-compose.prod*.yml
+deploy/nginx/
+ops/
+
+# root public/ is a local drop folder for brand files; the source of truth is packages/ui/assets/brand and it
+# also holds third-party logos that are never used or committed (CLAUDE.md rule 53)
+/public/

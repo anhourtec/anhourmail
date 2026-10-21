@@ -1,0 +1,22 @@
+# Keep build contexts small and free of local secrets.
+.git
+**/node_modules
+**/.next
+**/.source
+**/out
+**/dist
+coverage
+playwright-report
+test-results
+.playwright-mcp
+.env
+.env.*
+!.env.example
+credentials.md
+*.local.md
+docs/internal/handoff.md
+docs/internal/private
+infra/stalwart/.generated
+*.pem
+*.key
+*.tsbuildinfo

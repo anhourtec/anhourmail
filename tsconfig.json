@@ -1,0 +1,5 @@
+{
+  "extends": "@anhourmail/config/tsconfig.base.json",
+  "compilerOptions": { "lib": ["ES2023", "DOM"] },
+  "include": ["*.config.ts", "tests/**/*.ts", "infra/**/*.ts"]
+}

@@ -1,0 +1,9 @@
+npm run check:credentials
+npm run check:skeletons
+npm run check:logging
+npm run check:docs
+npm run check:spdx
+npm run check:audit
+npm exec -- lint-staged
+npm run typecheck
+npm run check:brand

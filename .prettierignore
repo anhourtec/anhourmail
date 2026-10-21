@@ -1,0 +1,16 @@
+node_modules
+.next
+out
+dist
+coverage
+playwright-report
+test-results
+.playwright-mcp
+**/.source
+package-lock.json
+packages/adapters/drizzle/meta
+infra/stalwart/.generated
+docs/internal/research
+LICENSE
+**/LICENSE
+docs/internal/audit.md

@@ -1,0 +1,83 @@
+{
+  "name": "anhourmail",
+  "version": "0.0.0",
+  "private": true,
+  "description": "AnhourMail \u2014 private, fast hosted email. Console, webmail, marketing site, docs and worker.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12 <23"
+  },
+  "packageManager": "npm@10.9.4",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:site": "npm run dev --workspace @anhourmail/site",
+    "dev:docs": "npm run dev --workspace @anhourmail/docs",
+    "dev:worker": "npm run dev --workspace @anhourmail/worker",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint . --max-warnings=0",
+    "format": "prettier --write .",
+    "check": "npm run lint && npm run format:check && npm run typecheck && npm run check:skeletons && npm run check:logging && npm run check:docs && npm run check:spdx && npm run check:audit && npm run check:credentials && npm run check:licenses && npm run check:notices && npm run check:brand",
+    "check:skeletons": "node scripts/check-skeletons.mjs",
+    "check:logging": "node scripts/check-logging.mjs",
+    "check:docs": "node scripts/check-docs.mjs",
+    "stack:up": "node scripts/check-ports.mjs && docker compose --profile dev up -d --wait",
+    "stack:down": "docker compose --profile dev down",
+    "stack:verify": "tsx --env-file-if-exists=.env scripts/dev-verify.ts",
+    "prepare": "husky",
+    "ports:check": "node scripts/check-ports.mjs",
+    "format:check": "prettier --check .",
+    "check:spdx": "node scripts/check-spdx.mjs",
+    "notices": "node scripts/third-party-notices.mjs",
+    "check:notices": "node scripts/third-party-notices.mjs --check",
+    "check:licenses": "node scripts/check-licenses.mjs",
+    "check:audit": "node scripts/check-audit.mjs",
+    "check:credentials": "node scripts/check-credentials.mjs",
+    "test": "vitest run --coverage",
+    "test:watch": "vitest",
+    "test:int": "vitest run --config vitest.int.config.ts",
+    "test:rbac": "tsx --env-file-if-exists=.env scripts/rbac-e2e.ts",
+    "test:e2e": "playwright test",
+    "db:migrate": "npm run db:migrate --workspace @anhourmail/adapters",
+    "db:generate": "npm run db:generate --workspace @anhourmail/adapters",
+    "db:seed": "tsx --env-file-if-exists=.env scripts/seed/index.ts",
+    "brand:sync": "node scripts/sync-brand.mjs",
+    "check:brand": "node scripts/sync-brand.mjs --check",
+    "dev:reset": "node scripts/dev-reset.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@next/eslint-plugin-next": "16.4.2",
+    "@playwright/test": "1.64.1",
+    "@types/node": "22.20.0",
+    "@vitest/coverage-v8": "5.0.5",
+    "@vitest/eslint-plugin": "1.6.27",
+    "eslint": "10.13.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-playwright": "2.12.1",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.13.0",
+    "husky": "9.1.7",
+    "lint-staged": "16.4.0",
+    "prettier": "3.9.10",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.0",
+    "vitest": "5.0.5",
+    "concurrently": "10.0.6"
+  },
+  "lint-staged": {
+    "*.{js,mjs,ts,tsx}": [
+      "eslint --max-warnings=0 --fix",
+      "prettier --write"
+    ],
+    "*.{json,css,md,mdx,yml,yaml}": [
+      "prettier --write"
+    ]
+  }
+}
