@@ -1,0 +1,39 @@
+{
+  "name": "@anhourmail/ui",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": [
+    "*.css"
+  ],
+  "exports": {
+    "./cn": "./src/cn.ts",
+    "./fonts": "./src/fonts.ts",
+    "./skeletons": "./src/skeletons.tsx",
+    "./styles/tokens.css": "./src/styles/tokens.css",
+    "./styles/type.css": "./src/styles/type.css",
+    "./anhourtec-logo": "./src/anhourtec-logo.tsx",
+    "./theme-switch": "./src/theme-switch.tsx",
+    "./page-header": "./src/page-header.tsx",
+    "./wordmark": "./src/wordmark.tsx"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "clsx": "2.1.1",
+    "geist": "1.8.1",
+    "tailwind-merge": "3.7.0",
+    "lucide-react": "1.61.0",
+    "next-themes": "0.4.6"
+  },
+  "peerDependencies": {
+    "next": "16.4.2",
+    "react": "19.3.1"
+  },
+  "devDependencies": {
+    "@anhourmail/config": "0.0.0",
+    "@types/react": "19.3.0"
+  }
+}

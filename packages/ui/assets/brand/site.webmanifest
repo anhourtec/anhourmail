@@ -1,0 +1,13 @@
+{
+  "name": "AnhourMail",
+  "short_name": "AnhourMail",
+  "description": "Private, fast email. Open source. By Anhourtec.",
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#0077c8",
+  "background_color": "#ffffff",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
