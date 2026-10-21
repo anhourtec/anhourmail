@@ -55,7 +55,7 @@ Each migration gets a section in this shape:
 - Rollback:
 ```
 
-### 0005_domain_claims · uncommitted · 2026-10-21 · Caution
+### 0005_domain_claims · `d628175` · 2026-10-21 · Caution
 
 - Added: unique index `customer_domain_account_name_idx` (account_id, name); partial unique index
   `customer_domain_claimed_name_idx` on name where `status <> 'pending_dns'`.
