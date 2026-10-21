@@ -33,6 +33,8 @@ const COLUMNS: { title: string; links: FooterLink[] }[] = [
       { label: "Changelog", href: "/changelog" },
       { label: "Support", href: "/support" },
       { label: "Switch to AnhourMail", href: "/switch" },
+      { label: "Transparency report", href: "/transparency" },
+      { label: "Where the money goes", href: "/costs" },
     ],
   },
   {

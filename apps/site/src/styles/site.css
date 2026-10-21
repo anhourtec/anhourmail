@@ -169,6 +169,9 @@
     opacity: 1;
     transform: none;
   }
+  .am-site-reveal--visible {
+    opacity: 1;
+  }
   @media (prefers-reduced-motion: reduce) {
     .am-site-reveal {
       opacity: 1;
@@ -1050,4 +1053,9 @@
 main:has(> .am-site-night-fade:last-child) + footer {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
+}
+
+/* Form error text on night bands (light enough for 4.5:1 on navy, in both themes). */
+.am-site-error-on-dark {
+  color: rgb(252 165 165);
 }

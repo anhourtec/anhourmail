@@ -81,6 +81,7 @@ export default function PricingPage() {
           <Reveal>
             <p className="am-small text-center">Planned pricing — final prices are confirmed before the beta opens.</p>
           </Reveal>
+          <h2 className="sr-only">Plans</h2>
           <PlanCards />
         </div>
       </section>

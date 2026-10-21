@@ -234,6 +234,7 @@ export default function HomePage() {
 
       {/* 02 · Seam panel takes the overlap: the essentials as an editorial grid */}
       <section className="am-site-seam px-5 pt-[200px] pb-16 sm:pt-[250px] lg:pt-[300px]">
+        <h2 className="sr-only">Highlights</h2>
         <EssentialsGrid />
       </section>
 

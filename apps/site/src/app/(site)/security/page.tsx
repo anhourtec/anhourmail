@@ -95,8 +95,9 @@ export default function SecurityPage() {
             <h2 className="am-site-h3">Transparency report</h2>
             <Prose>
               <p>
-                We will publish a regular report counting the requests for user data we receive and how we answered
-                them. The first one comes after launch.
+                We publish a regular report counting the requests for user data we receive and how we answered them —
+                see the <Link href="/transparency">transparency report</Link>. What your subscription pays for is on{" "}
+                <Link href="/costs">where the money goes</Link>.
               </p>
             </Prose>
           </div>

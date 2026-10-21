@@ -61,7 +61,9 @@ export function Reveal({
       obs.unobserve(el);
     };
   }, [onLoad]);
-  const cls = `am-site-reveal ${variant === "scale" ? "am-site-reveal--scale" : ""} ${className ?? ""}`;
+  // Above-the-fold (onLoad) reveals move but never start invisible: the hero text is the largest paint, and an
+  // opacity fade would hold it back until after hydration (Lighthouse LCP).
+  const cls = `am-site-reveal ${variant === "scale" ? "am-site-reveal--scale" : ""} ${onLoad ? "am-site-reveal--visible" : ""} ${className ?? ""}`;
   return (
     <Tag ref={ref as never} className={cls} style={{ transitionDelay: `${delayMs}ms`, ...style }}>
       {children}

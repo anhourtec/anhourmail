@@ -41,7 +41,7 @@ export default function FeaturesPage() {
                     <h2 className="am-site-h4">{f.title}</h2>
                     <p className="flex-1 text-muted-foreground text-sm">{f.blurb}</p>
                     <span className="am-site-link-arrow text-sm">
-                      Learn more
+                      Learn more<span className="sr-only"> about {f.title}</span>
                       <ArrowRightIcon className="size-4" aria-hidden="true" />
                     </span>
                   </Link>

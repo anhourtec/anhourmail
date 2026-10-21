@@ -28,7 +28,7 @@ import { Breadcrumbs, type Crumb } from "@anhourmail/ui/page-header";
 import { PROTOCOL_LIST } from "@/lib/ia";
 
 import { Reveal } from "./reveal";
-import { WaitlistPlaceholder } from "./waitlist-placeholder";
+import { WaitlistForm } from "./waitlist-form";
 
 type Icon = ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>;
 
@@ -176,6 +176,7 @@ export function FeatureRow({
         {href ? (
           <Link href={href} className="am-site-link-arrow mt-1">
             Learn more
+            <span className="sr-only"> about {typeof title === "string" ? title : "this feature"}</span>
             <ArrowRightIcon className="size-4" aria-hidden="true" />
           </Link>
         ) : null}
@@ -334,7 +335,7 @@ export function CtaBand({ id = "waitlist", title = "Get your inbox back." }: { i
         <p className="max-w-[46ch] text-white/75">
           We’ll invite people in small groups. One email when your invite is ready, nothing else.
         </p>
-        <WaitlistPlaceholder />
+        <WaitlistForm />
       </div>
     </section>
   );

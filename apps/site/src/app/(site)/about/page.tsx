@@ -36,8 +36,9 @@ const BLOCKS = [
     body: (
       <p>
         Paid plans — {PLANS.plus.name} and {PLANS.supporter.name} — fund the service, including the free plan. There are
-        no ads and no data deals. We plan to publish a public breakdown of what running {BRAND.product} costs, so you
-        can see where the money goes.
+        no ads and no data deals. We publish what running {BRAND.product} costs, so you can see{" "}
+        <Link href="/costs">where the money goes</Link>, and a <Link href="/transparency">transparency report</Link> on
+        requests for user data.
       </p>
     ),
   },
