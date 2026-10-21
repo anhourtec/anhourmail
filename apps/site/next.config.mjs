@@ -14,7 +14,6 @@ try {
   // no .env (CI, production): configuration comes from the environment
 }
 const https = process.env.APP_PROTOCOL === "https";
-const webInternal = process.env.WEB_INTERNAL_URL ?? "http://127.0.0.1:43200";
 
 /** LAN IPv4 addresses, so the dev server (bound to 0.0.0.0) can be opened from other devices on the network. */
 const lanIps = Object.values(os.networkInterfaces())
@@ -23,9 +22,8 @@ const lanIps = Object.values(os.networkInterfaces())
   .map((i) => i.address);
 
 /**
- * Marketing site + public docs + changelog + credits (anhourmail.com). A Next server with prerendered pages,
- * not a static export: `/api/public/*` is rewritten to the console app so the waitlist form posts
- * same-origin (no CORS). Zero third-party requests: self-hosted fonts, no analytics, no cookies.
+ * Marketing site + public docs + changelog + credits (anhourmail.com). A Next server with prerendered pages.
+ * Sign-up and sign-in live on the console (`APP_URL`); the site only links there. Zero third-party requests: self-hosted fonts, no analytics, no cookies.
  */
 const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
@@ -50,7 +48,6 @@ const nextConfig = {
   transpilePackages: ["@anhourmail/shared", "@anhourmail/ui"],
   allowedDevOrigins: ["127.0.0.1", "localhost", "localhost", "*.localhost", ...lanIps],
   headers: async () => [{ source: "/:path*", headers: securityHeaders }],
-  rewrites: async () => [{ source: "/api/public/:path*", destination: `${webInternal}/api/public/:path*` }],
 };
 
 const withMDX = createMDX();

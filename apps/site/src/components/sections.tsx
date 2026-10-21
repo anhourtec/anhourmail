@@ -2,7 +2,7 @@
 /**
  * Building blocks shared by every marketing page, so the site keeps one visual and motion language
  * (BookYourPTO pattern): page hero, section heads, alternating feature rows, the essentials grid, plan cards,
- * FAQ and the closing waitlist band. No pill clouds, no floating callouts (docs/internal/branding.md).
+ * FAQ and the closing call to action. No pill clouds, no floating callouts (docs/internal/branding.md).
  */
 import Link from "next/link";
 import type { ComponentType, ReactNode } from "react";
@@ -26,9 +26,9 @@ import { ADDONS, BILLING, formatPrice, PLAN_ORDER, PLANS, PRODUCT_DOMAIN } from 
 import { Breadcrumbs, type Crumb } from "@anhourmail/ui/page-header";
 
 import { PROTOCOL_LIST } from "@/lib/ia";
+import { SIGN_IN_URL, SIGN_UP_URL } from "@/lib/site";
 
 import { Reveal } from "./reveal";
-import { WaitlistForm } from "./waitlist-form";
 
 type Icon = ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>;
 
@@ -79,10 +79,10 @@ export function PageHero({
             delayMs={360}
             className="mt-8 flex w-full flex-col items-center justify-center gap-3 sm:w-auto sm:flex-row"
           >
-            <Link href="#waitlist" className="am-site-btn am-site-btn--primary h-[50px] w-full px-6 sm:w-auto">
-              Join the waitlist
+            <a href={SIGN_UP_URL} className="am-site-btn am-site-btn--primary h-[50px] w-full px-6 sm:w-auto">
+              Get started
               <ArrowRightIcon className="size-4" aria-hidden="true" />
-            </Link>
+            </a>
             <Link href="/pricing" className="am-site-btn am-site-btn--glass h-[50px] w-full px-6 sm:w-auto">
               See pricing
             </Link>
@@ -260,7 +260,7 @@ export function PlanCards() {
               <p className="am-small -mt-3">
                 {p.price
                   ? `or ${formatPrice(p.price.CAD, "CAD")} CAD per ${BILLING.interval}`
-                  : "Invite-only while we grow"}
+                  : "One free account per person"}
               </p>
               <ul className="flex flex-col gap-2.5 border-t pt-5 text-sm">
                 {[
@@ -319,8 +319,8 @@ export function FaqList({ items }: { items: readonly { q: string; a: ReactNode }
   );
 }
 
-/** Closing waitlist band; flows straight into the dark footer. */
-export function CtaBand({ id = "waitlist", title = "Get your inbox back." }: { id?: string; title?: string }) {
+/** Closing call to action; flows straight into the dark footer. */
+export function CtaBand({ id = "get-started", title = "Get your inbox back." }: { id?: string; title?: string }) {
   return (
     <section id={id} className="am-site-night-fade relative mt-[var(--am-site-pad-y)] overflow-hidden">
       <div aria-hidden="true" className="am-site-sky opacity-60">
@@ -333,9 +333,17 @@ export function CtaBand({ id = "waitlist", title = "Get your inbox back." }: { i
         </span>
         <h2 className="am-site-h2 max-w-[18ch]">{title}</h2>
         <p className="max-w-[46ch] text-white/75">
-          We’ll invite people in small groups. One email when your invite is ready, nothing else.
+          Create an account, take a free @{PRODUCT_DOMAIN} address, and connect your own domain whenever you’re ready.
         </p>
-        <WaitlistForm />
+        <div className="flex w-full flex-col items-center justify-center gap-3 sm:w-auto sm:flex-row">
+          <a href={SIGN_UP_URL} className="am-site-btn am-site-btn--primary h-[50px] w-full px-6 sm:w-auto">
+            Get started
+            <ArrowRightIcon className="size-4" aria-hidden="true" />
+          </a>
+          <a href={SIGN_IN_URL} className="am-site-btn am-site-btn--glass h-[50px] w-full px-6 sm:w-auto">
+            Sign in
+          </a>
+        </div>
       </div>
     </section>
   );

@@ -7,6 +7,7 @@ import { ArrowRightIcon, ArrowUpRightIcon, CodeIcon } from "lucide-react";
 import { BRAND } from "@anhourmail/shared";
 
 import { FEATURE_PAGES, featureHref } from "@/lib/ia";
+import { SIGN_UP_URL } from "@/lib/site";
 
 import { Logo } from "./logo";
 import { ThemeToggle } from "./theme-toggle";
@@ -80,10 +81,10 @@ export function SiteFooter() {
               Private, fast email on your own domain. Open source, with no ads and no tracking.
             </p>
             <div className="flex flex-wrap items-center gap-2.5">
-              <Link href="/#waitlist" className="am-site-btn am-site-btn--primary h-10 px-4 text-sm">
-                Join the waitlist
+              <a href={SIGN_UP_URL} className="am-site-btn am-site-btn--primary h-10 px-4 text-sm">
+                Get started
                 <ArrowRightIcon className="size-4" aria-hidden="true" />
-              </Link>
+              </a>
               <a href={REPO} className="am-site-btn am-site-btn--glass h-10 px-4 text-sm ring-1 ring-white/10">
                 <CodeIcon className="size-4" aria-hidden="true" />
                 Read the code

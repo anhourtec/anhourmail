@@ -11,7 +11,7 @@ import { CtaBand, FaqList, PageHero, PlanCards, SectionHead } from "@/components
 
 export const metadata: Metadata = {
   title: "Pricing",
-  description: `AnhourMail plans: free invite-only address, paid plans billed once a ${BILLING.interval} with a ${String(BILLING.refundWindowDays)}-day refund window.`,
+  description: `AnhourMail plans: a free address, paid plans billed once a ${BILLING.interval} with a ${String(BILLING.refundWindowDays)}-day refund window.`,
   alternates: { canonical: "/pricing" },
   openGraph: { title: "Pricing · AnhourMail", url: "/pricing" },
 };
@@ -27,7 +27,6 @@ const ROWS: readonly { label: string; value: (p: Plan) => RowValue }[] = [
   { label: "Webmail and every mail app", value: () => true },
   { label: "Export anytime", value: () => true },
   { label: "Supporter badge and early features", value: (p) => p.supporterBadge },
-  { label: "Sign-up", value: (p) => (p.inviteOnly ? "Invite-only" : "Open") },
 ];
 
 function Cell({ v }: { v: RowValue }) {

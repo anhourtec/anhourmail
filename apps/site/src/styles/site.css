@@ -1049,13 +1049,8 @@
   color: white;
 }
 
-/* When a page ends on the dark waitlist band, the footer continues it: no rounded seam, just a hairline. */
+/* When a page ends on the dark closing band, the footer continues it: no rounded seam, just a hairline. */
 main:has(> .am-site-night-fade:last-child) + footer {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
-}
-
-/* Form error text on night bands (light enough for 4.5:1 on navy, in both themes). */
-.am-site-error-on-dark {
-  color: rgb(252 165 165);
 }

@@ -253,7 +253,7 @@ export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
       {
         icon: BellIcon,
         title: "Status",
-        body: "The webmail arrives with the invite-only beta. Until then, any IMAP app works.",
+        body: "The webmail arrives with the beta. Until then, any IMAP app works.",
       },
     ],
     faq: [

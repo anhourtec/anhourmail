@@ -21,7 +21,7 @@ const STEPS = [
   {
     icon: InboxIcon,
     title: "Get your new address",
-    body: `Join the waitlist. When your invite arrives, take a free @${PRODUCT_DOMAIN} address or connect a domain you own.`,
+    body: `Create an account, then take a free @${PRODUCT_DOMAIN} address or connect a domain you own.`,
   },
   {
     icon: ForwardIcon,

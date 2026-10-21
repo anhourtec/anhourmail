@@ -50,7 +50,6 @@ export const SITE_ROUTES = [
   "/about",
   "/support",
   "/switch",
-  "/waitlist",
   "/transparency",
   "/costs",
   "/blog",

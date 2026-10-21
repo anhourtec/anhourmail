@@ -4,7 +4,7 @@ import Link from "next/link";
 import { ArrowRightIcon, ChevronDownIcon, MenuIcon } from "lucide-react";
 
 import { FEATURE_PAGES, featureHref } from "@/lib/ia";
-import { NAV_LINKS } from "@/lib/site";
+import { NAV_LINKS, SIGN_IN_URL, SIGN_UP_URL } from "@/lib/site";
 
 import { FEATURE_ICONS } from "./feature-icons";
 import { Logo } from "./logo";
@@ -67,12 +67,15 @@ export function SiteHeader() {
         </ul>
         <div className="ml-auto flex items-center gap-1 lg:ml-0">
           <ThemeToggle onDark />
-          <Link
-            href="/#waitlist"
+          <a href={SIGN_IN_URL} className="am-site-nav-link hidden sm:inline-flex">
+            Sign in
+          </a>
+          <a
+            href={SIGN_UP_URL}
             className="am-site-btn am-site-btn--primary hidden h-[42px] rounded-[16px] px-4 text-sm sm:inline-flex"
           >
-            Join the waitlist
-          </Link>
+            Get started
+          </a>
           <details className="am-site-nav-menu relative lg:hidden">
             <summary className="am-site-nav-link cursor-pointer list-none" aria-label="Menu">
               <MenuIcon className="size-5" aria-hidden="true" />
@@ -93,9 +96,13 @@ export function SiteHeader() {
               <Link href="/switch" className="am-site-nav-link flex">
                 Switch to AnhourMail
               </Link>
-              <Link href="/#waitlist" className="am-site-nav-link flex text-[rgb(var(--am-cyan-hi))]">
-                Join the waitlist
-              </Link>
+              <div className="my-2 border-white/10 border-t" />
+              <a href={SIGN_IN_URL} className="am-site-nav-link flex">
+                Sign in
+              </a>
+              <a href={SIGN_UP_URL} className="am-site-nav-link flex text-[rgb(var(--am-cyan-hi))]">
+                Get started
+              </a>
             </div>
           </details>
         </div>

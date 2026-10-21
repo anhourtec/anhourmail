@@ -26,6 +26,7 @@ import { AliasToggles, DnsChecks, InstantList, TerminalCard, TrackerBlocked } fr
 import { WebmailMock } from "@/components/landing/webmail-mock";
 import { Reveal } from "@/components/reveal";
 import { CtaBand, EssentialsGrid, FaqList, FeatureRow, PlanCards, SectionHead } from "@/components/sections";
+import { SIGN_UP_URL } from "@/lib/site";
 
 const LIFECYCLE = [
   { icon: UserPlusIcon, label: "Sign up" },
@@ -113,8 +114,8 @@ const SECURITY = [
 const STEPS = [
   {
     icon: MailIcon,
-    title: "Join the waitlist",
-    body: "Leave your email. We invite people in small groups as capacity grows.",
+    title: "Create an account",
+    body: "Sign up in the console with your email address. It takes a minute.",
   },
   {
     icon: AtSignIcon,
@@ -131,7 +132,7 @@ const STEPS = [
 const FAQ = [
   {
     q: "Is it really free?",
-    a: "The free plan is invite-only while we grow. Paid plans fund it, and we plan to publish a public cost breakdown.",
+    a: "Yes. Paid plans fund the free tier, and we plan to publish a public cost breakdown.",
   },
   {
     q: "Can I use my own mail app?",
@@ -198,10 +199,10 @@ export default function HomePage() {
             delayMs={390}
             className="mt-9 flex w-full flex-col items-center justify-center gap-3 sm:w-auto sm:flex-row"
           >
-            <Link href="#waitlist" className="am-site-btn am-site-btn--primary h-[52px] w-full px-6 sm:w-auto">
-              Join the waitlist
+            <a href={SIGN_UP_URL} className="am-site-btn am-site-btn--primary h-[52px] w-full px-6 sm:w-auto">
+              Get started
               <ArrowRightIcon className="size-4" aria-hidden="true" />
-            </Link>
+            </a>
             <Link href="#how-it-works" className="am-site-btn am-site-btn--glass h-[52px] w-full px-6 sm:w-auto">
               How it works
             </Link>

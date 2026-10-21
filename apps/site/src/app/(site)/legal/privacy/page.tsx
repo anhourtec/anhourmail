@@ -50,10 +50,6 @@ const SECTIONS: LegalSection[] = [
           changes to your account, and mail delivery metadata (message ID, sending and receiving domains, status) for
           troubleshooting. These never contain message subjects, bodies or attachments.
         </li>
-        <li>
-          <strong>Waitlist:</strong> your email address, and optionally which community you came from and the link you
-          followed.
-        </li>
       </ul>
     ),
   },
@@ -121,7 +117,6 @@ const SECTIONS: LegalSection[] = [
         <li>Sign-in history: 1 year.</li>
         <li>Your account’s activity log: the life of the account plus 1 year.</li>
         <li>Billing records: as long as tax law requires.</li>
-        <li>Waitlist entries: until you’re invited or ask us to remove you.</li>
       </ul>
     ),
   },

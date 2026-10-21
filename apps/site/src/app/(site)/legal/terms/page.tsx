@@ -51,7 +51,7 @@ const SECTIONS: LegalSection[] = [
     body: (
       <ul>
         <li>You need to be old enough to agree to these terms where you live, and at least 16.</li>
-        <li>The free plan (an @{PRODUCT_DOMAIN} address) is invite-only while we grow. One free account per person.</li>
+        <li>The free plan (an @{PRODUCT_DOMAIN} address) is limited to one free account per person.</li>
         <li>Keep your password and two-step sign-in safe. You’re responsible for what happens under your account.</li>
         <li>Don’t create accounts automatically or resell them.</li>
       </ul>
