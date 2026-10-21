@@ -1,0 +1,7 @@
+{
+  "General Sans (font)": {
+    "license": "LicenseRef-ITF-FFL",
+    "reason": "ITF Free Font License (Fontshare): free for personal and commercial use, including self-hosted web embedding; the font files may not be sold on their own. Used only as self-hosted display type, inherited from the Anhourtec design system.",
+    "adr": "ADR-0012 licence exception: General Sans font"
+  }
+}

@@ -1,0 +1,54 @@
+name: Bug report
+description: Something in the code or the hosted service doesn't work as documented.
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Security problems go to security@anhourmail.com, not here.**
+        Never paste passwords, app passwords, tokens, `.env` contents, `credentials.md` or the content of anyone's email.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Go to …
+        2. Click …
+        3. See …
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Webmail
+        - Console (account, domains, aliases, billing)
+        - Mail delivery / IMAP / SMTP / JMAP
+        - Marketing site or docs
+        - Self-hosting / local development
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Commit SHA for self-hosted or local builds; "hosted" for anhourmail.com.
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Browser and OS, or mail client and version.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Redact addresses, subjects and any personal data.

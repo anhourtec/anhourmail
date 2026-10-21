@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/anhourtec/anhourmail/blob/main/SECURITY.md
+    about: Please do not open public issues for security problems. Email security@anhourmail.com instead.
+  - name: Help with the hosted service
+    url: https://anhourmail.com/docs
+    about: Setup guides, client settings and troubleshooting for anhourmail.com accounts.

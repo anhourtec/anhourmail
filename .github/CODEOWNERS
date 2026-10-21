@@ -1,0 +1,10 @@
+# Default reviewers for everything. Replace @anhourtec/maintainers with the real team once it exists on GitHub.
+*                               @anhourtec/maintainers
+
+# Changes to sending limits, signup gating, abuse logic, auth, RBAC and audit need a security review.
+/packages/shared/src/rbac/      @anhourtec/maintainers
+/packages/shared/src/sending.ts @anhourtec/maintainers
+/packages/core/src/audit/       @anhourtec/maintainers
+/infra/                         @anhourtec/maintainers
+/deploy/                        @anhourtec/maintainers
+/.github/                       @anhourtec/maintainers
