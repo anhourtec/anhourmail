@@ -1,0 +1,269 @@
+@AGENTS.md
+
+# AnhourMail
+
+AnhourMail is a hosted email service by **Anhourtec** (Vancouver/Victoria, BC, Canada) for privacy-minded,
+tech-savvy individuals: free `@anhourmail.com` addresses, custom domains on paid plans, aliases and masked aliases,
+IMAP/SMTP/JMAP, and a fast open-source webmail. Mail is handled by **Stalwart** (AGPL-3.0, run unmodified and
+driven through its JMAP management API). Everything else — signup, waitlist, invites, plans, billing, domains,
+mailboxes, aliases, quotas, abuse, audit — is our control plane.
+
+Start every session by reading `docs/internal/handoff.md` (local only), then the docs for the area you touch:
+`docs/internal/00-vision.md` … `09-roadmap.md`, `docs/internal/adr/`, `docs/internal/roles.md`,
+`docs/internal/audit.md`, `docs/internal/codemap.md`.
+
+## Stack
+
+| Layer    | Choice                                                                                                                                                                                                                                                                                                                                                                                                |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Apps     | `apps/web` (console on `app.` + webmail on `mail.`, one Next.js app routed by host), `apps/site` (marketing, waitlist UI, `/docs` via Fumadocs, `/changelog`, `/credits`), `apps/worker` (queue worker + scheduler)                                                                                                                                                                                   |
+| Packages | `packages/core` (domain, services, ports — no ORM/SDK imports), `packages/adapters` (Postgres via drizzle, in-memory, contract tests), `packages/shared` (facts, plans, limits, DNS templates, RBAC matrix, zod schemas), `packages/server` (logger, health, Redis), `packages/stalwart-client`, `packages/jmap-client`, `packages/ui` (tokens, fonts, skeletons), `packages/config` (tsconfig bases) |
+| Frontend | Next.js 16 App Router, React 19, TypeScript strict, Tailwind v4 + shadcn/ui, self-hosted General Sans + Geist                                                                                                                                                                                                                                                                                         |
+| Auth     | better-auth (console identity); Stalwart OAuth tokens held server-side for webmail                                                                                                                                                                                                                                                                                                                    |
+| Data     | Postgres 17 (control plane only, never mail content), Redis 8 (sessions, queues, rate limits, cache)                                                                                                                                                                                                                                                                                                  |
+| Mail     | Stalwart v0.16.27 (pinned tag + digest); Mailpit in dev/CI                                                                                                                                                                                                                                                                                                                                            |
+| Quality  | ESLint (typescript-eslint strict-type-checked) + Prettier, Vitest, Playwright, husky + lint-staged                                                                                                                                                                                                                                                                                                    |
+| Deploy   | Docker Compose; v1 = one VPS (provider and region not public); NGINX for HTTPS, Stalwart owns mail ports and their TLS                                                                                                                                                                                                                                                                                |
+
+Versions are pinned and listed in `AGENTS.md`.
+
+## Running it
+
+```sh
+cp .env.example .env            # dev placeholders only
+npm install
+npm run dev                     # starts compose services if down, then site + web + worker with labelled output
+npm run db:seed -- --demo       # demo world + writes credentials.md (gitignored)
+```
+
+| Command                                            | What it does                                                                                    |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `npm run stack:up` / `stack:down`                  | Docker services only (Postgres, Redis, Stalwart, Mailpit, mail-edge); runs `ports:check` first  |
+| `npm run db:migrate`                               | Apply drizzle migrations (log every one in `docs/internal/migration.md`)                        |
+| `npm run db:seed`                                  | Minimum: platform Global Administrator, plans, `dev.test` mail domain + Stalwart dev plan       |
+| `npm run db:seed -- --demo`                        | Full demo world (every role, special states, mailboxes, sample mail); rewrites `credentials.md` |
+| `npm run dev:reset`                                | Wipe volumes, restart compose, migrate, seed `--demo`                                           |
+| `npm run stack:verify`                             | Prove the mail stack: internal delivery over JMAP, external mail caught by Mailpit, no egress   |
+| `npm run check`                                    | Lint, format check, typecheck, skeleton / logging / docs checks                                 |
+| `npm test` · `test:int` · `test:rbac` · `test:e2e` | Unit (coverage gated) · integration (real stack) · RBAC harness · Playwright                    |
+
+### Ports and local URLs
+
+Dev services use the uncommon **43xxx** block, overridable in `.env` (`npm run ports:check` fails on clashes).
+App dev servers listen on `DEV_HOST` and infra containers publish on `DEV_BIND_ADDRESS`. `.env.example` ships the
+safe default `DEV_BIND_ADDRESS=127.0.0.1` because infra holds dev passwords and Stalwart's dev recovery admin; a
+local `.env` may set `DEV_HOST=0.0.0.0` and `DEV_BIND_ADDRESS=0.0.0.0` to reach everything from the LAN (Next's
+`allowedDevOrigins` includes the machine's LAN IPs). `*.localhost` hostnames resolve to 127.0.0.1 without editing
+`/etc/hosts`, so host separation and cookie scoping behave like production. On a bare IP (e.g. a phone on the LAN)
+dev serves the webmail at `/webmail`. Production publishes only NGINX 80/443 and Stalwart's mail ports (rule 18).
+
+| What                                       | Local                                                                                                                                                 | Bind                                   | Production                  |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | --------------------------- |
+| Marketing site                             | http://localhost:43100                                                                                                                                | `DEV_HOST`                             | https://anhourmail.com      |
+| Public docs                                | http://localhost:43100/docs                                                                                                                           | `DEV_HOST`                             | https://anhourmail.com/docs |
+| Changelog / credits                        | http://localhost:43100/changelog, `/credits`                                                                                                          | `DEV_HOST`                             | `/changelog`, `/credits`    |
+| Console                                    | http://localhost:43200                                                                                                                                | `DEV_HOST`                             | https://app.anhourmail.com  |
+| Webmail                                    | http://localhost:43300 (same `apps/web` via the dev port forwarder `scripts/dev-mail-proxy.mjs`, routed by port — ADR-0003; also `/webmail` on 43200) | `DEV_HOST`                             | https://mail.anhourmail.com |
+| Mailpit UI / SMTP                          | http://localhost:43026 / 43125                                                                                                                        | `DEV_BIND_ADDRESS` (127.0.0.1 default) | — (dev and CI only)         |
+| Stalwart HTTP (JMAP, management, `/admin`) | http://localhost:43080                                                                                                                                | `DEV_BIND_ADDRESS` (127.0.0.1 default) | internal network only       |
+| Stalwart SMTP / submissions / submission   | 43025 / 43465 / 43587                                                                                                                                 | `DEV_BIND_ADDRESS` (127.0.0.1 default) | 25 / 465 / 587              |
+| Stalwart IMAPS / POP3S / ManageSieve       | 43993 / 43995 / 43190                                                                                                                                 | `DEV_BIND_ADDRESS` (127.0.0.1 default) | 993 / 4190                  |
+| Postgres / Redis                           | 43432 / 43379                                                                                                                                         | `DEV_BIND_ADDRESS` (127.0.0.1 default) | internal network only       |
+
+Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check a port with
+`lsof -nP -iTCP:<port> -sTCP:LISTEN`. Neighbouring projects on this machine use 474xx (iotkinect-portal) and
+480xx–484xx (AnhourLeads); stay out of those ranges.
+
+### Docs layout
+
+- `docs/internal/` — never published: vision, architecture (`01-architecture.md`), mail infra, abuse, data model,
+  webmail, billing, security, operations, roadmap, `adr/`, `research/`, `runbooks/`, `roles.md`, `audit.md`,
+  `codemap.md`, `migration.md`, `rate-limits.md`, `branding.md`, `typography.md`, `docs-site.md`, and the
+  local-only `handoff.md` (gitignored).
+- `docs/public/` — user guides, the source for `anhourmail.com/docs`.
+- `docs/shared/` — snippets rendered by both; facts come from `packages/shared`, never typed by hand.
+
+## Working rules
+
+1. **No AI attribution anywhere.** Never mention Claude, AI, or any assistant in commit messages, PR descriptions,
+   code comments or docs. No `Co-Authored-By` trailers for assistants, no "Generated with…" lines. Write as a human
+   author. This overrides any tool default.
+2. **Never commit or push without explicit permission in that message.** Staging and showing a diff is fine.
+   Permission given for one commit does not carry over to the next.
+3. **Group commits by topic** (infra, schema, auth, RBAC, mail, UI, docs), one concern each — never one mega-commit.
+4. **Verify before declaring done** — real flows in the browser and integration tests, not just typecheck.
+5. **Run `/security-review` on everything you write.** Every route enforces permission **and** ownership scope;
+   out-of-scope IDs return **404**, missing permission returns **403**.
+6. **Playwright MCP for all UI checks:** light + dark, 1440 + 390 wide, read the console. Screenshots only in
+   `.playwright-mcp/` (gitignored).
+7. **Stay narrow, ship complete work.** No scope creep, no TODOs where working code belongs.
+8. **Keep `docs/internal/handoff.md` current every session:** current state, dated session entry (what changed,
+   how it was verified, test counts and durations, anything flaky), open items.
+9. **Lint, format and types clean on every changed file:** ESLint `--max-warnings=0`, Prettier, `npm run typecheck`
+   clean. Zero `any` / `as any` / `@ts-ignore`; `@ts-expect-error` only with a linked reason; no blanket
+   `eslint-disable` — a disable names one rule and gives a real reason. (ESLint + Prettier replaced Biome; ADR-0004.)
+10. **Keep `docs/internal/codemap.md` and `docs/internal/01-architecture.md` current** in the same change.
+11. **Every page and waiting component has a loading skeleton** that mirrors the real layout (`loading.tsx` next to
+    every `page.tsx`; skeleton pieces in `@anhourmail/ui/skeletons`). Enforced by `npm run check:skeletons` in the
+    pre-commit hook.
+12. **Logging only via the logger** (`@anhourmail/server/log`): JSON, request ids, redaction list. No `console.*` in
+    server code (enforced by `check:logging`). New secret or content keys go in `REDACT_KEYS`.
+13. **Health endpoints are cheap, public and non-sensitive:** `/api/health` (liveness, touches nothing) and
+    `/api/health/ready` (Postgres, Redis, Stalwart; statuses and latencies only).
+14. **Every endpoint has a rate limit:** defaults plus tighter tiers for auth, signup, waitlist, invites, DNS verify,
+    exports and sending-related actions. Table in `docs/internal/rate-limits.md`. Redis failures fail open, except
+    tiers marked fail-closed (send quotas, signup, waitlist, password reset, alias creation).
+15. **Every migration is logged in `docs/internal/migration.md`** with its rollback level. Never edit an applied
+    migration. Destructive changes ship in three steps (add, move data, drop) after a backup.
+16. **Third-party secrets** (Stripe, Stalwart API key, SMS/OTP provider, DNS provider) are encrypted at rest
+    (key ring with key id, AES-256-GCM with AAD), write-only in UI and API, never logged or audited by value.
+17. **Scheduled work runs in the worker/scheduler container**, never a host crontab.
+18. **Ports — never use common ones** (43xxx for dev services, listed in the table above).
+    - **Dev:** app dev servers listen on `DEV_HOST`; infra containers publish on `DEV_BIND_ADDRESS`.
+      `.env.example` keeps the safe default `DEV_BIND_ADDRESS=127.0.0.1` (infra holds dev passwords and Stalwart's
+      recovery admin); a local `.env` may set both to `0.0.0.0` to open everything on the LAN deliberately.
+    - **Production:** no host ports for app, worker, Postgres, Redis or Stalwart HTTP — containers talk only over
+      internal Docker networks. The only published ports are NGINX **80/443** and Stalwart's mail ports
+      **25, 465, 587, 993, 995, 4190**, which must be the standard ones.
+
+### Mail-specific rules
+
+19. **Never send real mail to external addresses** from dev, tests or CI. Dev/test outbound goes to Mailpit.
+    Tests that need "external" delivery use a second local Stalwart domain or a mock.
+    - Dev Stalwart sits on the internal `mailnet` network with no internet route; every non-local recipient also
+      routes to Mailpit (`infra/stalwart/dev-plan.ts`). `npm run stack:verify` proves both.
+20. **Never weaken mail authentication or filtering** (SPF, DKIM, DMARC, ARC verification, MTA-STS, spam checks)
+    to make something work — fix the root cause. Dev-only exceptions forced by the no-egress network (e.g. Pyzor
+    off) live in the dev plan, are documented, and never reach production config.
+21. **All Stalwart access goes through `packages/stalwart-client`; all JMAP through `packages/jmap-client`.** The
+    management API is internal-network only and never reachable from the browser. The browser never holds a
+    Stalwart token: the webmail talks to our same-origin proxy, which attaches the user's token server-side.
+22. **Stalwart is pinned and never forked.** Tag **and** digest in `docker-compose.yml`. Upgrades are a deliberate
+    change: read release notes and `UPGRADING/`, back up, test in dev/staging, re-verify management object shapes,
+    record in handoff.
+    - Stalwart v0.16 has no REST API or TOML: management is JMAP `x:*` objects at `POST /jmap` (see `AGENTS.md`).
+23. **We never store mailbox passwords.** Stalwart owns mail credentials; IMAP import source credentials are
+    encrypted and wiped when the job ends.
+    - Passwords are stored only as **salted argon2id** hashes (OWASP baseline m=19 MiB, t=2, p=1): console
+      passwords in Postgres, mailbox passwords sent to Stalwart as PHC strings (plaintext never crosses the
+      management API). Never plaintext, reversible encryption or fast hashes (`07-security.md` "Password storage").
+24. **Mail content never enters Postgres, logs, analytics, audit or error reports.** No subjects, bodies, previews
+    or recipient lists in logs.
+25. **Ownership isolation is correctness:** every query is scoped to the owning account; tests include cross-account
+    access attempts that must return 404.
+26. **Provisioning is a job, not an inline request:** write intent → worker applies to Stalwart → status
+    `active`/`failed`. The reconciler reports drift and never deletes mail automatically.
+27. **Outbound limits and trust tiers are enforced server-side** (Stalwart throttles + our checks), never only in
+    the UI. Any change to sending limits, signup gating or abuse logic needs a `security-reviewer` pass.
+28. **`anhourtec.com` is staff-only;** customer and free accounts live on `anhourmail.com` or customer domains.
+29. **Privacy promises are product requirements:** no tracking pixels or third-party analytics anywhere; remote
+    images blocked by default; HTML email rendered in a sandboxed iframe (no `allow-scripts`) with strict CSP and
+    sanitising; zero third-party requests from the site, docs, console or webmail.
+30. **Docs are part of done:** behaviour, config or architecture changes update the matching doc and, for
+    non-trivial decisions, an ADR in `docs/internal/adr/`.
+
+### Public docs
+
+31. **Every user-facing change updates the public docs in the same change.** New or changed features, settings,
+    limits, prices, DNS records, client setup steps or error messages → update `docs/public` (and screenshots if UI
+    changed), plus a changelog entry. A user-facing change without docs is unfinished work.
+32. **One source of truth for facts.** Hostnames, ports, plan limits, prices, sending limits and DNS templates live
+    in `packages/shared` and are imported by the app, the marketing site and the docs. Never duplicate them by hand.
+33. **Public docs never expose internals.** No internal hostnames, IPs, admin paths, abuse-detection thresholds or
+    anything from `docs/internal`. Publish sending limits, not detection rules.
+34. **The docs site is verified like the app:** `check:docs` passes, links work, Playwright check of changed pages
+    in light/dark at 1440 and 390.
+
+### Roles, testing and architecture
+
+35. **Roles come from one matrix** (`packages/shared/src/rbac`). Any permission, route or nav change updates the
+    matrix, `docs/internal/roles.md`, the RBAC harness and the e2e role journeys in the same change.
+36. **Run the full RBAC harness and a Playwright MCP pass as every affected role** before calling UI, route or
+    permission work done.
+37. **Never break what already works:** run the full suite (lint, typecheck, unit, integration, RBAC, e2e) before
+    finishing any task. If anything fails — even unrelated — fix it or report it. Never skip, delete or weaken a
+    test to get green.
+38. **Code is database-independent:** domain and services use repository interfaces only; only adapter folders
+    (`packages/adapters`, `*/adapters/`) import the ORM, database driver or third-party SDKs (enforced by ESLint).
+    Stalwart, Stripe, SMS/OTP and DNS each sit behind an interface with a fake for tests.
+39. **Every change ships with unit tests** (success, failure, permission denial, edge cases). Coverage thresholds
+    (≥ 90% core, services and RBAC; ≥ 80% overall) are enforced in CI.
+40. **Zero TypeScript errors, zero ESLint warnings, Prettier-formatted,** in every workspace, at every commit.
+41. **CI is the gate:** all required checks green before merge; never bypass hooks (`--no-verify`) or mark checks
+    optional.
+
+### Open source and licensing
+
+42. **Every new source file has the correct SPDX header:** `// SPDX-License-Identifier: AGPL-3.0-only` in apps and
+    app-specific packages, `MIT` in reusable packages (`jmap-client`, `stalwart-client` and other generic
+    libraries). Code brought in from HourMail keeps its MIT notice. Enforced by `check:spdx`.
+43. **Every new dependency passes the licence allowlist** (`check:licenses`), and `THIRD_PARTY_NOTICES.md` plus
+    `/credits` are regenerated in the same change (`check:notices` fails if stale).
+44. **Nothing private ever lands in the public repo:** no IPs, secrets, tuned abuse thresholds or customer data.
+    Abuse logic can be public; thresholds come from config.
+    - `docker-compose.yml` is **dev/CI only**. Production compose, NGINX config, server addresses and deploy
+      secrets live in the private ops repository (`docker-compose.prod.yml`, `deploy/nginx/`, `ops/` are
+      gitignored as a backstop). This repo ships images (`deploy/Dockerfile.*`) and the self-hosting guide.
+45. **Outside contributions are merged only after the contributor has signed the CLA.**
+
+### Audit
+
+46. **Every mutation writes an audit entry in the same transaction**, through the audit module
+    (`packages/core/src/audit`) — including denied attempts and staff/act-as actions. New action names are added to
+    the event catalogue in `docs/internal/audit.md`. `check:audit` fails on a service mutation without one.
+47. **Audit is append-only and tamper-evident;** never add update/delete paths for audit rows or bypass the hash
+    chain.
+48. **Never put mail content, secrets, tokens or passwords in audit entries;** use the shared redaction list.
+49. **Staff actions on an account are always visible to that account's admins.**
+
+### Local data
+
+50. **`credentials.md` is generated by the seed script, gitignored, and must never be committed or pasted into
+    chat, commits, docs or logs** (`check:credentials` fails if it is staged). Any new role, account state or local
+    service updates the demo seed and the `credentials.md` generator in the same change.
+51. **At the end of every session, stop the dev stack:** stop `npm run dev` and run
+    `docker compose --profile dev down` (keep volumes unless asked). Record in `docs/internal/handoff.md` that it
+    was stopped and how to restart (`npm run dev`).
+52. **Local-only files never reach the public repo:** `docs/internal/handoff.md`, `credentials.md`, `.env*`
+    (except `.env.example`), `docs/internal/private/**`, `*.local.md`, `infra/stalwart/.generated/` and
+    `.playwright-mcp/` are gitignored; `npm run check:credentials` (pre-commit + CI) fails if any of them is staged
+    or tracked.
+53. **Brand assets have one source: `packages/ui/assets/brand`** (Anhourtec logo for light and dark
+    backgrounds, favicons, app icons, `site.webmanifest`). Edit only there, run `npm run brand:sync` to copy them
+    into `apps/web/public` and `apps/site/public`; `npm run check:brand` (pre-commit + CI) fails on drift. Render
+    the company logo with `AnhourtecLogo` from `@anhourmail/ui/anhourtec-logo` (it switches variant with the
+    theme) and set icons with `BRAND_ICONS`. The repo-root `public/` is a local drop folder and is gitignored.
+    **Never use third-party logos** (customer or partner marks) anywhere in the product, site or docs — no implied
+    endorsement, no "trusted by" strips until a written agreement exists. The AnhourMail and Anhourtec names and
+    logo are trademarks (TRADEMARKS.md); forks replace them. No 1 MB+ assets in pages (the embedded-raster
+    `favicon.svg` is not used).
+54. **Security review at the end of every session**, whether or not anything is committed: run `/security-review`
+    on the session's changes, then the Cloudflare **`security-audit`** skill (installed user-wide at
+    `~/.claude/skills/security-audit`) as a scoped run over the session diff (`git diff` of everything changed,
+    staged or not) with the **`quick`** profile; a full `standard`/`deep` audit only when asked. Fix every
+    `confirmed` finding before ending the session, report every `needs_validation` item to the maintainer, and
+    record both reviews and their results in `docs/internal/handoff.md`. Audit output stays outside the repo
+    (`~/security-audit-skill/anhourmail/run-<N>`); never probe deployed or production endpoints. The same two
+    reviews also run before any commit (below).
+
+## Project conventions
+
+- **Services hold the logic; route handlers only parse, call and map errors.** Services take the actor and check
+  permission and scope themselves, so a new caller can't forget.
+- **Out of scope → 404, missing permission → 403, signed out → 401.** Never confirm another account's ids.
+- Response envelope: `{ data }` on success, `{ error: { code, message } }` on failure.
+- Redis is an optimisation: failures are swallowed (fail open) except the fail-closed tiers in rule 14.
+- Tokens, not hex: colours come from `@anhourmail/ui` tokens (transactional email templates are the only
+  exception). Sentence case, display headings weight 500, never bold. Lucide icons only.
+- Mail ids, hostnames, numbers and DNS values render in mono.
+- Before any commit the user asks for: run `/security-review`, then the `security-audit` skill (quick profile,
+  scoped to the pending diff), address confirmed findings, and report both in the summary.
+
+## Document history
+
+| When (UTC) | Who                       | What                                                                                                                               |
+| ---------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-10-21 | Nishchayjeet Singh (Nish) | Created                                                                                                                            |
+| 2026-10-21 | Nishchayjeet Singh (Nish) | Rule 53: brand assets single source, Anhourtec logo, no third-party logos; rule 44: production config only in the private ops repo |
+| 2026-10-21 | Nishchayjeet Singh (Nish) | Rule 54: /security-review + Cloudflare security-audit skill (quick, scoped) at the end of every session                            |
+| 2026-10-21 | Nishchayjeet Singh (Nish) | Rule 23: passwords stored only as salted argon2id hashes (console + mailbox)                                                       |
