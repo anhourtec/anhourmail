@@ -104,7 +104,7 @@ export const EXTRA_COMPONENTS = [
   },
   {
     name: "Geist / Geist Mono (font)",
-    version: "via the geist package",
+    version: "self-hosted in packages/ui (from the geist package)",
     license: "OFL-1.1",
     url: "https://vercel.com/font",
     note: "SIL Open Font License 1.1. Self-hosted, no third-party font requests.",

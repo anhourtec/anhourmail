@@ -14,7 +14,7 @@ export const CREDITS: readonly Credit[] = [
   },
   {
     name: "Geist / Geist Mono (font)",
-    version: "via the geist package",
+    version: "self-hosted in packages/ui (from the geist package)",
     license: "OFL-1.1",
     url: "https://vercel.com/font",
   },
@@ -1449,13 +1449,6 @@ export const CREDITS: readonly Credit[] = [
     license: "MIT",
     url: "https://fumadocs.dev",
     repository: "https://github.com/fuma-nama/fumadocs",
-  },
-  {
-    name: "geist",
-    version: "1.8.1",
-    license: "OFL-1.1",
-    url: "https://vercel.com/font",
-    repository: "https://github.com/vercel/geist-font",
   },
   {
     name: "get-nonce",

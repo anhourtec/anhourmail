@@ -2,11 +2,10 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
-import { RootProvider } from "fumadocs-ui/provider/next";
-
 import { BRAND_ICONS } from "@anhourmail/ui/anhourtec-logo";
 import { brandFontVars } from "@anhourmail/ui/fonts";
 
+import { ThemeProvider } from "@/components/theme-provider";
 import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/lib/site";
 
 import "./globals.css";
@@ -41,9 +40,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <noscript>
           <style>{".am-site-reveal{opacity:1;transform:none}"}</style>
         </noscript>
-        <RootProvider theme={{ attribute: "class", defaultTheme: "system", enableSystem: true }}>
-          {children}
-        </RootProvider>
+        <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>
   );

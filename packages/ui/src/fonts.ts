@@ -1,23 +1,40 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import localFont from "next/font/local";
 
-import { GeistMono } from "geist/font/mono";
-import { GeistSans } from "geist/font/sans";
-
 /**
- * Brand fonts, all self-hosted — no third-party font requests (privacy requirement).
- * General Sans (Fontshare, ITF Free Font License) is display/headings only; Geist is UI/body; Geist Mono is
- * labels, numbers, hostnames and DNS values. See docs/internal/typography.md.
+ * Brand fonts, all self-hosted — no third-party font requests (privacy requirement). See typography.md.
+ *
+ * Loading budget (Lighthouse mobile, 2026-10-21): only General Sans Medium (23 KB) is preloaded.
+ * - General Sans Medium (Fontshare, ITF Free Font License): display/headings only — headings are always weight 500,
+ *   so the Regular/Semibold faces are not shipped. Preloaded, swaps in early (23 KB).
+ * - Geist (OFL-1.1, variable, 69 KB): UI/body. NOT preloaded, `display: optional` — a slow first visit keeps the
+ *   size-adjusted fallback instead of waiting or re-rendering (no font on the LCP path); later visits get Geist.
+ * - Geist Mono (OFL-1.1, variable): labels, numbers, hostnames, DNS values — below the fold, not preloaded.
  */
 const generalSans = localFont({
-  src: [
-    { path: "./fonts/GeneralSans-Regular.woff2", weight: "400", style: "normal" },
-    { path: "./fonts/GeneralSans-Medium.woff2", weight: "500", style: "normal" },
-    { path: "./fonts/GeneralSans-Semibold.woff2", weight: "600", style: "normal" },
-  ],
+  src: [{ path: "./fonts/GeneralSans-Medium.woff2", weight: "500", style: "normal" }],
   variable: "--font-general-sans",
   display: "swap",
+  preload: true,
 });
 
-/** CSS variables for the three brand fonts. Put on <body>. */
-export const brandFontVars = [GeistSans.variable, GeistMono.variable, generalSans.variable].join(" ");
+const geistSans = localFont({
+  src: "./fonts/Geist-Variable.woff2",
+  variable: "--font-geist-sans",
+  weight: "100 900",
+  display: "optional",
+  preload: false,
+});
+
+const geistMono = localFont({
+  src: "./fonts/GeistMono-Variable.woff2",
+  variable: "--font-geist-mono",
+  weight: "100 900",
+  display: "swap",
+  preload: false,
+  adjustFontFallback: false,
+  fallback: ["ui-monospace", "SFMono-Regular", "Menlo", "Monaco", "Liberation Mono", "monospace"],
+});
+
+/** CSS variables for the three brand fonts. Put on <html>. */
+export const brandFontVars = [geistSans.variable, geistMono.variable, generalSans.variable].join(" ");

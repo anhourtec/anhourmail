@@ -4,13 +4,13 @@ Last updated: 2026-10-21. Classes: `packages/ui/src/styles/type.css` (`am-*`, ap
 
 ## Fonts (all self-hosted; no third-party font requests)
 
-| Family                   | Role                                              | Source                                                                                                                                       | CSS variable                             |
-| ------------------------ | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| General Sans 400/500/600 | Display and headings, weight **500**              | `packages/ui/src/fonts/GeneralSans-*.woff2`, copied from iotkinect-portal (Fontshare, ITF Free Font License, ADR-0012) via `next/font/local` | `--font-general-sans` → `--font-display` |
-| Geist                    | UI and body                                       | `geist` npm package                                                                                                                          | `--font-sans`                            |
-| Geist Mono               | Labels, numbers, ids, hostnames, DNS values, code | `geist` npm package                                                                                                                          | `--font-mono`                            |
+| Family                         | Role                                              | Source                                                                                                                                       | CSS variable                             |
+| ------------------------------ | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| General Sans 500 (Medium only) | Display and headings, weight **500**              | `packages/ui/src/fonts/GeneralSans-*.woff2`, copied from iotkinect-portal (Fontshare, ITF Free Font License, ADR-0012) via `next/font/local` | `--font-general-sans` → `--font-display` |
+| Geist                          | UI and body                                       | `geist` npm package                                                                                                                          | `--font-sans`                            |
+| Geist Mono                     | Labels, numbers, ids, hostnames, DNS values, code | `geist` npm package                                                                                                                          | `--font-mono`                            |
 
-`brandFontVars` (from `@anhourmail/ui/fonts`) goes on `<body>`. A metric-matched fallback (`"General Sans Fallback"`: Arial with `size-adjust: 102%`) prevents layout shift.
+`brandFontVars` (from `@anhourmail/ui/fonts`) goes on `<html>`. Only General Sans Medium (23 KB) is preloaded; Geist (`display: optional`) and Geist Mono load on demand (Lighthouse mobile, 2026-10-21). A metric-matched fallback (`"General Sans Fallback"`: Arial with `size-adjust: 102%`) prevents layout shift.
 
 ## App scale (console + webmail)
 
