@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /** Provisioning: the control plane holds desired state; the worker applies it to the mail server (CLAUDE.md rule 26). */
 
-export type JobKind = "domain.ensure" | "mailbox.ensure";
+export type JobKind = "domain.ensure" | "domain.remove" | "mailbox.ensure";
 export type JobStatus = "queued" | "running" | "succeeded" | "failed";
 
 export type ProvisioningJob = {

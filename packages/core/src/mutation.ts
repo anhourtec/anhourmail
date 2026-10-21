@@ -31,6 +31,46 @@ export type MutationOutcome<T> = {
  *      audit write fails, the change rolls back;
  *   3. if `fn` throws, record a `failed` entry in a separate unit of work and rethrow.
  */
+const auditBase = (
+  actor: Actor,
+  req: RequestMeta,
+  spec: MutationSpec,
+  result: AuditResult,
+  errorCode: string | null,
+  scope: AuditScope,
+): AuditEntryInput => ({
+  scope,
+  action: spec.action,
+  ...auditActor(actor, spec.accountId),
+  target: { type: spec.target.type, id: spec.target.id ?? null, label: spec.target.label ?? null },
+  result,
+  errorCode,
+  ...requestFields(req),
+  meta: {},
+});
+
+const scopeOf = (spec: MutationSpec): AuditScope =>
+  spec.accountId === null ? "platform" : `account:${spec.accountId}`;
+
+/**
+ * Step 1 of `mutation()` on its own: authorize, and audit a refusal as `denied` before rethrowing. For services that
+ * must do slow work (e.g. DNS lookups) before opening the unit of work; they still call `mutation()` afterwards.
+ */
+export async function authorizeAudited(deps: Deps, actor: Actor, req: RequestMeta, spec: MutationSpec) {
+  try {
+    authorize(actor, spec.permission, spec.accountId ?? undefined);
+  } catch (err) {
+    if (err instanceof DomainError) {
+      // Only an account's own members see its log: probes from outside go to the platform log.
+      const entryScope = err instanceof ForbiddenError ? scopeOf(spec) : "platform";
+      await deps.uow.run((r) =>
+        r.audit.append(auditBase(actor, req, spec, "denied", err.code, entryScope), deps.clock.now()),
+      );
+    }
+    throw err;
+  }
+}
+
 export async function mutation<T>(
   deps: Deps,
   actor: Actor,
@@ -38,28 +78,11 @@ export async function mutation<T>(
   spec: MutationSpec,
   fn: (repos: Repositories) => Promise<MutationOutcome<T>>,
 ): Promise<T> {
-  const scope: AuditScope = spec.accountId === null ? "platform" : `account:${spec.accountId}`;
-  const base = (result: AuditResult, errorCode: string | null, entryScope: AuditScope): AuditEntryInput => ({
-    scope: entryScope,
-    action: spec.action,
-    ...auditActor(actor, spec.accountId),
-    target: { type: spec.target.type, id: spec.target.id ?? null, label: spec.target.label ?? null },
-    result,
-    errorCode,
-    ...requestFields(req),
-    meta: {},
-  });
+  const scope = scopeOf(spec);
+  const base = (result: AuditResult, errorCode: string | null, entryScope: AuditScope) =>
+    auditBase(actor, req, spec, result, errorCode, entryScope);
 
-  try {
-    authorize(actor, spec.permission, spec.accountId ?? undefined);
-  } catch (err) {
-    if (err instanceof DomainError) {
-      // Only an account's own members see its log: probes from outside go to the platform log.
-      const entryScope = err instanceof ForbiddenError ? scope : "platform";
-      await deps.uow.run((r) => r.audit.append(base("denied", err.code, entryScope), deps.clock.now()));
-    }
-    throw err;
-  }
+  await authorizeAudited(deps, actor, req, spec);
 
   try {
     return await deps.uow.run(async (repos) => {

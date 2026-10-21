@@ -5,6 +5,7 @@ import { and, desc, eq, gt, gte, inArray, lt, lte, type SQL, sql } from "drizzle
 
 import type { AccessRepository, Repositories, UnitOfWork } from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
+import type { CustomerDomain, DomainRepository, DomainStatus } from "@anhourmail/core/domains";
 import type { Invite, InviteRepository, InviteSource } from "@anhourmail/core/invite";
 import type {
   DomainState,
@@ -23,6 +24,7 @@ import {
   hashEntry,
 } from "@anhourmail/core/audit";
 import type { WaitlistEntry, WaitlistRepository } from "@anhourmail/core/waitlist";
+import { PLAN_ORDER, type PlanId } from "@anhourmail/shared/plans";
 import { ACCOUNT_ROLES, type AccountRole, PLATFORM_ROLES, type PlatformRole } from "@anhourmail/shared/rbac";
 import type { Utm } from "@anhourmail/shared/schemas";
 
@@ -297,6 +299,14 @@ class PgAccountRepository implements AccountRepository {
     return row;
   }
 
+  async get(id: string): Promise<{ id: string; name: string; plan: PlanId; status: string } | null> {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
+    const [r] = await this.x.select().from(customerAccount).where(eq(customerAccount.id, id));
+    if (!r) return null;
+    const plan = (PLAN_ORDER as readonly string[]).includes(r.plan) ? (r.plan as PlanId) : "free";
+    return { id: r.id, name: r.name, plan, status: r.status };
+  }
+
   async addMember(input: { accountId: string; userId: string; role: AccountRole }): Promise<void> {
     await this.x.insert(accountMembership).values(input);
   }
@@ -443,6 +453,10 @@ class PgMailDirectoryRepository implements MailDirectoryRepository {
       .where(eq(customerDomain.id, id));
   }
 
+  async deleteDomain(id: string): Promise<void> {
+    await this.x.delete(customerDomain).where(and(eq(customerDomain.id, id), eq(customerDomain.status, "removing")));
+  }
+
   async markMailbox(
     id: string,
     update: { status: string; stalwartId?: string; lastError: string | null },
@@ -458,14 +472,114 @@ class PgMailDirectoryRepository implements MailDirectoryRepository {
   }
 
   async desired(): Promise<{ domains: string[]; mailboxes: { address: string; quotaBytes: number }[] }> {
-    const [domains, mailboxes] = await Promise.all([
-      this.x.select({ name: customerDomain.name }).from(customerDomain).where(eq(customerDomain.status, "active")),
-      this.x
-        .select({ address: mailbox.address, quotaBytes: mailbox.quotaBytes })
-        .from(mailbox)
-        .where(eq(mailbox.status, "active")),
-    ]);
+    // Sequential: a transaction holds one database connection, which runs one query at a time.
+    const domains = await this.x
+      .select({ name: customerDomain.name })
+      .from(customerDomain)
+      .where(eq(customerDomain.status, "active"));
+    const mailboxes = await this.x
+      .select({ address: mailbox.address, quotaBytes: mailbox.quotaBytes })
+      .from(mailbox)
+      .where(eq(mailbox.status, "active"));
     return { domains: domains.map((d) => d.name), mailboxes };
+  }
+}
+
+const DOMAIN_STATUSES: readonly DomainStatus[] = ["pending_dns", "active", "removing"];
+
+function toDomain(r: typeof customerDomain.$inferSelect): CustomerDomain {
+  return {
+    id: r.id,
+    accountId: r.accountId,
+    name: r.name,
+    status: DOMAIN_STATUSES.includes(r.status as DomainStatus) ? (r.status as DomainStatus) : "pending_dns",
+    verifyToken: r.verifyToken,
+    stalwartId: r.stalwartId,
+    lastError: r.lastError,
+    createdAt: r.createdAt,
+  };
+}
+
+class PgDomainRepository implements DomainRepository {
+  constructor(private readonly x: Executor) {}
+
+  async listByAccount(accountId: string): Promise<CustomerDomain[]> {
+    const rows = await this.x
+      .select()
+      .from(customerDomain)
+      .where(eq(customerDomain.accountId, accountId))
+      .orderBy(customerDomain.name);
+    return rows.map(toDomain);
+  }
+
+  async get(accountId: string, id: string): Promise<CustomerDomain | null> {
+    const [r] = await this.x
+      .select()
+      .from(customerDomain)
+      .where(and(eq(customerDomain.id, id), eq(customerDomain.accountId, accountId)));
+    return r ? toDomain(r) : null;
+  }
+
+  async nameTaken(name: string): Promise<boolean> {
+    const [r] = await this.x
+      .select({ id: customerDomain.id })
+      .from(customerDomain)
+      .where(and(eq(customerDomain.name, name), inArray(customerDomain.status, ["active", "removing"])))
+      .limit(1);
+    return r !== undefined;
+  }
+
+  async insert(d: CustomerDomain): Promise<void> {
+    await this.x.insert(customerDomain).values({
+      id: d.id,
+      accountId: d.accountId,
+      name: d.name,
+      status: d.status,
+      verifyToken: d.verifyToken,
+      stalwartId: d.stalwartId,
+      lastError: d.lastError,
+      createdAt: d.createdAt,
+    });
+  }
+
+  async transition(id: string, from: DomainStatus, to: DomainStatus): Promise<boolean> {
+    const rows = await this.x
+      .update(customerDomain)
+      .set({ status: to })
+      .where(and(eq(customerDomain.id, id), eq(customerDomain.status, from)))
+      .returning({ id: customerDomain.id });
+    return rows.length > 0;
+  }
+
+  async deletePending(id: string): Promise<boolean> {
+    const rows = await this.x
+      .delete(customerDomain)
+      .where(and(eq(customerDomain.id, id), eq(customerDomain.status, "pending_dns")))
+      .returning({ id: customerDomain.id });
+    return rows.length > 0;
+  }
+
+  async addressCount(name: string): Promise<number> {
+    const pattern = `%@${name}`;
+    const [m] = await this.x
+      .select({ n: sql<number>`count(*)::int` })
+      .from(mailbox)
+      .where(sql`${mailbox.address} like ${pattern}`);
+    const [a] = await this.x
+      .select({ n: sql<number>`count(*)::int` })
+      .from(mailAlias)
+      .where(sql`${mailAlias.address} like ${pattern}`);
+    return (m?.n ?? 0) + (a?.n ?? 0);
+  }
+
+  async pending(since: Date, limit: number): Promise<CustomerDomain[]> {
+    const rows = await this.x
+      .select()
+      .from(customerDomain)
+      .where(and(eq(customerDomain.status, "pending_dns"), gte(customerDomain.createdAt, since)))
+      .orderBy(sql`random()`)
+      .limit(limit);
+    return rows.map(toDomain);
   }
 }
 
@@ -522,6 +636,7 @@ const repositories = (x: Executor): Repositories => ({
   accounts: new PgAccountRepository(x),
   provisioning: new PgProvisioningRepository(x),
   directory: new PgMailDirectoryRepository(x),
+  domains: new PgDomainRepository(x),
   invites: new PgInviteRepository(x),
 });
 

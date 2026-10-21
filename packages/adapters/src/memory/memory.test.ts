@@ -13,7 +13,16 @@ describeAdapterContract("memory", async () => {
     seedMail: async ({ domain, address, alias, quotaBytes }) => {
       const domainId = randomUUID();
       const mailboxId = randomUUID();
-      uow.state.domains.push({ id: domainId, name: domain, status: "active", stalwartId: null, lastError: null });
+      uow.state.domains.push({
+        id: domainId,
+        accountId: randomUUID(),
+        name: domain,
+        status: "active",
+        verifyToken: "t",
+        stalwartId: null,
+        lastError: null,
+        createdAt: new Date(),
+      });
       uow.state.mailboxes.push({
         id: mailboxId,
         address,

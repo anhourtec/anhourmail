@@ -76,6 +76,9 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
   },
 };
 
+/** Custom domains per account on plans that include them (an abuse ceiling, not a selling point). */
+export const MAX_CUSTOM_DOMAINS = 20;
+
 export const PLAN_ORDER: readonly PlanId[] = ["free", "plus", "supporter"];
 
 export type AddOnId = "bulk";

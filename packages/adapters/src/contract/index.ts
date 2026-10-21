@@ -230,6 +230,65 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
       }
     });
 
+    it("accounts: get returns the plan; unknown ids are null", async () => {
+      const { uow, cleanup } = await factory();
+      try {
+        const { id } = await uow.run((r) => r.accounts.create({ name: "Contract plan", plan: "plus" }));
+        expect(await uow.run((r) => r.accounts.get(id))).toMatchObject({ id, name: "Contract plan", plan: "plus" });
+        expect(await uow.run((r) => r.accounts.get(randomUUID()))).toBeNull();
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("domains: account-scoped reads, verified-only claims, conditional transitions, pending list", async () => {
+      const { uow, cleanup } = await factory();
+      try {
+        const a = await uow.run((r) => r.accounts.create({ name: "Contract dom A", plan: "plus" }));
+        const b = await uow.run((r) => r.accounts.create({ name: "Contract dom B", plan: "plus" }));
+        const name = `c-${randomUUID().slice(0, 8)}.example.ca`;
+        const at = new Date(Date.UTC(2200, 0, 1) + Math.floor(Math.random() * 1e9));
+        const make = (accountId: string) => ({
+          id: randomUUID(),
+          accountId,
+          name,
+          status: "pending_dns" as const,
+          verifyToken: randomUUID(),
+          stalwartId: null,
+          lastError: null,
+          createdAt: at,
+        });
+        const mine = make(a.id);
+        const theirs = make(b.id);
+        await uow.run(async (r) => {
+          await r.domains.insert(mine);
+          await r.domains.insert(theirs); // two unverified claims on one name are allowed
+        });
+        await expect(uow.run((r) => r.domains.insert({ ...make(a.id) }))).rejects.toThrow(); // same account twice
+        expect(await uow.run((r) => r.domains.get(a.id, mine.id))).toMatchObject({ name, status: "pending_dns" });
+        expect(await uow.run((r) => r.domains.get(b.id, mine.id))).toBeNull();
+        expect((await uow.run((r) => r.domains.listByAccount(a.id))).map((d) => d.id)).toEqual([mine.id]);
+        expect(await uow.run((r) => r.domains.nameTaken(name))).toBe(false);
+        const pending = await uow.run((r) => r.domains.pending(at, 1000));
+        expect(pending.map((d) => d.id)).toEqual(expect.arrayContaining([mine.id, theirs.id]));
+
+        expect(await uow.run((r) => r.domains.transition(mine.id, "pending_dns", "active"))).toBe(true);
+        expect(await uow.run((r) => r.domains.transition(mine.id, "pending_dns", "active"))).toBe(false);
+        expect(await uow.run((r) => r.domains.nameTaken(name))).toBe(true);
+        // Only one verified claim per name, enforced by storage too.
+        await expect(uow.run((r) => r.domains.transition(theirs.id, "pending_dns", "active"))).rejects.toThrow();
+        expect(await uow.run((r) => r.domains.addressCount(name))).toBe(0);
+        expect(await uow.run((r) => r.domains.deletePending(mine.id))).toBe(false); // active: not deleted
+        expect(await uow.run((r) => r.domains.deletePending(theirs.id))).toBe(true);
+        expect(await uow.run((r) => r.domains.get(b.id, theirs.id))).toBeNull();
+        await uow.run((r) => r.domains.transition(mine.id, "active", "removing"));
+        await uow.run((r) => r.directory.deleteDomain(mine.id));
+        expect(await uow.run((r) => r.domains.get(a.id, mine.id))).toBeNull();
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("provisioning: idempotent enqueue, ordered claim, retry, complete, give up", async () => {
       const { uow, cleanup } = await factory();
       try {

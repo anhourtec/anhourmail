@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 
 import type { AccessRepository, Repositories, UnitOfWork } from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
+import type { CustomerDomain, DomainRepository } from "@anhourmail/core/domains";
 import type { Invite, InviteRepository } from "@anhourmail/core/invite";
 import type {
   DomainState,
@@ -20,6 +21,7 @@ import {
   hashEntry,
 } from "@anhourmail/core/audit";
 import type { WaitlistEntry, WaitlistRepository } from "@anhourmail/core/waitlist";
+import type { PlanId } from "@anhourmail/shared/plans";
 import type { AccountRole, PlatformRole } from "@anhourmail/shared/rbac";
 
 /**
@@ -32,7 +34,7 @@ export type MemoryState = {
   platformRoles: { userId: string; role: PlatformRole }[];
   memberships: { userId: string; accountId: string; role: AccountRole }[];
   suspended: string[];
-  accounts: { id: string; name: string; plan?: string }[];
+  accounts: { id: string; name: string; plan: PlanId; status?: string }[];
   userStates: Record<string, string>;
   confirmTokens: Map<string, { hash: string; expiresAt: Date }>;
   invites: (Invite & {
@@ -42,7 +44,7 @@ export type MemoryState = {
     waitlistEntryId: string | null;
   })[];
   jobs: ProvisioningJob[];
-  domains: (DomainState & { lastError: string | null })[];
+  domains: CustomerDomain[];
   mailboxes: (MailboxState & { lastError: string | null })[];
 };
 
@@ -162,6 +164,10 @@ function repositories(s: MemoryState): Repositories {
       s.userStates[userId] = state;
     },
     membershipCount: async (userId) => s.memberships.filter((m) => m.userId === userId).length,
+    get: async (id) => {
+      const a = s.accounts.find((x) => x.id === id);
+      return a ? { id: a.id, name: a.name, plan: a.plan, status: a.status ?? "active" } : null;
+    },
   };
 
   const provisioning: ProvisioningRepository = {
@@ -207,7 +213,7 @@ function repositories(s: MemoryState): Repositories {
   const directory: MailDirectoryRepository = {
     getDomain: async (id) => {
       const d = s.domains.find((x) => x.id === id);
-      return d ? clone({ id: d.id, name: d.name, status: d.status, stalwartId: d.stalwartId }) : null;
+      return d ? clone<DomainState>({ id: d.id, name: d.name, status: d.status, stalwartId: d.stalwartId }) : null;
     },
     getMailbox: async (id) => {
       const m = s.mailboxes.find((x) => x.id === id);
@@ -222,6 +228,9 @@ function repositories(s: MemoryState): Repositories {
           lastError: update.lastError,
           ...(update.stalwartId ? { stalwartId: update.stalwartId } : {}),
         });
+    },
+    deleteDomain: async (id) => {
+      s.domains = s.domains.filter((d) => !(d.id === id && d.status === "removing"));
     },
     markMailbox: async (id, update) => {
       const m = s.mailboxes.find((x) => x.id === id);
@@ -239,6 +248,44 @@ function repositories(s: MemoryState): Repositories {
         .filter((m) => m.status === "active")
         .map((m) => ({ address: m.address, quotaBytes: m.quotaBytes })),
     }),
+  };
+
+  const domains: DomainRepository = {
+    listByAccount: async (accountId) =>
+      clone(s.domains.filter((d) => d.accountId === accountId).sort((a, b) => a.name.localeCompare(b.name))),
+    get: async (accountId, id) => clone(s.domains.find((d) => d.id === id && d.accountId === accountId) ?? null),
+    nameTaken: async (name) => s.domains.some((d) => d.name === name && d.status !== "pending_dns"),
+    insert: async (d) => {
+      if (s.domains.some((x) => x.accountId === d.accountId && x.name === d.name)) throw new Error("duplicate domain");
+      s.domains.push(clone(d));
+    },
+    transition: async (id, from, to) => {
+      const d = s.domains.find((x) => x.id === id && x.status === from);
+      if (!d) return false;
+      if (
+        to !== "pending_dns" &&
+        s.domains.some((x) => x.id !== id && x.name === d.name && x.status !== "pending_dns")
+      ) {
+        throw new Error("duplicate claimed domain name"); // mirrors the partial unique index in Postgres
+      }
+      d.status = to;
+      return true;
+    },
+    deletePending: async (id) => {
+      const before = s.domains.length;
+      s.domains = s.domains.filter((d) => !(d.id === id && d.status === "pending_dns"));
+      return s.domains.length < before;
+    },
+    addressCount: async (name) =>
+      s.mailboxes.filter((m) => m.address.endsWith(`@${name}`)).length +
+      s.mailboxes.flatMap((m) => m.aliases).filter((a) => a.address.endsWith(`@${name}`)).length,
+    pending: async (since, limit) =>
+      clone(
+        s.domains
+          .filter((d) => d.status === "pending_dns" && d.createdAt >= since)
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+          .slice(0, limit),
+      ),
   };
 
   const invites: InviteRepository = {
@@ -277,7 +324,7 @@ function repositories(s: MemoryState): Repositories {
     },
   };
 
-  return { waitlist, audit, access, accounts, provisioning, directory, invites };
+  return { waitlist, audit, access, accounts, provisioning, directory, domains, invites };
 }
 
 export class MemoryUnitOfWork implements UnitOfWork {

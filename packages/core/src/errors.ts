@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * Domain errors. The HTTP layer maps them: Unauthenticated → 401, Forbidden → 403, NotFound → 404 (also for
- * out-of-scope ids — never confirm another account's ids), Validation → 400, Conflict → 409.
+ * out-of-scope ids — never confirm another account's ids), Validation → 400, Conflict → 409, PlanLimit → 403.
  */
 export class DomainError extends Error {
   constructor(
@@ -47,5 +47,12 @@ export class InvalidTokenError extends DomainError {
 export class ConflictError extends DomainError {
   constructor(message: string) {
     super(message, "conflict");
+  }
+}
+
+/** The account's plan doesn't include this (HTTP 403 with its own code, so the UI can offer an upgrade). */
+export class PlanLimitError extends DomainError {
+  constructor(message: string) {
+    super(message, "plan_limit");
   }
 }

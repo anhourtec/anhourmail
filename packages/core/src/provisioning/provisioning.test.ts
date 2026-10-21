@@ -28,6 +28,10 @@ function fakeMailServer(opts: { failTimes?: number } = {}): MailServer & { domai
       else state.boxes.push(box);
       return { externalId: `acc:${address}` };
     },
+    removeDomain: async (name) => {
+      if (state.boxes.some((b) => b.address.endsWith(`@${name}`))) throw new Error("domain still has mailboxes");
+      state.domains = state.domains.filter((x) => x !== name);
+    },
     listDomains: async () => [...state.domains],
     listMailboxes: async () => state.boxes.map((b) => ({ address: b.address, quotaBytes: b.quotaBytes })),
     get domains() {
@@ -41,7 +45,16 @@ function fakeMailServer(opts: { failTimes?: number } = {}): MailServer & { domai
 
 function setup(clock = fixedClock("2026-10-21T12:00:00Z")) {
   const d = makeDeps(clock);
-  d.uow.state.domains.push({ id: "d1", name: "example.test", status: "active", stalwartId: null, lastError: null });
+  d.uow.state.domains.push({
+    id: "d1",
+    accountId: "a1",
+    name: "example.test",
+    status: "active",
+    verifyToken: "t",
+    stalwartId: null,
+    lastError: null,
+    createdAt: clock.now(),
+  });
   d.uow.state.mailboxes.push({
     id: "m1",
     address: "owner@example.test",
@@ -191,5 +204,61 @@ describe("reconcile", () => {
     d.uow.state.mailboxes[0]!.status = "active";
     const report = await reconcile(d, fakeMailServer());
     expect(report.missingOnMailServer).toEqual({ domains: ["example.test"], mailboxes: ["owner@example.test"] });
+  });
+});
+
+describe("domain removal job", () => {
+  it("takes a removing domain off the mail server, then deletes its row; skips ensure for it", async () => {
+    const { d } = setup();
+    d.uow.state.mailboxes = [];
+    const mail = fakeMailServer();
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await runNextJob(d, mail);
+    expect(mail.domains).toEqual(["example.test"]);
+
+    d.uow.state.domains[0]!.status = "removing";
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await runNextJob(d, mail); // ensure is a no-op for a removing domain
+    expect(mail.domains).toEqual(["example.test"]);
+    await enqueueProvisioning(d, { kind: "domain.remove", subjectId: "d1" });
+    await runNextJob(d, mail);
+    expect(mail.domains).toEqual([]);
+    expect(d.uow.state.domains).toEqual([]);
+  });
+
+  it("retries while the mail server still has mailboxes on the domain, and never removes an active domain", async () => {
+    const { d } = setup();
+    const mail = fakeMailServer();
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    d.uow.state.domains[0]!.status = "removing";
+    await enqueueProvisioning(d, { kind: "domain.remove", subjectId: "d1" });
+    const job = await runNextJob(d, mail);
+    expect(d.uow.state.jobs.find((j) => j.id === job?.id)?.status).toBe("queued");
+    expect(d.uow.state.domains).toHaveLength(1);
+
+    d.uow.state.domains[0]!.status = "active";
+    d.uow.state.jobs = [];
+    await enqueueProvisioning(d, { kind: "domain.remove", subjectId: "d1" });
+    await runNextJob(d, mail);
+    expect(d.uow.state.domains).toHaveLength(1);
+  });
+});
+
+describe("domain removed while being added", () => {
+  it("takes it off the mail server again instead of leaving an orphan", async () => {
+    const { d } = setup();
+    d.uow.state.mailboxes = [];
+    const mail = fakeMailServer();
+    const ensure = mail.ensureDomain.bind(mail);
+    mail.ensureDomain = async (name) => {
+      const out = await ensure(name);
+      d.uow.state.domains[0]!.status = "removing"; // the customer removed it meanwhile
+      return out;
+    };
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await runNextJob(d, mail);
+    expect(mail.domains).toEqual([]);
+    expect(d.uow.state.domains[0]?.stalwartId).toBeNull();
   });
 });

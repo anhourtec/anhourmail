@@ -17,12 +17,29 @@ const describe = (err: unknown): string =>
   (err instanceof Error ? `${err.name}: ${err.message}` : String(err)).replace(/\s+/g, " ").slice(0, 300);
 
 async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promise<void> {
+  if (job.kind === "domain.remove") {
+    const domain = await deps.uow.run((r) => r.directory.getDomain(job.subjectId));
+    if (!domain) return; // already gone
+    if (domain.status !== "removing") throw new Error(`domain not marked for removal (status ${domain.status})`);
+    await mail.removeDomain(domain.name);
+    await deps.uow.run((r) => r.directory.deleteDomain(domain.id));
+    return;
+  }
   if (job.kind === "domain.ensure") {
     const domain = await deps.uow.run((r) => r.directory.getDomain(job.subjectId));
     if (!domain) throw new Error("domain not found");
+    // Removed before the worker got to it: nothing to add.
+    if (domain.status === "removing") return;
     // Only verified domains reach the mail server (DNS ownership proven first).
     if (domain.status !== "active") throw new Error(`domain not verified (status ${domain.status})`);
     const { externalId } = await mail.ensureDomain(domain.name);
+    // Marked for removal while we were adding it: take it off again so the mail server keeps no orphan. If the row
+    // is already gone, do nothing by name — another account may hold the name by now; the reconciler reports drift.
+    const now = await deps.uow.run((r) => r.directory.getDomain(domain.id));
+    if (now?.status !== "active") {
+      if (now?.status === "removing") await mail.removeDomain(domain.name);
+      return;
+    }
     await deps.uow.run((r) => r.directory.markDomain(domain.id, { stalwartId: externalId, lastError: null }));
     return;
   }

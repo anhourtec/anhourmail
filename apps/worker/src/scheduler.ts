@@ -16,6 +16,8 @@ export const JOBS: readonly Job[] = [
   { name: "audit-verify", script: "job:audit-verify", everyMs: 6 * 3600_000, timeoutMs: 10 * 60_000, enabled: true },
   // Rule 26: desired state vs Stalwart; reports drift, never deletes.
   { name: "reconcile", script: "job:reconcile", everyMs: 3600_000, timeoutMs: 10 * 60_000, enabled: true },
+  // Pending customer domains: activate them once their DNS checks out (docs: "re-checks automatically").
+  { name: "domain-recheck", script: "job:domain-recheck", everyMs: 5 * 60_000, timeoutMs: 4 * 60_000, enabled: true },
 ];
 
 const HEARTBEAT = process.env.SCHEDULER_HEARTBEAT ?? "/tmp/scheduler-heartbeat";

@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "dev:scheduler": "tsx watch --env-file-if-exists=../../.env src/scheduler.ts",
     "job:reconcile": "tsx src/jobs/reconcile.ts",
-    "start": "tsx src/worker.ts"
+    "start": "tsx src/worker.ts",
+    "job:domain-recheck": "tsx src/jobs/domain-recheck.ts"
   },
   "dependencies": {
     "@anhourmail/adapters": "0.0.0",

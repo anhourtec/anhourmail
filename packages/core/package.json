@@ -12,7 +12,8 @@
     "./account": "./src/account/index.ts",
     "./security": "./src/security/index.ts",
     "./provisioning": "./src/provisioning/index.ts",
-    "./invite": "./src/invite/index.ts"
+    "./invite": "./src/invite/index.ts",
+    "./domains": "./src/domains/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

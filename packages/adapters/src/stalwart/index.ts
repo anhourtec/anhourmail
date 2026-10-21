@@ -44,6 +44,16 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
       return { externalId };
     },
 
+    async removeDomain(name) {
+      const domain = (await mgmt.listDomains()).find((d) => d.name === name.toLowerCase());
+      if (!domain) return;
+      const users = await mgmt.listUsers();
+      if (users.some((u) => u.address.endsWith(`@${domain.name}`))) {
+        throw new Error("domain still has mailboxes on the mail server");
+      }
+      await mgmt.destroyDomain(domain.id);
+    },
+
     async listDomains() {
       return (await mgmt.listDomains()).map((d) => d.name);
     },

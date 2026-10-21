@@ -17,6 +17,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updatedAt = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
@@ -191,7 +192,8 @@ export const customerDomain = pgTable(
     accountId: uuid("account_id")
       .notNull()
       .references(() => customerAccount.id, { onDelete: "cascade" }),
-    name: text("name").notNull().unique(),
+    name: text("name").notNull(),
+    /** pending_dns | active | removing */
     status: text("status").notNull().default("pending_dns"),
     verifyToken: text("verify_token").notNull(),
     /** Stalwart's id once provisioned; null until the provisioning job succeeds. */
@@ -199,7 +201,14 @@ export const customerDomain = pgTable(
     lastError: text("last_error"),
     createdAt: createdAt(),
   },
-  (t) => [index("customer_domain_account_idx").on(t.accountId)],
+  (t) => [
+    index("customer_domain_account_idx").on(t.accountId),
+    uniqueIndex("customer_domain_account_name_idx").on(t.accountId, t.name),
+    // Only a verified claim is exclusive: unverified adds can't squat a domain (ownership TXT decides).
+    uniqueIndex("customer_domain_claimed_name_idx")
+      .on(t.name)
+      .where(sql`status <> 'pending_dns'`),
+  ],
 );
 
 export const mailbox = pgTable(

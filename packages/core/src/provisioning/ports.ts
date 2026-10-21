@@ -17,6 +17,8 @@ export type MailDirectoryRepository = {
   getDomain(id: string): Promise<DomainState | null>;
   getMailbox(id: string): Promise<MailboxState | null>;
   markDomain(id: string, update: { stalwartId?: string; lastError: string | null }): Promise<void>;
+  /** Deletes the domain row once the mail server no longer has it (`removing` domains only). */
+  deleteDomain(id: string): Promise<void>;
   markMailbox(id: string, update: { status: string; stalwartId?: string; lastError: string | null }): Promise<void>;
   /** Everything that should exist on the mail server (for the reconciler). */
   desired(): Promise<{ domains: string[]; mailboxes: { address: string; quotaBytes: number }[] }>;
@@ -33,6 +35,8 @@ export type MailServer = {
     quotaBytes: number;
     aliases: { address: string; enabled: boolean; description: string | null }[];
   }): Promise<{ externalId: string }>;
+  /** Removes an empty domain (and its signing keys). Refuses if any mailbox still lives on it. Idempotent. */
+  removeDomain(name: string): Promise<void>;
   listDomains(): Promise<string[]>;
   listMailboxes(): Promise<{ address: string; quotaBytes: number }[]>;
 };

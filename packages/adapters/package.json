@@ -11,7 +11,8 @@
     "./contract": "./src/contract/index.ts",
     "./auth": "./src/auth/index.ts",
     "./mail": "./src/mail/index.ts",
-    "./stalwart": "./src/stalwart/index.ts"
+    "./stalwart": "./src/stalwart/index.ts",
+    "./dns": "./src/dns/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
