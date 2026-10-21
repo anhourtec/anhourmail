@@ -16,6 +16,11 @@ export type AdapterFactory = () => Promise<{
   uow: UnitOfWork;
   cleanup: () => Promise<void>;
   createUser: (email: string) => Promise<string>;
+  /** Seeds an active domain, an active mailbox and one alias; returns their ids. */
+  seedMail: (input: { domain: string; address: string; alias: string; quotaBytes: number }) => Promise<{
+    domainId: string;
+    mailboxId: string;
+  }>;
 }>;
 
 const entry = (email: string, createdAt = new Date()): WaitlistEntry => ({
@@ -158,6 +163,92 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         expect(await uow.run((r) => r.access.memberships(userId))).toEqual([{ accountId: id, role: "owner" }]);
         expect(await uow.run((r) => r.access.accountNames([id]))).toEqual({ [id]: "Contract family" });
         await expect(uow.run((r) => r.accounts.addMember({ accountId: id, userId, role: "member" }))).rejects.toThrow();
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("provisioning: idempotent enqueue, ordered claim, retry, complete, give up", async () => {
+      const { uow, cleanup } = await factory();
+      try {
+        const subject = randomUUID();
+        const t0 = new Date(Date.UTC(2000, 0, 1));
+        const a = await uow.run((r) =>
+          r.provisioning.enqueue({ kind: "domain.ensure", subjectId: subject, runAfter: t0 }),
+        );
+        const again = await uow.run((r) =>
+          r.provisioning.enqueue({ kind: "domain.ensure", subjectId: subject, runAfter: t0 }),
+        );
+        expect(again.id).toBe(a.id);
+        const claimed = await uow.run((r) => r.provisioning.claimNext(new Date(Date.UTC(2000, 0, 2))));
+        expect(claimed).toMatchObject({ id: a.id, status: "running", attempts: 1 });
+        const future = new Date(Date.UTC(2999, 0, 1));
+        await uow.run((r) => r.provisioning.retry(a.id, "boom", future, new Date()));
+        expect(await uow.run((r) => r.provisioning.get(a.id))).toMatchObject({ status: "queued", lastError: "boom" });
+        await uow.run((r) => r.provisioning.complete(a.id, new Date()));
+        expect((await uow.run((r) => r.provisioning.get(a.id)))?.status).toBe("succeeded");
+        const b = await uow.run((r) =>
+          r.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: randomUUID(), runAfter: future }),
+        );
+        await uow.run((r) => r.provisioning.giveUp(b.id, "gave up", new Date()));
+        expect(await uow.run((r) => r.provisioning.get(b.id))).toMatchObject({
+          status: "failed",
+          lastError: "gave up",
+        });
+        expect(await uow.run((r) => r.provisioning.get(randomUUID()))).toBeNull();
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("provisioning: a job is claimed by exactly one of two concurrent workers", async () => {
+      const { uow, cleanup } = await factory();
+      try {
+        // Far-past runAfter: this job is the oldest claimable one in a shared test database.
+        const job = await uow.run((r) =>
+          r.provisioning.enqueue({
+            kind: "domain.ensure",
+            subjectId: randomUUID(),
+            runAfter: new Date(Date.UTC(1990, 0, 1)),
+          }),
+        );
+        const now = new Date(Date.UTC(1990, 0, 2));
+        const [x, y] = await Promise.all([
+          uow.run((r) => r.provisioning.claimNext(now)),
+          uow.run((r) => r.provisioning.claimNext(now)),
+        ]);
+        expect([x?.id, y?.id].filter((id) => id === job.id)).toHaveLength(1);
+        await uow.run((r) => r.provisioning.complete(job.id, new Date()));
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("directory: mailbox with aliases, status updates, desired state", async () => {
+      const { uow, cleanup, seedMail } = await factory();
+      try {
+        const tag = randomUUID().slice(0, 8);
+        const domain = `c-${tag}.test`;
+        const { domainId, mailboxId } = await seedMail({
+          domain,
+          address: `owner@${domain}`,
+          alias: `hello@${domain}`,
+          quotaBytes: 1024,
+        });
+        expect(await uow.run((r) => r.directory.getDomain(domainId))).toMatchObject({ name: domain, stalwartId: null });
+        const mb = await uow.run((r) => r.directory.getMailbox(mailboxId));
+        expect(mb).toMatchObject({ address: `owner@${domain}`, quotaBytes: 1024 });
+        expect(mb?.aliases.map((a) => a.address)).toEqual([`hello@${domain}`]);
+        await uow.run(async (r) => {
+          await r.directory.markDomain(domainId, { stalwartId: "s-dom", lastError: null });
+          await r.directory.markMailbox(mailboxId, { status: "active", stalwartId: "s-mb", lastError: null });
+        });
+        expect((await uow.run((r) => r.directory.getDomain(domainId)))?.stalwartId).toBe("s-dom");
+        expect((await uow.run((r) => r.directory.getMailbox(mailboxId)))?.stalwartId).toBe("s-mb");
+        const desired = await uow.run((r) => r.directory.desired());
+        expect(desired.domains).toContain(domain);
+        expect(desired.mailboxes).toContainEqual({ address: `owner@${domain}`, quotaBytes: 1024 });
+        expect(await uow.run((r) => r.directory.getMailbox("not-a-uuid"))).toBeNull();
       } finally {
         await cleanup();
       }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * `npm run dev`: starts the Docker services if they're down, syncs brand assets, then runs the console/webmail
- * (apps/web, with the webmail port forwarder) and the site + docs (apps/site) together with labelled, coloured output. Ctrl-C stops the apps;
+ * (apps/web, with the webmail port forwarder), the site + docs (apps/site) and the provisioning worker together with labelled, coloured output. Ctrl-C stops the apps;
  * `npm run stack:down` stops the containers (CLAUDE.md rule 51: do that at the end of every session).
  */
 import { execFileSync, spawn } from "node:child_process";
@@ -34,12 +34,13 @@ const child = spawn(
     "concurrently",
     "--kill-others-on-fail",
     "--names",
-    "web,mail,site",
+    "web,mail,site,worker",
     "--prefix-colors",
-    "blue,cyan,magenta",
+    "blue,cyan,magenta,yellow",
     "npm run dev --workspace @anhourmail/web",
     "node scripts/dev-mail-proxy.mjs",
     "npm run dev --workspace @anhourmail/site",
+    "npm run dev --workspace @anhourmail/worker",
   ],
   { stdio: "inherit", env: process.env },
 );

@@ -6,7 +6,9 @@ export default defineConfig({
   test: {
     include: ["packages/*/src/**/*.int.test.ts", "apps/*/src/**/*.int.test.ts"],
     environment: "node",
-    testTimeout: 30_000,
+    testTimeout: 60_000,
+    // Suites share the test database and the dev Stalwart: run files one at a time.
+    fileParallelism: false,
     env: process.env.TEST_DATABASE_URL ? {} : loadDotEnv(),
   },
 });

@@ -2,6 +2,7 @@
 import type { AccessRepository } from "./access/repository";
 import type { AccountRepository } from "./account/repository";
 import type { AuditRepository } from "./audit/repository";
+import type { MailDirectoryRepository, ProvisioningRepository } from "./provisioning/ports";
 import type { WaitlistRepository } from "./waitlist/repository";
 
 /** Everything a service can touch inside one transaction. Adapters implement it (memory, postgres). */
@@ -10,6 +11,8 @@ export type Repositories = {
   audit: AuditRepository;
   access: AccessRepository;
   accounts: AccountRepository;
+  provisioning: ProvisioningRepository;
+  directory: MailDirectoryRepository;
 };
 
 /**

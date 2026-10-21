@@ -5,10 +5,13 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "dev": "tsx --env-file-if-exists=../../.env watch src/scheduler.ts",
+    "dev": "tsx --env-file-if-exists=../../.env watch src/worker.ts",
     "scheduler": "tsx src/scheduler.ts",
     "job:audit-verify": "tsx src/jobs/audit-verify.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev:scheduler": "tsx --env-file-if-exists=../../.env watch src/scheduler.ts",
+    "job:reconcile": "tsx src/jobs/reconcile.ts",
+    "start": "tsx src/worker.ts"
   },
   "dependencies": {
     "@anhourmail/adapters": "0.0.0",

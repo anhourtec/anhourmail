@@ -182,6 +182,9 @@ export const customerDomain = pgTable(
     name: text("name").notNull().unique(),
     status: text("status").notNull().default("pending_dns"),
     verifyToken: text("verify_token").notNull(),
+    /** Stalwart's id once provisioned; null until the provisioning job succeeds. */
+    stalwartId: text("stalwart_id"),
+    lastError: text("last_error"),
     createdAt: createdAt(),
   },
   (t) => [index("customer_domain_account_idx").on(t.accountId)],
@@ -197,7 +200,9 @@ export const mailbox = pgTable(
     userId: text("user_id").references(() => authUser.id, { onDelete: "set null" }),
     address: text("address").notNull().unique(),
     stalwartId: text("stalwart_id"),
+    /** provisioning | active | failed | suspended — set by the provisioning job (CLAUDE.md rule 26). */
     status: text("status").notNull().default("active"),
+    lastError: text("last_error"),
     quotaBytes: bigint("quota_bytes", { mode: "number" }).notNull(),
     createdAt: createdAt(),
   },
@@ -256,5 +261,30 @@ export const auditLog = pgTable(
     uniqueIndex("audit_log_scope_seq_idx").on(t.scope, t.seq),
     index("audit_log_scope_at_idx").on(t.scope, t.at),
     index("audit_log_actor_idx").on(t.actorUserId),
+  ],
+);
+
+// --- provisioning queue (desired state → Stalwart; CLAUDE.md rule 26) ---------------------------------------
+
+export const provisioningJob = pgTable(
+  "provisioning_job",
+  {
+    id: uuid("id").primaryKey(),
+    /** domain.ensure | mailbox.ensure | aliases.sync */
+    kind: text("kind").notNull(),
+    /** The control-plane row the job applies (domain or mailbox id). */
+    subjectId: text("subject_id").notNull(),
+    /** queued | running | succeeded | failed (failed = gave up after max attempts) */
+    status: text("status").notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error"),
+    runAfter: timestamp("run_after", { withTimezone: true }).notNull(),
+    lockedAt: timestamp("locked_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("provisioning_job_ready_idx").on(t.status, t.runAfter),
+    index("provisioning_job_subject_idx").on(t.kind, t.subjectId),
   ],
 );

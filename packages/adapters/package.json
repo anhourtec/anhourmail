@@ -10,7 +10,8 @@
     "./postgres/schema": "./src/db-postgres/schema.ts",
     "./contract": "./src/contract/index.ts",
     "./auth": "./src/auth/index.ts",
-    "./mail": "./src/mail/index.ts"
+    "./mail": "./src/mail/index.ts",
+    "./stalwart": "./src/stalwart/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -24,7 +25,8 @@
     "better-auth": "1.7.12",
     "@anhourmail/shared": "0.0.0",
     "@node-rs/argon2": "2.2.2",
-    "nodemailer": "10.1.7"
+    "nodemailer": "10.1.7",
+    "@anhourmail/stalwart-client": "0.0.0"
   },
   "devDependencies": {
     "@anhourmail/config": "0.0.0",

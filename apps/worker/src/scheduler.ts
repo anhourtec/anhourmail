@@ -2,7 +2,7 @@
 /**
  * Scheduler (CLAUDE.md rule 17): periodic jobs run here, never in a host crontab. One job at a time, each
  * spawned as its own process with a timeout; a heartbeat file backs the container healthcheck
- * (`find /tmp/scheduler-heartbeat -mmin -2`). Event-driven provisioning jobs arrive in phase 3 (queue worker).
+ * (`find /tmp/scheduler-heartbeat -mmin -2`). Event-driven provisioning runs in the queue worker (src/worker.ts).
  */
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -14,6 +14,8 @@ type Job = { name: string; script: string; everyMs: number; timeoutMs: number; e
 export const JOBS: readonly Job[] = [
   // Section 11: verify every audit hash chain and alert on breaks.
   { name: "audit-verify", script: "job:audit-verify", everyMs: 6 * 3600_000, timeoutMs: 10 * 60_000, enabled: true },
+  // Rule 26: desired state vs Stalwart; reports drift, never deletes.
+  { name: "reconcile", script: "job:reconcile", everyMs: 3600_000, timeoutMs: 10 * 60_000, enabled: true },
 ];
 
 const HEARTBEAT = process.env.SCHEDULER_HEARTBEAT ?? "/tmp/scheduler-heartbeat";

@@ -20,5 +20,25 @@ describeAdapterContract("postgres", async () => {
       await db.insert(schema.authUser).values({ id, name: email, email, emailVerified: true });
       return id;
     },
+    seedMail: async ({ domain, address, alias, quotaBytes }) => {
+      const [account] = await db
+        .insert(schema.customerAccount)
+        .values({ name: `contract ${domain}` })
+        .returning();
+      if (!account) throw new Error("account not created");
+      const [d] = await db
+        .insert(schema.customerDomain)
+        .values({ accountId: account.id, name: domain, status: "active", verifyToken: "t" })
+        .returning();
+      const [m] = await db
+        .insert(schema.mailbox)
+        .values({ accountId: account.id, address, quotaBytes, status: "active" })
+        .returning();
+      if (!d || !m) throw new Error("mail rows not created");
+      await db
+        .insert(schema.mailAlias)
+        .values({ accountId: account.id, mailboxId: m.id, address: alias, kind: "alias" });
+      return { domainId: d.id, mailboxId: m.id };
+    },
   };
 });

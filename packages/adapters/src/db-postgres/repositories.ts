@@ -5,6 +5,14 @@ import { and, desc, eq, gte, inArray, lt, lte, type SQL, sql } from "drizzle-orm
 
 import type { AccessRepository, Repositories, UnitOfWork } from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
+import type {
+  DomainState,
+  JobKind,
+  MailboxState,
+  MailDirectoryRepository,
+  ProvisioningJob,
+  ProvisioningRepository,
+} from "@anhourmail/core/provisioning";
 import {
   type AuditEntry,
   type AuditEntryInput,
@@ -22,7 +30,11 @@ import {
   accountMembership,
   auditLog,
   customerAccount,
+  customerDomain,
+  mailAlias,
+  mailbox,
   platformRoleAssignment,
+  provisioningJob,
   userProfile,
   waitlistEntry,
 } from "./schema";
@@ -240,11 +252,165 @@ class PgAccountRepository implements AccountRepository {
   }
 }
 
+/** A job left `running` this long (crashed worker) is claimable again. */
+const STALE_RUNNING_MS = 10 * 60 * 1000;
+
+function toJob(r: typeof provisioningJob.$inferSelect): ProvisioningJob {
+  return {
+    id: r.id,
+    kind: r.kind as JobKind,
+    subjectId: r.subjectId,
+    status: r.status as ProvisioningJob["status"],
+    attempts: r.attempts,
+    lastError: r.lastError,
+    runAfter: r.runAfter,
+  };
+}
+
+class PgProvisioningRepository implements ProvisioningRepository {
+  constructor(private readonly x: Executor) {}
+
+  async enqueue(input: { kind: JobKind; subjectId: string; runAfter: Date }): Promise<ProvisioningJob> {
+    const [existing] = await this.x
+      .select()
+      .from(provisioningJob)
+      .where(
+        and(
+          eq(provisioningJob.kind, input.kind),
+          eq(provisioningJob.subjectId, input.subjectId),
+          eq(provisioningJob.status, "queued"),
+        ),
+      )
+      .limit(1);
+    if (existing) return toJob(existing);
+    const [row] = await this.x
+      .insert(provisioningJob)
+      .values({
+        id: randomUUID(),
+        kind: input.kind,
+        subjectId: input.subjectId,
+        status: "queued",
+        runAfter: input.runAfter,
+      })
+      .returning();
+    if (!row) throw new Error("job not created");
+    return toJob(row);
+  }
+
+  /** Atomic claim: FOR UPDATE SKIP LOCKED, so concurrent workers never take the same job. */
+  async claimNext(now: Date): Promise<ProvisioningJob | null> {
+    const stale = new Date(now.getTime() - STALE_RUNNING_MS);
+    const res = await this.x.execute<{ id: string }>(sql`
+      update provisioning_job set status = 'running', attempts = attempts + 1, locked_at = ${now}, updated_at = ${now}
+      where id = (
+        select id from provisioning_job
+        where (status = 'queued' and run_after <= ${now}) or (status = 'running' and locked_at < ${stale})
+        order by run_after
+        limit 1
+        for update skip locked
+      )
+      returning id`);
+    const id = res.rows[0]?.id;
+    if (!id) return null;
+    return this.get(id);
+  }
+
+  async complete(id: string, now: Date): Promise<void> {
+    await this.x
+      .update(provisioningJob)
+      .set({ status: "succeeded", lastError: null, lockedAt: null, updatedAt: now })
+      .where(eq(provisioningJob.id, id));
+  }
+
+  async retry(id: string, error: string, runAfter: Date, now: Date): Promise<void> {
+    await this.x
+      .update(provisioningJob)
+      .set({ status: "queued", lastError: error, runAfter, lockedAt: null, updatedAt: now })
+      .where(eq(provisioningJob.id, id));
+  }
+
+  async giveUp(id: string, error: string, now: Date): Promise<void> {
+    await this.x
+      .update(provisioningJob)
+      .set({ status: "failed", lastError: error, lockedAt: null, updatedAt: now })
+      .where(eq(provisioningJob.id, id));
+  }
+
+  async get(id: string): Promise<ProvisioningJob | null> {
+    const [row] = await this.x.select().from(provisioningJob).where(eq(provisioningJob.id, id));
+    return row ? toJob(row) : null;
+  }
+}
+
+class PgMailDirectoryRepository implements MailDirectoryRepository {
+  constructor(private readonly x: Executor) {}
+
+  async getDomain(id: string): Promise<DomainState | null> {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
+    const [r] = await this.x.select().from(customerDomain).where(eq(customerDomain.id, id));
+    return r ? { id: r.id, name: r.name, status: r.status, stalwartId: r.stalwartId } : null;
+  }
+
+  async getMailbox(id: string): Promise<MailboxState | null> {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
+    const [m] = await this.x.select().from(mailbox).where(eq(mailbox.id, id));
+    if (!m) return null;
+    const aliases = await this.x.select().from(mailAlias).where(eq(mailAlias.mailboxId, id)).orderBy(mailAlias.address);
+    return {
+      id: m.id,
+      address: m.address,
+      quotaBytes: m.quotaBytes,
+      status: m.status,
+      stalwartId: m.stalwartId,
+      aliases: aliases.map((a) => ({
+        address: a.address,
+        kind: a.kind === "masked" ? "masked" : "alias",
+        enabled: a.enabled,
+        description: a.description,
+      })),
+    };
+  }
+
+  async markDomain(id: string, update: { stalwartId?: string; lastError: string | null }): Promise<void> {
+    await this.x
+      .update(customerDomain)
+      .set({ lastError: update.lastError, ...(update.stalwartId ? { stalwartId: update.stalwartId } : {}) })
+      .where(eq(customerDomain.id, id));
+  }
+
+  async markMailbox(
+    id: string,
+    update: { status: string; stalwartId?: string; lastError: string | null },
+  ): Promise<void> {
+    await this.x
+      .update(mailbox)
+      .set({
+        status: update.status,
+        lastError: update.lastError,
+        ...(update.stalwartId ? { stalwartId: update.stalwartId } : {}),
+      })
+      .where(eq(mailbox.id, id));
+  }
+
+  async desired(): Promise<{ domains: string[]; mailboxes: { address: string; quotaBytes: number }[] }> {
+    const [domains, mailboxes] = await Promise.all([
+      this.x.select({ name: customerDomain.name }).from(customerDomain).where(eq(customerDomain.status, "active")),
+      this.x
+        .select({ address: mailbox.address, quotaBytes: mailbox.quotaBytes })
+        .from(mailbox)
+        .where(eq(mailbox.status, "active")),
+    ]);
+    return { domains: domains.map((d) => d.name), mailboxes };
+  }
+}
+
 const repositories = (x: Executor): Repositories => ({
   waitlist: new PgWaitlistRepository(x),
   audit: new PgAuditRepository(x),
   access: new PgAccessRepository(x),
   accounts: new PgAccountRepository(x),
+  provisioning: new PgProvisioningRepository(x),
+  directory: new PgMailDirectoryRepository(x),
 });
 
 /** One Postgres transaction per `run` (CLAUDE.md rule 46: the audit row commits with the change). */

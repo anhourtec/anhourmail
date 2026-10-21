@@ -10,7 +10,8 @@
     "./audit": "./src/audit/index.ts",
     "./waitlist": "./src/waitlist/index.ts",
     "./account": "./src/account/index.ts",
-    "./security": "./src/security/index.ts"
+    "./security": "./src/security/index.ts",
+    "./provisioning": "./src/provisioning/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

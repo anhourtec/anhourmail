@@ -208,6 +208,50 @@ export class StalwartManagement {
     return true;
   }
 
+  async listDomains(): Promise<{ id: string; name: string }[]> {
+    return this.transport.getAll<Named>("x:Domain", ["name"]);
+  }
+
+  /** Individual accounts as full addresses with their disk quota and aliases. */
+  async listUsers(): Promise<{ id: string; address: string; quotaBytes: number | null; aliases: string[] }[]> {
+    const [domains, accounts] = await Promise.all([
+      this.listDomains(),
+      this.transport.getAll<{
+        id: string;
+        "@type"?: string;
+        name: string;
+        domainId: string;
+        quotas?: { maxDiskQuota?: number };
+        aliases?: Record<string, { name: string; domainId: string }>;
+      }>("x:Account", ["name", "domainId", "quotas", "aliases"]),
+    ]);
+    const domainName = new Map(domains.map((d) => [d.id, d.name] as const));
+    return accounts
+      .filter((a) => a["@type"] === undefined || a["@type"] === "User")
+      .map((a) => ({
+        id: a.id,
+        address: `${a.name}@${domainName.get(a.domainId) ?? "?"}`,
+        quotaBytes: a.quotas?.maxDiskQuota ?? null,
+        aliases: Object.values(a.aliases ?? {}).map((x) => `${x.name}@${domainName.get(x.domainId) ?? "?"}`),
+      }));
+  }
+
+  /**
+   * Destroys an account or domain. For tests and explicit, audited admin actions only — the reconciler never
+   * deletes (mail may live there; CLAUDE.md rule 26).
+   */
+  async destroy(object: "x:Account" | "x:Domain", id: string): Promise<void> {
+    await this.transport.set(object, { destroy: [id] });
+  }
+
+  /** Destroys a domain after its DKIM keys (Stalwart refuses otherwise). Accounts must already be gone. */
+  async destroyDomain(id: string): Promise<void> {
+    const keys = await this.transport.getAll<{ id: string; domainId: string }>("x:DkimSignature", ["domainId"]);
+    const mine = keys.filter((k) => k.domainId === id).map((k) => k.id);
+    if (mine.length > 0) await this.transport.set("x:DkimSignature", { destroy: mine });
+    await this.destroy("x:Domain", id);
+  }
+
   /** Partial update of a singleton object (e.g. `x:SpamPyzor`, `x:SystemSettings`). */
   async updateSingleton(object: string, fields: Record<string, unknown>): Promise<void> {
     await this.transport.set(object, { update: { singleton: fields } });

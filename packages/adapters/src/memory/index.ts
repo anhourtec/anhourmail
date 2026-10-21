@@ -3,6 +3,13 @@ import { randomUUID } from "node:crypto";
 
 import type { AccessRepository, Repositories, UnitOfWork } from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
+import type {
+  DomainState,
+  MailboxState,
+  MailDirectoryRepository,
+  ProvisioningJob,
+  ProvisioningRepository,
+} from "@anhourmail/core/provisioning";
 import {
   type AuditEntry,
   type AuditEntryInput,
@@ -26,6 +33,9 @@ export type MemoryState = {
   suspended: string[];
   accounts: { id: string; name: string; plan?: string }[];
   userStates: Record<string, string>;
+  jobs: ProvisioningJob[];
+  domains: (DomainState & { lastError: string | null })[];
+  mailboxes: (MailboxState & { lastError: string | null })[];
 };
 
 export const emptyState = (): MemoryState => ({
@@ -36,6 +46,9 @@ export const emptyState = (): MemoryState => ({
   suspended: [],
   accounts: [],
   userStates: {},
+  jobs: [],
+  domains: [],
+  mailboxes: [],
 });
 
 const clone = <T>(v: T): T => structuredClone(v);
@@ -117,7 +130,84 @@ function repositories(s: MemoryState): Repositories {
     membershipCount: async (userId) => s.memberships.filter((m) => m.userId === userId).length,
   };
 
-  return { waitlist, audit, access, accounts };
+  const provisioning: ProvisioningRepository = {
+    enqueue: async ({ kind, subjectId, runAfter }) => {
+      const existing = s.jobs.find((j) => j.kind === kind && j.subjectId === subjectId && j.status === "queued");
+      if (existing) return clone(existing);
+      const job: ProvisioningJob = {
+        id: randomUUID(),
+        kind,
+        subjectId,
+        status: "queued",
+        attempts: 0,
+        lastError: null,
+        runAfter,
+      };
+      s.jobs.push(job);
+      return clone(job);
+    },
+    claimNext: async (now) => {
+      const job = s.jobs
+        .filter((j) => j.status === "queued" && j.runAfter <= now)
+        .sort((a, b) => a.runAfter.getTime() - b.runAfter.getTime())[0];
+      if (!job) return null;
+      job.status = "running";
+      job.attempts += 1;
+      return clone(job);
+    },
+    complete: async (id) => {
+      const job = s.jobs.find((j) => j.id === id);
+      if (job) Object.assign(job, { status: "succeeded", lastError: null });
+    },
+    retry: async (id, error, runAfter) => {
+      const job = s.jobs.find((j) => j.id === id);
+      if (job) Object.assign(job, { status: "queued", lastError: error, runAfter });
+    },
+    giveUp: async (id, error) => {
+      const job = s.jobs.find((j) => j.id === id);
+      if (job) Object.assign(job, { status: "failed", lastError: error });
+    },
+    get: async (id) => clone(s.jobs.find((j) => j.id === id) ?? null),
+  };
+
+  const directory: MailDirectoryRepository = {
+    getDomain: async (id) => {
+      const d = s.domains.find((x) => x.id === id);
+      return d ? clone({ id: d.id, name: d.name, status: d.status, stalwartId: d.stalwartId }) : null;
+    },
+    getMailbox: async (id) => {
+      const m = s.mailboxes.find((x) => x.id === id);
+      if (!m) return null;
+      const { lastError: _e, ...state } = m;
+      return clone(state);
+    },
+    markDomain: async (id, update) => {
+      const d = s.domains.find((x) => x.id === id);
+      if (d)
+        Object.assign(d, {
+          lastError: update.lastError,
+          ...(update.stalwartId ? { stalwartId: update.stalwartId } : {}),
+        });
+    },
+    markMailbox: async (id, update) => {
+      const m = s.mailboxes.find((x) => x.id === id);
+      if (m) {
+        Object.assign(m, {
+          status: update.status,
+          lastError: update.lastError,
+          ...(update.stalwartId ? { stalwartId: update.stalwartId } : {}),
+        });
+      }
+    },
+    desired: async () => ({
+      domains: s.domains.filter((d) => d.status === "active").map((d) => d.name),
+      mailboxes: s.mailboxes
+        .filter((m) => m.status === "active")
+        .map((m) => ({ address: m.address, quotaBytes: m.quotaBytes })),
+    }),
+  };
+
+  return { waitlist, audit, access, accounts, provisioning, directory };
 }
 
 export class MemoryUnitOfWork implements UnitOfWork {
