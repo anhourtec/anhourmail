@@ -2,6 +2,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { connection } from "next/server";
 
 import { lookupInvite } from "@anhourmail/core/invite";
 import { PLANS } from "@anhourmail/shared/plans";
@@ -23,6 +24,8 @@ export default async function SignUpPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  // Rendered per request: runtime configuration (sign-up mode, site URL) is never baked in at build time.
+  await connection();
   const mode = signUpMode();
   if (mode === "closed") notFound();
   const params = await searchParams;

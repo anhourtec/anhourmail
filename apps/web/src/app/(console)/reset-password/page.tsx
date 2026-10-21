@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { Metadata } from "next";
 import Link from "next/link";
+import { connection } from "next/server";
 
 import { AuthSplit } from "@/components/auth-split";
 
@@ -13,6 +14,8 @@ export default async function ResetPasswordPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  // Rendered per request: runtime configuration (sign-up mode, site URL) is never baked in at build time.
+  await connection();
   const params = await searchParams;
   const token = typeof params.token === "string" ? params.token : null;
   const invalid = params.error !== undefined || token === null;

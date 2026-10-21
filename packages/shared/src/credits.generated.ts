@@ -146,8 +146,7 @@ export const CREDITS: readonly Credit[] = [
     name: "@esbuild/darwin-arm64",
     version: "0.28.2",
     license: "MIT",
-    url: "https://github.com/evanw/esbuild",
-    repository: "https://github.com/evanw/esbuild",
+    url: null,
   },
   {
     name: "@esbuild/darwin-x64",
@@ -335,8 +334,7 @@ export const CREDITS: readonly Credit[] = [
     name: "@img/sharp-darwin-arm64",
     version: "0.35.5",
     license: "Apache-2.0",
-    url: "https://sharp.pixelplumbing.com",
-    repository: "https://github.com/lovell/sharp",
+    url: null,
   },
   {
     name: "@img/sharp-darwin-x64",
@@ -354,8 +352,7 @@ export const CREDITS: readonly Credit[] = [
     name: "@img/sharp-libvips-darwin-arm64",
     version: "1.3.4",
     license: "LGPL-3.0-or-later",
-    url: "https://sharp.pixelplumbing.com",
-    repository: "https://github.com/lovell/sharp-libvips",
+    url: null,
   },
   {
     name: "@img/sharp-libvips-darwin-x64",
@@ -522,8 +519,7 @@ export const CREDITS: readonly Credit[] = [
     name: "@next/swc-darwin-arm64",
     version: "16.4.2",
     license: "MIT",
-    url: "https://github.com/vercel/next.js",
-    repository: "https://github.com/vercel/next.js",
+    url: null,
   },
   {
     name: "@next/swc-darwin-x64",
@@ -604,8 +600,7 @@ export const CREDITS: readonly Credit[] = [
     name: "@node-rs/argon2-darwin-arm64",
     version: "2.2.2",
     license: "MIT",
-    url: "https://github.com/napi-rs/node-rs",
-    repository: "https://github.com/napi-rs/node-rs",
+    url: null,
   },
   {
     name: "@node-rs/argon2-darwin-x64",
@@ -1055,8 +1050,7 @@ export const CREDITS: readonly Credit[] = [
     name: "@yuku-core/binding-darwin-arm64",
     version: "0.19.0",
     license: "MIT",
-    url: "https://github.com/yuku-toolchain/yuku",
-    repository: "https://github.com/yuku-toolchain/yuku",
+    url: null,
   },
   {
     name: "@yuku-core/binding-darwin-x64",
@@ -1426,8 +1420,7 @@ export const CREDITS: readonly Credit[] = [
     name: "fsevents",
     version: "2.3.3",
     license: "MIT",
-    url: "https://github.com/fsevents/fsevents",
-    repository: "https://github.com/fsevents/fsevents",
+    url: null,
   },
   {
     name: "fumadocs-core",

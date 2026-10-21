@@ -3,6 +3,7 @@
 # shellcheck source=.cicd/lib.sh
 source "$(dirname "$0")/lib.sh"
 stack_up
+apps_up
 step "playwright browsers"
 npx playwright install --with-deps chromium
 step "test:e2e"

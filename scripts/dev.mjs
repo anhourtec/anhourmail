@@ -4,6 +4,7 @@
  * `npm run dev`: starts the Docker services if they're down, syncs brand assets, then runs the console/webmail
  * (apps/web, with the webmail port forwarder), the site + docs (apps/site) and the provisioning worker together with labelled, coloured output. Ctrl-C stops the apps;
  * `npm run stack:down` stops the containers (CLAUDE.md rule 51: do that at the end of every session).
+ * `--no-stack` skips starting the containers (CI starts its own `ci` profile first).
  */
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -15,7 +16,7 @@ else {
 }
 
 const run = (cmd, args) => execFileSync(cmd, args, { stdio: "inherit" });
-run("docker", ["compose", "--profile", "dev", "up", "-d", "--wait"]);
+if (!process.argv.includes("--no-stack")) run("docker", ["compose", "--profile", "dev", "up", "-d", "--wait"]);
 run("node", ["scripts/sync-brand.mjs"]);
 
 const host = process.env.DEV_HOST ?? "0.0.0.0";

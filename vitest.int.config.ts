@@ -9,6 +9,7 @@ export default defineConfig({
     testTimeout: 60_000,
     // Suites share the test database and the dev Stalwart: run files one at a time.
     fileParallelism: false,
+    globalSetup: ["scripts/test-int-setup.ts"],
     env: process.env.TEST_DATABASE_URL ? {} : loadDotEnv(),
   },
 });

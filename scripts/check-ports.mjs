@@ -54,10 +54,27 @@ for (const [key, port] of Object.entries(ports)) {
 }
 for (const [port, keys] of byPort) if (keys.length > 1) problems.push(`${port} is used by ${keys.join(", ")}`);
 
+/** Something accepts connections on the port (used when we may not bind it ourselves). */
+const answers = (port) =>
+  new Promise((resolve) => {
+    const sock = net.connect({ port, host: "127.0.0.1" });
+    sock.setTimeout(1000);
+    sock.once("connect", () => (sock.destroy(), resolve(true)));
+    sock.once("error", () => resolve(false));
+    sock.once("timeout", () => (sock.destroy(), resolve(false)));
+  });
+
+/**
+ * Busy only if the bind fails with EADDRINUSE. Ports below 1024 can refuse a non-root bind (EACCES) while Docker
+ * can still publish them, so for those we check whether anything is listening instead.
+ */
 const inUse = (port) =>
   new Promise((resolve) => {
     const srv = net.createServer();
-    srv.once("error", () => resolve(true));
+    srv.once("error", (err) => {
+      if (err.code === "EADDRINUSE") resolve(true);
+      else answers(port).then(resolve, () => resolve(false));
+    });
     srv.once("listening", () => srv.close(() => resolve(false)));
     srv.listen(port, "127.0.0.1");
   });

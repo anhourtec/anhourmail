@@ -53,6 +53,9 @@ export function productionPackages(root = ROOT) {
       license: normalizeLicense(entry.license),
       dir: path.join(root, key),
       optional: Boolean(entry.optional),
+      // Built for one OS/CPU (e.g. a native addon's darwin-arm64 package): only installed on that platform, so
+      // nothing is read from disk for it — the generated files must be identical on every machine and in CI.
+      platformSpecific: Boolean(entry.os || entry.cpu),
     });
   }
   return [...out.values()].sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
@@ -92,6 +95,8 @@ function repositoryUrl(dir) {
     return { url: null, repository: null };
   }
 }
+
+const sourceOf = (p) => (p.platformSpecific ? { url: null, repository: null } : repositoryUrl(p.dir));
 
 /** Assets we ship or run that aren't npm packages. */
 export const EXTRA_COMPONENTS = [
@@ -201,12 +206,12 @@ function buildNotices(pkgs) {
   ];
   const notices = [];
   for (const p of pkgs) {
-    const licText = readIfExists(p.dir, ["LICENSE", "LICENCE", "COPYING"]);
+    const licText = p.platformSpecific ? null : readIfExists(p.dir, ["LICENSE", "LICENCE", "COPYING"]);
     const copyright = copyrightLine(licText) ?? "";
-    const { url } = repositoryUrl(p.dir);
+    const { url } = sourceOf(p);
     const label = url ? `[${p.name}](${url})` : p.name;
     lines.push(`| ${label} | ${p.version} | ${p.license} | ${copyright.replace(/\|/g, "\\|")} |`);
-    if (p.license.includes("Apache-2.0")) {
+    if (p.license.includes("Apache-2.0") && !p.platformSpecific) {
       const notice = readIfExists(p.dir, ["NOTICE"]);
       if (notice) notices.push({ name: `${p.name}@${p.version}`, text: notice.trim() });
     }
@@ -227,7 +232,7 @@ function buildCredits(pkgs) {
   const credits = [
     ...EXTRA_COMPONENTS.map((c) => ({ name: c.name, version: c.version, license: c.license, url: c.url })),
     ...pkgs.map((p) => {
-      const { url, repository } = repositoryUrl(p.dir);
+      const { url, repository } = sourceOf(p);
       return { name: p.name, version: p.version, license: p.license, url, ...(repository ? { repository } : {}) };
     }),
   ];

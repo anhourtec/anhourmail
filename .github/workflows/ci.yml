@@ -21,8 +21,8 @@ jobs:
     name: lint, format, types, repo checks
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version-file: .nvmrc, cache: npm }
       - run: .cicd/setup.sh
       - run: .cicd/checks.sh
@@ -31,21 +31,21 @@ jobs:
     name: unit tests + coverage
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version-file: .nvmrc, cache: npm }
       - run: .cicd/setup.sh
       - run: .cicd/unit.sh
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with: { name: coverage, path: coverage/, if-no-files-found: ignore }
 
   integration:
     name: integration (Postgres, Redis, Stalwart, Mailpit)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version-file: .nvmrc, cache: npm }
       - run: .cicd/setup.sh
       - run: .cicd/integration.sh
@@ -56,8 +56,8 @@ jobs:
     name: RBAC harness
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version-file: .nvmrc, cache: npm }
       - run: .cicd/setup.sh
       - run: .cicd/rbac.sh
@@ -66,13 +66,13 @@ jobs:
     name: Playwright e2e
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version-file: .nvmrc, cache: npm }
       - run: .cicd/setup.sh
       - run: .cicd/e2e.sh
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: |
@@ -84,8 +84,8 @@ jobs:
     name: build apps + images
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version-file: .nvmrc, cache: npm }
       - run: .cicd/setup.sh
       - run: .cicd/build.sh
@@ -94,9 +94,9 @@ jobs:
     name: secret scan + dependency audit
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version-file: .nvmrc, cache: npm }
       - run: .cicd/security.sh
 
@@ -104,8 +104,8 @@ jobs:
     name: licences, notices, SPDX
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version-file: .nvmrc, cache: npm }
       - run: .cicd/setup.sh
       - run: .cicd/licences.sh
