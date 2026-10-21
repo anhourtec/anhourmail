@@ -1,0 +1,27 @@
+{
+  "name": "@anhourmail/shared",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./platform": "./src/platform.ts",
+    "./plans": "./src/plans.ts",
+    "./sending": "./src/sending.ts",
+    "./dns": "./src/dns.ts",
+    "./schemas": "./src/schemas.ts",
+    "./credits": "./src/credits.generated.ts",
+    "./rbac": "./src/rbac/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@anhourmail/config": "0.0.0"
+  }
+}

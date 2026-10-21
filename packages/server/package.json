@@ -1,0 +1,24 @@
+{
+  "name": "@anhourmail/server",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./log": "./src/log.ts",
+    "./health": "./src/health.ts",
+    "./redis": "./src/redis.ts",
+    "./request-context": "./src/request-context.ts",
+    "./client-ip": "./src/client-ip.ts",
+    "./rate-limit": "./src/rate-limit.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "ioredis": "6.0.0"
+  },
+  "devDependencies": {
+    "@anhourmail/config": "0.0.0"
+  }
+}

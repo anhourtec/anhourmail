@@ -1,0 +1,175 @@
+// SPDX-License-Identifier: MIT
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { clientIp } from "./client-ip";
+import { appVersion, liveness, probe } from "./health";
+import { log, redact, setLogSinkForTests } from "./log";
+import { callerKey, checkRateLimit, LIMITS, memoryCounter, redisCounter } from "./rate-limit";
+import { requestContext, requestIdFrom, runWithRequestContext } from "./request-context";
+
+afterEach(() => {
+  setLogSinkForTests(null);
+  vi.unstubAllEnvs();
+});
+
+describe("logger", () => {
+  it("writes one JSON line with request id, redacting secrets and mail content", () => {
+    const lines: string[] = [];
+    setLogSinkForTests((l) => lines.push(l));
+    runWithRequestContext({ requestId: "req-abcdefgh", userId: "u1" }, () => {
+      log.child({ component: "test" }).info("hello", {
+        password: "p",
+        subject: "private",
+        nested: { authorization: "Bearer abc.def" },
+        note: "Bearer xyz123",
+        err: new Error("boom"),
+      });
+    });
+    const rec = JSON.parse(lines[0] ?? "{}") as Record<string, unknown>;
+    expect(rec).toMatchObject({
+      level: "info",
+      msg: "hello",
+      requestId: "req-abcdefgh",
+      userId: "u1",
+      component: "test",
+    });
+    expect(rec.password).toBe("[redacted]");
+    expect(rec.subject).toBe("[redacted]");
+    expect(rec.note).toBe("Bearer [redacted]");
+    expect(rec.err).toMatchObject({ type: "Error", message: "boom" });
+    expect(rec.err).not.toHaveProperty("stack");
+  });
+
+  it("respects LOG_LEVEL and keeps stacks at error", () => {
+    vi.stubEnv("LOG_LEVEL", "warn");
+    const lines: string[] = [];
+    setLogSinkForTests((l) => lines.push(l));
+    log.info("dropped");
+    log.error("kept", { err: new Error("x") });
+    expect(lines).toHaveLength(1);
+    expect(log.enabled("debug")).toBe(false);
+    expect((JSON.parse(lines[0] ?? "{}") as { err: { stack?: string } }).err.stack).toBeTruthy();
+  });
+
+  it("silent level and pretty mode", () => {
+    vi.stubEnv("LOG_LEVEL", "silent");
+    const lines: string[] = [];
+    setLogSinkForTests((l) => lines.push(l));
+    log.fatal("nothing");
+    expect(lines).toHaveLength(0);
+    vi.stubEnv("LOG_LEVEL", "info");
+    vi.stubEnv("LOG_PRETTY", "true");
+    setLogSinkForTests((l) => lines.push(l));
+    log.at("warn", "pretty", { a: 1 });
+    expect(lines[0]).toMatch(/WARN\s+pretty\s+a=1/);
+  });
+
+  it("redact handles cycles, depth, arrays, dates, bigints and headers", () => {
+    const a: Record<string, unknown> = {
+      when: new Date("2026-01-01T00:00:00Z"),
+      big: 10n,
+      list: Array.from({ length: 60 }, (_, i) => i),
+    };
+    a.self = a;
+    const out = redact(a) as Record<string, unknown>;
+    expect(out.self).toBe("[circular]");
+    expect(out.when).toBe("2026-01-01T00:00:00.000Z");
+    expect(out.big).toBe("10");
+    expect((out.list as unknown[]).length).toBe(50);
+    expect(redact(new Headers({ cookie: "c", accept: "x" }))).toEqual({ accept: "x", cookie: "[redacted]" });
+    let deep: Record<string, unknown> = {};
+    const root = deep;
+    for (let i = 0; i < 10; i++) deep = deep.n = {} as Record<string, unknown>;
+    expect(JSON.stringify(redact(root))).toContain("[truncated]");
+    expect(redact(new Date(Number.NaN))).toBeNull();
+    expect((redact("x".repeat(3000)) as string).length).toBeLessThan(2100);
+  });
+});
+
+describe("request context", () => {
+  it("accepts a sane X-Request-Id, otherwise generates one", () => {
+    expect(requestIdFrom(new Headers({ "x-request-id": "abcd1234efgh" }))).toBe("abcd1234efgh");
+    expect(requestIdFrom(new Headers({ "x-request-id": "bad id!" }))).toMatch(/^[0-9a-f-]{36}$/);
+    expect(requestContext()).toBeUndefined();
+  });
+});
+
+describe("client ip", () => {
+  it("trusts X-Forwarded-For only behind our proxy", () => {
+    const h = new Headers({ "x-forwarded-for": "203.0.113.7, 10.0.0.1" });
+    expect(clientIp(h, false)).toBeNull();
+    expect(clientIp(h, true)).toBe("10.0.0.1"); // right-most: the hop our proxy added
+    expect(clientIp(new Headers({ "x-forwarded-for": "not an ip" }), true)).toBeNull();
+    expect(clientIp(new Headers(), true)).toBeNull();
+  });
+});
+
+describe("rate limits", () => {
+  it("counts per window and returns headers; 429 past the limit", async () => {
+    const counter = memoryCounter();
+    const limit = { limit: 2, windowSec: 60, by: "ip", failMode: "open" } as const;
+    const now = 1_000_000_000_000;
+    expect((await checkRateLimit(counter, "t", limit, "ip:1", now)).allowed).toBe(true);
+    const second = await checkRateLimit(counter, "t", limit, "ip:1", now);
+    expect(second.headers["RateLimit-Remaining"]).toBe("0");
+    const third = await checkRateLimit(counter, "t", limit, "ip:1", now);
+    expect(third.allowed).toBe(false);
+    expect(third.headers["Retry-After"]).toBeDefined();
+    expect((await checkRateLimit(counter, "t", limit, "ip:2", now)).allowed).toBe(true);
+  });
+
+  it("fails open or closed per tier when the store is down", async () => {
+    const broken = () => Promise.reject(new Error("redis down"));
+    setLogSinkForTests(() => undefined);
+    expect((await checkRateLimit(broken, "r", LIMITS.read, "c")).allowed).toBe(true);
+    const closed = await checkRateLimit(broken, "w", LIMITS.publicForm, "c");
+    expect(closed).toMatchObject({ allowed: false, degraded: true });
+  });
+
+  it("dev multiplier applies outside production only", async () => {
+    vi.stubEnv("RATE_LIMIT_MULTIPLIER", "3");
+    const counter = memoryCounter();
+    const limit = { limit: 1, windowSec: 60, by: "ip", failMode: "closed" } as const;
+    for (let i = 0; i < 3; i++) expect((await checkRateLimit(counter, "m", limit, "c", 0)).allowed).toBe(true);
+    expect((await checkRateLimit(counter, "m", limit, "c", 0)).allowed).toBe(false);
+  });
+
+  it("caller keys hash the session and never contain it", () => {
+    const k = callerKey("secret-session-token", "1.2.3.4");
+    expect(k).toMatch(/^s:/);
+    expect(k).not.toContain("secret");
+    expect(callerKey(null, "1.2.3.4")).toBe("ip:1.2.3.4");
+    expect(callerKey(null, null)).toBe("ip:direct");
+  });
+
+  it("redis counter sets expiry on the first hit only", async () => {
+    const calls: string[] = [];
+    let n = 0;
+    const counter = redisCounter({
+      incr: async () => ++n,
+      expire: async (k, s) => {
+        calls.push(`${k}:${s}`);
+        return 1;
+      },
+    });
+    await counter("k", 60);
+    await counter("k", 60);
+    expect(calls).toEqual(["k:61"]);
+  });
+});
+
+describe("health", () => {
+  it("liveness reports the build sha when valid", () => {
+    vi.stubEnv("GIT_SHA", "abc123");
+    expect(liveness("0.0.0")).toMatchObject({ status: "ok", version: "abc123" });
+    vi.stubEnv("GIT_SHA", "bad sha!");
+    expect(appVersion("1.2.3")).toBe("1.2.3");
+  });
+
+  it("probe reports ok, failure and timeout without throwing", async () => {
+    setLogSinkForTests(() => undefined);
+    expect((await probe("ok", 100, async () => 1)).ok).toBe(true);
+    expect((await probe("fail", 100, () => Promise.reject(new Error("x")))).ok).toBe(false);
+    expect((await probe("slow", 10, () => new Promise((r) => setTimeout(r, 200)))).ok).toBe(false);
+  });
+});
