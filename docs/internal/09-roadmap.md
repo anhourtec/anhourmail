@@ -44,6 +44,7 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
 
 - Landing page in the BookYourPTO style (`branding.md` marketing scale), pricing from `packages/shared`, FAQ, trust page (privacy policy PIPEDA/BC PIPA, AUP with CASL, transparency report, cost breakdown), waitlist with double opt-in, invite codes with source/UTM tracking, changelog/blog content folder, `/credits`.
 - **Exit:** waitlist live behind rate limits and fail-closed checks; legal pages reviewed by counsel; zero third-party requests (verified in Playwright); Lighthouse ≥ 95 on all marketing pages.
+- **Status (2026-10-21):** built — site pages, waitlist with double opt-in, staff invites from the waitlist, invite-only sign-up, zero third-party requests (e2e). Open: counsel review; mobile Lighthouse is 90–94 (desktop ≥ 98); paid-user invite codes move to Phase 5.
 
 ## Phase 3 — Control plane
 
