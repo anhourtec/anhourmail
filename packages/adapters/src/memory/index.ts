@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import type { AccessRepository, Repositories, UnitOfWork } from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
 import type { CustomerDomain, DomainRepository } from "@anhourmail/core/domains";
-import type { Invite, InviteRepository } from "@anhourmail/core/invite";
 import type { Mailbox, MailboxRepository } from "@anhourmail/core/mailboxes";
 import type {
   AliasState,
@@ -21,7 +20,6 @@ import {
   GENESIS_HASH,
   hashEntry,
 } from "@anhourmail/core/audit";
-import type { WaitlistEntry, WaitlistRepository } from "@anhourmail/core/waitlist";
 import type { PlanId } from "@anhourmail/shared/plans";
 import type { AccountRole, PlatformRole } from "@anhourmail/shared/rbac";
 
@@ -30,20 +28,12 @@ import type { AccountRole, PlatformRole } from "@anhourmail/shared/rbac";
  * a throw restores the state from before the call — and runs are serialised like transactions.
  */
 export type MemoryState = {
-  waitlist: WaitlistEntry[];
   audit: AuditEntry[];
   platformRoles: { userId: string; role: PlatformRole }[];
   memberships: { userId: string; accountId: string; role: AccountRole }[];
   suspended: string[];
   accounts: { id: string; name: string; plan: PlanId; status?: string }[];
   userStates: Record<string, string>;
-  confirmTokens: Map<string, { hash: string; expiresAt: Date }>;
-  invites: (Invite & {
-    tokenHash: string;
-    status: string;
-    acceptedUserId: string | null;
-    waitlistEntryId: string | null;
-  })[];
   jobs: ProvisioningJob[];
   domains: CustomerDomain[];
   mailboxes: (Mailbox & { aliases: AliasState[] })[];
@@ -52,15 +42,12 @@ export type MemoryState = {
 };
 
 export const emptyState = (): MemoryState => ({
-  waitlist: [],
   audit: [],
   platformRoles: [],
   memberships: [],
   suspended: [],
   accounts: [],
   userStates: {},
-  confirmTokens: new Map(),
-  invites: [],
   jobs: [],
   domains: [],
   mailboxes: [],
@@ -70,46 +57,6 @@ export const emptyState = (): MemoryState => ({
 const clone = <T>(v: T): T => structuredClone(v);
 
 function repositories(s: MemoryState): Repositories {
-  const waitlist: WaitlistRepository = {
-    get: async (id) => clone(s.waitlist.find((e) => e.id === id) ?? null),
-    findByEmailHash: async (h) => clone(s.waitlist.find((e) => e.emailHash === h) ?? null),
-    findByConfirmToken: async (hash, now) => {
-      const id = [...s.confirmTokens].find(([, t]) => t.hash === hash && t.expiresAt > now)?.[0];
-      const entry = s.waitlist.find((e) => e.id === id && e.status === "pending");
-      return clone(entry ?? null);
-    },
-    setConfirmation: async (id, { tokenHash, expiresAt, sentAt }) => {
-      s.confirmTokens.set(id, { hash: tokenHash, expiresAt });
-      const e = s.waitlist.find((x) => x.id === id);
-      if (e) e.confirmSentAt = sentAt;
-    },
-    markConfirmed: async (id, at) => {
-      const e = s.waitlist.find((x) => x.id === id && x.status === "pending");
-      if (!e) return false;
-      Object.assign(e, { status: "confirmed", confirmedAt: at });
-      s.confirmTokens.delete(id);
-      return true;
-    },
-    markInvited: async (id) => {
-      const e = s.waitlist.find((x) => x.id === id && x.status === "confirmed");
-      if (e) e.status = "invited";
-      return Boolean(e);
-    },
-    insert: async (e) => {
-      if (s.waitlist.some((x) => x.emailHash === e.emailHash)) return false;
-      s.waitlist.push(clone(e));
-      return true;
-    },
-    list: async ({ limit, before }) =>
-      clone(
-        s.waitlist
-          .filter((e) => !before || e.createdAt < before)
-          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : -1))
-          .slice(0, limit),
-      ),
-    count: async () => s.waitlist.length,
-  };
-
   const audit: AuditRepository = {
     append: async (input: AuditEntryInput, at: Date) => {
       const last = s.audit.filter((e) => e.scope === input.scope).at(-1);
@@ -335,43 +282,7 @@ function repositories(s: MemoryState): Repositories {
     },
   };
 
-  const invites: InviteRepository = {
-    create: async (input) => {
-      const id = randomUUID();
-      s.invites.push({
-        id,
-        email: input.email,
-        accountId: input.accountId,
-        role: input.role,
-        source: input.source,
-        expiresAt: input.expiresAt,
-        tokenHash: input.tokenHash,
-        status: "pending",
-        acceptedUserId: null,
-        waitlistEntryId: input.waitlistEntryId,
-      });
-      return { id };
-    },
-    findValid: async (hash, now) => {
-      const i = s.invites.find((x) => x.tokenHash === hash && x.status === "pending" && x.expiresAt > now);
-      return i
-        ? clone({
-            id: i.id,
-            email: i.email,
-            accountId: i.accountId,
-            role: i.role,
-            source: i.source,
-            expiresAt: i.expiresAt,
-          })
-        : null;
-    },
-    markAccepted: async (id, userId) => {
-      const i = s.invites.find((x) => x.id === id);
-      if (i) Object.assign(i, { status: "accepted", acceptedUserId: userId });
-    },
-  };
-
-  return { waitlist, audit, access, accounts, provisioning, directory, domains, mailboxes, invites };
+  return { audit, access, accounts, provisioning, directory, domains, mailboxes };
 }
 
 export class MemoryUnitOfWork implements UnitOfWork {

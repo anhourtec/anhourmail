@@ -38,34 +38,6 @@ ${paragraphs}
 
 const hello = (name?: string) => (name && name.trim() !== "" ? `Hi ${name.trim()},` : "Hi,");
 
-export function waitlistConfirmEmail(input: { to: string; url: string }): MailMessage {
-  return systemEmail({
-    to: input.to,
-    subject: "Confirm your place on the AnhourMail waitlist",
-    greeting: hello(),
-    lines: [
-      "Thanks for joining the AnhourMail waitlist. Confirm this address so we can send your invite when a spot opens.",
-      "The link works for 48 hours.",
-    ],
-    action: { label: "Confirm my email", url: input.url },
-    footer: "If you didn't sign up, ignore this email — we won't contact this address again.",
-  });
-}
-
-export function inviteEmail(input: { to: string; url: string }): MailMessage {
-  return systemEmail({
-    to: input.to,
-    subject: "Your AnhourMail invite",
-    greeting: hello(),
-    lines: [
-      "Your spot is ready. Use this link to create your AnhourMail account with this email address.",
-      "The invite works for 7 days and can be used once.",
-    ],
-    action: { label: "Create my account", url: input.url },
-    footer: "If you weren't expecting this, you can ignore it.",
-  });
-}
-
 export function passwordResetEmail(input: { to: string; name: string; url: string }): MailMessage {
   return systemEmail({
     to: input.to,

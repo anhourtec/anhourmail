@@ -6,19 +6,12 @@ import { authorize, can } from "./actor";
 import { ForbiddenError, NotFoundError, UnauthenticatedError } from "./errors";
 
 describe("can / authorize", () => {
-  it("public permissions are open to everyone, including anonymous", () => {
-    expect(can(anonymous, "waitlist.join")).toBe(true);
-    expect(() => {
-      authorize(anonymous, "waitlist.join");
-    }).not.toThrow();
-  });
-
-  it("anonymous gets 401 for everything else", () => {
+  it("anonymous gets 401 for everything", () => {
     expect(() => {
       authorize(anonymous, "self.profile.read");
     }).toThrow(UnauthenticatedError);
     expect(() => {
-      authorize(anonymous, "waitlist.read");
+      authorize(anonymous, "platform.audit.read");
     }).toThrow(UnauthenticatedError);
     expect(() => {
       authorize(anonymous, "audit.read", ACCOUNT_A);
@@ -35,10 +28,10 @@ describe("can / authorize", () => {
   });
 
   it("platform permissions follow platform roles", () => {
-    expect(can(user({ platform: ["reports_reader"] }), "waitlist.read")).toBe(true);
-    expect(can(user({ platform: ["reports_reader"] }), "waitlist.manage")).toBe(false);
+    expect(can(user({ platform: ["reports_reader"] }), "platform.audit.read")).toBe(true);
+    expect(can(user({ platform: ["reports_reader"] }), "platform.staff.manage")).toBe(false);
     expect(() => {
-      authorize(user({ platform: ["billing_admin"] }), "waitlist.read");
+      authorize(user({ platform: ["billing_admin"] }), "platform.audit.read");
     }).toThrow(ForbiddenError);
   });
 
@@ -70,10 +63,10 @@ describe("can / authorize", () => {
     expect(can(user({ platform: ["global_admin"] }), "audit.read", ACCOUNT_A)).toBe(false);
   });
 
-  it("suspended users are refused everywhere except public", () => {
+  it("suspended users are refused everywhere", () => {
     const s = user({ platform: ["global_admin"], account: [[ACCOUNT_A, "owner"]], suspended: true });
-    expect(can(s, "waitlist.read")).toBe(false);
+    expect(can(s, "platform.audit.read")).toBe(false);
     expect(can(s, "audit.read", ACCOUNT_A)).toBe(false);
-    expect(can(s, "waitlist.join")).toBe(true);
+    expect(can(s, "self.profile.read")).toBe(false);
   });
 });

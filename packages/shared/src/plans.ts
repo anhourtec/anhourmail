@@ -24,8 +24,6 @@ export type Plan = {
   aliases: number | null;
   maskedAliases: number | null;
   catchAll: boolean;
-  /** Invite or waitlist required to sign up. */
-  inviteOnly: boolean;
   supporterBadge: boolean;
 };
 
@@ -43,7 +41,6 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     aliases: 5,
     maskedAliases: 10,
     catchAll: false,
-    inviteOnly: true,
     supporterBadge: false,
   },
   plus: {
@@ -57,7 +54,6 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     aliases: null,
     maskedAliases: null,
     catchAll: true,
-    inviteOnly: false,
     supporterBadge: false,
   },
   supporter: {
@@ -71,7 +67,6 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     aliases: null,
     maskedAliases: null,
     catchAll: true,
-    inviteOnly: false,
     supporterBadge: true,
   },
 };

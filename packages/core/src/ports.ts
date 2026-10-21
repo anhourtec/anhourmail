@@ -3,14 +3,11 @@ import type { AccessRepository } from "./access/repository";
 import type { AccountRepository } from "./account/repository";
 import type { AuditRepository } from "./audit/repository";
 import type { DomainRepository } from "./domains/repository";
-import type { InviteRepository } from "./invite/repository";
 import type { MailboxRepository } from "./mailboxes/repository";
 import type { MailDirectoryRepository, ProvisioningRepository } from "./provisioning/ports";
-import type { WaitlistRepository } from "./waitlist/repository";
 
 /** Everything a service can touch inside one transaction. Adapters implement it (memory, postgres). */
 export type Repositories = {
-  waitlist: WaitlistRepository;
   audit: AuditRepository;
   access: AccessRepository;
   accounts: AccountRepository;
@@ -18,7 +15,6 @@ export type Repositories = {
   directory: MailDirectoryRepository;
   domains: DomainRepository;
   mailboxes: MailboxRepository;
-  invites: InviteRepository;
 };
 
 /**

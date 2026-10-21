@@ -90,7 +90,8 @@ describe("mutation()", () => {
 
   it("business refusals are audited as denied but return the result", async () => {
     const d = deps();
-    const out = await mutation(d, anonymous, req, { ...spec(null), permission: "waitlist.join" }, async () => ({
+    const system = { kind: "system", name: "test" } as const;
+    const out = await mutation(d, system, req, { ...spec(null), permission: "self.profile.read" }, async () => ({
       result: "ok",
       denied: { code: "bot_check" },
     }));

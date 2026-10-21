@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import { customerDomainRecords, DKIM_SELECTORS, dkimTarget, VERIFY_PREFIX } from "./dns";
 import { ADDONS, BILLING, formatPrice, PLAN_ORDER, PLANS } from "./plans";
 import { CLIENT_ENDPOINTS, HOSTS, PRODUCT_DOMAIN } from "./platform";
-import { WaitlistSignupSchema } from "./schemas";
 import { BULK_MAIL, TRUST_TIERS } from "./sending";
 
 describe("plans", () => {
@@ -64,15 +63,5 @@ describe("sending tiers", () => {
     expect(TRUST_TIERS.restricted.limits.messagesPerDay).toBe(0);
     expect(TRUST_TIERS.new.limits.messagesPerDay).toBeLessThan(TRUST_TIERS.standard.limits.messagesPerDay);
     expect(TRUST_TIERS.standard.limits.messagesPerDay).toBeLessThan(TRUST_TIERS.trusted.limits.messagesPerDay);
-  });
-});
-
-describe("waitlist schema", () => {
-  it("normalises email, lets the honeypot through (checked by the service) and rejects a bad ref", () => {
-    const ok = WaitlistSignupSchema.parse({ email: " A@Example.com ", startedAt: 1 });
-    expect(ok.email).toBe("a@example.com");
-    expect(WaitlistSignupSchema.safeParse({ email: "a@example.com", startedAt: 1, website: "x" }).success).toBe(true);
-    expect(WaitlistSignupSchema.safeParse({ email: "not-an-email", startedAt: 1 }).success).toBe(false);
-    expect(WaitlistSignupSchema.safeParse({ email: "a@example.com", startedAt: 1, ref: "!!" }).success).toBe(false);
   });
 });

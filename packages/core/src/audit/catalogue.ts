@@ -136,13 +136,6 @@ export const AUDIT_ACTIONS = [
   "bulk.suppression_added",
   "bulk.suppression_removed",
   "bulk.sending_paused",
-  // waitlist and invites
-  "waitlist.joined",
-  "waitlist.invited",
-  "waitlist.confirmed",
-  "invite.created",
-  "invite.redeemed",
-  "invite.revoked",
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];

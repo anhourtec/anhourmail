@@ -8,11 +8,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./audit": "./src/audit/index.ts",
-    "./waitlist": "./src/waitlist/index.ts",
     "./account": "./src/account/index.ts",
     "./security": "./src/security/index.ts",
     "./provisioning": "./src/provisioning/index.ts",
-    "./invite": "./src/invite/index.ts",
     "./domains": "./src/domains/index.ts",
     "./mailboxes": "./src/mailboxes/index.ts"
   },

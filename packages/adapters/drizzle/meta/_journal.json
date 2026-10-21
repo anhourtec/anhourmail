@@ -43,6 +43,13 @@
       "when": 1792604633938,
       "tag": "0005_domain_claims",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792610020978,
+      "tag": "0006_remove_waitlist",
+      "breakpoints": true
     }
   ]
 }

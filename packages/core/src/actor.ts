@@ -31,7 +31,6 @@ export const ANONYMOUS: Actor = { kind: "anonymous" };
 export function can(actor: Actor, permission: Permission, accountId?: string): boolean {
   if (actor.kind === "system") return true;
   const def = PERMISSIONS[permission];
-  if (def.scope === "public") return true;
   if (actor.kind === "anonymous" || actor.suspended) return false;
   switch (def.scope) {
     case "self":

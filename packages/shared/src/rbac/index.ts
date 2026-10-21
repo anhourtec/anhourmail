@@ -7,7 +7,6 @@
  * Two scopes:
  * - platform: Anhourtec staff roles, granted per user.
  * - account:  roles inside one customer account (Plus/Supporter accounts can add people), granted per membership.
- * Plus `public` permissions anyone may use, signed in or not (e.g. joining the waitlist).
  */
 
 export const PLATFORM_ROLES = [
@@ -37,20 +36,17 @@ export const ROLE_LABELS: Readonly<Record<`platform:${PlatformRole}` | `account:
 };
 
 /** Account states that are not roles but change what a person can do. */
-export const USER_STATES = ["anonymous", "waitlisted", "invited", "free", "paid", "suspended"] as const;
+export const USER_STATES = ["anonymous", "invited", "free", "paid", "suspended"] as const;
 export type UserState = (typeof USER_STATES)[number];
 
 type PermissionDef = {
-  scope: "public" | "platform" | "account" | "self";
+  scope: "platform" | "account" | "self";
   description: string;
   /** Critical permissions are never granted to Member or Read-only, and changes to them need a security review. */
   critical?: true;
 };
 
 export const PERMISSIONS = {
-  // --- public
-  "waitlist.join": { scope: "public", description: "Join the waitlist" },
-
   // --- self (any signed-in person, about themselves)
   "self.profile.read": { scope: "self", description: "See own profile, roles and memberships" },
   "self.security.manage": { scope: "self", description: "Own sign-ins, sessions, 2FA, app passwords" },
@@ -68,8 +64,6 @@ export const PERMISSIONS = {
   "platform.billing.manage": { scope: "platform", description: "Plans, refunds, subscription state", critical: true },
   "platform.audit.read": { scope: "platform", description: "Read the platform audit log" },
   "platform.reports.read": { scope: "platform", description: "Read dashboards and reports" },
-  "waitlist.read": { scope: "platform", description: "Read the waitlist" },
-  "waitlist.manage": { scope: "platform", description: "Invite people from the waitlist" },
 
   // --- account (inside one customer account)
   "account.read": { scope: "account", description: "See account settings, people, domains" },
@@ -174,8 +168,6 @@ export const PLATFORM_GRANTS: Readonly<Record<PlatformRole, readonly PlatformPer
     "platform.billing.manage",
     "platform.audit.read",
     "platform.reports.read",
-    "waitlist.read",
-    "waitlist.manage",
   ],
   support_admin: [
     "platform.accounts.read",
@@ -183,8 +175,6 @@ export const PLATFORM_GRANTS: Readonly<Record<PlatformRole, readonly PlatformPer
     "platform.users.resetCredentials",
     "platform.invites.manage",
     "platform.mailflow.read",
-    "waitlist.read",
-    "waitlist.manage",
   ],
   trust_safety_admin: [
     "platform.accounts.read",
@@ -193,7 +183,7 @@ export const PLATFORM_GRANTS: Readonly<Record<PlatformRole, readonly PlatformPer
     "platform.trust.manage",
   ],
   billing_admin: ["platform.accounts.read", "platform.billing.manage"],
-  reports_reader: ["platform.audit.read", "platform.reports.read", "waitlist.read"],
+  reports_reader: ["platform.audit.read", "platform.reports.read"],
 };
 
 export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermission[]>> = {

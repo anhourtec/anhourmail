@@ -58,9 +58,6 @@ if (mode === "create") {
   if (!/^e2e-[0-9a-f]{8}$/.test(run)) throw new Error(`refusing cleanup: unexpected run id ${JSON.stringify(run)}`);
   await db.delete(schema.authUser).where(like(schema.authUser.email, `${run}-%`));
   await db.delete(schema.customerAccount).where(like(schema.customerAccount.name, `${run}%`));
-  // The site spec joins the waitlist with e2e-<timestamp>@waitlist.test addresses.
-  await db.delete(schema.waitlistEntry).where(like(schema.waitlistEntry.email, "e2e-%@waitlist.test"));
-  await db.delete(schema.invite).where(like(schema.invite.email, "e2e-%@waitlist.test"));
   // Domains and mailboxes the run created on the dev mail server (their names carry the run id).
   try {
     const mgmt = stalwart();

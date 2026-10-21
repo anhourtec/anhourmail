@@ -6,13 +6,12 @@ import { log } from "./log";
 /**
  * Fixed-window rate limits (CLAUDE.md rule 14; table in docs/internal/rate-limits.md).
  * Fail mode is per tier: `open` lets requests through when Redis is down (ordinary reads/writes); `closed`
- * refuses them (anything that costs money or reputation: sign-in, waitlist, invites, sending, exports).
+ * refuses them (anything that costs money or reputation: sign-in, sign-up, invites, sending, exports).
  */
 export type RateLimit = {
   limit: number;
   windowSec: number;
-  /** `key`: not a route tier; the caller passes its own key (e.g. an email hash). */
-  by: "caller" | "ip" | "key";
+  by: "caller" | "ip";
   failMode: "open" | "closed";
 };
 
@@ -22,8 +21,6 @@ export const LIMITS = {
   auth: { limit: 30, windowSec: 60, by: "ip", failMode: "closed" },
   publicForm: { limit: 10, windowSec: 900, by: "ip", failMode: "closed" },
   invite: { limit: 20, windowSec: 900, by: "ip", failMode: "closed" },
-  /** Waitlist confirmation emails per recipient (email hash), whatever IPs the requests come from. */
-  waitlistMail: { limit: 3, windowSec: 86_400, by: "key", failMode: "closed" },
   dnsVerify: { limit: 30, windowSec: 3600, by: "caller", failMode: "open" },
   export: { limit: 5, windowSec: 3600, by: "caller", failMode: "closed" },
   sending: { limit: 60, windowSec: 3600, by: "caller", failMode: "closed" },

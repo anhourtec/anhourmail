@@ -11,17 +11,13 @@
     "./plans": "./src/plans.ts",
     "./sending": "./src/sending.ts",
     "./dns": "./src/dns.ts",
-    "./schemas": "./src/schemas.ts",
     "./credits": "./src/credits.generated.ts",
-    "./rbac": "./src/rbac/index.ts",
-    "./sources": "./src/sources.ts"
+    "./rbac": "./src/rbac/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
-  "dependencies": {
-    "zod": "4.6.7"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@anhourmail/config": "0.0.0"
   }

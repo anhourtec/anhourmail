@@ -149,10 +149,8 @@ try {
       let body: string | undefined;
       if (route.method !== "GET") {
         headers["content-type"] = "application/json";
-        body = JSON.stringify({
-          email: `${run}-${randomBytes(3).toString("hex")}@waitlist.test`,
-          startedAt: Date.now() - 10_000,
-        });
+        // An empty body: allowed callers reach validation (each route's probeStatus), denied ones never get there.
+        body = "{}";
       }
       const res = await fetch(`${WEB}${path}`, { method: route.method, headers, ...(body ? { body } : {}) });
       const expected = expectedStatus(route, p, accountA.id);
@@ -174,7 +172,6 @@ try {
   // ---- 4. cleanup -----------------------------------------------------------------------------------------
   await db.delete(schema.authUser).where(like(schema.authUser.email, `${run}-%`));
   await db.delete(schema.customerAccount).where(like(schema.customerAccount.name, `${run} %`));
-  await db.delete(schema.waitlistEntry).where(like(schema.waitlistEntry.email, `${run}-%`));
   await pool.end();
 }
 

@@ -22,7 +22,7 @@ describe("console navigation follows the matrix", () => {
   });
 
   it("staff see platform sections for their role only", () => {
-    expect(visibleNav(actor(["reports_reader"])).map((n) => n.label)).toEqual(["Waitlist", "Platform audit"]);
+    expect(visibleNav(actor(["reports_reader"])).map((n) => n.label)).toEqual(["Platform audit"]);
     expect(visibleNav(actor(["global_admin"])).filter((n) => n.scope === "platform")).toHaveLength(
       NAV.filter((n) => n.scope === "platform").length,
     );

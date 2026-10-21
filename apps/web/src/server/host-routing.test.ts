@@ -12,11 +12,11 @@ describe("host routing", () => {
     expect(hostKind("192.168.1.20:43300", "43300")).toBe("mail");
   });
 
-  it("serves health and public API on every host", () => {
+  it("serves health on every host; the webmail host serves no other API", () => {
     for (const host of ["mail.anhourmail.com", "app.anhourmail.com", "localhost:43200"]) {
       expect(routeHost(host, "/api/health/ready", true)).toEqual({ action: "next" });
-      expect(routeHost(host, "/api/public/waitlist", true)).toEqual({ action: "next" });
     }
+    expect(routeHost("mail.anhourmail.com", "/api/public/example", true)).toEqual({ action: "not_found" });
   });
 
   it("the webmail origin only serves the webmail", () => {

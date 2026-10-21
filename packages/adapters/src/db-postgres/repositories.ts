@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { randomUUID } from "node:crypto";
 
-import { and, desc, eq, gt, gte, inArray, lt, lte, type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, lte, type SQL, sql } from "drizzle-orm";
 
 import type { AccessRepository, Repositories, UnitOfWork } from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
 import type { CustomerDomain, DomainRepository, DomainStatus } from "@anhourmail/core/domains";
-import type { Invite, InviteRepository, InviteSource } from "@anhourmail/core/invite";
 import type { Mailbox, MailboxRepository, MailboxStatus } from "@anhourmail/core/mailboxes";
 import type {
   DomainState,
@@ -24,10 +23,8 @@ import {
   GENESIS_HASH,
   hashEntry,
 } from "@anhourmail/core/audit";
-import type { WaitlistEntry, WaitlistRepository } from "@anhourmail/core/waitlist";
 import { PLAN_ORDER, type PlanId } from "@anhourmail/shared/plans";
 import { ACCOUNT_ROLES, type AccountRole, PLATFORM_ROLES, type PlatformRole } from "@anhourmail/shared/rbac";
-import type { Utm } from "@anhourmail/shared/schemas";
 
 import type { Db, Executor } from "./client";
 import {
@@ -36,120 +33,14 @@ import {
   authUser,
   customerAccount,
   customerDomain,
-  invite,
   mailAlias,
   mailbox,
   platformRoleAssignment,
   provisioningJob,
   userProfile,
-  waitlistEntry,
 } from "./schema";
 
 // Row <-> domain mapping happens only here (ADR-0008).
-
-class PgWaitlistRepository implements WaitlistRepository {
-  constructor(private readonly x: Executor) {}
-
-  async get(id: string): Promise<WaitlistEntry | null> {
-    const [row] = await this.x.select().from(waitlistEntry).where(eq(waitlistEntry.id, id)).limit(1);
-    return row ? toWaitlist(row) : null;
-  }
-
-  async findByConfirmToken(tokenHash: string, now: Date): Promise<WaitlistEntry | null> {
-    const [row] = await this.x
-      .select()
-      .from(waitlistEntry)
-      .where(
-        and(
-          eq(waitlistEntry.confirmTokenHash, tokenHash),
-          eq(waitlistEntry.status, "pending"),
-          gt(waitlistEntry.confirmExpiresAt, now),
-        ),
-      )
-      .limit(1);
-    return row ? toWaitlist(row) : null;
-  }
-
-  async setConfirmation(id: string, input: { tokenHash: string; expiresAt: Date; sentAt: Date }): Promise<void> {
-    await this.x
-      .update(waitlistEntry)
-      .set({ confirmTokenHash: input.tokenHash, confirmExpiresAt: input.expiresAt, confirmSentAt: input.sentAt })
-      .where(eq(waitlistEntry.id, id));
-  }
-
-  async markConfirmed(id: string, at: Date): Promise<boolean> {
-    const rows = await this.x
-      .update(waitlistEntry)
-      .set({ status: "confirmed", confirmedAt: at, confirmTokenHash: null, confirmExpiresAt: null })
-      .where(and(eq(waitlistEntry.id, id), eq(waitlistEntry.status, "pending")))
-      .returning({ id: waitlistEntry.id });
-    return rows.length > 0;
-  }
-
-  async markInvited(id: string): Promise<boolean> {
-    const rows = await this.x
-      .update(waitlistEntry)
-      .set({ status: "invited" })
-      .where(and(eq(waitlistEntry.id, id), eq(waitlistEntry.status, "confirmed")))
-      .returning({ id: waitlistEntry.id });
-    return rows.length > 0;
-  }
-
-  async findByEmailHash(emailHash: string): Promise<WaitlistEntry | null> {
-    const [row] = await this.x.select().from(waitlistEntry).where(eq(waitlistEntry.emailHash, emailHash)).limit(1);
-    return row ? toWaitlist(row) : null;
-  }
-
-  async insert(e: WaitlistEntry): Promise<boolean> {
-    const rows = await this.x
-      .insert(waitlistEntry)
-      .values({
-        id: e.id,
-        email: e.email,
-        emailHash: e.emailHash,
-        community: e.community,
-        ref: e.ref,
-        utm: e.utm,
-        status: e.status,
-        createdAt: e.createdAt,
-        confirmSentAt: e.confirmSentAt,
-        confirmedAt: e.confirmedAt,
-      })
-      .onConflictDoNothing({ target: waitlistEntry.emailHash })
-      .returning({ id: waitlistEntry.id });
-    return rows.length > 0;
-  }
-
-  async list(opts: { limit: number; before?: Date }): Promise<WaitlistEntry[]> {
-    const rows = await this.x
-      .select()
-      .from(waitlistEntry)
-      .where(opts.before ? lt(waitlistEntry.createdAt, opts.before) : undefined)
-      .orderBy(desc(waitlistEntry.createdAt), desc(waitlistEntry.id))
-      .limit(opts.limit);
-    return rows.map(toWaitlist);
-  }
-
-  async count(): Promise<number> {
-    const [row] = await this.x.select({ n: sql<number>`count(*)::int` }).from(waitlistEntry);
-    return row?.n ?? 0;
-  }
-}
-
-function toWaitlist(r: typeof waitlistEntry.$inferSelect): WaitlistEntry {
-  return {
-    id: r.id,
-    email: r.email,
-    emailHash: r.emailHash,
-    community: r.community,
-    ref: r.ref,
-    utm: (r.utm as Utm | null) ?? null,
-    status: r.status === "invited" || r.status === "confirmed" ? r.status : "pending",
-    createdAt: r.createdAt,
-    confirmSentAt: r.confirmSentAt,
-    confirmedAt: r.confirmedAt,
-  };
-}
 
 class PgAuditRepository implements AuditRepository {
   constructor(private readonly x: Executor) {}
@@ -688,54 +579,7 @@ class PgMailboxRepository implements MailboxRepository {
   }
 }
 
-class PgInviteRepository implements InviteRepository {
-  constructor(private readonly x: Executor) {}
-
-  async create(input: Parameters<InviteRepository["create"]>[0]): Promise<{ id: string }> {
-    const [row] = await this.x
-      .insert(invite)
-      .values({
-        email: input.email,
-        tokenHash: input.tokenHash,
-        expiresAt: input.expiresAt,
-        source: input.source,
-        createdBy: input.createdBy,
-        waitlistEntryId: input.waitlistEntryId,
-        accountId: input.accountId,
-        role: input.role,
-      })
-      .returning({ id: invite.id });
-    if (!row) throw new Error("invite not created");
-    return row;
-  }
-
-  async findValid(tokenHash: string, now: Date): Promise<Invite | null> {
-    const [r] = await this.x
-      .select()
-      .from(invite)
-      .where(and(eq(invite.tokenHash, tokenHash), eq(invite.status, "pending"), gt(invite.expiresAt, now)))
-      .limit(1);
-    if (!r) return null;
-    return {
-      id: r.id,
-      email: r.email,
-      accountId: r.accountId,
-      role: r.role !== null && isAccountRole(r.role) ? r.role : null,
-      source: (["waitlist", "staff", "referral"].includes(r.source) ? r.source : "staff") as InviteSource,
-      expiresAt: r.expiresAt,
-    };
-  }
-
-  async markAccepted(id: string, userId: string, at: Date): Promise<void> {
-    await this.x
-      .update(invite)
-      .set({ status: "accepted", acceptedUserId: userId, acceptedAt: at })
-      .where(and(eq(invite.id, id), eq(invite.status, "pending")));
-  }
-}
-
 const repositories = (x: Executor): Repositories => ({
-  waitlist: new PgWaitlistRepository(x),
   audit: new PgAuditRepository(x),
   access: new PgAccessRepository(x),
   accounts: new PgAccountRepository(x),
@@ -743,7 +587,6 @@ const repositories = (x: Executor): Repositories => ({
   directory: new PgMailDirectoryRepository(x),
   domains: new PgDomainRepository(x),
   mailboxes: new PgMailboxRepository(x),
-  invites: new PgInviteRepository(x),
 });
 
 /** One Postgres transaction per `run` (CLAUDE.md rule 46: the audit row commits with the change). */

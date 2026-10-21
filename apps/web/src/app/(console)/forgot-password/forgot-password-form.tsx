@@ -15,6 +15,10 @@ export function ForgotPasswordForm() {
   const [pending, setPending] = useState(false);
 
   async function submit(email: string) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setError("Enter the email address you sign in with.");
+      return;
+    }
     setPending(true);
     setError(null);
     try {
@@ -23,7 +27,10 @@ export function ForgotPasswordForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, redirectTo: `${window.location.origin}/reset-password` }),
       });
+      // Same answer whether or not an account exists; only a malformed request or the rate limit is reported.
       if (res.status === 429) setError("Too many attempts. Wait a minute and try again.");
+      else if (res.status === 400) setError("Enter the email address you sign in with.");
+      else if (!res.ok) setError("Something went wrong. Try again in a moment.");
       else setSent(true);
     } catch {
       setError("Couldn't reach the server. Check your connection and try again.");

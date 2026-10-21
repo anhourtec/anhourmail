@@ -60,10 +60,10 @@ function accountPeople(key: "family" | "group"): SeedPerson[] {
 
 export function demoPeople(platformAdminEmail: string): SeedPerson[] {
   const staff: [PlatformRole, string, string, string][] = [
-    ["support_admin", "support", "Support Admin", "Waitlist (full emails), customer lookup; no billing or trust tiers"],
-    ["trust_safety_admin", "trust", "Trust & Safety Admin", "Abuse queue and trust tiers; no waitlist"],
+    ["support_admin", "support", "Support Admin", "Customer lookup and credential resets; no billing or trust tiers"],
+    ["trust_safety_admin", "trust", "Trust & Safety Admin", "Abuse queue and trust tiers"],
     ["billing_admin", "billing", "Billing Admin (staff)", "Platform billing only"],
-    ["reports_reader", "reports", "Reports Reader", "Platform audit + waitlist with masked emails; read-only"],
+    ["reports_reader", "reports", "Reports Reader", "Platform audit log; read-only"],
   ];
   return [
     {
@@ -71,7 +71,7 @@ export function demoPeople(platformAdminEmail: string): SeedPerson[] {
       name: "Platform Admin",
       state: "paid",
       platformRole: "global_admin",
-      tryThis: "Every staff section, the waitlist with full emails and the platform audit log",
+      tryThis: "Every staff section and the platform audit log",
       mailbox: true,
     },
     ...staff.map(([role, local, name, tryThis]) => ({
@@ -112,7 +112,6 @@ export function demoPeople(platformAdminEmail: string): SeedPerson[] {
   ];
 }
 
-export const WAITLISTED = { email: "waiting@example.test", community: "reddit" };
 export const INVITED = {
   email: `invited@${ACCOUNTS.family.domain}`,
   account: "family" as const,

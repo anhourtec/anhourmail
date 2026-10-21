@@ -6,7 +6,6 @@ import { networkInterfaces } from "node:os";
 import { type Auth, createAuth } from "@anhourmail/adapters/auth";
 import { db } from "@anhourmail/adapters/postgres";
 import { provisionSignUp } from "@anhourmail/core/account";
-import { inviteMatches, redeemInvite } from "@anhourmail/core/invite";
 import { recordSecurityEvent } from "@anhourmail/core/security";
 import { log } from "@anhourmail/server/log";
 import { requestContext } from "@anhourmail/server/request-context";
@@ -16,9 +15,11 @@ import { container } from "../container";
 import { env } from "../env";
 import { passwordResetEmail } from "../mail/system-email";
 
-/** Sign-up mode: `open` (anyone), `invite` (valid invite for that email), `closed` (no sign-up page). */
-export const signUpMode = (): "open" | "invite" | "closed" => env().SIGNUP_MODE;
-export const signUpOpen = (): boolean => env().SIGNUP_MODE !== "closed";
+/**
+ * Sign-up mode: `open` (anyone who can reach the console; production keeps it behind the firewall allow-list) or
+ * `closed` (no sign-up page).
+ */
+export const signUpOpen = (): boolean => env().SIGNUP_MODE === "open";
 
 /** Dev: the machine's LAN IPv4 addresses, so the console works from other devices (DEV_HOST=0.0.0.0). */
 export function lanOrigins(port: number): string[] {
@@ -47,10 +48,14 @@ export function auth(): Auth {
       ],
       secureCookies: e.APP_URL.startsWith("https://") || e.NODE_ENV === "production",
       signUp: e.SIGNUP_MODE,
-      inviteMatches: (token, email) => inviteMatches(container().deps, token, email),
       sendPasswordReset: async ({ email, name, url }) => {
-        // Only called for addresses that have an account; the HTTP answer is the same either way.
-        await container().mailer.send(passwordResetEmail({ to: email, name, url }));
+        // Only called for addresses that have an account, so a delivery failure must not change the HTTP answer
+        // (a 5xx only for real accounts would reveal them): log it and carry on.
+        await container()
+          .mailer.send(passwordResetEmail({ to: email, name, url }))
+          .catch((err: unknown) => {
+            log.error("password reset email failed", { component: "auth", err });
+          });
         await recordSecurityEvent(
           container().deps,
           { action: "auth.password_reset_requested", userId: "", email },
@@ -67,17 +72,6 @@ export function auth(): Auth {
         );
       },
       onUserCreated: async (user) => {
-        const req = { requestId: requestContext()?.requestId ?? "sign-up", ip: null, userAgent: null };
-        if (user.inviteToken !== undefined) {
-          // In invite mode the token was already checked; in open mode an invalid/expired token is simply ignored.
-          await redeemInvite(
-            container().deps,
-            { token: user.inviteToken, userId: user.id, email: user.email },
-            req,
-          ).catch((err: unknown) => {
-            log.warn("invite not redeemed at sign-up", { component: "auth", userId: user.id, err });
-          });
-        }
         try {
           await provisionSignUp(
             container().deps,

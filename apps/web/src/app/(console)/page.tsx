@@ -3,19 +3,15 @@ import type { Metadata } from "next";
 
 import { can, type UserActor } from "@anhourmail/core";
 import { type AuditEntry, listAccountAudit, listPlatformAudit } from "@anhourmail/core/audit";
-import { listWaitlist } from "@anhourmail/core/waitlist";
 import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 
 import { PageHeader } from "@anhourmail/ui/page-header";
 
 import { ConsoleShell } from "@/components/console-shell";
-import { InviteButton } from "@/components/invite-button";
 import { navGroups, requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
 
 export const metadata: Metadata = { title: "Console" };
-
-const WAITLIST_STATUS = { pending: "Unconfirmed", confirmed: "Confirmed", invited: "Invited" } as const;
 
 const dateFmt = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium", timeStyle: "short" });
 
@@ -86,11 +82,7 @@ export default async function ConsoleHome() {
   const actor = await requireUser();
   const deps = container().deps;
   const { groups, names } = await navGroups(actor);
-  const canInvite = can(actor, "waitlist.manage");
-  const [waitlist, platformAudit] = await Promise.all([
-    can(actor, "waitlist.read") ? listWaitlist(deps, actor, { limit: 5 }) : null,
-    can(actor, "platform.audit.read") ? listPlatformAudit(deps, actor, { limit: 8 }) : null,
-  ]);
+  const platformAudit = can(actor, "platform.audit.read") ? await listPlatformAudit(deps, actor, { limit: 8 }) : null;
 
   return (
     <ConsoleShell email={actor.email} groups={groups}>
@@ -111,37 +103,6 @@ export default async function ConsoleHome() {
               ))}
             </div>
           </div>
-          {waitlist && (
-            <div className="flex flex-col gap-3">
-              <h3 id="waitlist" className="am-h3 scroll-mt-20">
-                Waitlist <span className="am-num am-small">({waitlist.total})</span>
-              </h3>
-              {waitlist.entries.length === 0 ? (
-                <p className="am-small">Nobody on the waitlist yet.</p>
-              ) : (
-                <ul className="divide-y rounded-xl border">
-                  {waitlist.entries.map((w) => (
-                    <li key={w.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3">
-                      <span className="flex min-w-0 flex-col">
-                        <span className="am-code truncate">{w.email}</span>
-                        <span className="am-micro">{w.community ?? "—"}</span>
-                      </span>
-                      <span className="flex items-center gap-3">
-                        <span
-                          className={`am-status am-status--${
-                            w.status === "confirmed" ? "success" : w.status === "invited" ? "info" : "neutral"
-                          }`}
-                        >
-                          {WAITLIST_STATUS[w.status]}
-                        </span>
-                        {canInvite && w.status === "confirmed" && <InviteButton entryId={w.id} email={w.email} />}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
           {platformAudit && (
             <div className="flex flex-col gap-3">
               <h3 id="platform-activity" className="am-h3 scroll-mt-20">

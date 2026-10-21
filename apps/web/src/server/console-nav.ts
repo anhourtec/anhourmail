@@ -13,7 +13,6 @@ export type NavIcon =
   | "users"
   | "credit-card"
   | "scroll-text"
-  | "list-checks"
   | "building"
   | "shield-alert"
   | "receipt"
@@ -58,14 +57,6 @@ export const NAV: readonly NavItem[] = [
     scope: "account",
     phase: 0,
     href: (accountId) => `/#activity-${accountId}`,
-  },
-  {
-    label: "Waitlist",
-    icon: "list-checks",
-    permission: "waitlist.read",
-    scope: "platform",
-    phase: 0,
-    href: () => "/#waitlist",
   },
   { label: "Customer accounts", icon: "building", permission: "platform.accounts.read", scope: "platform", phase: 3 },
   { label: "Abuse queue", icon: "shield-alert", permission: "platform.abuse.manage", scope: "platform", phase: 6 },

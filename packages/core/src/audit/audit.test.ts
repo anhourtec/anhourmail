@@ -64,7 +64,7 @@ describe("audit records", () => {
   it("catalogue has unique dotted names", () => {
     expect(new Set(AUDIT_ACTIONS).size).toBe(AUDIT_ACTIONS.length);
     for (const a of AUDIT_ACTIONS) expect(a).toMatch(/^[a-z_]+\.[a-z_]+$/);
-    expect(isAuditAction("waitlist.joined")).toBe(true);
+    expect(isAuditAction("domain.added")).toBe(true);
     expect(isAuditAction("nope.nope")).toBe(false);
   });
 

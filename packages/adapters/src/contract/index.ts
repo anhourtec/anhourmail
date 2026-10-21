@@ -9,7 +9,6 @@ import { describe, expect, it } from "vitest";
 
 import type { UnitOfWork } from "@anhourmail/core";
 import { type AuditEntryInput, verifyChain } from "@anhourmail/core/audit";
-import { hashEmail, type WaitlistEntry } from "@anhourmail/core/waitlist";
 
 /** `createUser` makes a console user the adapter can reference (memberships need one in Postgres). */
 export type AdapterFactory = () => Promise<{
@@ -23,28 +22,15 @@ export type AdapterFactory = () => Promise<{
   }>;
 }>;
 
-const entry = (email: string, createdAt = new Date()): WaitlistEntry => ({
-  id: randomUUID(),
-  email,
-  emailHash: hashEmail(email),
-  community: "reddit",
-  ref: null,
-  utm: { source: "test" },
-  status: "pending",
-  createdAt,
-  confirmSentAt: null,
-  confirmedAt: null,
-});
-
 const auditInput = (
   scope: AuditEntryInput["scope"],
-  action: AuditEntryInput["action"] = "waitlist.joined",
+  action: AuditEntryInput["action"] = "account.created",
 ): AuditEntryInput => ({
   scope,
   action,
   actor: { type: "anonymous", userId: null, email: null, role: null, accountId: null },
   onBehalfOf: null,
-  target: { type: "waitlist_entry", id: null, label: null },
+  target: { type: "account", id: null, label: null },
   result: "success",
   errorCode: null,
   requestId: "req-1",
@@ -55,117 +41,20 @@ const auditInput = (
 
 export function describeAdapterContract(name: string, factory: AdapterFactory): void {
   describe(`${name} adapter contract`, () => {
-    it("waitlist: insert, find by hash, count, list newest first", async () => {
-      const { uow, cleanup } = await factory();
-      try {
-        const tag = randomUUID().slice(0, 8);
-        // Far-future, per-run timestamps: these rows are the newest even in a shared, long-lived test database.
-        const base = Date.UTC(2200, 0, 1) + Date.now(); // later than every earlier run
-        const a = entry(`a-${tag}@example.com`, new Date(base));
-        const b = entry(`b-${tag}@example.com`, new Date(base + 1));
-        await uow.run(async (r) => {
-          await r.waitlist.insert(a);
-          await r.waitlist.insert(b);
-        });
-        const found = await uow.run((r) => r.waitlist.findByEmailHash(a.emailHash));
-        expect(found?.email).toBe(a.email);
-        expect(found?.utm).toEqual({ source: "test" });
-        expect(await uow.run((r) => r.waitlist.findByEmailHash("nope"))).toBeNull();
-        const list = await uow.run((r) => r.waitlist.list({ limit: 2 }));
-        expect(list.map((e) => e.id)).toEqual([b.id, a.id]);
-        const older = await uow.run((r) => r.waitlist.list({ limit: 10, before: b.createdAt }));
-        expect(older.map((e) => e.id)).toContain(a.id);
-        expect(older.map((e) => e.id)).not.toContain(b.id);
-        expect(await uow.run((r) => r.waitlist.count())).toBeGreaterThanOrEqual(2);
-      } finally {
-        await cleanup();
-      }
-    });
-
-    it("waitlist: duplicate email hash is rejected", async () => {
-      const { uow, cleanup } = await factory();
-      try {
-        const e = entry(`dup-${randomUUID()}@example.com`);
-        await uow.run((r) => r.waitlist.insert(e));
-        // Duplicate email hash: refused without throwing (a concurrent join must not surface as a 500).
-        expect(await uow.run((r) => r.waitlist.insert({ ...e, id: randomUUID() }))).toBe(false);
-      } finally {
-        await cleanup();
-      }
-    });
-
-    it("waitlist: double opt-in token lifecycle and invited state", async () => {
-      const { uow, cleanup } = await factory();
-      try {
-        const e = entry(`optin-${randomUUID()}@example.com`);
-        const hash = randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "");
-        const now = new Date();
-        await uow.run(async (r) => {
-          await r.waitlist.insert(e);
-          await r.waitlist.setConfirmation(e.id, {
-            tokenHash: hash,
-            expiresAt: new Date(now.getTime() + 60_000),
-            sentAt: now,
-          });
-        });
-        expect((await uow.run((r) => r.waitlist.findByConfirmToken(hash, now)))?.id).toBe(e.id);
-        expect(await uow.run((r) => r.waitlist.findByConfirmToken(hash, new Date(now.getTime() + 120_000)))).toBeNull();
-        expect((await uow.run((r) => r.waitlist.get(e.id)))?.confirmSentAt?.getTime()).toBe(now.getTime());
-        expect(await uow.run((r) => r.waitlist.markConfirmed(e.id, now))).toBe(true);
-        expect(await uow.run((r) => r.waitlist.markConfirmed(e.id, now))).toBe(false);
-        expect(await uow.run((r) => r.waitlist.findByConfirmToken(hash, now))).toBeNull();
-        expect(await uow.run((r) => r.waitlist.get(e.id))).toMatchObject({ status: "confirmed" });
-        expect(await uow.run((r) => r.waitlist.markInvited(e.id))).toBe(true);
-        expect((await uow.run((r) => r.waitlist.get(e.id)))?.status).toBe("invited");
-        // Only a confirmed entry can be claimed: a second (concurrent) invite loses.
-        expect(await uow.run((r) => r.waitlist.markInvited(e.id))).toBe(false);
-        expect(await uow.run((r) => r.waitlist.get(randomUUID()))).toBeNull();
-      } finally {
-        await cleanup();
-      }
-    });
-
-    it("invites: create, find valid, expiry, single use", async () => {
-      const { uow, cleanup, createUser } = await factory();
-      try {
-        const hash = `inv-${randomUUID()}`;
-        const now = new Date();
-        const email = `invited-${randomUUID()}@example.com`;
-        const { id } = await uow.run((r) =>
-          r.invites.create({
-            email,
-            tokenHash: hash,
-            expiresAt: new Date(now.getTime() + 60_000),
-            source: "waitlist",
-            createdBy: null,
-            waitlistEntryId: null,
-            accountId: null,
-            role: null,
-          }),
-        );
-        expect(await uow.run((r) => r.invites.findValid(hash, now))).toMatchObject({ id, email, source: "waitlist" });
-        expect(await uow.run((r) => r.invites.findValid(hash, new Date(now.getTime() + 120_000)))).toBeNull();
-        const userId = await createUser(`acc-${randomUUID()}@example.com`);
-        await uow.run((r) => r.invites.markAccepted(id, userId, now));
-        expect(await uow.run((r) => r.invites.findValid(hash, now))).toBeNull();
-      } finally {
-        await cleanup();
-      }
-    });
-
     it("unit of work is atomic: a throw rolls back every write, audit included", async () => {
       const { uow, cleanup } = await factory();
       try {
         const scope = `account:${randomUUID()}` as const;
-        const e = entry(`rollback-${randomUUID()}@example.com`);
+        let created = "";
         await expect(
           uow.run(async (r) => {
-            await r.waitlist.insert(e);
+            created = (await r.accounts.create({ name: `Contract rollback ${randomUUID()}`, plan: "free" })).id;
             await r.audit.append(auditInput(scope), new Date());
             throw new Error("boom");
           }),
         ).rejects.toThrow("boom");
-        expect(await uow.run((r) => r.waitlist.findByEmailHash(e.emailHash))).toBeNull();
+        expect(created).not.toBe("");
+        expect(await uow.run((r) => r.accounts.get(created))).toBeNull();
         expect(await uow.run((r) => r.audit.chain(scope))).toEqual([]);
       } finally {
         await cleanup();

@@ -16,7 +16,7 @@ import { env } from "../env";
 /**
  * Every API handler goes through `route()` (CLAUDE.md rules 12–14):
  *   request id + one access-log line, rate limit (tier per route), same-origin check on writes (CSRF for
- *   cookie auth; `public` routes accept the marketing site's origin), domain-error → HTTP mapping.
+ *   cookie auth: writes must come from this origin), domain-error → HTTP mapping.
  * Permission and ownership checks happen in the service layer (packages/core), never only here.
  */
 
@@ -26,14 +26,11 @@ const STATUS: Record<string, number> = {
   not_found: 404,
   bad_request: 400,
   conflict: 409,
-  invalid_token: 400,
   plan_limit: 403,
 };
 
 export type RouteOptions = {
   limit?: LimitName;
-  /** `same`: only this origin may POST/PUT/DELETE. `public`: also the marketing site (e.g. the waitlist). */
-  origin?: "same" | "public";
 };
 
 export type RouteContext = { req: Request; meta: RequestMeta };
@@ -53,17 +50,14 @@ const SAFE = new Set(["GET", "HEAD", "OPTIONS"]);
 const TOKEN_PATH = /(\/(?:reset-password|verify-email|invite|magic-link|confirm)\/)[^/?#]+/gi;
 export const logPath = (path: string): string => path.replace(TOKEN_PATH, "$1[redacted]").slice(0, 512);
 
-function originAllowed(req: Request, mode: "same" | "public"): boolean {
+/** Writes (POST/PUT/PATCH/DELETE) must come from this origin: the CSRF guard for cookie auth. */
+function originAllowed(req: Request): boolean {
   if (SAFE.has(req.method)) return true;
   const origin = req.headers.get("origin");
   const host = req.headers.get("host");
-  if (!origin) return mode === "public"; // server-to-server callers (the site's rewrite, curl) send none
+  if (!origin || !host) return false;
   try {
-    const o = new URL(origin);
-    if (host && o.host === host) return true;
-    if (mode === "public" && o.origin === new URL(env().SITE_URL).origin) return true;
-    // Dev: the marketing site on any *.localhost / LAN host talks to us through its rewrite.
-    return mode === "public" && env().NODE_ENV !== "production";
+    return new URL(origin).host === host;
   } catch {
     return false;
   }
@@ -100,7 +94,7 @@ export function route(handler: Handler, opts: RouteOptions = {}) {
           errorCode = "rate_limited";
           res = errorBody("rate_limited", "Too many requests. Wait a moment and try again.", 429);
           for (const [k, v] of Object.entries(rl.headers)) res.headers.set(k, v);
-        } else if (!originAllowed(req, opts.origin ?? "same")) {
+        } else if (!originAllowed(req)) {
           errorCode = "forbidden";
           res = errorBody("forbidden", "Cross-origin request blocked.", 403);
         } else {

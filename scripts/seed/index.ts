@@ -21,7 +21,6 @@ import { createDb, type Db, PgUnitOfWork, schema } from "@anhourmail/adapters/po
 import { type Deps, systemClock } from "@anhourmail/core";
 import type { AuditAction, AuditEntryInput } from "@anhourmail/core/audit";
 import { enqueueProvisioning } from "@anhourmail/core/provisioning";
-import { confirmWaitlist, joinWaitlist, MIN_FILL_MS } from "@anhourmail/core/waitlist";
 import { JmapClient } from "@anhourmail/jmap-client";
 import { customerDomainRecords, PLANS } from "@anhourmail/shared";
 import { createAppPassword, type StalwartManagement, stalwart } from "@anhourmail/stalwart-client";
@@ -37,7 +36,6 @@ import {
   type SeedPerson,
   STAFF_DOMAIN,
   UNVERIFIED_DOMAIN,
-  WAITLISTED,
 } from "./people";
 
 const ROOT = path.join(import.meta.dirname, "../..");
@@ -310,7 +308,7 @@ async function upsertStaffAccount(database: Db): Promise<string> {
 }
 
 if (demo) {
-  log("demo: domains, invite, waitlist, audit, sample mail…");
+  log("demo: domains, invite, audit, sample mail…");
   // Verified customer domains + one unverified domain (DNS states in the console)
   for (const key of ["family", "group"] as const) {
     const a = ACCOUNTS[key];
@@ -347,19 +345,6 @@ if (demo) {
     expiresAt: new Date(Date.now() + 7 * 24 * 3600 * 1000),
     createdBy: "seed",
   });
-
-  // Waitlisted and confirmed (double opt-in), through the real services (audited, deduplicated), so staff can try
-  // the Invite button. On re-runs the entry already exists and no new token is issued.
-  const seedReq = () => ({ requestId: `seed-${randomUUID().slice(0, 8)}`, ip: null, userAgent: "anhourmail-seed" });
-  const joined = await joinWaitlist(
-    deps,
-    { kind: "system", name: "seed" },
-    { email: WAITLISTED.email, community: WAITLISTED.community, startedAt: Date.now() - MIN_FILL_MS - 1000 },
-    seedReq(),
-  );
-  if (joined.confirmation) {
-    await confirmWaitlist(deps, { kind: "system", name: "seed" }, joined.confirmation.token, seedReq());
-  }
 
   // Sample audit entries, only when the account is new (append-only: re-runs don't pile up)
   await deps.uow.run(async (r) => {
@@ -469,10 +454,6 @@ if (demo) {
   special.push(
     { label: "Free user", detail: `\`free@${FREE_DOMAIN}\` (see the Customer: Free user table)` },
     { label: "Supporter", detail: `\`supporter@${FREE_DOMAIN}\` (see the Customer: Supporter table)` },
-    {
-      label: "Waitlisted",
-      detail: `\`${WAITLISTED.email}\` — confirmed on the waitlist, no login yet; staff with waitlist access can invite it from the console`,
-    },
     {
       label: "Invited, not accepted",
       detail: `\`${INVITED.email}\` invited to Demo Family as member — link (accept flow lands in phase 3): ${APP_URL}/invite/${inviteToken}`,

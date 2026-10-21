@@ -10,7 +10,7 @@
  */
 export type HostDecision = { action: "next" } | { action: "rewrite"; path: string } | { action: "not_found" };
 
-const ANY_HOST = [/^\/api\/health(\/|$)/, /^\/api\/public\//, /^\/_next\//, /^\/favicon\.ico$/];
+const ANY_HOST = [/^\/api\/health(\/|$)/, /^\/_next\//, /^\/favicon\.ico$/];
 
 export function hostKind(host: string, webmailDevPort?: string): "mail" | "app" | "bare" {
   const [name = "", port] = host.toLowerCase().split(/:(?=\d+$)/);

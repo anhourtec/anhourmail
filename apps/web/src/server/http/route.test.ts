@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import type * as NextServerModule from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MemoryUnitOfWork } from "@anhourmail/adapters/memory";
@@ -13,20 +12,10 @@ import { resetEnvForTests } from "../env";
 import { logPath, ok, readJson, route } from "./route";
 
 vi.mock("../auth/actor", () => ({ getActor: async () => ANONYMOUS }));
-// `after()` needs a Next request scope; outside one, collect the deferred work so tests can await it.
-type NextServer = typeof NextServerModule;
-const deferred: Promise<unknown>[] = [];
-vi.mock("next/server", async (importOriginal) => ({
-  ...(await importOriginal<NextServer>()),
-  after: (task: () => Promise<unknown>) => {
-    deferred.push(task());
-  },
-}));
 
 const params = { params: Promise.resolve({}) };
 const noDns = { lookup: async () => [] };
 let uow: MemoryUnitOfWork;
-let mailer: ReturnType<typeof memoryMailer>;
 
 beforeEach(() => {
   vi.stubEnv("APP_URL", "http://localhost:43200");
@@ -39,8 +28,12 @@ beforeEach(() => {
   vi.stubEnv("MAIL_FROM", "AnhourMail <no-reply@example.test>");
   resetEnvForTests();
   uow = new MemoryUnitOfWork();
-  mailer = memoryMailer();
-  setContainerForTests({ deps: { uow, clock: systemClock }, counter: memoryCounter(), mailer, dns: noDns });
+  setContainerForTests({
+    deps: { uow, clock: systemClock },
+    counter: memoryCounter(),
+    mailer: memoryMailer(),
+    dns: noDns,
+  });
   setLogSinkForTests(() => undefined);
 });
 afterEach(() => {
@@ -88,7 +81,7 @@ describe("route()", () => {
     expect(JSON.stringify(await boom.json())).not.toContain("secret detail");
   });
 
-  it("blocks cross-origin writes; public routes accept the site origin", async () => {
+  it("blocks cross-origin writes and writes without an origin", async () => {
     const handler = async () => ok(true);
     const evil = await route(handler)(
       post("http://localhost:43200/api/x", {}, { origin: "https://evil.example" }),
@@ -100,11 +93,11 @@ describe("route()", () => {
       params,
     );
     expect(same.status).toBe(200);
-    const site = await route(handler, { origin: "public" })(
+    const site = await route(handler)(
       post("http://localhost:43200/api/x", {}, { origin: "http://localhost:43100" }),
       params,
     );
-    expect(site.status).toBe(200);
+    expect(site.status).toBe(403);
     const noOrigin = await route(handler)(post("http://localhost:43200/api/x", {}), params);
     expect(noOrigin.status).toBe(403);
   });
@@ -133,49 +126,10 @@ describe("security hardening (audit 2026-10-21)", () => {
     vi.stubEnv("SITE_URL", "https://example.test");
     vi.stubEnv("BETTER_AUTH_SECRET", "y".repeat(48));
     resetEnvForTests();
-    const res = await route(async () => ok(true), { limit: "publicForm", origin: "public" })(
-      post("https://app.example.test/api/public/waitlist", {}),
+    const res = await route(async () => ok(true), { limit: "publicForm" })(
+      post("https://app.example.test/api/example", {}, { origin: "https://app.example.test" }),
       params,
     );
     expect(res.status).toBe(400);
-  });
-});
-
-describe("POST /api/public/waitlist", () => {
-  it("accepts, stores and audits; answers the same for a duplicate", async () => {
-    const { POST } = await import("../../app/api/public/waitlist/route");
-    const body = { email: "route@example.com", startedAt: Date.now() - 10_000 };
-    const first = await POST(
-      post("http://localhost:43200/api/public/waitlist", body, { origin: "http://localhost:43100" }),
-      params,
-    );
-    expect(first.status).toBe(202);
-    expect(await first.json()).toEqual({ data: { status: "accepted" } });
-    // The confirmation email is sent after the response (no timing difference between new and known addresses).
-    await Promise.all(deferred);
-    expect(mailer.sent.map((m) => m.to)).toEqual(["route@example.com"]);
-    const again = await POST(post("http://localhost:43200/api/public/waitlist", body), params);
-    expect(again.status).toBe(202);
-    expect(uow.state.waitlist).toHaveLength(1);
-    expect(uow.state.audit.map((e) => e.action)).toEqual(["waitlist.joined", "waitlist.joined"]);
-    const invalid = await POST(post("http://localhost:43200/api/public/waitlist", { email: "x" }), params);
-    expect(invalid.status).toBe(400);
-  });
-
-  it("stops confirmation emails to an address over its daily cap, with the same 202", async () => {
-    const { POST } = await import("../../app/api/public/waitlist/route");
-    // The per-address email tier is exhausted; the per-IP form tier is not.
-    const counter = async (key: string) => (key.includes(":waitlistMail:") ? 99 : 1);
-    setContainerForTests({ deps: { uow, clock: systemClock }, counter, mailer, dns: noDns });
-    const res = await POST(
-      post("http://localhost:43200/api/public/waitlist", {
-        email: "capped@example.com",
-        startedAt: Date.now() - 10_000,
-      }),
-      params,
-    );
-    expect(res.status).toBe(202);
-    await Promise.all(deferred);
-    expect(mailer.sent).toHaveLength(0);
   });
 });

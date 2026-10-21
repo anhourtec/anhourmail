@@ -14,7 +14,7 @@ test("Global Administrator sees every staff section", async ({ page, consoleErro
   const u = e2eUsers();
   await signIn(page, u.users.globalAdmin, u.password);
   const nav = await openNav(page);
-  for (const label of ["Waitlist", "Platform audit", "Staff roles", "Abuse queue"]) {
+  for (const label of ["Platform audit", "Staff roles", "Abuse queue", "Customer accounts"]) {
     await expect(nav.locator(`[data-nav]`, { hasText: label }).first()).toBeVisible();
   }
   expect(consoleErrors).toEqual([]);
@@ -24,7 +24,7 @@ test("Reports Reader sees read-only staff sections only", async ({ page }) => {
   const u = e2eUsers();
   await signIn(page, u.users.reportsReader, u.password);
   const nav = await openNav(page);
-  await expect(nav.locator(`[data-nav="waitlist.read"]`)).toBeVisible();
+  await expect(nav.locator(`[data-nav="platform.audit.read"]`)).toBeVisible();
   await expect(nav.locator(`[data-nav="platform.staff.manage"]`)).toHaveCount(0);
 });
 
@@ -87,6 +87,13 @@ test("sign-in links to sign-up and shows the legal consent", async ({ page }) =>
   await expect(page).toHaveURL(/\/sign-up$/);
 });
 
+test("forgot password asks for an address before sending anything", async ({ page }) => {
+  await page.goto(`${urls.app}/forgot-password`);
+  await page.getByRole("button", { name: "Send reset link" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Enter the email address you sign in with." })).toBeVisible();
+  await expect(page.getByText("If an account uses that address")).toHaveCount(0);
+});
+
 test("forgot password always answers the same and links back to sign-in", async ({ page }) => {
   await page.goto(`${urls.app}/sign-in`);
   await page.getByRole("link", { name: "Forgot password?" }).click();
@@ -94,6 +101,36 @@ test("forgot password always answers the same and links back to sign-in", async 
   await page.getByLabel("Email").fill("nobody-here@e2e.test");
   await page.getByRole("button", { name: "Send reset link" }).click();
   await expect(page.getByRole("status")).toContainText("If an account uses that address");
+});
+
+test("password reset: the emailed link sets a new password that then signs in", async ({ page }, testInfo) => {
+  const u = e2eUsers();
+  const who = `${u.run}-${testInfo.project.name}-reset`;
+  const email = `${who}@e2e.test`;
+  // A fresh account (sign-up is open in dev); the run prefix lets global teardown remove it.
+  await page.goto(`${urls.app}/sign-up`);
+  await page.getByLabel("First name").fill(who);
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(`${u.password}-old`);
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await expect(page).toHaveURL(/\/sign-in$/);
+
+  await page.getByRole("link", { name: "Forgot password?" }).click();
+  await expect(page.getByRole("heading", { name: "Reset your password" })).toBeVisible();
+  await page.getByLabel("Email").fill(email);
+  await page.getByRole("button", { name: "Send reset link" }).click();
+  await expect(page.getByRole("status")).toContainText("If an account uses that address");
+
+  const link = await linkFromMail(page.request, email, /https?:\/\/\S+\/reset-password[^\s"<]*/);
+  await page.goto(link);
+  await page.getByLabel("New password", { exact: true }).fill(`${u.password}-new`);
+  await page.getByLabel("Confirm new password").fill(`${u.password}-new`);
+  await page.getByRole("button", { name: "Save new password" }).click();
+  await expect(page.getByRole("status")).toContainText("Your password has been changed.");
+
+  await signIn(page, email, `${u.password}-new`);
 });
 
 test("the password eye toggles visibility", async ({ page }) => {
@@ -105,47 +142,4 @@ test("the password eye toggles visibility", async ({ page }) => {
   await expect(field).toHaveAttribute("type", "text");
   await page.getByRole("button", { name: "Hide password" }).click();
   await expect(field).toHaveAttribute("type", "password");
-});
-
-test("waitlist → confirm → staff invite → sign-up from the invite with the email locked", async ({
-  page,
-  request,
-  browser,
-}, testInfo) => {
-  const u = e2eUsers();
-  const who = `${u.run}-${testInfo.project.name}-invitee`;
-  const email = `${who}@waitlist.test`;
-
-  // 1. Join from the site and confirm through the emailed link.
-  const joined = await request.post(`${urls.site}/api/public/waitlist`, {
-    data: { email, startedAt: Date.now() - 10_000 },
-    headers: { origin: urls.site },
-  });
-  expect(joined.status()).toBe(202);
-  const confirm = await linkFromMail(request, email, /https?:\/\/\S+\/waitlist\/confirm\?token=[^\s"<]+/);
-  await page.goto(confirm);
-  await expect(page.getByText("You’re on the list.")).toBeVisible();
-
-  // 2. A Global Administrator invites the confirmed sign-up from the console.
-  await signIn(page, u.users.globalAdmin, u.password);
-  await page.getByRole("button", { name: `Invite ${email}` }).click();
-  await expect(page.getByRole("button", { name: `Invite ${email}` })).toHaveCount(0);
-
-  // 3. The invitee signs up from the invite link (fresh browser context): the email is fixed.
-  const inviteUrl = await linkFromMail(request, email, /https?:\/\/\S+\/sign-up\?invite=[^\s"<]+/);
-  const invitee = await browser.newPage();
-  await invitee.goto(inviteUrl);
-  await expect(invitee.getByRole("heading", { name: "You're invited" })).toBeVisible();
-  await expect(invitee.getByLabel("Email")).toHaveValue(email);
-  await expect(invitee.getByLabel("Email")).toHaveAttribute("readonly", "");
-  await invitee.getByLabel("First name").fill(who);
-  await invitee.getByLabel("Password", { exact: true }).fill(`${u.password}-invitee`);
-  await invitee.getByRole("button", { name: "Create account" }).click();
-  await expect(invitee.getByRole("heading", { name: "Overview" })).toBeVisible();
-
-  // 4. The invite is single-use.
-  const again = await browser.newPage();
-  await again.goto(inviteUrl);
-  await expect(again.getByRole("heading", { name: "Create your account" })).toBeVisible();
-  await expect(again.getByLabel("Email")).not.toHaveAttribute("readonly", "");
 });
