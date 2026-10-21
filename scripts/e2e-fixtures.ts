@@ -10,6 +10,7 @@ import { like } from "drizzle-orm";
 
 import { hashPassword } from "@anhourmail/adapters/auth";
 import { createDb, schema } from "@anhourmail/adapters/postgres";
+import { stalwart } from "@anhourmail/stalwart-client";
 
 const FILE = "test-results/e2e-users.json";
 const url = process.env.DATABASE_URL;
@@ -53,11 +54,24 @@ if (mode === "create") {
   writeFileSync(FILE, JSON.stringify({ run, password, accountName: account.name, users }, null, 2), { mode: 0o600 });
 } else if (mode === "delete") {
   const { run } = JSON.parse(readFileSync(FILE, "utf8")) as { run: string };
+  // Cleanup matches names by run id; refuse anything that isn't one, so a bad file can't match everything.
+  if (!/^e2e-[0-9a-f]{8}$/.test(run)) throw new Error(`refusing cleanup: unexpected run id ${JSON.stringify(run)}`);
   await db.delete(schema.authUser).where(like(schema.authUser.email, `${run}-%`));
   await db.delete(schema.customerAccount).where(like(schema.customerAccount.name, `${run}%`));
   // The site spec joins the waitlist with e2e-<timestamp>@waitlist.test addresses.
   await db.delete(schema.waitlistEntry).where(like(schema.waitlistEntry.email, "e2e-%@waitlist.test"));
   await db.delete(schema.invite).where(like(schema.invite.email, "e2e-%@waitlist.test"));
+  // Domains and mailboxes the run created on the dev mail server (their names carry the run id).
+  try {
+    const mgmt = stalwart();
+    const domainOf = (address: string) => address.slice(address.lastIndexOf("@") + 1);
+    for (const u of await mgmt.listUsers()) {
+      if (domainOf(u.address).includes(run)) await mgmt.destroy("x:Account", u.id);
+    }
+    for (const d of await mgmt.listDomains()) if (d.name.includes(run)) await mgmt.destroyDomain(d.id);
+  } catch (err) {
+    console.warn(`e2e cleanup: mail server not cleaned (${err instanceof Error ? err.message : String(err)})`);
+  }
   rmSync(FILE, { force: true });
 } else {
   throw new Error("usage: e2e-fixtures.ts create|delete");

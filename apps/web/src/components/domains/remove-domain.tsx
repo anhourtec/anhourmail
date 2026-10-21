@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { dangerButtonClass, secondaryButtonClass } from "../ui-classes";
-import { callApi } from "./api";
+import { callApi } from "../api";
 
 /** Two-step remove (no browser dialogs). The server refuses while mailboxes or aliases use the domain. */
 export function RemoveDomain({ accountId, domainId, name }: { accountId: string; domainId: string; name: string }) {

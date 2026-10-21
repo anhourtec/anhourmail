@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { primaryButtonClass } from "../ui-classes";
-import { callApi } from "./api";
+import { callApi } from "../api";
 
 type CheckResult = { activated: boolean; records: { required: boolean; state: string }[] };
 

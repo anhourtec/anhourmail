@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { type SyntheticEvent, useState } from "react";
 
 import { inputClass, primaryButtonClass } from "../ui-classes";
-import { callApi } from "./api";
+import { callApi } from "../api";
 
 /** Add a domain, then open its page with the records to publish. */
 export function AddDomainForm({ accountId }: { accountId: string }) {

@@ -99,4 +99,36 @@ export const ROUTES: readonly RouteSpec[] = [
     accountParam: "accountId",
     probeStatus: 404,
   },
+  {
+    method: "GET",
+    path: "/api/accounts/:accountId/mailboxes",
+    file: "app/api/accounts/[accountId]/mailboxes/route.ts",
+    guard: "mailbox.read",
+    accountParam: "accountId",
+  },
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/mailboxes",
+    file: "app/api/accounts/[accountId]/mailboxes/route.ts",
+    guard: "mailbox.manage",
+    accountParam: "accountId",
+    // The harness sends no address: allowed callers get a validation error.
+    probeStatus: 400,
+  },
+  {
+    method: "GET",
+    path: "/api/accounts/:accountId/mailboxes/:mailboxId",
+    file: "app/api/accounts/[accountId]/mailboxes/[mailboxId]/route.ts",
+    guard: "mailbox.read",
+    accountParam: "accountId",
+    probeStatus: 404,
+  },
+  {
+    method: "PATCH",
+    path: "/api/accounts/:accountId/mailboxes/:mailboxId",
+    file: "app/api/accounts/[accountId]/mailboxes/[mailboxId]/route.ts",
+    guard: "mailbox.manage",
+    accountParam: "accountId",
+    probeStatus: 404,
+  },
 ];
