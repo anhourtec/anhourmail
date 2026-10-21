@@ -72,6 +72,32 @@ Lists multiply one message into many deliveries, so they are an abuse amplifier 
 - Disclaimers and signatures (ADR-0014) are added in our submission path before DKIM signing, so they never
   break authentication; they are not a channel for promotional content on base plans.
 
+### Sender identity and outbound scanning (Phase 1 results)
+
+- **Header From = envelope sender** for every authenticated submission (ADR-0019, `sender-identity` Sieve system
+  script). Stops users showing another address — ours or anyone's — in mail we DKIM-sign.
+- **Outbound spam scanning:** `MtaStageData.enableSpamFilter` defaults to `is_empty(authenticated_as)` (inbound
+  only). Enabling it for authenticated mail (`true`) in dev let a GTUBE message through with no verdict and no
+  headers — inconclusive, because dev Stalwart has no internet and the spam rule set
+  (`SpamSettings.spamFilterRulesUrl`, GitHub) never downloads, so scanning runs without rules. Recommendation:
+  pin the rules bundle locally like the admin UI (hash-checked `file://` URL), then re-test outbound with
+  `scoreReject` for submissions only (reject, never silently drop, so the user sees it) and our own outbound
+  checks in front (rate limits, recipient caps, trust tiers). Until then outbound scanning stays at the default.
+- **Mail to a non-existent local address** submitted over JMAP was accepted and silently dropped (no DSN, no
+  error) in dev. Phase 3 must surface this to the sender (BFF pre-check of local recipients or DSN on).
+
+## Events from Stalwart (Phase 1 prototype)
+
+`x:WebHook` (Community) posts batched events `{"events":[{id, createdAt, type, data}]}`, signed with
+`X-Signature: base64(HMAC-SHA256(key, raw body))` (verified). Useful types: `auth.success`, `auth.failed`,
+`auth.too-many-attempts`, `delivery.completed`, `delivery.failed`, `delivery.dsn-perm-fail`,
+`delivery.dsn-temp-fail`, `delivery.rate-limit-exceeded`, `incoming-report.abuse-report` (ARF complaints).
+Auth events carry `accountName`, `accountId`, `listenerId` (`imaps`, `pop3s`, `submissions`, `http` = JMAP), `remoteIp`
+and, for failures, `reason`. Signals for detection: bursts of `auth.failed` per account (credential stuffing),
+sign-ins from new networks, `dsn-perm-fail` ratio and abuse reports per sender (bounce/complaint spikes →
+auto-restrict). Note: in dev `remoteIp` is the mail forwarder's container address; production must expose
+Stalwart directly (or use PROXY protocol) so client IPs survive.
+
 ## Detection
 
 | Signal                                                                                                                | Source                                                   | Action                                                   |

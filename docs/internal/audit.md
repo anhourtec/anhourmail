@@ -120,11 +120,22 @@ Delivery metadata from Stalwart (message-id, from/to **domains**, status, timest
 
 ## Ingesting Stalwart events
 
-Stalwart Community has an **`x:WebHook`** object (event notifications). Plan, to be prototyped in Phase 1 (`09-roadmap.md`):
+Stalwart Community has an **`x:WebHook`** object. **Prototyped in Phase 1 (2026-10-21)** with a dev-only
+`event-sink` service on the mail network (`docker compose logs event-sink`): payloads are batched
+`{"events":[{id, createdAt, type, data}]}` and signed `X-Signature: base64(HMAC-SHA256(key, raw body))`.
 
-- Configure a WebHook to post auth and delivery events to the worker's internal endpoint (internal network, HMAC-signed).
-- The worker maps protocol auth events to `mailauth.*` audit entries (actor = the mailbox's owning user) and delivery events to `mail_flow_event`.
-- Delivery history and live telemetry are Enterprise-only, so the WebHook is the Community path. If its event coverage is incomplete, fall back to parsing Stalwart's console tracer output in the worker.
+Receiver design (apps/worker, Phase 3):
+
+- Internal endpoint only (mail network), `x:WebHook.signatureKey` from the secrets store; verify the HMAC over the
+  raw body with a constant-time compare before parsing; reject unsigned or stale batches (`createdAt` window) and
+  de-duplicate by event `id` (Stalwart retries until `discardAfter`).
+- `auth.success` → `auth.mail_client_sign_in`; `auth.failed` / `auth.too-many-attempts` →
+  `auth.mail_client_sign_in_failed` (`meta`: protocol from `listenerId` — `imaps`/`imap` IMAP, `pop3s`/`pop3`
+  POP3, `submissions`/`submission` SMTP, `http` JMAP — plus remote IP and reason). Actor = the user who owns the
+  mailbox (`accountName` → mailbox → user), scope = that account. New-device detection and alerts read these.
+- `delivery.dsn-perm-fail`, `delivery.failed`, `incoming-report.abuse-report` → mail-flow log (30 days) and
+  abuse signals (`03-anti-spam-and-abuse.md`); never message content.
+- Event selection is an include-list (`eventsPolicy: include`); `lossy: false`; throttle 1 s.
 
 ## Testing
 

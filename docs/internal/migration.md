@@ -33,11 +33,12 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 ## Summary
 
-| #    | Migration                   | Commit      | Date       | Change                                                        | Rollback |
-| ---- | --------------------------- | ----------- | ---------- | ------------------------------------------------------------- | -------- |
-| 0002 | `0002_user_first_last_name` | uncommitted | 2026-10-21 | `auth_user.first_name` (not null, default '') and `last_name` | Safe     |
-| 0001 | `0001_audit_append_only`    | uncommitted | 2026-10-21 | Trigger blocking UPDATE/DELETE/TRUNCATE on `audit_log`        | Caution  |
-| 0000 | `0000_init`                 | uncommitted | 2026-10-21 | Initial control-plane schema (14 tables)                      | Safe     |
+| #    | Migration                   | Commit      | Date       | Change                                                                                   | Rollback |
+| ---- | --------------------------- | ----------- | ---------- | ---------------------------------------------------------------------------------------- | -------- |
+| 0003 | `0003_provisioning_queue`   | uncommitted | 2026-10-21 | `provisioning_job` table; `customer_domain.stalwart_id/last_error`, `mailbox.last_error` | Safe     |
+| 0002 | `0002_user_first_last_name` | uncommitted | 2026-10-21 | `auth_user.first_name` (not null, default '') and `last_name`                            | Safe     |
+| 0001 | `0001_audit_append_only`    | uncommitted | 2026-10-21 | Trigger blocking UPDATE/DELETE/TRUNCATE on `audit_log`                                   | Caution  |
+| 0000 | `0000_init`                 | uncommitted | 2026-10-21 | Initial control-plane schema (14 tables)                                                 | Safe     |
 
 ## Details
 
@@ -51,6 +52,16 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0003_provisioning_queue · uncommitted · 2026-10-21 · Safe
+
+- Added: `provisioning_job` (kind, subject_id, status, attempts, last_error, run_after, locked_at) with indexes
+  on (status, run_after) and (kind, subject_id); `customer_domain.stalwart_id`, `customer_domain.last_error`,
+  `mailbox.last_error`.
+- Changed: —
+- Removed: —
+- Data: none.
+- Rollback: drop the table and columns (queued jobs are lost; desired state is unaffected and can be re-enqueued).
 
 ### 0002_user_first_last_name · uncommitted · 2026-10-21 · Safe
 

@@ -39,7 +39,25 @@ We compare against Stalwart's own expectation (`x:Domain/get dnsZoneFile`) so th
 
 - **RSA-2048 is primary.** Gmail does not verify Ed25519 signatures, so Ed25519 is an optional second signature only (`research/deliverability.md` §4).
 - Customer domains delegate DKIM by CNAME: `am1._domainkey.<domain> → am1.<domain>.dkim.anhourmail.com` (likewise `am2`). We publish the keys behind these and rotate them without the customer touching DNS.
-- **Open problem:** Stalwart's automatic DKIM names selectors by date (observed in dev: `v1-rsa-20261021._domainkey`, `v1-ed25519-20261021._domainkey`). Fixed customer CNAMEs need fixed selectors, so Phase 1 prototypes `dkimManagement.selectorTemplate` with fixed `am1`/`am2` plus our own rotation (publish next key under the idle selector → switch signing → retire), or manual `x:DkimSignature` objects driven by the worker. Stalwart's automatic rotation requires automatic DNS management, which needs our zone (`*.dkim.anhourmail.com`) at an API-driven DNS provider (open decision).
+- **Fixed selectors — answered in Phase 1 (ADR-0017, verified 2026-10-21 on v0.16.27):**
+  - `dkimManagement: {"@type":"Automatic","selectorTemplate":"am1","algorithms":{"Dkim1RsaSha256":true}}` creates
+    one RSA key with selector `am1` at domain creation. With manual DNS its `nextTransitionAt` stays null: Stalwart
+    never rotates it (automatic rotation needs automatic DNS management), and a fixed template would collide on
+    rotation anyway. So **the worker owns rotation** with manual `x:DkimSignature` objects.
+  - A manual key is `x:DkimSignature/set create {"@type":"Dkim1RsaSha256", domainId, selector:"am2",
+stage:"pending", privateKey:{"@type":"Text",secret:<PEM>}, canonicalization:"relaxed/relaxed",
+headers:{From,To,Date,Subject,Message-ID: true}}`. **`headers` must be set explicitly** — with an empty set the
+    key was "active" but no DKIM-Signature was added (observed).
+  - Stages: `pending` (published in `dnsZoneFile`, not signing) → `active` (published, signing) → `retiring`
+    (published, not signing) → `retired` (removed from the zone, kept until destroyed). Verified via Mailpit: only
+    `s=am1` before the swap, only `s=am2` after; `am1` left the zone when set `retired`.
+  - **Rotation procedure** (worker job, every 90 days per domain): (1) generate RSA-2048 for the idle selector
+    (destroy its retired key first) and create it `pending`; (2) publish its TXT at
+    `<sel>.<domain>.dkim.anhourmail.com` (the customer CNAME points there; nothing changes on their side); (3) wait
+    ≥ 2 × TTL and confirm the TXT resolves; (4) in one `x:DkimSignature/set`: new key `active`, old key
+    `retiring` (+ `ReloadSettings`); (5) after 7 days set the old key `retired`, after 30 days destroy it. Audit
+    each step (`platform.settings_changed` with domain + selector, never key material). Private keys are generated
+    by the worker and sent once; they are never stored in Postgres.
 - Rotation cadence: 90 days, with the next key pre-published one TTL ahead.
 
 ## Domain lifecycle
@@ -60,11 +78,24 @@ active ──(user removes)──► removing (grace 7 days; mail kept) ──�
 - Since v0.16 there is **no REST management API and no TOML**. Only `config.json` (the DataStore location) is on disk. Everything else is a JMAP object under `urn:stalwart:jmap` at `POST /jmap` (`x:Domain`, `x:Account`, `x:MtaRoute`, `x:MtaOutboundStrategy`, `x:NetworkListener`, `x:MtaOutboundThrottle`, `x:WebHook`, `x:Action`, …).
 - Directory changes apply immediately. Listener, route and expression changes need `x:Action ReloadSettings`.
 - All access goes through `packages/stalwart-client` (rule 21). Every write is an idempotent upsert by natural key.
-- Production auth is a scoped **API key** (Bearer, `sys*` permissions only, IP allow-list). The recovery admin (`STALWART_RECOVERY_ADMIN`) is **never set in production**: it works in normal mode too.
+- Production auth is a scoped **API key** (ADR-0017, verified 2026-10-21). API keys belong to a real account, so a
+  dedicated admin service account (`svc-mgmt@<system domain>`) owns it; the key uses `permissions: {"@type":"Replace",
+permissions: {authenticate, sysDomain*, sysAccount*, sysDkimSignature*, …}}` (`authenticate` is required — without
+  it every request is 403) plus an `allowedIps` allow-list of the control-plane hosts. Verified: it creates and reads
+  domains/accounts/DKIM keys, but `Mailbox/get` and `Email/query` on a user account and other admin objects return
+  `forbidden`. Caveat: `sysAccountCreate` can create Admin-role accounts, so the key is a high-value secret (vault,
+  IP allow-list, rotation). The recovery admin (`STALWART_RECOVERY_ADMIN`) is **never set in production**: it works
+  in normal mode too.
 - The management and JMAP HTTP listener is reachable from the internal network only. NGINX exposes nothing under `/jmap`, `/api` or `/admin` publicly. The webmail JMAP proxy is our BFF, not a pass-through.
 - Add a 587 submission listener (not created by default). Keep the default POP3S listener on 995: IMAP, POP3, SMTP submission, ManageSieve and JMAP are all offered (`packages/shared/src/platform.ts` `CLIENT_ENDPOINTS`).
 - Outbound spam scanning of authenticated mail is **off by default** in Stalwart (`MtaStageData.enableSpamFilter`). We turn it on and pair it with control-plane limits (`03-anti-spam-and-abuse.md`).
-- **Transport security** (ADR-0016, verified schema 2026-10-21): listeners allow only TLS 1.2/1.3 (`TlsVersion` has no older values); set `tlsDisableCipherSuites` to leave AEAD suites only; plain 143/110/587 must refuse AUTH before STARTTLS (Phase 1 check). Outbound `x:MtaTlsStrategy` default `startTls/dane/mtaSts: optional` (enforced wherever the destination publishes a policy), `allowInvalidCerts: false`. Inbound `x:MtaSts` `testing` → `enforce`, `x:TlsReportSettings` on, DANE TLSA on `mx1` once the zone is DNSSEC-signed. `x:MtaExtensions.requireTls` on (RFC 8689).
+- **Transport security** (ADR-0016, ADR-0018; verified 2026-10-21): listeners allow only TLS 1.2/1.3 (`TlsVersion` has
+  no older values; 993 negotiated TLS 1.2 ECDHE-ECDSA-AES256-GCM and 587 STARTTLS negotiated TLS 1.3); set
+  `tlsDisableCipherSuites` to leave AEAD suites only. **Clear-text auth by default:** IMAP 143 advertises
+  `LOGINDISABLED` and refuses LOGIN, POP3 110 refuses USER/PASS, port 25 refuses AUTH — but **587 offered
+  OAUTHBEARER/XOAUTH2 before STARTTLS** (default `x:MtaStageAuth.saslMechanisms` rule `local_port != 25 →
+[oauthbearer, xoauth2]`). We remove that rule so no mechanism is offered until TLS (`infra/stalwart/dev-plan.ts`,
+  same setting in production; `stack:verify` checks it). Outbound `x:MtaTlsStrategy` default `startTls/dane/mtaSts: optional` (enforced wherever the destination publishes a policy), `allowInvalidCerts: false`. Inbound `x:MtaSts` (default `mode: testing`, `maxAge` 7 days — verified) `testing` → `enforce`, `x:TlsReportSettings` on, DANE TLSA on `mx1` once the zone is DNSSEC-signed. `x:MtaExtensions.requireTls` on (RFC 8689; default `true`, verified).
 - **Encryption at rest (opt-in zero-access):** `x:Email.encryptAtRest` true server-wide; per user `x:PublicKey` + `x:AccountSettings.encryptionAtRest` (`Aes256`, `encryptOnAppend: true`) set through our BFF. Community feature, verified end to end (`research/encryption.md` §3.2).
 - ARC: verification only (sealing was removed in 0.16). SRS for forwarding.
 - Masked email (`x:MaskedEmail`) and undelete are Enterprise. We implement masked aliases as account aliases plus our own metadata (ADR-0009).

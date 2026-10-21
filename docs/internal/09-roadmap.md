@@ -12,24 +12,33 @@ Last updated: 2026-10-21. Each phase ends with its exit criteria met, the full t
 
 Prototypes (each ends in a short ADR or a doc update):
 
-1. **DKIM `selectorTemplate`** with fixed `am1`/`am2` selectors behind customer CNAMEs, plus our rotation flow (`02-mail-infrastructure.md`).
-2. **API key as Bearer on `/jmap`** for management only. Confirm that it cannot read mail data, and use it instead of the dev admin outside dev.
+1. **DKIM `selectorTemplate`** with fixed `am1`/`am2` selectors behind customer CNAMEs, plus our rotation flow (`02-mail-infrastructure.md`). — **Answered 2026-10-21 (ADR-0017):** a fixed template creates `am1` but never rotates without automatic DNS; the worker rotates with manual `x:DkimSignature` keys through `pending → active → retiring → retired` (verified signing selector in Mailpit). Manual keys must list signed `headers`.
+2. **API key as Bearer on `/jmap`** for management only. Confirm that it cannot read mail data, and use it instead of the dev admin outside dev. — **Answered (ADR-0017):** key owned by an admin service account, `Replace` permissions `authenticate` + `sys*` domain/account/DKIM; manages domains/accounts; `Mailbox/get`/`Email/query` on users → `forbidden`.
 3. **Stalwart `x:WebHook`** delivering auth and delivery events to the worker (IMAP/SMTP/JMAP sign-ins for audit, bounces for abuse).
-4. **Push vs `maxConcurrentRequests`:** does a long-lived WebSocket/EventSource count? Size the BFF accordingly.
-5. **BFF session acquisition:** the headless OAuth code flow (`/api/auth` → `/auth/token`) end to end, and where the mailbox secret comes from on first webmail open.
+4. **Push vs `maxConcurrentRequests`:** does a long-lived WebSocket/EventSource count? Size the BFF accordingly. — **Answered (ADR-0018):** channels don't count; the limit of 4 is enforced on requests (`jmap:error:limit`), so the BFF queues ≤ 4 in flight per user + one upstream WebSocket.
+5. **BFF session acquisition:** the headless OAuth code flow (`/api/auth` → `/auth/token`) end to end, and where the mailbox secret comes from on first webmail open. — **Answered (ADR-0018, `05-webmail.md` "Session acquisition"):** works with PKCE; 1 h access + refresh tokens; password change revokes both; the mailbox secret comes from the user at webmail sign-in and is never stored.
 6. Outbound spam scanning for authenticated mail: behaviour and actions.
 7. **Folder depth and Archive** (ADR-0014): confirm `maxMailboxDepth` is ignored for batched creates and report
-   upstream; Archive folder created at provisioning; BFF limits in place.
+   upstream; Archive folder created at provisioning; BFF limits in place. — **Answered:** limit 10 enforced for single creates, bypassed by a 14-level batched chain (BFF enforces depth; upstream report still to file); no Archive by default, `role: archive` create works.
 8. **Disclaimer path** (ADR-0014): appended in our submission path before DKIM; optional DATA-stage Sieve
    (`x:MtaStageData.script`) experiment for IMAP/SMTP-client mail, kept off unless MIME and DKIM stay intact.
 
-9. **Transport hardening + zero-access** (ADR-0016): AEAD-only cipher list, AUTH refused before STARTTLS on 143/110/587, MTA-STS `testing` + TLS-RPT, REQUIRETLS on; an automated integration test that enables per-user encryption at rest and asserts the stored blob is encrypted and decryptable only with the user key.
+9. **Transport hardening + zero-access** (ADR-0016): AEAD-only cipher list, AUTH refused before STARTTLS on 143/110/587, MTA-STS `testing` + TLS-RPT, REQUIRETLS on; an automated integration test that enables per-user encryption at rest and asserts the stored blob is encrypted and decryptable only with the user key. — **Answered (ADR-0018):** TLS 1.2/1.3 only; 143/110/25 refuse clear-text auth by default; 587 offered OAUTHBEARER/XOAUTH2 before STARTTLS — removed in the dev plan + `stack:verify` check; MTA-STS default `testing`/7 d; REQUIRETLS on by default; per-user encryption at rest verified self-service end to end (automated test lands with the BFF setting in Phase 4).
 
 Also: worker + scheduler containers, provisioning job runner, reconciler skeleton, seeded demo world complete.
+**Done 2026-10-21:** provisioning queue (`provisioning_job`, SKIP LOCKED claims, backoff, give-up + audit),
+worker process, Stalwart MailServer adapter, hourly reconciler (reports drift, never deletes), integration test
+provisioning domain + mailbox + alias against the compose stack (runs in the CI integration job).
 
 **Exit:** prototypes answered; provisioning a domain + mailbox + alias from a job works and is reconciled; integration tests run against the compose stack in CI.
 
 Phase 1 also probes collaboration (`10-collaboration.md` open items): header-From enforcement for authenticated submissions (a non-member could send as a group address in the Phase 0 probe — must be closed with a regression test), send-as identity removal on group exit, per-folder share inheritance, list fan-out duplicates.
+
+Answered 2026-10-21: **header-From enforcement** — closed (ADR-0019, `sender-identity` script, regression checks in
+`stack:verify`); **outbound scanning (item 6)** — inconclusive in dev because the spam rule set can't download;
+pin the rules bundle locally and re-test; **`x:WebHook` (item 3)** — events, payload shape and HMAC verified with
+the dev `event-sink`; receiver design in `audit.md` "Ingesting Stalwart events". Still open from item 3: a live DSN
+capture (Mailpit accepts everything; an unknown local recipient produced no DSN — see `03-anti-spam-and-abuse.md`).
 
 ## Phase 2 — Marketing site + waitlist + invites
 

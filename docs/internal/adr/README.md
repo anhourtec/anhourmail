@@ -20,3 +20,6 @@ One decision per file, numbered, never rewritten. A later ADR supersedes an earl
 | [0014](0014-folders-and-signatures.md)                       | Folders and signatures (Outlook parity) on JMAP                               | Accepted |
 | [0015](0015-bulk-sending-add-on.md)                          | Newsletters and bulk sending as a separate paid add-on                        | Accepted |
 | [0016](0016-encryption-at-rest-and-security-baseline.md)     | Encryption at rest (opt-in zero-access) and security baseline                 | Accepted |
+| [0017](0017-dkim-rotation-and-management-api-key.md)         | DKIM fixed selectors rotated by the worker; scoped management API key         | Accepted |
+| [0018](0018-webmail-session-push-and-transport-hardening.md) | Webmail OAuth sessions, push sizing, submission transport hardening           | Accepted |
+| [0019](0019-sender-identity-enforcement.md)                  | Sender identity enforcement for authenticated mail                            | Accepted |

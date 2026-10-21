@@ -80,8 +80,16 @@ recipients created, so no abuse amplification beyond normal sending limits).
    `MtaStageAuth.mustMatchSender` is already `true`, but it checks the SMTP envelope sender, not the header.
    Fix: (a) the BFF only submits with an identity the actor is allowed (control-plane check, audited), and
    (b) a system Sieve / data-stage rule that rejects authenticated submissions whose header `From` isn't one of
-   the account's addresses. Track as a Phase 1 prototype with a regression test; never disable DMARC/alignment
-   checks to make delegation work (rule 20).
+   the account's addresses. Never disable DMARC/alignment checks to make delegation work (rule 20).
+   **Closed in Phase 1 (2026-10-21, ADR-0019):** the `sender-identity` Sieve system script runs at DATA for
+   authenticated sessions and requires exactly one header From equal to the (already validated) envelope sender,
+   and a matching `Sender:` if present. Verified on SMTP 465, 587 and JMAP EmailSubmission: own address, own alias
+   and a **group member sending as the group** (envelope and header both the group) are accepted; a forged header
+   From (local or external), a non-member using the group address, two From addresses, a forged `Sender:` and a
+   missing From are refused (5.5.3; JMAP `forbiddenToSend`). Decision: members may send as the group only with the
+   group as envelope sender (the identity Stalwart creates for them does this). Regression checks in
+   `npm run stack:verify`. Consequence: "send on behalf" (`Sender: delegate`, `From: owner`) cannot pass this
+   rule as written — Phase 4.1 adds an explicit, audited exception if we offer it.
 2. **Lists accept anyone.** Members-only posting must be enforced by us (below).
 
 ## What the control plane owns vs what Stalwart enforces

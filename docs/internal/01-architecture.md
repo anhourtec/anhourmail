@@ -131,3 +131,26 @@ The Stalwart Community edition has no tenants (Enterprise-only, `research/stalwa
 **What lives where.** This public repo ships the **images** (`deploy/Dockerfile.*`), the dev/CI `docker-compose.yml` and a self-hosting guide (`/docs/self-hosting`). Production compose files, NGINX config, server IPs, deploy secrets and tuned abuse thresholds live in a **private ops repo** and on the server, never here (rule 44).
 
 **Dev.** `docker-compose.yml` (profiles `dev`/`ci` only) runs Postgres, Redis, Stalwart and Mailpit. Infra containers bind `DEV_BIND_ADDRESS` (default `127.0.0.1`; a maintainer may set `0.0.0.0` in their local `.env` for LAN testing). App dev servers listen on `DEV_HOST` (default `0.0.0.0`). Ports are the 43xxx scheme in CLAUDE.md: site 43100, console 43200, webmail 43300 (all on `localhost`; the webmail port is a dev forwarder into the same `apps/web`, routed by port, plus a `/webmail` fallback on 43200 in dev only), Stalwart HTTP 43080, mail ports 43025/43465/43587/43993/43190, Mailpit 43125/43026, Postgres 43432, Redis 43379. Stalwart and Mailpit sit on an internal network with no internet route (ADR-0011, `02-mail-infrastructure.md`).
+
+## Provisioning (implemented in Phase 1)
+
+Desired state lives in Postgres (`customer_domain`, `mailbox`, `mail_alias`); Stalwart is brought to it by jobs,
+never inline in a request (CLAUDE.md rule 26).
+
+```
+console mutation ──(same transaction)──► provisioning_job (queued)
+                                              │  claimNext: FOR UPDATE SKIP LOCKED; stale "running" (10 min) reclaimed
+worker (apps/worker/src/worker.ts) ───────────┘
+   └─ runNextJob ─► MailServer port ─► Stalwart adapter (packages/adapters/src/stalwart) ─► JMAP x:Domain / x:Account
+        success → subject status active + stalwart_id; failure → retry 10/20/40/80 s; 5th failure → failed +
+        audit platform.provisioning_failed
+scheduler ─► job:reconcile (hourly) ─► desired vs Stalwart ─► drift report + audit platform.reconciler_drift
+             (missing / unknown / quota mismatch). Never deletes.
+```
+
+- Job kinds: `domain.ensure`, `mailbox.ensure` (account + quota + aliases, including masked aliases). Every call
+  is idempotent (upsert by natural key), so retries and duplicate jobs are safe.
+- New mailboxes get a random, unusable argon2id password; mail access is via webmail sign-in and app passwords.
+- Platform domains (free tier, staff) are desired implicitly through their mailboxes; `RECONCILE_IGNORE_DOMAINS`
+  lists mail-server-only infrastructure domains (dev: `dev.test`).
+- Verified by `packages/adapters/src/stalwart/provisioning.int.test.ts` against the compose stack (CI integration job).
