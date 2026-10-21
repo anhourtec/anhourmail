@@ -246,6 +246,14 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
     (`~/security-audit-skill/anhourmail/run-<N>`); never probe deployed or production endpoints. The same two
     reviews also run before any commit (below).
 
+55. **Checkpoint continuously; never let the usage limit end a session mid-change.** Sessions can stop without
+    warning when the usage limit is reached, and the assistant can't see how close that is. So work in small,
+    finished slices and checkpoint after each one: tests green → `docs/internal/handoff.md` updated (what changed,
+    how it was verified, what's next, open items) → the pre-commit reviews (rule 54) → commit by topic. Never hold
+    more than one slice of uncommitted work. When a session feels long, or the maintainer says the limit is near,
+    stop starting new work: finish or revert the current slice, checkpoint it, then stop the stack (rule 51).
+    Pushing still needs the maintainer's go-ahead (rule 2).
+
 ## Project conventions
 
 - **Services hold the logic; route handlers only parse, call and map errors.** Services take the actor and check
@@ -267,3 +275,4 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 | 2026-10-21 | Nishchayjeet Singh (Nish) | Rule 53: brand assets single source, Anhourtec logo, no third-party logos; rule 44: production config only in the private ops repo |
 | 2026-10-21 | Nishchayjeet Singh (Nish) | Rule 54: /security-review + Cloudflare security-audit skill (quick, scoped) at the end of every session                            |
 | 2026-10-21 | Nishchayjeet Singh (Nish) | Rule 23: passwords stored only as salted argon2id hashes (console + mailbox)                                                       |
+| 2026-10-21 | Nishchayjeet Singh (Nish) | Rule 55: checkpoint after every slice (handoff + reviews + commit) so a usage-limit stop loses nothing                             |
