@@ -26,7 +26,7 @@
     "check:skeletons": "node scripts/check-skeletons.mjs",
     "check:logging": "node scripts/check-logging.mjs",
     "check:docs": "node scripts/check-docs.mjs",
-    "stack:up": "node scripts/check-ports.mjs && docker compose --profile dev up -d --wait",
+    "stack:up": "node scripts/check-ports.mjs && node -e \"require('node:fs').mkdirSync('infra/stalwart/.generated',{recursive:true})\" && docker compose --profile dev up -d --wait",
     "stack:down": "docker compose --profile dev down",
     "stack:verify": "tsx --env-file-if-exists=.env scripts/dev-verify.ts",
     "prepare": "husky",

@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
 import { pageSchema } from "fumadocs-core/source/schema";
 import { defineCollections, defineConfig, defineDocs } from "fumadocs-mdx/config";
 import lastModified from "fumadocs-mdx/plugins/last-modified";
@@ -26,6 +29,22 @@ export const blogPosts = defineCollections({
   }),
 });
 
+const run = promisify(execFile);
+
+/**
+ * "Last updated" from git history, when there is one. Image builds have neither git nor `.git`, so a missing
+ * history means no date, never a failed build.
+ */
+async function gitLastModified(filePath: string): Promise<Date | null> {
+  try {
+    const { stdout } = await run("git", ["log", "-1", "--format=%cI", "--", filePath], { timeout: 5000 });
+    const date = new Date(stdout.trim());
+    return stdout.trim() && !Number.isNaN(date.getTime()) ? date : null;
+  } catch {
+    return null;
+  }
+}
+
 export default defineConfig({
-  plugins: [lastModified()],
+  plugins: [lastModified({ versionControl: gitLastModified })],
 });

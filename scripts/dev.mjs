@@ -7,7 +7,7 @@
  * `--no-stack` skips starting the containers (CI starts its own `ci` profile first).
  */
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 
 if (existsSync(".env")) process.loadEnvFile(".env");
 else {
@@ -16,6 +16,8 @@ else {
 }
 
 const run = (cmd, args) => execFileSync(cmd, args, { stdio: "inherit" });
+// Bind-mounted into Stalwart: created here so it's ours, not root's (the seed writes the WebUI bundle into it).
+mkdirSync("infra/stalwart/.generated", { recursive: true });
 if (!process.argv.includes("--no-stack")) run("docker", ["compose", "--profile", "dev", "up", "-d", "--wait"]);
 run("node", ["scripts/sync-brand.mjs"]);
 

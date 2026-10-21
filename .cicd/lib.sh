@@ -16,6 +16,8 @@ ensure_env() {
 # Starts the compose services used by integration-style jobs and waits for health.
 stack_up() {
   ensure_env
+  # Bind-mounted into Stalwart: if Docker creates it, it's root-owned and the seed can't write the WebUI bundle.
+  mkdir -p infra/stalwart/.generated
   step "ports"
   npm run --silent ports:check
   step "compose up (ci profile)"
