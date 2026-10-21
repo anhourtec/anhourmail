@@ -4,6 +4,7 @@
     "index",
     "clients",
     "custom-domain",
+    "mailboxes",
     "aliases",
     "folders-and-signatures",
     "sending-limits",
