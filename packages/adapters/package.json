@@ -1,0 +1,35 @@
+{
+  "name": "@anhourmail/adapters",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    "./memory": "./src/memory/index.ts",
+    "./postgres": "./src/db-postgres/index.ts",
+    "./postgres/schema": "./src/db-postgres/schema.ts",
+    "./contract": "./src/contract/index.ts",
+    "./auth": "./src/auth/index.ts",
+    "./mail": "./src/mail/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx --env-file-if-exists=../../.env src/db-postgres/migrate.ts"
+  },
+  "dependencies": {
+    "@anhourmail/core": "0.0.0",
+    "drizzle-orm": "0.45.4",
+    "pg": "8.23.1",
+    "better-auth": "1.7.12",
+    "@anhourmail/shared": "0.0.0",
+    "@node-rs/argon2": "2.2.2",
+    "nodemailer": "10.1.7"
+  },
+  "devDependencies": {
+    "@anhourmail/config": "0.0.0",
+    "@types/pg": "8.23.1",
+    "drizzle-kit": "0.31.11",
+    "@types/nodemailer": "8.0.2"
+  }
+}

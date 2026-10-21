@@ -1,0 +1,4 @@
+{
+  "extends": "@anhourmail/config/tsconfig.base.json",
+  "include": ["src/**/*.ts", "drizzle.config.ts"]
+}

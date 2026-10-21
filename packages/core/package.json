@@ -1,0 +1,25 @@
+{
+  "name": "@anhourmail/core",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./audit": "./src/audit/index.ts",
+    "./waitlist": "./src/waitlist/index.ts",
+    "./account": "./src/account/index.ts",
+    "./security": "./src/security/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@anhourmail/shared": "0.0.0",
+    "@anhourmail/server": "0.0.0"
+  },
+  "devDependencies": {
+    "@anhourmail/config": "0.0.0"
+  }
+}

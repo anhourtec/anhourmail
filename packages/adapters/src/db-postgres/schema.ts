@@ -1,0 +1,260 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+/**
+ * Control-plane schema (Postgres). Never mail content (CLAUDE.md rule 24). Only this adapter knows table
+ * shapes; services see domain types through repository ports (ADR-0008). Entities: docs/internal/04-data-model.md.
+ * Every migration is logged in docs/internal/migration.md (rule 15).
+ */
+import {
+  bigint,
+  boolean,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
+
+const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
+const updatedAt = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
+
+// --- console identity (better-auth core tables; mailbox identity lives in Stalwart) ----------------------
+
+export const authUser = pgTable("auth_user", {
+  id: text("id").primaryKey(),
+  /** Display name (shown in the console and as the default sender name). */
+  name: text("name").notNull(),
+  firstName: text("first_name").notNull().default(""),
+  lastName: text("last_name"),
+  email: text("email").notNull().unique(),
+  emailVerified: boolean("email_verified").notNull().default(false),
+  image: text("image"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const authSession = pgTable(
+  "auth_session",
+  {
+    id: text("id").primaryKey(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    token: text("token").notNull().unique(),
+    ipAddress: text("ip_address"),
+    userAgent: text("user_agent"),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("auth_session_user_idx").on(t.userId)],
+);
+
+export const authAccount = pgTable(
+  "auth_account",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id").notNull(),
+    providerId: text("provider_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    idToken: text("id_token"),
+    accessTokenExpiresAt: timestamp("access_token_expires_at", { withTimezone: true }),
+    refreshTokenExpiresAt: timestamp("refresh_token_expires_at", { withTimezone: true }),
+    scope: text("scope"),
+    password: text("password"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("auth_account_user_idx").on(t.userId)],
+);
+
+export const authVerification = pgTable("auth_verification", {
+  id: text("id").primaryKey(),
+  identifier: text("identifier").notNull(),
+  value: text("value").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+// --- roles, accounts, people ------------------------------------------------------------------------------
+
+/** Staff roles (packages/shared/src/rbac PLATFORM_ROLES). */
+export const platformRoleAssignment = pgTable(
+  "platform_role_assignment",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    role: text("role").notNull(),
+    grantedBy: text("granted_by"),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.role] })],
+);
+
+/** Per-person state that is not a role: free / paid / invited / waitlisted / suspended (rbac USER_STATES). */
+export const userProfile = pgTable("user_profile", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => authUser.id, { onDelete: "cascade" }),
+  state: text("state").notNull().default("free"),
+  suspended: boolean("suspended").notNull().default(false),
+  trustTier: text("trust_tier").notNull().default("new"),
+  updatedAt: updatedAt(),
+});
+
+/** A customer account (a person, a family or a small group). */
+export const customerAccount = pgTable("customer_account", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  plan: text("plan").notNull().default("free"),
+  status: text("status").notNull().default("active"),
+  createdAt: createdAt(),
+});
+
+export const accountMembership = pgTable(
+  "account_membership",
+  {
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    role: text("role").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.accountId, t.userId] }), index("account_membership_user_idx").on(t.userId)],
+);
+
+export const invite = pgTable(
+  "invite",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    email: text("email").notNull(),
+    accountId: uuid("account_id").references(() => customerAccount.id, { onDelete: "cascade" }),
+    role: text("role"),
+    /** sha256 of the invite token; the token itself is only in the invite link. */
+    tokenHash: text("token_hash").notNull().unique(),
+    status: text("status").notNull().default("pending"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdBy: text("created_by"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("invite_email_idx").on(t.email)],
+);
+
+export const waitlistEntry = pgTable(
+  "waitlist_entry",
+  {
+    id: uuid("id").primaryKey(),
+    email: text("email").notNull(),
+    emailHash: text("email_hash").notNull(),
+    community: text("community"),
+    ref: text("ref"),
+    utm: jsonb("utm"),
+    status: text("status").notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("waitlist_entry_email_hash_idx").on(t.emailHash),
+    index("waitlist_entry_created_idx").on(t.createdAt),
+  ],
+);
+
+// --- mail configuration (desired state; the worker applies it to Stalwart) --------------------------------
+
+export const customerDomain = pgTable(
+  "customer_domain",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    name: text("name").notNull().unique(),
+    status: text("status").notNull().default("pending_dns"),
+    verifyToken: text("verify_token").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("customer_domain_account_idx").on(t.accountId)],
+);
+
+export const mailbox = pgTable(
+  "mailbox",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    userId: text("user_id").references(() => authUser.id, { onDelete: "set null" }),
+    address: text("address").notNull().unique(),
+    stalwartId: text("stalwart_id"),
+    status: text("status").notNull().default("active"),
+    quotaBytes: bigint("quota_bytes", { mode: "number" }).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("mailbox_account_idx").on(t.accountId)],
+);
+
+export const mailAlias = pgTable(
+  "mail_alias",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    mailboxId: uuid("mailbox_id")
+      .notNull()
+      .references(() => mailbox.id, { onDelete: "cascade" }),
+    address: text("address").notNull().unique(),
+    /** `alias` (chosen) or `masked` (random, per-site); both are Stalwart account aliases (ADR-0009). */
+    kind: text("kind").notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    description: text("description"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("mail_alias_mailbox_idx").on(t.mailboxId)],
+);
+
+// --- audit (append-only, hash-chained per scope; ADR-0010) -------------------------------------------------
+
+export const auditLog = pgTable(
+  "audit_log",
+  {
+    id: uuid("id").primaryKey(),
+    scope: text("scope").notNull(),
+    seq: integer("seq").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull(),
+    action: text("action").notNull(),
+    actorType: text("actor_type").notNull(),
+    actorUserId: text("actor_user_id"),
+    actorEmail: text("actor_email"),
+    actorRole: text("actor_role"),
+    actorAccountId: text("actor_account_id"),
+    onBehalfOf: jsonb("on_behalf_of"),
+    targetType: text("target_type").notNull(),
+    targetId: text("target_id"),
+    targetLabel: text("target_label"),
+    result: text("result").notNull(),
+    errorCode: text("error_code"),
+    requestId: text("request_id"),
+    ip: text("ip"),
+    userAgent: text("user_agent"),
+    meta: jsonb("meta").notNull(),
+    prevHash: text("prev_hash").notNull(),
+    hash: text("hash").notNull(),
+  },
+  (t) => [
+    uniqueIndex("audit_log_scope_seq_idx").on(t.scope, t.seq),
+    index("audit_log_scope_at_idx").on(t.scope, t.at),
+    index("audit_log_actor_idx").on(t.actorUserId),
+  ],
+);
