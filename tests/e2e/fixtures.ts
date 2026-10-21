@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { readFileSync } from "node:fs";
 
-import { expect, type Page, test as base } from "@playwright/test";
+import { type APIRequestContext, expect, type Page, test as base } from "@playwright/test";
 
 export type E2eUsers = {
   run: string;
@@ -40,3 +40,27 @@ export async function signIn(page: Page, email: string, password: string): Promi
 }
 
 export { expect };
+
+const mailpit = `http://localhost:${process.env.MAILPIT_UI_PORT ?? "43026"}`;
+
+/** Waits for a message to `to` in Mailpit (dev mail sink) and returns the first URL matching `pattern`. */
+export async function linkFromMail(request: APIRequestContext, to: string, pattern: RegExp): Promise<string> {
+  let link: string | undefined;
+  await expect
+    .poll(
+      async () => {
+        const search = (await (
+          await request.get(`${mailpit}/api/v1/search?query=${encodeURIComponent(`to:${to}`)}`)
+        ).json()) as { messages?: { ID: string }[] };
+        for (const m of search.messages ?? []) {
+          const msg = (await (await request.get(`${mailpit}/api/v1/message/${m.ID}`)).json()) as { Text: string };
+          link = pattern.exec(msg.Text)?.[0];
+          if (link) return true;
+        }
+        return false;
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+  return link ?? "";
+}

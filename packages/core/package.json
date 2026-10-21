@@ -11,7 +11,8 @@
     "./waitlist": "./src/waitlist/index.ts",
     "./account": "./src/account/index.ts",
     "./security": "./src/security/index.ts",
-    "./provisioning": "./src/provisioning/index.ts"
+    "./provisioning": "./src/provisioning/index.ts",
+    "./invite": "./src/invite/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

@@ -40,7 +40,7 @@ type Persona = {
 const STATUS: Record<string, number> = { unauthorized: 401, forbidden: 403, not_found: 404 };
 
 function expectedStatus(route: RouteSpec, p: Persona, accountId: string): number {
-  const okStatus = route.method === "POST" ? 202 : 200;
+  const okStatus = route.probeStatus ?? (route.method === "POST" ? 202 : 200);
   if (route.guard === "public") return okStatus;
   if (route.guard === "session") return p.actor.kind === "user" ? 200 : 401;
   if (route.guard === "infra") return 200;
@@ -139,7 +139,10 @@ try {
   for (const route of ROUTES) {
     if (route.guard === "infra") continue;
     for (const p of personas) {
-      const path = route.path.replace(`:${route.accountParam ?? "_"}`, accountA.id);
+      // The account parameter targets account A; any other parameter gets a random id (probe → probeStatus).
+      const path = route.path
+        .replace(`:${route.accountParam ?? "_"}`, accountA.id)
+        .replace(/:[A-Za-z]+/g, () => randomUUID());
       const requestId = `${run}-${randomBytes(4).toString("hex")}`;
       const headers: Record<string, string> = { "x-request-id": requestId, origin: WEB };
       if (p.cookie) headers.cookie = p.cookie;

@@ -16,7 +16,8 @@ const MIN_PASSWORD = 12;
  * sync until edited; clearing it goes back to automatic). Posts to the auth endpoint; the SDK stays server-side
  * (ADR-0008) and the server re-validates and applies the same display-name default.
  */
-export function SignUpForm() {
+/** `invite`: a valid invite — the email is fixed to the invited address and the token is sent with the sign-up. */
+export function SignUpForm({ invite }: { invite?: { token: string; email: string } }) {
   const router = useRouter();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -30,7 +31,7 @@ export function SignUpForm() {
 
   async function submit(form: FormData) {
     const emailValue = form.get("email");
-    const email = typeof emailValue === "string" ? emailValue.trim() : "";
+    const email = invite ? invite.email : typeof emailValue === "string" ? emailValue.trim() : "";
     const passwordValue = form.get("password");
     const password = typeof passwordValue === "string" ? passwordValue : "";
     if (firstName.trim() === "") {
@@ -53,6 +54,7 @@ export function SignUpForm() {
           name: shownDisplay.trim(),
           email,
           password,
+          ...(invite ? { inviteToken: invite.token } : {}),
         }),
       });
       if (res.ok) {
@@ -61,6 +63,7 @@ export function SignUpForm() {
         return;
       }
       if (res.status === 429) setError("Too many attempts. Wait a minute and try again.");
+      else if (res.status === 403) setError("This invite is no longer valid. Ask for a new one.");
       else if (res.status === 422 || res.status === 400) {
         setError("We couldn't create that account. Check your details, or sign in if you already have one.");
       } else setError("Something went wrong. Try again in a moment.");
@@ -136,13 +139,15 @@ export function SignUpForm() {
       </div>
       <label className="flex flex-col gap-1.5">
         <span className="am-h4">Email</span>
+        {invite && <span className="am-micro">Your invite is for this address.</span>}
         <input
           name="email"
           type="email"
           autoComplete="email"
           placeholder="you@example.com"
           required
-          className={inputClass}
+          {...(invite ? { value: invite.email, readOnly: true, "aria-readonly": true } : {})}
+          className={`${inputClass} read-only:bg-muted read-only:text-muted-foreground`}
         />
       </label>
       <div className="flex flex-col gap-1.5">

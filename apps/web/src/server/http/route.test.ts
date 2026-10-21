@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import type * as NextServerModule from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MemoryUnitOfWork } from "@anhourmail/adapters/memory";
@@ -12,9 +13,19 @@ import { resetEnvForTests } from "../env";
 import { logPath, ok, readJson, route } from "./route";
 
 vi.mock("../auth/actor", () => ({ getActor: async () => ANONYMOUS }));
+// `after()` needs a Next request scope; outside one, collect the deferred work so tests can await it.
+type NextServer = typeof NextServerModule;
+const deferred: Promise<unknown>[] = [];
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<NextServer>()),
+  after: (task: () => Promise<unknown>) => {
+    deferred.push(task());
+  },
+}));
 
 const params = { params: Promise.resolve({}) };
 let uow: MemoryUnitOfWork;
+let mailer: ReturnType<typeof memoryMailer>;
 
 beforeEach(() => {
   vi.stubEnv("APP_URL", "http://localhost:43200");
@@ -27,7 +38,8 @@ beforeEach(() => {
   vi.stubEnv("MAIL_FROM", "AnhourMail <no-reply@example.test>");
   resetEnvForTests();
   uow = new MemoryUnitOfWork();
-  setContainerForTests({ deps: { uow, clock: systemClock }, counter: memoryCounter(), mailer: memoryMailer() });
+  mailer = memoryMailer();
+  setContainerForTests({ deps: { uow, clock: systemClock }, counter: memoryCounter(), mailer });
   setLogSinkForTests(() => undefined);
 });
 afterEach(() => {
@@ -138,11 +150,31 @@ describe("POST /api/public/waitlist", () => {
     );
     expect(first.status).toBe(202);
     expect(await first.json()).toEqual({ data: { status: "accepted" } });
+    // The confirmation email is sent after the response (no timing difference between new and known addresses).
+    await Promise.all(deferred);
+    expect(mailer.sent.map((m) => m.to)).toEqual(["route@example.com"]);
     const again = await POST(post("http://localhost:43200/api/public/waitlist", body), params);
     expect(again.status).toBe(202);
     expect(uow.state.waitlist).toHaveLength(1);
     expect(uow.state.audit.map((e) => e.action)).toEqual(["waitlist.joined", "waitlist.joined"]);
     const invalid = await POST(post("http://localhost:43200/api/public/waitlist", { email: "x" }), params);
     expect(invalid.status).toBe(400);
+  });
+
+  it("stops confirmation emails to an address over its daily cap, with the same 202", async () => {
+    const { POST } = await import("../../app/api/public/waitlist/route");
+    // The per-address email tier is exhausted; the per-IP form tier is not.
+    const counter = async (key: string) => (key.includes(":waitlistMail:") ? 99 : 1);
+    setContainerForTests({ deps: { uow, clock: systemClock }, counter, mailer });
+    const res = await POST(
+      post("http://localhost:43200/api/public/waitlist", {
+        email: "capped@example.com",
+        startedAt: Date.now() - 10_000,
+      }),
+      params,
+    );
+    expect(res.status).toBe(202);
+    await Promise.all(deferred);
+    expect(mailer.sent).toHaveLength(0);
   });
 });

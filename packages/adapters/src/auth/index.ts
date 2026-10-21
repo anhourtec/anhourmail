@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * Console identity adapter (better-auth). Only this folder imports the SDK (ADR-0008). Mailbox identity is
- * Stalwart's; this is the AnhourMail console login. Self-service sign-up is controlled by `signUp` (SIGNUP_MODE):
+ * Stalwart's; this is the AnhourMail console login. Sign-up is controlled by `signUp` (SIGNUP_MODE: open | invite |
+ * closed; in `invite` mode a valid invite for exactly that email is required, checked before the user is created):
  * open while the app is reachable only from allow-listed IPs (docs/internal/08-operations.md "Access control"),
  * closed when invites take over.
  */
@@ -23,9 +24,11 @@ export type AuthOptions = {
   trustedOrigins: string[];
   secureCookies: boolean;
   /** Allow self-service sign-up (POST /api/auth/sign-up/email). */
-  signUp: boolean;
+  signUp: "open" | "invite" | "closed";
+  /** True when `token` is a valid invite for `email` (sign-up gate in invite mode). */
+  inviteMatches?: (token: unknown, email: string) => Promise<boolean>;
   /** Runs after a new console user is stored (personal account provisioning). Errors are logged by the caller. */
-  onUserCreated?: (user: { id: string; email: string; name: string }) => Promise<void>;
+  onUserCreated?: (user: { id: string; email: string; name: string; inviteToken: unknown }) => Promise<void>;
   /** Sends the reset link. Must not reveal whether the address has an account (the endpoint answers the same). */
   sendPasswordReset: (input: { email: string; name: string; url: string }) => Promise<void>;
   /** After a successful reset (audit, notifications). */
@@ -43,7 +46,7 @@ export function createAuth(opts: AuthOptions) {
     }),
     emailAndPassword: {
       enabled: true,
-      disableSignUp: !opts.signUp,
+      disableSignUp: opts.signUp === "closed",
       minPasswordLength: 12,
       // Salted argon2id (OWASP baseline) instead of the library default (docs/internal/07-security.md).
       password: { hash: hashPassword, verify: verifyPassword },
@@ -67,13 +70,23 @@ export function createAuth(opts: AuthOptions) {
     databaseHooks: {
       user: {
         create: {
-          before: async (user) => {
+          before: async (user, ctx) => {
+            if (opts.signUp === "invite") {
+              const token = inviteTokenFrom(ctx);
+              const ok = token !== undefined && (await opts.inviteMatches?.(token, user.email)) === true;
+              if (!ok) throw new APIError("FORBIDDEN", { message: "A valid invite for this email is required." });
+            }
             const names = normaliseNames(user);
             if (!names) throw new APIError("BAD_REQUEST", { message: "First name is required." });
             return { data: { ...user, ...names } };
           },
-          after: async (user) => {
-            await opts.onUserCreated?.({ id: user.id, email: user.email, name: user.name });
+          after: async (user, ctx) => {
+            await opts.onUserCreated?.({
+              id: user.id,
+              email: user.email,
+              name: user.name,
+              inviteToken: inviteTokenFrom(ctx),
+            });
           },
         },
         // Profile edits get the same trimming and length caps as sign-up (a blank first name is refused).
@@ -111,6 +124,15 @@ export function createAuth(opts: AuthOptions) {
 }
 
 export type Auth = ReturnType<typeof createAuth>;
+
+/** The invite token a sign-up request carries in its JSON body (`inviteToken`), if any. */
+function inviteTokenFrom(ctx: unknown): unknown {
+  if (typeof ctx !== "object" || ctx === null || !("body" in ctx)) return undefined;
+  const body = (ctx as { body?: unknown }).body;
+  return typeof body === "object" && body !== null && "inviteToken" in body
+    ? (body as { inviteToken?: unknown }).inviteToken
+    : undefined;
+}
 
 const clean = (v: unknown, max: number): string =>
   typeof v === "string" ? v.trim().replace(/\s+/g, " ").slice(0, max) : "";

@@ -14,8 +14,14 @@ export async function getActor(headers: Headers): Promise<Actor> {
   if (!user) return ANONYMOUS;
   const ctx = requestContext();
   if (ctx) ctx.userId = user.id;
-  const [platformRoles, memberships, suspended] = await container().deps.uow.run((r) =>
-    Promise.all([r.access.platformRoles(user.id), r.access.memberships(user.id), r.access.isSuspended(user.id)]),
+  // Sequential: a transaction holds one database connection, which runs one query at a time.
+  const [platformRoles, memberships, suspended] = await container().deps.uow.run(
+    async (r) =>
+      [
+        await r.access.platformRoles(user.id),
+        await r.access.memberships(user.id),
+        await r.access.isSuspended(user.id),
+      ] as const,
   );
   return { kind: "user", userId: user.id, email: user.email, platformRoles, memberships, suspended };
 }

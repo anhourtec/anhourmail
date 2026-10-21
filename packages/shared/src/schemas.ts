@@ -5,17 +5,7 @@
  */
 import { z } from "zod";
 
-/** Where a waitlist signup or invite came from. Free text is capped; known values get grouped in reports. */
-export const KNOWN_SOURCES = [
-  "reddit",
-  "hacker-news",
-  "lemmy",
-  "mastodon",
-  "friend",
-  "search",
-  "blog",
-  "other",
-] as const;
+export { KNOWN_SOURCES } from "./sources";
 
 const utm = z.string().trim().max(100).optional();
 

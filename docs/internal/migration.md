@@ -33,12 +33,13 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 ## Summary
 
-| #    | Migration                   | Commit      | Date       | Change                                                                                   | Rollback |
-| ---- | --------------------------- | ----------- | ---------- | ---------------------------------------------------------------------------------------- | -------- |
-| 0003 | `0003_provisioning_queue`   | uncommitted | 2026-10-21 | `provisioning_job` table; `customer_domain.stalwart_id/last_error`, `mailbox.last_error` | Safe     |
-| 0002 | `0002_user_first_last_name` | uncommitted | 2026-10-21 | `auth_user.first_name` (not null, default '') and `last_name`                            | Safe     |
-| 0001 | `0001_audit_append_only`    | uncommitted | 2026-10-21 | Trigger blocking UPDATE/DELETE/TRUNCATE on `audit_log`                                   | Caution  |
-| 0000 | `0000_init`                 | uncommitted | 2026-10-21 | Initial control-plane schema (14 tables)                                                 | Safe     |
+| #    | Migration                          | Commit      | Date       | Change                                                                                   | Rollback |
+| ---- | ---------------------------------- | ----------- | ---------- | ---------------------------------------------------------------------------------------- | -------- |
+| 0004 | `0004_waitlist_opt_in_and_invites` | uncommitted | 2026-10-21 | Waitlist double opt-in columns; invite source/waitlist link/acceptance                   | Safe     |
+| 0003 | `0003_provisioning_queue`          | uncommitted | 2026-10-21 | `provisioning_job` table; `customer_domain.stalwart_id/last_error`, `mailbox.last_error` | Safe     |
+| 0002 | `0002_user_first_last_name`        | uncommitted | 2026-10-21 | `auth_user.first_name` (not null, default '') and `last_name`                            | Safe     |
+| 0001 | `0001_audit_append_only`           | uncommitted | 2026-10-21 | Trigger blocking UPDATE/DELETE/TRUNCATE on `audit_log`                                   | Caution  |
+| 0000 | `0000_init`                        | uncommitted | 2026-10-21 | Initial control-plane schema (14 tables)                                                 | Safe     |
 
 ## Details
 
@@ -52,6 +53,15 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0004_waitlist_opt_in_and_invites · uncommitted · 2026-10-21 · Safe
+
+- Added: `waitlist_entry.confirm_token_hash` (unique index), `confirm_expires_at`, `confirm_sent_at`, `confirmed_at`;
+  `invite.source` (default `staff`), `invite.waitlist_entry_id`, `invite.accepted_user_id`, `invite.accepted_at`.
+- Changed: —
+- Removed: —
+- Data: none. Existing waitlist rows stay `pending` with no token (a re-join issues one).
+- Rollback: drop the columns and the index (outstanding confirmation and invite links stop working).
 
 ### 0003_provisioning_queue · uncommitted · 2026-10-21 · Safe
 

@@ -32,6 +32,8 @@ const entry = (email: string, createdAt = new Date()): WaitlistEntry => ({
   utm: { source: "test" },
   status: "pending",
   createdAt,
+  confirmSentAt: null,
+  confirmedAt: null,
 });
 
 const auditInput = (
@@ -85,7 +87,67 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
       try {
         const e = entry(`dup-${randomUUID()}@example.com`);
         await uow.run((r) => r.waitlist.insert(e));
-        await expect(uow.run((r) => r.waitlist.insert({ ...e, id: randomUUID() }))).rejects.toThrow();
+        // Duplicate email hash: refused without throwing (a concurrent join must not surface as a 500).
+        expect(await uow.run((r) => r.waitlist.insert({ ...e, id: randomUUID() }))).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("waitlist: double opt-in token lifecycle and invited state", async () => {
+      const { uow, cleanup } = await factory();
+      try {
+        const e = entry(`optin-${randomUUID()}@example.com`);
+        const hash = randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "");
+        const now = new Date();
+        await uow.run(async (r) => {
+          await r.waitlist.insert(e);
+          await r.waitlist.setConfirmation(e.id, {
+            tokenHash: hash,
+            expiresAt: new Date(now.getTime() + 60_000),
+            sentAt: now,
+          });
+        });
+        expect((await uow.run((r) => r.waitlist.findByConfirmToken(hash, now)))?.id).toBe(e.id);
+        expect(await uow.run((r) => r.waitlist.findByConfirmToken(hash, new Date(now.getTime() + 120_000)))).toBeNull();
+        expect((await uow.run((r) => r.waitlist.get(e.id)))?.confirmSentAt?.getTime()).toBe(now.getTime());
+        expect(await uow.run((r) => r.waitlist.markConfirmed(e.id, now))).toBe(true);
+        expect(await uow.run((r) => r.waitlist.markConfirmed(e.id, now))).toBe(false);
+        expect(await uow.run((r) => r.waitlist.findByConfirmToken(hash, now))).toBeNull();
+        expect(await uow.run((r) => r.waitlist.get(e.id))).toMatchObject({ status: "confirmed" });
+        expect(await uow.run((r) => r.waitlist.markInvited(e.id))).toBe(true);
+        expect((await uow.run((r) => r.waitlist.get(e.id)))?.status).toBe("invited");
+        // Only a confirmed entry can be claimed: a second (concurrent) invite loses.
+        expect(await uow.run((r) => r.waitlist.markInvited(e.id))).toBe(false);
+        expect(await uow.run((r) => r.waitlist.get(randomUUID()))).toBeNull();
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("invites: create, find valid, expiry, single use", async () => {
+      const { uow, cleanup, createUser } = await factory();
+      try {
+        const hash = `inv-${randomUUID()}`;
+        const now = new Date();
+        const email = `invited-${randomUUID()}@example.com`;
+        const { id } = await uow.run((r) =>
+          r.invites.create({
+            email,
+            tokenHash: hash,
+            expiresAt: new Date(now.getTime() + 60_000),
+            source: "waitlist",
+            createdBy: null,
+            waitlistEntryId: null,
+            accountId: null,
+            role: null,
+          }),
+        );
+        expect(await uow.run((r) => r.invites.findValid(hash, now))).toMatchObject({ id, email, source: "waitlist" });
+        expect(await uow.run((r) => r.invites.findValid(hash, new Date(now.getTime() + 120_000)))).toBeNull();
+        const userId = await createUser(`acc-${randomUUID()}@example.com`);
+        await uow.run((r) => r.invites.markAccepted(id, userId, now));
+        expect(await uow.run((r) => r.invites.findValid(hash, now))).toBeNull();
       } finally {
         await cleanup();
       }

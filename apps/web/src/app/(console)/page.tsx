@@ -11,11 +11,14 @@ import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 import { PageHeader } from "@anhourmail/ui/page-header";
 
 import { ConsoleShell, type ShellNavGroup } from "@/components/console-shell";
+import { InviteButton } from "@/components/invite-button";
 import { getActor } from "@/server/auth/actor";
 import { visibleNav } from "@/server/console-nav";
 import { container } from "@/server/container";
 
 export const metadata: Metadata = { title: "Console" };
+
+const WAITLIST_STATUS = { pending: "Unconfirmed", confirmed: "Confirmed", invited: "Invited" } as const;
 
 const dateFmt = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium", timeStyle: "short" });
 
@@ -87,6 +90,7 @@ export default async function ConsoleHome() {
   const deps = container().deps;
   const names = await deps.uow.run((r) => r.access.accountNames(actor.memberships.map((m) => m.accountId)));
   const platformNav = visibleNav(actor).filter((n) => n.scope === "platform");
+  const canInvite = can(actor, "waitlist.manage");
   const [waitlist, platformAudit] = await Promise.all([
     can(actor, "waitlist.read") ? listWaitlist(deps, actor, { limit: 5 }) : null,
     can(actor, "platform.audit.read") ? listPlatformAudit(deps, actor, { limit: 8 }) : null,
@@ -132,9 +136,21 @@ export default async function ConsoleHome() {
               ) : (
                 <ul className="divide-y rounded-xl border">
                   {waitlist.entries.map((w) => (
-                    <li key={w.id} className="flex items-center justify-between gap-4 px-4 py-3">
-                      <span className="am-code truncate">{w.email}</span>
-                      <span className="am-micro">{w.community ?? "—"}</span>
+                    <li key={w.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3">
+                      <span className="flex min-w-0 flex-col">
+                        <span className="am-code truncate">{w.email}</span>
+                        <span className="am-micro">{w.community ?? "—"}</span>
+                      </span>
+                      <span className="flex items-center gap-3">
+                        <span
+                          className={`am-status am-status--${
+                            w.status === "confirmed" ? "success" : w.status === "invited" ? "info" : "neutral"
+                          }`}
+                        >
+                          {WAITLIST_STATUS[w.status]}
+                        </span>
+                        {canInvite && w.status === "confirmed" && <InviteButton entryId={w.id} email={w.email} />}
+                      </span>
                     </li>
                   ))}
                 </ul>

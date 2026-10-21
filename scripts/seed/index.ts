@@ -20,7 +20,7 @@ import { hashPassword } from "@anhourmail/adapters/auth";
 import { createDb, type Db, PgUnitOfWork, schema } from "@anhourmail/adapters/postgres";
 import { type Deps, systemClock } from "@anhourmail/core";
 import type { AuditAction, AuditEntryInput } from "@anhourmail/core/audit";
-import { joinWaitlist, MIN_FILL_MS } from "@anhourmail/core/waitlist";
+import { confirmWaitlist, joinWaitlist, MIN_FILL_MS } from "@anhourmail/core/waitlist";
 import { JmapClient } from "@anhourmail/jmap-client";
 import { customerDomainRecords, PLANS } from "@anhourmail/shared";
 import { createAppPassword, type StalwartManagement, stalwart } from "@anhourmail/stalwart-client";
@@ -344,13 +344,18 @@ if (demo) {
     createdBy: "seed",
   });
 
-  // Waitlisted, through the real service (audited, deduplicated)
-  await joinWaitlist(
+  // Waitlisted and confirmed (double opt-in), through the real services (audited, deduplicated), so staff can try
+  // the Invite button. On re-runs the entry already exists and no new token is issued.
+  const seedReq = () => ({ requestId: `seed-${randomUUID().slice(0, 8)}`, ip: null, userAgent: "anhourmail-seed" });
+  const joined = await joinWaitlist(
     deps,
     { kind: "system", name: "seed" },
     { email: WAITLISTED.email, community: WAITLISTED.community, startedAt: Date.now() - MIN_FILL_MS - 1000 },
-    { requestId: `seed-${randomUUID().slice(0, 8)}`, ip: null, userAgent: "anhourmail-seed" },
+    seedReq(),
   );
+  if (joined.confirmation) {
+    await confirmWaitlist(deps, { kind: "system", name: "seed" }, joined.confirmation.token, seedReq());
+  }
 
   // Sample audit entries, only when the account is new (append-only: re-runs don't pile up)
   await deps.uow.run(async (r) => {
@@ -462,7 +467,7 @@ if (demo) {
     { label: "Supporter", detail: `\`supporter@${FREE_DOMAIN}\` (see the Customer: Supporter table)` },
     {
       label: "Waitlisted",
-      detail: `\`${WAITLISTED.email}\` — on the waitlist only, no login (visible to staff with waitlist access)`,
+      detail: `\`${WAITLISTED.email}\` — confirmed on the waitlist, no login yet; staff with waitlist access can invite it from the console`,
     },
     {
       label: "Invited, not accepted",

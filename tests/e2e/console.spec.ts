@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { e2eUsers, expect, signIn, test, urls } from "./fixtures";
+import { e2eUsers, expect, linkFromMail, signIn, test, urls } from "./fixtures";
 
 test("signed-out visitors land on sign-in; a wrong password shows an error", async ({ page }) => {
   await page.goto(urls.app);
@@ -100,4 +100,47 @@ test("the password eye toggles visibility", async ({ page }) => {
   await expect(field).toHaveAttribute("type", "text");
   await page.getByRole("button", { name: "Hide password" }).click();
   await expect(field).toHaveAttribute("type", "password");
+});
+
+test("waitlist → confirm → staff invite → sign-up from the invite with the email locked", async ({
+  page,
+  request,
+  browser,
+}, testInfo) => {
+  const u = e2eUsers();
+  const who = `${u.run}-${testInfo.project.name}-invitee`;
+  const email = `${who}@waitlist.test`;
+
+  // 1. Join from the site and confirm through the emailed link.
+  const joined = await request.post(`${urls.site}/api/public/waitlist`, {
+    data: { email, startedAt: Date.now() - 10_000 },
+    headers: { origin: urls.site },
+  });
+  expect(joined.status()).toBe(202);
+  const confirm = await linkFromMail(request, email, /https?:\/\/\S+\/waitlist\/confirm\?token=[^\s"<]+/);
+  await page.goto(confirm);
+  await expect(page.getByText("You’re on the list.")).toBeVisible();
+
+  // 2. A Global Administrator invites the confirmed sign-up from the console.
+  await signIn(page, u.users.globalAdmin, u.password);
+  await page.getByRole("button", { name: `Invite ${email}` }).click();
+  await expect(page.getByRole("button", { name: `Invite ${email}` })).toHaveCount(0);
+
+  // 3. The invitee signs up from the invite link (fresh browser context): the email is fixed.
+  const inviteUrl = await linkFromMail(request, email, /https?:\/\/\S+\/sign-up\?invite=[^\s"<]+/);
+  const invitee = await browser.newPage();
+  await invitee.goto(inviteUrl);
+  await expect(invitee.getByRole("heading", { name: "You're invited" })).toBeVisible();
+  await expect(invitee.getByLabel("Email")).toHaveValue(email);
+  await expect(invitee.getByLabel("Email")).toHaveAttribute("readonly", "");
+  await invitee.getByLabel("First name").fill(who);
+  await invitee.getByLabel("Password", { exact: true }).fill(`${u.password}-invitee`);
+  await invitee.getByRole("button", { name: "Create account" }).click();
+  await expect(invitee.getByRole("heading", { name: "Overview" })).toBeVisible();
+
+  // 4. The invite is single-use.
+  const again = await browser.newPage();
+  await again.goto(inviteUrl);
+  await expect(again.getByRole("heading", { name: "Create your account" })).toBeVisible();
+  await expect(again.getByLabel("Email")).not.toHaveAttribute("readonly", "");
 });

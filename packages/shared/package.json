@@ -13,7 +13,8 @@
     "./dns": "./src/dns.ts",
     "./schemas": "./src/schemas.ts",
     "./credits": "./src/credits.generated.ts",
-    "./rbac": "./src/rbac/index.ts"
+    "./rbac": "./src/rbac/index.ts",
+    "./sources": "./src/sources.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

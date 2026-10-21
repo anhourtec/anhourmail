@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 
 import type { Utm } from "@anhourmail/shared/schemas";
 
-export type WaitlistStatus = "pending" | "invited";
+export type WaitlistStatus = "pending" | "confirmed" | "invited";
 
 export type WaitlistEntry = {
   id: string;
@@ -15,7 +15,14 @@ export type WaitlistEntry = {
   utm: Utm | null;
   status: WaitlistStatus;
   createdAt: Date;
+  /** Double opt-in bookkeeping (the token itself is never stored, only its hash in the adapter). */
+  confirmSentAt: Date | null;
+  confirmedAt: Date | null;
 };
+
+/** Confirmation links work for 48 hours; a repeat sign-up re-sends at most every 10 minutes. */
+export const CONFIRM_TTL_MS = 48 * 60 * 60 * 1000;
+export const CONFIRM_RESEND_MS = 10 * 60 * 1000;
 
 /** Forms filled faster than this are treated as bots (BookYourPTO pattern, enforced server-side). */
 export const MIN_FILL_MS = 3_000;

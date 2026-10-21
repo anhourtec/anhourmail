@@ -57,6 +57,7 @@ if (mode === "create") {
   await db.delete(schema.customerAccount).where(like(schema.customerAccount.name, `${run}%`));
   // The site spec joins the waitlist with e2e-<timestamp>@waitlist.test addresses.
   await db.delete(schema.waitlistEntry).where(like(schema.waitlistEntry.email, "e2e-%@waitlist.test"));
+  await db.delete(schema.invite).where(like(schema.invite.email, "e2e-%@waitlist.test"));
   rmSync(FILE, { force: true });
 } else {
   throw new Error("usage: e2e-fixtures.ts create|delete");

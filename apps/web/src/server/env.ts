@@ -12,7 +12,7 @@ const schema = z.object({
   WEB_DEV_PORT: z.coerce.number().int().default(43200),
   BETTER_AUTH_SECRET: z.string().min(32),
   // Closed unless explicitly opened (the maintainer opens it while the app is behind the IP allow-list).
-  SIGNUP_MODE: z.enum(["open", "closed"]).default("closed"),
+  SIGNUP_MODE: z.enum(["open", "invite", "closed"]).default("closed"),
   MAIL_TRANSPORT_URL: z.string().min(1),
   MAIL_FROM: z.string().min(3),
   TRUST_PROXY: z.enum(["true", "false"]).default("false"),

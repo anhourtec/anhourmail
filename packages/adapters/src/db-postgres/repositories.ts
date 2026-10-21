@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { randomUUID } from "node:crypto";
 
-import { and, desc, eq, gte, inArray, lt, lte, type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, lt, lte, type SQL, sql } from "drizzle-orm";
 
 import type { AccessRepository, Repositories, UnitOfWork } from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
+import type { Invite, InviteRepository, InviteSource } from "@anhourmail/core/invite";
 import type {
   DomainState,
   JobKind,
@@ -31,6 +32,7 @@ import {
   auditLog,
   customerAccount,
   customerDomain,
+  invite,
   mailAlias,
   mailbox,
   platformRoleAssignment,
@@ -44,13 +46,74 @@ import {
 class PgWaitlistRepository implements WaitlistRepository {
   constructor(private readonly x: Executor) {}
 
+  async get(id: string): Promise<WaitlistEntry | null> {
+    const [row] = await this.x.select().from(waitlistEntry).where(eq(waitlistEntry.id, id)).limit(1);
+    return row ? toWaitlist(row) : null;
+  }
+
+  async findByConfirmToken(tokenHash: string, now: Date): Promise<WaitlistEntry | null> {
+    const [row] = await this.x
+      .select()
+      .from(waitlistEntry)
+      .where(
+        and(
+          eq(waitlistEntry.confirmTokenHash, tokenHash),
+          eq(waitlistEntry.status, "pending"),
+          gt(waitlistEntry.confirmExpiresAt, now),
+        ),
+      )
+      .limit(1);
+    return row ? toWaitlist(row) : null;
+  }
+
+  async setConfirmation(id: string, input: { tokenHash: string; expiresAt: Date; sentAt: Date }): Promise<void> {
+    await this.x
+      .update(waitlistEntry)
+      .set({ confirmTokenHash: input.tokenHash, confirmExpiresAt: input.expiresAt, confirmSentAt: input.sentAt })
+      .where(eq(waitlistEntry.id, id));
+  }
+
+  async markConfirmed(id: string, at: Date): Promise<boolean> {
+    const rows = await this.x
+      .update(waitlistEntry)
+      .set({ status: "confirmed", confirmedAt: at, confirmTokenHash: null, confirmExpiresAt: null })
+      .where(and(eq(waitlistEntry.id, id), eq(waitlistEntry.status, "pending")))
+      .returning({ id: waitlistEntry.id });
+    return rows.length > 0;
+  }
+
+  async markInvited(id: string): Promise<boolean> {
+    const rows = await this.x
+      .update(waitlistEntry)
+      .set({ status: "invited" })
+      .where(and(eq(waitlistEntry.id, id), eq(waitlistEntry.status, "confirmed")))
+      .returning({ id: waitlistEntry.id });
+    return rows.length > 0;
+  }
+
   async findByEmailHash(emailHash: string): Promise<WaitlistEntry | null> {
     const [row] = await this.x.select().from(waitlistEntry).where(eq(waitlistEntry.emailHash, emailHash)).limit(1);
     return row ? toWaitlist(row) : null;
   }
 
-  async insert(e: WaitlistEntry): Promise<void> {
-    await this.x.insert(waitlistEntry).values({ ...e, utm: e.utm });
+  async insert(e: WaitlistEntry): Promise<boolean> {
+    const rows = await this.x
+      .insert(waitlistEntry)
+      .values({
+        id: e.id,
+        email: e.email,
+        emailHash: e.emailHash,
+        community: e.community,
+        ref: e.ref,
+        utm: e.utm,
+        status: e.status,
+        createdAt: e.createdAt,
+        confirmSentAt: e.confirmSentAt,
+        confirmedAt: e.confirmedAt,
+      })
+      .onConflictDoNothing({ target: waitlistEntry.emailHash })
+      .returning({ id: waitlistEntry.id });
+    return rows.length > 0;
   }
 
   async list(opts: { limit: number; before?: Date }): Promise<WaitlistEntry[]> {
@@ -77,8 +140,10 @@ function toWaitlist(r: typeof waitlistEntry.$inferSelect): WaitlistEntry {
     community: r.community,
     ref: r.ref,
     utm: (r.utm as Utm | null) ?? null,
-    status: r.status === "invited" ? "invited" : "pending",
+    status: r.status === "invited" || r.status === "confirmed" ? r.status : "pending",
     createdAt: r.createdAt,
+    confirmSentAt: r.confirmSentAt,
+    confirmedAt: r.confirmedAt,
   };
 }
 
@@ -404,6 +469,52 @@ class PgMailDirectoryRepository implements MailDirectoryRepository {
   }
 }
 
+class PgInviteRepository implements InviteRepository {
+  constructor(private readonly x: Executor) {}
+
+  async create(input: Parameters<InviteRepository["create"]>[0]): Promise<{ id: string }> {
+    const [row] = await this.x
+      .insert(invite)
+      .values({
+        email: input.email,
+        tokenHash: input.tokenHash,
+        expiresAt: input.expiresAt,
+        source: input.source,
+        createdBy: input.createdBy,
+        waitlistEntryId: input.waitlistEntryId,
+        accountId: input.accountId,
+        role: input.role,
+      })
+      .returning({ id: invite.id });
+    if (!row) throw new Error("invite not created");
+    return row;
+  }
+
+  async findValid(tokenHash: string, now: Date): Promise<Invite | null> {
+    const [r] = await this.x
+      .select()
+      .from(invite)
+      .where(and(eq(invite.tokenHash, tokenHash), eq(invite.status, "pending"), gt(invite.expiresAt, now)))
+      .limit(1);
+    if (!r) return null;
+    return {
+      id: r.id,
+      email: r.email,
+      accountId: r.accountId,
+      role: r.role !== null && isAccountRole(r.role) ? r.role : null,
+      source: (["waitlist", "staff", "referral"].includes(r.source) ? r.source : "staff") as InviteSource,
+      expiresAt: r.expiresAt,
+    };
+  }
+
+  async markAccepted(id: string, userId: string, at: Date): Promise<void> {
+    await this.x
+      .update(invite)
+      .set({ status: "accepted", acceptedUserId: userId, acceptedAt: at })
+      .where(and(eq(invite.id, id), eq(invite.status, "pending")));
+  }
+}
+
 const repositories = (x: Executor): Repositories => ({
   waitlist: new PgWaitlistRepository(x),
   audit: new PgAuditRepository(x),
@@ -411,6 +522,7 @@ const repositories = (x: Executor): Repositories => ({
   accounts: new PgAccountRepository(x),
   provisioning: new PgProvisioningRepository(x),
   directory: new PgMailDirectoryRepository(x),
+  invites: new PgInviteRepository(x),
 });
 
 /** One Postgres transaction per `run` (CLAUDE.md rule 46: the audit row commits with the change). */

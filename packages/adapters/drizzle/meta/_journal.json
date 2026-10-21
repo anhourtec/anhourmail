@@ -29,6 +29,13 @@
       "when": 1792593158208,
       "tag": "0003_provisioning_queue",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792597542938,
+      "tag": "0004_waitlist_opt_in_and_invites",
+      "breakpoints": true
     }
   ]
 }

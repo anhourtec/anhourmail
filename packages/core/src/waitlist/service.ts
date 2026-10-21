@@ -6,20 +6,41 @@ import { WaitlistSignupSchema } from "@anhourmail/shared/schemas";
 import { type Actor, authorize, can } from "../actor";
 import { maskEmail } from "../audit/record";
 import { clampLimit } from "../audit/service";
-import { ValidationError } from "../errors";
+import { InvalidTokenError, ValidationError } from "../errors";
 import { mutation } from "../mutation";
 import type { Deps, RequestMeta } from "../ports";
-import { hashEmail, looksAutomated, normaliseEmail, type WaitlistEntry } from "./entity";
+import { hashToken, isTokenShaped, newToken } from "../tokens";
+import {
+  CONFIRM_RESEND_MS,
+  CONFIRM_TTL_MS,
+  hashEmail,
+  looksAutomated,
+  normaliseEmail,
+  type WaitlistEntry,
+} from "./entity";
 
 /** The same answer whether the address is new, already listed, or dropped as a bot: no enumeration. */
 export const WAITLIST_ACCEPTED = { status: "accepted" as const };
 
-export async function joinWaitlist(deps: Deps, actor: Actor, input: unknown, req: RequestMeta) {
+/** A confirmation email to send after the transaction commits (the caller owns delivery). */
+export type ConfirmationToSend = { email: string; token: string };
+
+/**
+ * Join the waitlist (double opt-in). New addresses get a confirmation token; a repeat sign-up for a still-pending
+ * address re-sends at most every 10 minutes. The HTTP answer is always WAITLIST_ACCEPTED.
+ */
+export async function joinWaitlist(
+  deps: Deps,
+  actor: Actor,
+  input: unknown,
+  req: RequestMeta,
+): Promise<{ accepted: typeof WAITLIST_ACCEPTED; confirmation: ConfirmationToSend | null }> {
   const parsed = WaitlistSignupSchema.safeParse(input);
   if (!parsed.success) throw new ValidationError("Enter a valid email address.");
   const data = parsed.data;
   const email = normaliseEmail(data.email);
   const emailHash = hashEmail(email);
+  const none = { accepted: WAITLIST_ACCEPTED, confirmation: null };
 
   return mutation(
     deps,
@@ -27,17 +48,31 @@ export async function joinWaitlist(deps: Deps, actor: Actor, input: unknown, req
     req,
     { action: "waitlist.joined", permission: "waitlist.join", accountId: null, target: { type: "waitlist_entry" } },
     async (repos) => {
-      if (looksAutomated(data, deps.clock.now())) {
-        return { result: WAITLIST_ACCEPTED, denied: { code: "bot_check" }, meta: { emailHash } };
+      const now = deps.clock.now();
+      if (looksAutomated(data, now)) {
+        return { result: none, denied: { code: "bot_check" }, meta: { emailHash } };
       }
-      const existing = await repos.waitlist.findByEmailHash(emailHash);
-      if (existing) {
+      const issue = async (id: string) => {
+        const token = newToken();
+        await repos.waitlist.setConfirmation(id, {
+          tokenHash: hashToken(token),
+          expiresAt: new Date(now.getTime() + CONFIRM_TTL_MS),
+          sentAt: now,
+        });
+        return { accepted: WAITLIST_ACCEPTED, confirmation: { email, token } };
+      };
+      const known = async (existing: WaitlistEntry) => {
+        const resend =
+          existing.status === "pending" &&
+          (existing.confirmSentAt === null || now.getTime() - existing.confirmSentAt.getTime() >= CONFIRM_RESEND_MS);
         return {
-          result: WAITLIST_ACCEPTED,
+          result: resend ? await issue(existing.id) : none,
           target: { id: existing.id, label: maskEmail(email) },
-          meta: { duplicate: true },
+          meta: { duplicate: true, confirmationResent: resend },
         };
-      }
+      };
+      const existing = await repos.waitlist.findByEmailHash(emailHash);
+      if (existing) return known(existing);
       const entry: WaitlistEntry = {
         id: randomUUID(),
         email,
@@ -46,14 +81,37 @@ export async function joinWaitlist(deps: Deps, actor: Actor, input: unknown, req
         ref: data.ref ?? null,
         utm: data.utm ?? null,
         status: "pending",
-        createdAt: deps.clock.now(),
+        createdAt: now,
+        confirmSentAt: null,
+        confirmedAt: null,
       };
-      await repos.waitlist.insert(entry);
+      if (!(await repos.waitlist.insert(entry))) {
+        // A concurrent join for the same address committed first: answer exactly as for a known address.
+        const winner = await repos.waitlist.findByEmailHash(emailHash);
+        if (winner) return known(winner);
+      }
       return {
-        result: WAITLIST_ACCEPTED,
+        result: await issue(entry.id),
         target: { id: entry.id, label: maskEmail(email) },
         meta: { community: entry.community, ref: entry.ref, utmSource: entry.utm?.source ?? null },
       };
+    },
+  );
+}
+
+/** Confirms a waitlist address from the emailed link. Unknown, used and expired tokens get the same error. */
+export async function confirmWaitlist(deps: Deps, actor: Actor, token: unknown, req: RequestMeta) {
+  if (!isTokenShaped(token)) throw new InvalidTokenError();
+  return mutation(
+    deps,
+    actor,
+    req,
+    { action: "waitlist.confirmed", permission: "waitlist.join", accountId: null, target: { type: "waitlist_entry" } },
+    async (repos) => {
+      const now = deps.clock.now();
+      const entry = await repos.waitlist.findByConfirmToken(hashToken(token), now);
+      if (!entry || !(await repos.waitlist.markConfirmed(entry.id, now))) throw new InvalidTokenError();
+      return { result: { status: "confirmed" as const }, target: { id: entry.id, label: maskEmail(entry.email) } };
     },
   );
 }
@@ -71,7 +129,10 @@ export async function listWaitlist(
   authorize(actor, "waitlist.read");
   const limit = clampLimit(opts.limit);
   const showEmail = can(actor, "waitlist.manage");
-  const [total, rows] = await deps.uow.run((r) => Promise.all([r.waitlist.count(), r.waitlist.list({ limit })]));
+  // Sequential: a transaction holds one database connection, which runs one query at a time.
+  const [total, rows] = await deps.uow.run(
+    async (r) => [await r.waitlist.count(), await r.waitlist.list({ limit })] as const,
+  );
   return {
     total,
     entries: rows.map(({ emailHash: _h, ...e }) => ({ ...e, email: showEmail ? e.email : maskEmail(e.email) })),

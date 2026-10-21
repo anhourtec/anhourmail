@@ -37,6 +37,13 @@ export class ValidationError extends DomainError {
   }
 }
 
+/** Expired, used or unknown one-time token (same answer for all three: no oracle). */
+export class InvalidTokenError extends DomainError {
+  constructor() {
+    super("This link is invalid or has expired.", "invalid_token");
+  }
+}
+
 export class ConflictError extends DomainError {
   constructor(message: string) {
     super(message, "conflict");

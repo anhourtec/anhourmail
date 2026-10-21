@@ -147,6 +147,11 @@ export const invite = pgTable(
     status: text("status").notNull().default("pending"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdBy: text("created_by"),
+    /** Where the invite came from: waitlist | staff | referral (marketing attribution, no tracking). */
+    source: text("source").notNull().default("staff"),
+    waitlistEntryId: uuid("waitlist_entry_id"),
+    acceptedUserId: text("accepted_user_id"),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
     createdAt: createdAt(),
   },
   (t) => [index("invite_email_idx").on(t.email)],
@@ -161,11 +166,18 @@ export const waitlistEntry = pgTable(
     community: text("community"),
     ref: text("ref"),
     utm: jsonb("utm"),
+    /** pending (unconfirmed) | confirmed (double opt-in done) | invited */
     status: text("status").notNull().default("pending"),
+    /** sha256 of the confirmation token (the token is only in the email link). */
+    confirmTokenHash: text("confirm_token_hash"),
+    confirmExpiresAt: timestamp("confirm_expires_at", { withTimezone: true }),
+    confirmSentAt: timestamp("confirm_sent_at", { withTimezone: true }),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   },
   (t) => [
     uniqueIndex("waitlist_entry_email_hash_idx").on(t.emailHash),
+    uniqueIndex("waitlist_entry_confirm_token_idx").on(t.confirmTokenHash),
     index("waitlist_entry_created_idx").on(t.createdAt),
   ],
 );

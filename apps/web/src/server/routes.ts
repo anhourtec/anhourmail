@@ -17,6 +17,11 @@ export type RouteSpec = {
   accountParam?: string;
   /** Audit action written by a mutating route (asserted by the harness). */
   audits?: string;
+  /**
+   * What an ALLOWED caller gets for the harness's probe request when it can't be a real success (e.g. a random
+   * subject id → 404, a junk token → 400). Denied callers still get 401/403/404 from the matrix.
+   */
+  probeStatus?: number;
 };
 
 export const ROUTES: readonly RouteSpec[] = [
@@ -30,7 +35,21 @@ export const ROUTES: readonly RouteSpec[] = [
     guard: "waitlist.join",
     audits: "waitlist.joined",
   },
+  {
+    method: "POST",
+    path: "/api/public/waitlist/confirm",
+    file: "app/api/public/waitlist/confirm/route.ts",
+    guard: "waitlist.join",
+    probeStatus: 400,
+  },
   { method: "GET", path: "/api/me", file: "app/api/me/route.ts", guard: "session" },
+  {
+    method: "POST",
+    path: "/api/platform/waitlist/:entryId/invite",
+    file: "app/api/platform/waitlist/[entryId]/invite/route.ts",
+    guard: "waitlist.manage",
+    probeStatus: 404,
+  },
   { method: "GET", path: "/api/platform/waitlist", file: "app/api/platform/waitlist/route.ts", guard: "waitlist.read" },
   { method: "GET", path: "/api/platform/audit", file: "app/api/platform/audit/route.ts", guard: "platform.audit.read" },
   {

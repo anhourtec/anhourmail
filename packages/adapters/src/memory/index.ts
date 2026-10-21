@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 
 import type { AccessRepository, Repositories, UnitOfWork } from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
+import type { Invite, InviteRepository } from "@anhourmail/core/invite";
 import type {
   DomainState,
   MailboxState,
@@ -33,6 +34,13 @@ export type MemoryState = {
   suspended: string[];
   accounts: { id: string; name: string; plan?: string }[];
   userStates: Record<string, string>;
+  confirmTokens: Map<string, { hash: string; expiresAt: Date }>;
+  invites: (Invite & {
+    tokenHash: string;
+    status: string;
+    acceptedUserId: string | null;
+    waitlistEntryId: string | null;
+  })[];
   jobs: ProvisioningJob[];
   domains: (DomainState & { lastError: string | null })[];
   mailboxes: (MailboxState & { lastError: string | null })[];
@@ -46,6 +54,8 @@ export const emptyState = (): MemoryState => ({
   suspended: [],
   accounts: [],
   userStates: {},
+  confirmTokens: new Map(),
+  invites: [],
   jobs: [],
   domains: [],
   mailboxes: [],
@@ -55,10 +65,34 @@ const clone = <T>(v: T): T => structuredClone(v);
 
 function repositories(s: MemoryState): Repositories {
   const waitlist: WaitlistRepository = {
+    get: async (id) => clone(s.waitlist.find((e) => e.id === id) ?? null),
     findByEmailHash: async (h) => clone(s.waitlist.find((e) => e.emailHash === h) ?? null),
+    findByConfirmToken: async (hash, now) => {
+      const id = [...s.confirmTokens].find(([, t]) => t.hash === hash && t.expiresAt > now)?.[0];
+      const entry = s.waitlist.find((e) => e.id === id && e.status === "pending");
+      return clone(entry ?? null);
+    },
+    setConfirmation: async (id, { tokenHash, expiresAt, sentAt }) => {
+      s.confirmTokens.set(id, { hash: tokenHash, expiresAt });
+      const e = s.waitlist.find((x) => x.id === id);
+      if (e) e.confirmSentAt = sentAt;
+    },
+    markConfirmed: async (id, at) => {
+      const e = s.waitlist.find((x) => x.id === id && x.status === "pending");
+      if (!e) return false;
+      Object.assign(e, { status: "confirmed", confirmedAt: at });
+      s.confirmTokens.delete(id);
+      return true;
+    },
+    markInvited: async (id) => {
+      const e = s.waitlist.find((x) => x.id === id && x.status === "confirmed");
+      if (e) e.status = "invited";
+      return Boolean(e);
+    },
     insert: async (e) => {
-      if (s.waitlist.some((x) => x.emailHash === e.emailHash)) throw new Error("duplicate email_hash");
+      if (s.waitlist.some((x) => x.emailHash === e.emailHash)) return false;
       s.waitlist.push(clone(e));
+      return true;
     },
     list: async ({ limit, before }) =>
       clone(
@@ -207,7 +241,43 @@ function repositories(s: MemoryState): Repositories {
     }),
   };
 
-  return { waitlist, audit, access, accounts, provisioning, directory };
+  const invites: InviteRepository = {
+    create: async (input) => {
+      const id = randomUUID();
+      s.invites.push({
+        id,
+        email: input.email,
+        accountId: input.accountId,
+        role: input.role,
+        source: input.source,
+        expiresAt: input.expiresAt,
+        tokenHash: input.tokenHash,
+        status: "pending",
+        acceptedUserId: null,
+        waitlistEntryId: input.waitlistEntryId,
+      });
+      return { id };
+    },
+    findValid: async (hash, now) => {
+      const i = s.invites.find((x) => x.tokenHash === hash && x.status === "pending" && x.expiresAt > now);
+      return i
+        ? clone({
+            id: i.id,
+            email: i.email,
+            accountId: i.accountId,
+            role: i.role,
+            source: i.source,
+            expiresAt: i.expiresAt,
+          })
+        : null;
+    },
+    markAccepted: async (id, userId) => {
+      const i = s.invites.find((x) => x.id === id);
+      if (i) Object.assign(i, { status: "accepted", acceptedUserId: userId });
+    },
+  };
+
+  return { waitlist, audit, access, accounts, provisioning, directory, invites };
 }
 
 export class MemoryUnitOfWork implements UnitOfWork {
