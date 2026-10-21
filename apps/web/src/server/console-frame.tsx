@@ -52,7 +52,7 @@ export async function ConsoleFrame({ children }: { children: React.ReactNode }) 
   const actor = await requireUser();
   const { groups } = await navGroups(actor);
   return (
-    <ConsoleShell email={actor.email} groups={groups}>
+    <ConsoleShell actor={actor} groups={groups}>
       {children}
     </ConsoleShell>
   );

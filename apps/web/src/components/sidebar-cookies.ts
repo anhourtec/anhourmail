@@ -18,5 +18,8 @@ export function writeSidebarCookie(name: string, value: string): void {
 
 /** Browser only: forgets the sidebar preferences (on sign-out, so a shared browser keeps no account ids). */
 export function clearSidebarCookies(): void {
-  for (const name of [SIDEBAR_COOKIE, GROUPS_COOKIE]) document.cookie = `${name}=; path=/; max-age=0; samesite=lax`;
+  const secure = window.location.protocol === "https:" ? "; secure" : "";
+  for (const name of [SIDEBAR_COOKIE, GROUPS_COOKIE]) {
+    document.cookie = `${name}=; path=/; max-age=0; samesite=lax${secure}`;
+  }
 }

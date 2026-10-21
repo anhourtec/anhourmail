@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { e2eUsers, expect, linkFromMail, openNav, signIn, test, urls } from "./fixtures";
+import { e2eUsers, expect, linkFromMail, openNav, signIn, signOut, test, urls } from "./fixtures";
 
 test("signed-out visitors land on sign-in; a wrong password shows an error", async ({ page }) => {
   await page.goto(urls.app);
@@ -49,7 +49,7 @@ test("Member sees only their own aliases", async ({ page }) => {
 test("sign out returns to sign-in", async ({ page }) => {
   const u = e2eUsers();
   await signIn(page, u.users.owner, u.password);
-  await page.getByRole("button", { name: "Sign out" }).click();
+  await signOut(page);
   await expect(page).toHaveURL(/\/sign-in$/);
 });
 
@@ -114,7 +114,7 @@ test("password reset: the emailed link sets a new password that then signs in", 
   await page.getByLabel("Password", { exact: true }).fill(`${u.password}-old`);
   await page.getByRole("button", { name: "Create account" }).click();
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
-  await page.getByRole("button", { name: "Sign out" }).click();
+  await signOut(page);
   await expect(page).toHaveURL(/\/sign-in$/);
 
   await page.getByRole("link", { name: "Forgot password?" }).click();
@@ -142,4 +142,29 @@ test("the password eye toggles visibility", async ({ page }) => {
   await expect(field).toHaveAttribute("type", "text");
   await page.getByRole("button", { name: "Hide password" }).click();
   await expect(field).toHaveAttribute("type", "password");
+});
+
+test("the person's menu lists their account with its role and opens it", async ({ page }) => {
+  const u = e2eUsers();
+  await signIn(page, u.users.owner, u.password);
+  await page.getByRole("button", { name: "Your account", exact: true }).click();
+  const menu = page.getByRole("menu", { name: "Your account" });
+  await expect(menu.getByText(u.users.owner)).toBeVisible();
+  await menu.getByRole("menuitem", { name: new RegExp(u.accountName) }).click();
+  await expect(page).toHaveURL(/\/accounts\/[0-9a-f-]+\//);
+  await page.getByRole("button", { name: "Your account", exact: true }).click();
+  await expect(
+    page.getByRole("menu", { name: "Your account" }).getByRole("menuitem", { name: new RegExp(u.accountName) }),
+  ).toHaveAttribute("aria-current", "true");
+});
+
+// The sidebar width is a wide-screen preference (a drawer on small screens): desktop project only.
+test("preferences switch the sidebar between expanded and icons only @desktop-only", async ({ page }) => {
+  const u = e2eUsers();
+  await signIn(page, u.users.owner, u.password);
+  await page.getByRole("button", { name: "Preferences" }).click();
+  await page.getByRole("radio", { name: "Icons only" }).click();
+  await expect(page.locator("aside").first()).toHaveClass(/w-16/);
+  await page.getByRole("radio", { name: "Expanded" }).click();
+  await expect(page.locator("aside").first()).toHaveClass(/w-64/);
 });

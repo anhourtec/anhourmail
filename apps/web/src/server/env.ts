@@ -3,12 +3,15 @@ import "server-only";
 
 import { z } from "zod";
 
+/** An http(s) URL: these become links and origins, so no other scheme is accepted in any mode. */
+const httpUrl = z.url({ protocol: /^https?$/ });
+
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   APP_PROTOCOL: z.enum(["http", "https"]).default("http"),
-  APP_URL: z.url(),
-  WEBMAIL_URL: z.url(),
-  SITE_URL: z.url(),
+  APP_URL: httpUrl,
+  WEBMAIL_URL: httpUrl,
+  SITE_URL: httpUrl,
   WEB_DEV_PORT: z.coerce.number().int().default(43200),
   BETTER_AUTH_SECRET: z.string().min(32),
   // Closed unless explicitly opened (the maintainer opens it while the app is behind the IP allow-list).

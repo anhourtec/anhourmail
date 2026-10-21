@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   type LucideIcon,
   Menu,
+  MoreVertical,
   PanelLeftClose,
   PanelLeftOpen,
   Receipt,
@@ -27,7 +28,10 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 
 import type { NavIcon } from "@/server/console-nav";
 
+import { AccountMenu, Avatar, type MenuAccount, type MenuUser } from "./account-menu";
 import { BrandMark } from "./brand-mark";
+import { HeaderActions } from "./header-actions";
+import { PanelSurface, usePopover } from "./popover";
 import { GROUPS_COOKIE, SIDEBAR_COOKIE, writeSidebarCookie } from "./sidebar-cookies";
 
 export type ChromeNavItem = { label: string; permission: string; icon: NavIcon; href?: string };
@@ -47,12 +51,6 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   "user-cog": UserCog,
 };
 
-function initials(email: string): string {
-  const name = email.split("@")[0] ?? "";
-  const parts = name.split(/[._-]+/).filter(Boolean);
-  return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? parts[0]?.[1] ?? "")).toUpperCase() || "?";
-}
-
 function isCurrent(pathname: string, href: string, exact: boolean): boolean {
   if (href.includes("#")) return false;
   return exact ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
@@ -61,23 +59,95 @@ function isCurrent(pathname: string, href: string, exact: boolean): boolean {
 /** Label shown beside the compact rail on hover/focus; fixed-positioned so the scrolling rail can't clip it. */
 type Tip = { text: string; top: number } | null;
 
+type Person = { user: MenuUser; accounts: MenuAccount[]; siteUrl: string };
+
+/**
+ * Foot of the sidebar: a short help card (expanded only) and the person's button, which opens their menu beside
+ * the sidebar (above it in the drawer).
+ */
+function SidebarFooter({ person, compact, mobile }: { person: Person; compact: boolean; mobile: boolean }) {
+  const { open: menuOpen, toggle: menuToggle, close: menuClose, trigger: menuTrigger, panel: menuPanel } = usePopover();
+  const { user } = person;
+  return (
+    <div className="flex shrink-0 flex-col gap-2 border-t border-sidebar-border p-3">
+      {!compact && (
+        <div className="rounded-xl border bg-card px-3.5 py-3">
+          <p className="font-medium text-[13px]">Need a hand?</p>
+          <p className="am-micro mt-1">
+            Read the{" "}
+            <a href={`${person.siteUrl}/docs`} className="text-foreground underline underline-offset-2">
+              guides
+            </a>{" "}
+            or{" "}
+            <a href={`${person.siteUrl}/support`} className="text-foreground underline underline-offset-2">
+              contact support
+            </a>
+            .
+          </p>
+        </div>
+      )}
+      <div className="relative">
+        <button
+          ref={menuTrigger}
+          type="button"
+          onClick={menuToggle}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          aria-label={compact ? `Your account (${user.email})` : undefined}
+          className={`flex w-full items-center rounded-lg transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring aria-expanded:bg-sidebar-accent ${compact ? "justify-center p-1" : "gap-3 p-2 text-left"}`}
+        >
+          <Avatar name={user.name} email={user.email} />
+          {!compact && (
+            <>
+              <span className="flex min-w-0 flex-1 flex-col leading-tight">
+                <span className="truncate font-medium text-[14px]">{user.name || user.email}</span>
+                <span className="am-micro truncate">{user.email}</span>
+              </span>
+              <MoreVertical className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            </>
+          )}
+        </button>
+        {menuOpen && (
+          <div
+            ref={menuPanel}
+            className={
+              mobile
+                ? "absolute bottom-full left-0 mb-2"
+                : `fixed bottom-3 ${compact ? "left-[4.5rem]" : "left-[16.5rem]"}`
+            }
+          >
+            <PanelSurface>
+              <AccountMenu
+                user={person.user}
+                accounts={person.accounts}
+                siteUrl={person.siteUrl}
+                onNavigate={() => {
+                  menuClose(false);
+                }}
+              />
+            </PanelSurface>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Sidebar({
   groups,
-  email,
+  person,
   compact,
   mobile,
   closed,
   onToggleGroup,
-  onToggle,
   onClose,
 }: {
   groups: ChromeNavGroup[];
-  email: string;
+  person: Person;
   compact: boolean;
   mobile: boolean;
   closed: string[];
   onToggleGroup: (id: string) => void;
-  onToggle?: () => void;
   onClose?: () => void;
 }) {
   const pathname = usePathname();
@@ -245,34 +315,7 @@ function Sidebar({
         })}
       </nav>
 
-      <div
-        className={`flex shrink-0 items-center border-t border-sidebar-border py-3 ${compact ? "flex-col gap-2 px-3" : "gap-3 px-4"}`}
-      >
-        <span
-          aria-hidden
-          title={email}
-          className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/12 font-medium text-[12px] text-primary"
-        >
-          {initials(email)}
-        </span>
-        {!compact && <span className="am-small min-w-0 flex-1 truncate">{email}</span>}
-        {!mobile && onToggle && (
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-label={compact ? "Expand sidebar" : "Collapse sidebar"}
-            aria-keyshortcuts="Control+B Meta+B"
-            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-            {...tipProps(compact ? "Expand sidebar  ⌘B" : "")}
-          >
-            {compact ? (
-              <PanelLeftOpen className="size-5" aria-hidden />
-            ) : (
-              <PanelLeftClose className="size-5" aria-hidden />
-            )}
-          </button>
-        )}
-      </div>
+      <SidebarFooter person={person} compact={compact} mobile={mobile} />
 
       {compact && tip && (
         <div
@@ -289,29 +332,37 @@ function Sidebar({
 
 /**
  * Console frame: a sidebar that expands (labels, collapsible sections) or compacts to an icon rail
- * (⌘/Ctrl+B or the button at its foot; remembered in a cookie so the first paint is right), and on small screens
- * becomes a drawer behind a menu button. The header keeps the person's controls.
+ * (⌘/Ctrl+B, the header button or Preferences; remembered in a cookie so the first paint is right), and on small
+ * screens becomes a drawer behind a menu button. The header holds preferences, theme and the person's menu; the
+ * sidebar's foot opens the same menu.
  */
 export function ConsoleChrome({
   groups,
-  email,
+  user,
+  accounts,
+  siteUrl,
   initialCompact,
   initialClosed,
-  actions,
   children,
 }: {
   groups: ChromeNavGroup[];
-  email: string;
+  user: MenuUser;
+  accounts: MenuAccount[];
+  siteUrl: string;
   initialCompact: boolean;
   initialClosed: string[];
-  actions: ReactNode;
   children: ReactNode;
 }) {
+  const person: Person = { user, accounts, siteUrl };
   const [compact, setCompact] = useState(initialCompact);
   const [closed, setClosed] = useState(initialClosed);
   const [drawer, setDrawer] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
 
+  const setCompactSaved = useCallback((next: boolean) => {
+    writeSidebarCookie(SIDEBAR_COOKIE, next ? "compact" : "expanded");
+    setCompact(next);
+  }, []);
   const toggle = useCallback(() => {
     setCompact((c) => {
       writeSidebarCookie(SIDEBAR_COOKIE, c ? "expanded" : "compact");
@@ -362,12 +413,11 @@ export function ConsoleChrome({
       >
         <Sidebar
           groups={groups}
-          email={email}
+          person={person}
           compact={compact}
           mobile={false}
           closed={closed}
           onToggleGroup={toggleGroup}
-          onToggle={toggle}
         />
       </aside>
 
@@ -385,7 +435,7 @@ export function ConsoleChrome({
           <aside className="absolute inset-y-0 left-0 w-[min(18rem,85vw)] border-r border-sidebar-border bg-sidebar shadow-xl">
             <Sidebar
               groups={groups}
-              email={email}
+              person={person}
               compact={false}
               mobile
               closed={closed}
@@ -413,12 +463,31 @@ export function ConsoleChrome({
             >
               <Menu className="size-5" aria-hidden />
             </button>
+            <button
+              type="button"
+              onClick={toggle}
+              aria-label={compact ? "Expand sidebar" : "Collapse sidebar"}
+              aria-keyshortcuts="Control+B Meta+B"
+              title={`${compact ? "Expand" : "Collapse"} sidebar (⌘B)`}
+              className="-ml-2 hidden rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring lg:inline-flex"
+            >
+              {compact ? (
+                <PanelLeftOpen className="size-5" aria-hidden />
+              ) : (
+                <PanelLeftClose className="size-5" aria-hidden />
+              )}
+            </button>
             <span className="lg:hidden">
               <BrandMark />
             </span>
-            <div className="ml-auto flex items-center gap-2">
-              <span className="am-small hidden md:inline">{email}</span>
-              {actions}
+            <div className="ml-auto">
+              <HeaderActions
+                user={user}
+                accounts={accounts}
+                siteUrl={siteUrl}
+                compact={compact}
+                setCompact={setCompactSaved}
+              />
             </div>
           </div>
         </header>

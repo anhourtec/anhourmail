@@ -49,6 +49,13 @@ export async function openNav(page: Page) {
   return page.getByRole("navigation", { name: "Console" });
 }
 
+/** Signs out through the person's menu in the header. */
+export async function signOut(page: Page) {
+  await page.getByRole("button", { name: "Your account", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Sign out" }).click();
+  await expect(page).toHaveURL(/\/sign-in$/);
+}
+
 export { expect };
 
 const mailpit = `http://localhost:${process.env.MAILPIT_UI_PORT ?? "43026"}`;

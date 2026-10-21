@@ -23,5 +23,13 @@ export async function getActor(headers: Headers): Promise<Actor> {
         await r.access.isSuspended(user.id),
       ] as const,
   );
-  return { kind: "user", userId: user.id, email: user.email, platformRoles, memberships, suspended };
+  return {
+    kind: "user",
+    userId: user.id,
+    email: user.email,
+    name: user.name,
+    platformRoles,
+    memberships,
+    suspended,
+  };
 }

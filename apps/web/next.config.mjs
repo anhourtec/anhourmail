@@ -38,6 +38,8 @@ const securityHeaders = [
 
 /** @type {import("next").NextConfig} */
 const nextConfig = {
+  // Dev-only badge: bottom-right, clear of the sidebar's account button (bottom-left) and the header menus.
+  devIndicators: { position: "bottom-right" },
   output: "standalone",
   reactCompiler: true,
   poweredByHeader: false,

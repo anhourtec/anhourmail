@@ -17,6 +17,8 @@ export type UserActor = {
   kind: "user";
   userId: string;
   email: string;
+  /** Display name, for the console's menus (never used for decisions). */
+  name?: string;
   platformRoles: readonly PlatformRole[];
   memberships: readonly Membership[];
   suspended: boolean;

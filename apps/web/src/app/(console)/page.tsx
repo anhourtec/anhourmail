@@ -85,7 +85,7 @@ export default async function ConsoleHome() {
   const platformAudit = can(actor, "platform.audit.read") ? await listPlatformAudit(deps, actor, { limit: 8 }) : null;
 
   return (
-    <ConsoleShell email={actor.email} groups={groups}>
+    <ConsoleShell actor={actor} groups={groups}>
       <PageHeader title="Overview" description="What you can do here comes from your roles." />
       {actor.suspended && <p className="am-status am-status--danger w-fit">This account is suspended.</p>}
 

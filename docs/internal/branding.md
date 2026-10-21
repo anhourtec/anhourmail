@@ -48,6 +48,14 @@ Dark mode (`.dark` on `<html>`, `next-themes`, default `system`): background 7 1
   by hairlines, labels in a tooltip on hover/focus. Toggle with the button or ⌘/Ctrl+B; the width and collapsed
   sections live in cookies so the server renders the first paint right. **Under `lg`** it becomes a drawer behind
   a menu button (overlay, Escape closes, a followed link closes it, focus returns to the button).
+- **Console header and the person's menu** (decision 2026-10-22, modelled on the admin-dashboard reference): left,
+  the sidebar toggle (drawer button under `lg`); right, three 36 px controls — **Preferences** (popover: Theme
+  Light/Dark/System and Sidebar Expanded/Icons only as segmented controls, "Restore defaults"), a **theme** button
+  that cycles Light → Dark → System, and the **avatar** (initials; no remote images) opening the person's menu:
+  name and email (and staff role), their accounts with role and a tick on the current one, Profile and security /
+  Billing ("Soon" until built), Documentation, Sign out. The sidebar's foot carries a small "Need a hand?" card
+  (guides, support) and the same menu behind a name + email button with a ⋮. No third-party marks (no GitHub
+  button: rule 53).
 - **Page header:** `PageHeader` from `@anhourmail/ui/page-header` — optional breadcrumb, h1 with actions on the right,
   one lead line. **No eyebrow label above the title** (decision 2026-10-21). Context comes from breadcrumbs, shown only
   when the page is at least two levels deep (e.g. `Demo Family › Domains › example.com`). No card around the page.
