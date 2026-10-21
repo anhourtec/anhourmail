@@ -121,8 +121,13 @@ const MAX_STRING = 2_000;
 
 const normKey = (k: string) => k.toLowerCase().replace(/[-_]/g, "");
 
+/** Email addresses in free text (e.g. an SMTP error naming the recipient) keep only a first letter and the domain. */
+const EMAIL_IN_TEXT = /\b([A-Za-z0-9])[A-Za-z0-9._%+-]*@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})\b/g;
+
 function scrubString(s: string): string {
-  const masked = s.replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, `$1 ${REDACTED}`);
+  const masked = s
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, `$1 ${REDACTED}`)
+    .replace(EMAIL_IN_TEXT, "$1***@$2");
   return masked.length > MAX_STRING ? `${masked.slice(0, MAX_STRING)}…` : masked;
 }
 

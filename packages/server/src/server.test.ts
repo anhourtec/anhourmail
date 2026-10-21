@@ -77,6 +77,10 @@ describe("logger", () => {
     expect(out.big).toBe("10");
     expect((out.list as unknown[]).length).toBe(50);
     expect(redact(new Headers({ cookie: "c", accept: "x" }))).toEqual({ accept: "x", cookie: "[redacted]" });
+    // SMTP errors name recipients; addresses in free text are masked (rule 24).
+    expect(redact(new Error("550 5.1.1 <pat.smith@example.com>: rejected"))).toMatchObject({
+      message: "550 5.1.1 <p***@example.com>: rejected",
+    });
     let deep: Record<string, unknown> = {};
     const root = deep;
     for (let i = 0; i < 10; i++) deep = deep.n = {} as Record<string, unknown>;
