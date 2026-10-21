@@ -72,7 +72,9 @@ async function AccountSection({ actor, accountId, name }: { actor: UserActor; ac
       </div>
       {audit && (
         <div className="flex flex-col gap-3">
-          <h3 className="am-h3">Recent activity</h3>
+          <h3 id={`activity-${accountId}`} className="am-h3 scroll-mt-20">
+            Recent activity
+          </h3>
           <AuditList entries={audit} />
         </div>
       )}
@@ -111,7 +113,7 @@ export default async function ConsoleHome() {
           </div>
           {waitlist && (
             <div className="flex flex-col gap-3">
-              <h3 className="am-h3">
+              <h3 id="waitlist" className="am-h3 scroll-mt-20">
                 Waitlist <span className="am-num am-small">({waitlist.total})</span>
               </h3>
               {waitlist.entries.length === 0 ? (
@@ -142,7 +144,9 @@ export default async function ConsoleHome() {
           )}
           {platformAudit && (
             <div className="flex flex-col gap-3">
-              <h3 className="am-h3">Platform activity</h3>
+              <h3 id="platform-activity" className="am-h3 scroll-mt-20">
+                Platform activity
+              </h3>
               <AuditList entries={platformAudit} />
             </div>
           )}

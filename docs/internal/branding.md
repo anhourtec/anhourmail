@@ -39,6 +39,15 @@ Dark mode (`.dark` on `<html>`, `next-themes`, default `system`): background 7 1
 
 ## App components (console + webmail)
 
+- **Sidebar** (decision 2026-10-22, maintainer asked for an expandable/compact, more capable nav): full-height
+  sidebar beside the content. **Expanded** (256 px): wordmark on top, Overview, then one collapsible section per
+  scope — "Anhourtec staff" and one per account (Lucide icon + name in sentence case, chevron; never mono uppercase
+  labels). Items are a 20 px Lucide icon + label, 40 px tall; the current page gets the accent tint plus a 3 px
+  primary bar on the left. Pages not built yet stay listed, dimmed, with a quiet "Soon" (no pill). Foot: initials
+  avatar, email, collapse button. **Compact** (64 px rail): icons only, a blue "A" monogram on top, sections split
+  by hairlines, labels in a tooltip on hover/focus. Toggle with the button or ⌘/Ctrl+B; the width and collapsed
+  sections live in cookies so the server renders the first paint right. **Under `lg`** it becomes a drawer behind
+  a menu button (overlay, Escape closes, a followed link closes it, focus returns to the button).
 - **Page header:** `PageHeader` from `@anhourmail/ui/page-header` — optional breadcrumb, h1 with actions on the right,
   one lead line. **No eyebrow label above the title** (decision 2026-10-21). Context comes from breadcrumbs, shown only
   when the page is at least two levels deep (e.g. `Demo Family › Domains › example.com`). No card around the page.

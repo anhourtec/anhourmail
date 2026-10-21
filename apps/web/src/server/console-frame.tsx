@@ -25,16 +25,20 @@ export async function navGroups(actor: UserActor): Promise<{ groups: ShellNavGro
   const item = (accountId: string) => (n: ReturnType<typeof visibleNav>[number]) => ({
     label: n.label,
     permission: n.permission,
-    phase: n.phase,
+    icon: n.icon,
     ...(n.href ? { href: n.href(accountId) } : {}),
   });
   const platform = visibleNav(actor).filter((n) => n.scope === "platform");
   return {
     names,
     groups: [
-      ...(platform.length > 0 ? [{ title: "Anhourtec staff", items: platform.map(item("")) }] : []),
+      ...(platform.length > 0
+        ? [{ id: "platform", title: "Anhourtec staff", kind: "platform" as const, items: platform.map(item("")) }]
+        : []),
       ...actor.memberships.map((m) => ({
+        id: m.accountId,
         title: names[m.accountId] ?? "Account",
+        kind: "account" as const,
         items: visibleNav(actor, m.accountId)
           .filter((n) => n.scope === "account")
           .map(item(m.accountId)),

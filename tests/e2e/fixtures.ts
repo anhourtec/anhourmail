@@ -39,6 +39,16 @@ export async function signIn(page: Page, email: string, password: string): Promi
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
 }
 
+/**
+ * The console navigation. On small screens it lives in a drawer behind "Open navigation", so open it first; on
+ * wide screens the sidebar is always there.
+ */
+export async function openNav(page: Page) {
+  const menu = page.getByRole("button", { name: "Open navigation" });
+  if (await menu.isVisible()) await menu.click();
+  return page.getByRole("navigation", { name: "Console" });
+}
+
 export { expect };
 
 const mailpit = `http://localhost:${process.env.MAILPIT_UI_PORT ?? "43026"}`;

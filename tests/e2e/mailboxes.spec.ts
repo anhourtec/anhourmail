@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /** Mailboxes (Phase 3) on a domain verified through the development DNS (`.test` names answer as configured). */
-import { e2eUsers, expect, signIn, test } from "./fixtures";
+import { e2eUsers, expect, openNav, signIn, test } from "./fixtures";
 
 test("an owner creates a mailbox for a member on a verified domain and changes its storage", async ({
   page,
@@ -8,16 +8,15 @@ test("an owner creates a mailbox for a member on a verified domain and changes i
   const u = e2eUsers();
   const domain = `${u.run}-mbx-${testInfo.project.name}.test`;
   await signIn(page, u.users.owner, u.password);
-  const nav = page.getByRole("navigation", { name: "Console" });
 
   // A verified domain first.
-  await nav.getByRole("link", { name: "Domains" }).click();
+  await (await openNav(page)).getByRole("link", { name: "Domains" }).click();
   await page.getByLabel("Add a domain").fill(domain);
   await page.getByRole("button", { name: "Add domain" }).click();
   await page.getByRole("button", { name: "Check now" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Verified." })).toBeVisible();
 
-  await nav.getByRole("link", { name: "Mailboxes" }).click();
+  await (await openNav(page)).getByRole("link", { name: "Mailboxes" }).click();
   await expect(page.getByRole("heading", { name: "Mailboxes", level: 1 })).toBeVisible();
   await page.getByLabel("Address").fill("Jane");
   await page.getByLabel("Domain").selectOption({ label: domain });
@@ -48,7 +47,7 @@ test("an owner creates a mailbox for a member on a verified domain and changes i
   await expect(page.getByText("3 GB")).toBeVisible();
 
   // A domain with a mailbox on it can't be removed.
-  await nav.getByRole("link", { name: "Domains" }).click();
+  await (await openNav(page)).getByRole("link", { name: "Domains" }).click();
   await page.getByRole("link", { name: domain }).click();
   await page.getByRole("button", { name: "Remove domain…" }).click();
   await page.getByRole("button", { name: "Remove domain", exact: true }).click();
@@ -58,7 +57,5 @@ test("an owner creates a mailbox for a member on a verified domain and changes i
 test("a member has no Mailboxes section", async ({ page }) => {
   const u = e2eUsers();
   await signIn(page, u.users.member, u.password);
-  await expect(page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Mailboxes" })).toHaveCount(
-    0,
-  );
+  await expect((await openNav(page)).getByRole("link", { name: "Mailboxes" })).toHaveCount(0);
 });

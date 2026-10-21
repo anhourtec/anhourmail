@@ -4,12 +4,15 @@
 import { LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
 
+import { clearSidebarCookies } from "./sidebar-cookies";
+
 export function SignOutButton() {
   const router = useRouter();
   return (
     <button
       type="button"
       onClick={() => {
+        clearSidebarCookies();
         void fetch("/api/auth/sign-out", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { e2eUsers, expect, linkFromMail, signIn, test, urls } from "./fixtures";
+import { e2eUsers, expect, linkFromMail, openNav, signIn, test, urls } from "./fixtures";
 
 test("signed-out visitors land on sign-in; a wrong password shows an error", async ({ page }) => {
   await page.goto(urls.app);
@@ -13,8 +13,9 @@ test("signed-out visitors land on sign-in; a wrong password shows an error", asy
 test("Global Administrator sees every staff section", async ({ page, consoleErrors }) => {
   const u = e2eUsers();
   await signIn(page, u.users.globalAdmin, u.password);
+  const nav = await openNav(page);
   for (const label of ["Waitlist", "Platform audit", "Staff roles", "Abuse queue"]) {
-    await expect(page.locator(`[data-nav]`, { hasText: label }).first()).toBeVisible();
+    await expect(nav.locator(`[data-nav]`, { hasText: label }).first()).toBeVisible();
   }
   expect(consoleErrors).toEqual([]);
 });
@@ -22,24 +23,27 @@ test("Global Administrator sees every staff section", async ({ page, consoleErro
 test("Reports Reader sees read-only staff sections only", async ({ page }) => {
   const u = e2eUsers();
   await signIn(page, u.users.reportsReader, u.password);
-  await expect(page.locator(`[data-nav="waitlist.read"]`)).toBeVisible();
-  await expect(page.locator(`[data-nav="platform.staff.manage"]`)).toHaveCount(0);
+  const nav = await openNav(page);
+  await expect(nav.locator(`[data-nav="waitlist.read"]`)).toBeVisible();
+  await expect(nav.locator(`[data-nav="platform.staff.manage"]`)).toHaveCount(0);
 });
 
 test("Owner sees account admin sections and the audit log", async ({ page }) => {
   const u = e2eUsers();
   await signIn(page, u.users.owner, u.password);
   await expect(page.getByRole("heading", { name: u.accountName })).toBeVisible();
-  await expect(page.locator(`[data-nav="audit.read"]`)).toBeVisible();
-  await expect(page.locator(`[data-nav="account.admins.manage"]`)).toBeVisible();
+  const nav = await openNav(page);
+  await expect(nav.locator(`[data-nav="audit.read"]`)).toBeVisible();
+  await expect(nav.locator(`[data-nav="account.admins.manage"]`)).toBeVisible();
 });
 
 test("Member sees only their own aliases", async ({ page }) => {
   const u = e2eUsers();
   await signIn(page, u.users.member, u.password);
-  await expect(page.locator(`[data-nav="alias.manage.own"]`)).toBeVisible();
-  await expect(page.locator(`[data-nav="audit.read"]`)).toHaveCount(0);
-  await expect(page.locator(`[data-nav="domain.read"]`)).toHaveCount(0);
+  const nav = await openNav(page);
+  await expect(nav.locator(`[data-nav="alias.manage.own"]`)).toBeVisible();
+  await expect(nav.locator(`[data-nav="audit.read"]`)).toHaveCount(0);
+  await expect(nav.locator(`[data-nav="domain.read"]`)).toHaveCount(0);
 });
 
 test("sign out returns to sign-in", async ({ page }) => {
@@ -71,7 +75,8 @@ test("sign-up creates a personal Free account and lands on the console as its Ow
   await page.getByRole("button", { name: "Create account" }).click();
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
   await expect(page.getByRole("heading", { name: `${who} Signup` })).toBeVisible();
-  await expect(page.locator(`[data-nav="audit.read"]`)).toBeVisible();
+  const nav = await openNav(page);
+  await expect(nav.locator(`[data-nav="audit.read"]`)).toBeVisible();
   expect(consoleErrors).toEqual([]);
 });
 
