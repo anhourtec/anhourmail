@@ -7,6 +7,8 @@
  *   4. The Stalwart container has no route to the internet.
  *   5. Mail clients can sign in over every protocol we offer: IMAP (993), POP3 (995) and SMTP submission (465)
  *      with TLS, plus greetings on SMTP 587 (STARTTLS) and ManageSieve (4190).
+ *   6. Sender identity (ADR-0019): an authenticated submission with a forged header From, two From lines or a
+ *      null envelope sender is refused.
  *
  *   npm run stack:verify      (after `npm run stack:up` and `npm run db:seed`)
  */
@@ -171,6 +173,48 @@ await protocolCheck("SMTP 465: TLS AUTH PLAIN", async () => {
   w.close();
   return res.startsWith("235");
 });
+/** SMTP AUTH submission as alice with a given header From; resolves to the DATA reply (ADR-0019). */
+async function submitWithHeaderFrom(headerFrom: string): Promise<string> {
+  const w = await wire(port("STALWART_SUBMISSIONS_PORT", 465), true);
+  await w.read(/^220 /m);
+  w.send("EHLO verify.local");
+  await w.read(/^250 /m);
+  w.send(`AUTH PLAIN ${Buffer.from(`\0${user}\0${password}`).toString("base64")}`);
+  await w.read(/^\d{3} /m);
+  w.send(`MAIL FROM:<${user}>`);
+  await w.read(/^\d{3} /m);
+  w.send(`RCPT TO:<sender-check-${randomUUID().slice(0, 8)}@example.com>`);
+  await w.read(/^\d{3} /m);
+  w.send("DATA");
+  await w.read(/^354 /m);
+  w.send(`From: ${headerFrom}\r\nTo: sender-check@example.com\r\nSubject: sender identity check\r\n\r\nx\r\n.`);
+  const res = await w.read(/^\d{3} /m);
+  w.send("QUIT");
+  w.close();
+  return res;
+}
+await protocolCheck("Sender identity: own header From accepted", async () =>
+  (await submitWithHeaderFrom(user)).startsWith("250"),
+);
+await protocolCheck("Sender identity: forged header From refused", async () =>
+  /^5\d\d /m.test(await submitWithHeaderFrom(`bob@${DEV_DOMAIN}`)),
+);
+await protocolCheck("Sender identity: two From lines refused", async () =>
+  /^5\d\d /m.test(await submitWithHeaderFrom(`${user}\r\nFrom: bob@${DEV_DOMAIN}`)),
+);
+await protocolCheck("Sender identity: authenticated null sender (MAIL FROM:<>) refused", async () => {
+  const w = await wire(port("STALWART_SUBMISSIONS_PORT", 465), true);
+  await w.read(/^220 /m);
+  w.send("EHLO verify.local");
+  await w.read(/^250 /m);
+  w.send(`AUTH PLAIN ${Buffer.from(`\0${user}\0${password}`).toString("base64")}`);
+  await w.read(/^\d{3} /m);
+  w.send("MAIL FROM:<>");
+  const res = await w.read(/^\d{3} /m);
+  w.send("QUIT");
+  w.close();
+  return /^5\d\d /m.test(res);
+});
 await protocolCheck("IMAP 143: greeting + STARTTLS offered", async () => {
   const w = await wire(port("STALWART_IMAP_PORT", 143), false);
   const res = await w.read(/^\* OK/m);
@@ -200,6 +244,14 @@ await protocolCheck("SMTP 587: greeting + STARTTLS offered", async () => {
   const res = await w.read(/^250 /m);
   w.close();
   return /STARTTLS/i.test(res);
+});
+await protocolCheck("SMTP 587: no AUTH mechanisms offered before STARTTLS", async () => {
+  const w = await wire(port("STALWART_SUBMISSION_PORT", 587), false);
+  await w.read(/^220 /m);
+  w.send("EHLO verify.local");
+  const res = await w.read(/^250 /m);
+  w.close();
+  return !/^250[ -]AUTH/im.test(res);
 });
 await protocolCheck("ManageSieve 4190: greeting", async () => {
   const w = await wire(port("STALWART_SIEVE_PORT", 4190), false);

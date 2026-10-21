@@ -10,6 +10,12 @@ export {
   StalwartTransport,
 } from "./client";
 export { type DomainInput, type RelayRouteInput, StalwartManagement, type UserInput } from "./management";
+export {
+  applySenderIdentityPolicy,
+  SENDER_IDENTITY_DATA_SCRIPT_EXPRESSION,
+  SENDER_IDENTITY_SCRIPT,
+  SENDER_IDENTITY_SIEVE,
+} from "./sender";
 
 const globalForStalwart = globalThis as unknown as { amStalwart?: StalwartManagement };
 

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { hashPassword } from "@anhourmail/adapters/auth";
-import type { StalwartManagement } from "@anhourmail/stalwart-client";
+import { applySenderIdentityPolicy, type StalwartManagement } from "@anhourmail/stalwart-client";
 
 /**
  * Dev-only Stalwart configuration (docs/internal/02-mail-infrastructure.md "Dev mail flow").
@@ -61,6 +61,16 @@ export async function applyDevMailPlan(
   ] as const) {
     if (await mgmt.ensureListener(l)) restartNeeded = true;
   }
+  // Header From must equal the authenticated envelope sender (ADR-0019). Also a production setting.
+  await applySenderIdentityPolicy(mgmt);
+  // Transport hardening (ADR-0018, validated 2026-10-21): offer no SASL mechanisms on submission until the session
+  // is TLS. The default still offered OAUTHBEARER/XOAUTH2 in clear text on 587. Port 25 never offers AUTH.
+  await mgmt.updateSingleton("x:MtaStageAuth", {
+    saslMechanisms: {
+      match: { "0": { if: "local_port != 25 && is_tls", then: "[plain, login, oauthbearer, xoauth2]" } },
+      else: "false",
+    },
+  });
   await mgmt.reloadSettings();
 
   const domainId = await mgmt.upsertDomain({ name: DEV_DOMAIN });

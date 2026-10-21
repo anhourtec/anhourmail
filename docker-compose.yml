@@ -101,6 +101,21 @@ services:
       MP_MAX_MESSAGES: "5000"
     networks: [mailnet]
 
+  # Dev only: receives Stalwart webhooks (auth, delivery, DSN, abuse-report events) on the isolated mail network
+  # and prints them, so payloads can be inspected with `docker compose logs event-sink`. The real receiver lives in
+  # apps/worker (docs/internal/audit.md "Ingesting Stalwart events"). Not published to the host.
+  event-sink:
+    image: node:22.22.3-alpine3.24
+    profiles: [dev]
+    networks: [mailnet]
+    command:
+      - node
+      - -e
+      - >-
+        require("http").createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c));
+        req.on("end", () => { console.log(JSON.stringify({ path: req.url, signature: req.headers["x-signature"] ?? null,
+        headers: Object.keys(req.headers), body: b.slice(0, 4000) })); res.end("ok"); }); }).listen(8080);
+
   # Host -> container forwarder for the isolated mail network. Carries inbound connections only.
   mail-edge:
     image: alpine/socat:1.8.0.3
