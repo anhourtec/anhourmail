@@ -66,7 +66,7 @@ deployment. Follow the [roadmap](./docs/internal/09-roadmap.md) and the [changel
 
 | Feature            | Description                                                                 |
 | ------------------ | --------------------------------------------------------------------------- |
-| **Free address**   | `you@anhourmail.com` with 10 GB, invite-only at launch                      |
+| **Free address**   | `you@anhourmail.com` with 10 GB                                             |
 | **Custom domains** | Bring your own domains on paid plans, with guided DNS and live verification |
 | **Aliases**        | Aliases, catch-all and masked aliases with per-alias on/off and stats       |
 | **Mail access**    | IMAP, SMTP and JMAP; app passwords; two-factor sign-in                      |
@@ -145,7 +145,7 @@ All ports are bound to `127.0.0.1` and can be changed in `.env`; `npm run ports:
 | Path                       | What it is                                                           | Licence       |
 | -------------------------- | -------------------------------------------------------------------- | ------------- |
 | `apps/web`                 | Console and webmail (Next.js), API routes, JMAP proxy                | AGPL-3.0-only |
-| `apps/site`                | Marketing site, waitlist, public docs (`/docs`), changelog, credits  | AGPL-3.0-only |
+| `apps/site`                | Marketing site, public docs (`/docs`), changelog, credits            | AGPL-3.0-only |
 | `apps/worker`              | Jobs and scheduler: provisioning, DNS checks, reconciler, imports    | AGPL-3.0-only |
 | `packages/core`            | Domain rules and services, no database or SDK imports                | AGPL-3.0-only |
 | `packages/adapters`        | Postgres and in-memory adapters, contract tests                      | AGPL-3.0-only |

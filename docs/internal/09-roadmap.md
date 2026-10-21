@@ -1,10 +1,10 @@
 # 09 — Roadmap
 
-Last updated: 2026-10-21. Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
+Last updated: 2026-10-22. Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
 
 ## Phase 0 — Research, docs, scaffold (this phase)
 
-- Research in `research/`; internal docs, ADRs, roles, audit; agent definitions; repo scaffold with ports-and-adapters, the Waitlist example slice, RBAC matrix stubs, audit module, CI workflow.
+- Research in `research/`; internal docs, ADRs, roles, audit; agent definitions; repo scaffold with ports-and-adapters, an example vertical slice, RBAC matrix stubs, audit module, CI workflow.
 - Dev stack: Postgres, Redis, Stalwart v0.16.27, Mailpit; `dev.test` seeded; mail between mailboxes visible via JMAP; nothing relays outside Mailpit.
 - **Exit:** owner review of docs and open questions; `stack:verify`, lint, typecheck, unit, `test:rbac` and `test:e2e` green on the scaffold.
 
@@ -40,11 +40,11 @@ pin the rules bundle locally and re-test; **`x:WebHook` (item 3)** — events, p
 the dev `event-sink`; receiver design in `audit.md` "Ingesting Stalwart events". Still open from item 3: a live DSN
 capture (Mailpit accepts everything; an unknown local recipient produced no DSN — see `03-anti-spam-and-abuse.md`).
 
-## Phase 2 — Marketing site + waitlist + invites
+## Phase 2 — Marketing site
 
-- Landing page in the BookYourPTO style (`branding.md` marketing scale), pricing from `packages/shared`, FAQ, trust page (privacy policy PIPEDA/BC PIPA, AUP with CASL, transparency report, cost breakdown), waitlist with double opt-in, invite codes with source/UTM tracking, changelog/blog content folder, `/credits`.
-- **Exit:** waitlist live behind rate limits and fail-closed checks; legal pages reviewed by counsel; zero third-party requests (verified in Playwright); Lighthouse ≥ 95 on all marketing pages.
-- **Status (2026-10-21):** built — site pages, waitlist with double opt-in, staff invites from the waitlist, invite-only sign-up, zero third-party requests (e2e). Open: counsel review; mobile Lighthouse is 90–94 (desktop ≥ 98); paid-user invite codes move to Phase 5.
+- Landing page in the BookYourPTO style (`branding.md` marketing scale), pricing from `packages/shared`, FAQ, trust page (privacy policy PIPEDA/BC PIPA, AUP with CASL, transparency report, cost breakdown), "Get started" and "Sign in" CTAs to the console, changelog/blog content folder, `/credits`.
+- **Exit:** legal pages reviewed by counsel; zero third-party requests (verified in Playwright); Lighthouse ≥ 95 on all marketing pages.
+- **Status (2026-10-22):** built — site pages, zero third-party requests (e2e). A waitlist (double opt-in, staff invites from it, invite-only sign-up) was built in this phase, then removed from the product on 2026-10-22 by maintainer decision; any waitlist now runs outside the product, and sign-up is open (behind the production firewall IP allow-list) or closed. Open: counsel review; mobile Lighthouse is 90–94 (desktop ≥ 98); paid-user invite codes move to Phase 5.
 
 ## Phase 3 — Control plane
 
@@ -73,14 +73,14 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
 - Production VPS (port 25 tested on day one), IP and /24 screening, DNS for `anhourmail.com`, Postmaster/SNDS/Yahoo registration, warm-up weeks −4 to −1 (`research/deliverability.md` "Warm-up schedule"), staff mail on AnhourMail.
 - **Exit:** mail-tester 10/10; seed placement ≥ 95% inbox at Gmail/Outlook/Yahoo; zero blocklist listings; DMARC reports clean.
 
-## Phase 8 — Invite-only beta
+## Phase 8 — Closed beta
 
-- Waitlist invites in waves (≤ 100, then ≤ 250, then ≤ 500), paid signups, support process, transparency page live.
+- Beta users admitted in waves (≤ 100, then ≤ 250, then ≤ 500), paid signups, support process, transparency page live.
 - **Exit:** independent penetration test done and its summary published; spam rate < 0.1% for 4 consecutive weeks; no P1 incidents open; full `standard` security audit done; MTA-STS `enforce`; DMARC `quarantine`.
 
 ## Phase 9 — Public launch
 
-- Paid signups open, free stays invite-gated per the Phase 6 decision, community launch posts (external marketing agents use the waitlist, invite codes and changelog only).
+- Paid signups open, free sign-up gated per the Phase 6 decision, community launch posts (external marketing agents use invite codes and the changelog only).
 - **Exit:** DMARC `reject`; on-call and runbooks exercised; external pentest findings resolved.
 
 ## Phase 4.1 — Zero-access mode

@@ -66,7 +66,7 @@ The BookYourPTO look, rebuilt in React and Tailwind v4 with an `am-site-*` prefi
 - A medium-weight geometric display (General Sans 500, tight tracking) and the single Anhourtec blue.
 - 8 px buttons with an inset highlight. A floating rounded nav pill. Big soft cards (20–30 px radius), pill eyebrows, an ~80 px section rhythm, and dark "night" bands (`night`, `night-gradient` navy → teal, `night-fade`) for statements and the final CTA.
 - Scroll reveals use one shared IntersectionObserver, are disabled under reduced motion, and there is no smooth-scroll library.
-- **Sections:** hero (changelog chip, h1, lead, waitlist CTA + "How it works"), product shot, night-band statement, alternating feature rows (private by default, your domain, fast webmail, aliases and masked aliases, no tracking), security/trust panel, three-step "how it works", pricing (from `packages/shared`), FAQ, final CTA with the waitlist form. **No testimonials or logo strips until they are real.**
+- **Sections:** hero (changelog chip, h1, lead, "Get started" CTA + "How it works"), product shot, night-band statement, alternating feature rows (private by default, your domain, fast webmail, aliases and masked aliases, no tracking), security/trust panel, three-step "how it works", pricing (from `packages/shared`), FAQ, final CTA with "Get started" and "Sign in". **No testimonials or logo strips until they are real.**
 - The docs use the same header, footer, tokens and fonts, with Fumadocs layout primitives restyled to the tokens.
 
 ## Voice

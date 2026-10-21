@@ -47,8 +47,6 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `signature_template` | `signature_template.changed`, `signature_template.applied` |
 | `disclaimer` | `disclaimer.changed` |
 | `bulk` | `bulk.addon_enabled`, `bulk.addon_disabled`, `bulk.sender_domain_verified`, `bulk.list_created`, `bulk.list_imported`, `bulk.list_deleted`, `bulk.campaign_scheduled`, `bulk.campaign_held`, `bulk.campaign_approved`, `bulk.campaign_sent`, `bulk.campaign_cancelled`, `bulk.suppression_added`, `bulk.suppression_removed`, `bulk.sending_paused` |
-| `waitlist` | `waitlist.joined`, `waitlist.invited`, `waitlist.confirmed` |
-| `invite` | `invite.created`, `invite.redeemed`, `invite.revoked` |
 
 <!-- END generated: audit actions -->
 

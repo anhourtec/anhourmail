@@ -1,6 +1,6 @@
 # Rate limits
 
-Last updated: 2026-10-21. Rule 14: **every endpoint has a rate limit**. Code: `packages/server/src/rate-limit.ts` (tiers) + the `route()` wrapper in `apps/web`. When the code lands, the tier names and numbers there are canonical; this table is updated in the same change.
+Last updated: 2026-10-22. Rule 14: **every endpoint has a rate limit**. Code: `packages/server/src/rate-limit.ts` (tiers) + the `route()` wrapper in `apps/web`. When the code lands, the tier names and numbers there are canonical; this table is updated in the same change.
 
 ## How it works
 
@@ -18,21 +18,21 @@ Last updated: 2026-10-21. Rule 14: **every endpoint has a rate limit**. Code: `p
 
 ## Tiers
 
-| Tier          | Limit / window                                                                                                                | Key               | Fail       | Used by                                                                                |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------- | ----------------- | ---------- | -------------------------------------------------------------------------------------- |
-| `read`        | 600 / 60 s                                                                                                                    | caller            | open       | GET/HEAD default                                                                       |
-| `write`       | 120 / 60 s                                                                                                                    | caller            | open       | Non-GET default; domain add/remove, mailbox create, quota change                       |
-| `auth`        | 30 / 60 s per IP; 10 failed sign-ins / 15 min per account → lockout 15 min                                                    | ip + account      | closed     | Sign-in, 2FA verify, password reset request, SSO handoff exchange                      |
-| `signup`      | 5 / hour per IP; 3 / day per phone number                                                                                     | ip, phone hash    | closed     | Account creation, phone OTP send                                                       |
-| `waitlist`    | `publicForm` 10 / 15 min per IP; `waitlistMail` 3 confirmation emails / day per email hash (over the cap: same 202, no email) | ip, email hash    | closed     | `POST /api/public/waitlist`, `POST /api/public/waitlist/confirm`, confirm resend       |
-| `invite`      | 30 / hour per user; 60 / 15 min per IP for redemption                                                                         | user, ip          | closed     | Create, send and redeem invites                                                        |
-| `dnsVerify`   | 20 / hour per domain; 60 / hour per account                                                                                   | domain, account   | open       | "Check now" on DNS records                                                             |
-| `export`      | 3 / day per account                                                                                                           | account           | closed     | Data export requests, audit export                                                     |
-| `sending`     | Published trust-tier limits (`packages/shared/src/sending.ts`); recipients counted per message                                | account + mailbox | **closed** | Webmail send (BFF), alias creation burst (20 / hour), masked alias creation (50 / day) |
-| `sensitive`   | 30 / hour                                                                                                                     | caller            | closed     | App password creation, 2FA changes, member invites, role changes                       |
-| `webhook`     | 120 / 60 s                                                                                                                    | ip                | open       | Stripe webhooks (signature verified first), Stalwart WebHook (internal network only)   |
-| `staff`       | 300 / 60 s                                                                                                                    | user              | open       | Staff console reads; act-as start is under `sensitive`                                 |
-| `publicAsset` | 600 / 60 s                                                                                                                    | ip                | open       | Image proxy (`mail.` host, also capped per message), well-known files                  |
+| Tier          | Limit / window                                                                                 | Key               | Fail       | Used by                                                                                |
+| ------------- | ---------------------------------------------------------------------------------------------- | ----------------- | ---------- | -------------------------------------------------------------------------------------- |
+| `read`        | 600 / 60 s                                                                                     | caller            | open       | GET/HEAD default                                                                       |
+| `write`       | 120 / 60 s                                                                                     | caller            | open       | Non-GET default; domain add/remove, mailbox create, quota change                       |
+| `auth`        | 30 / 60 s per IP; 10 failed sign-ins / 15 min per account → lockout 15 min                     | ip + account      | closed     | Sign-in, 2FA verify, password reset request, SSO handoff exchange                      |
+| `signup`      | 5 / hour per IP; 3 / day per phone number                                                      | ip, phone hash    | closed     | Account creation, phone OTP send                                                       |
+| `publicForm`  | 10 / 15 min per IP                                                                             | ip                | closed     | Generic tier for unauthenticated forms; no current users                               |
+| `invite`      | 30 / hour per user; 60 / 15 min per IP for redemption                                          | user, ip          | closed     | Create, send and redeem invites                                                        |
+| `dnsVerify`   | 20 / hour per domain; 60 / hour per account                                                    | domain, account   | open       | "Check now" on DNS records                                                             |
+| `export`      | 3 / day per account                                                                            | account           | closed     | Data export requests, audit export                                                     |
+| `sending`     | Published trust-tier limits (`packages/shared/src/sending.ts`); recipients counted per message | account + mailbox | **closed** | Webmail send (BFF), alias creation burst (20 / hour), masked alias creation (50 / day) |
+| `sensitive`   | 30 / hour                                                                                      | caller            | closed     | App password creation, 2FA changes, member invites, role changes                       |
+| `webhook`     | 120 / 60 s                                                                                     | ip                | open       | Stripe webhooks (signature verified first), Stalwart WebHook (internal network only)   |
+| `staff`       | 300 / 60 s                                                                                     | user              | open       | Staff console reads; act-as start is under `sensitive`                                 |
+| `publicAsset` | 600 / 60 s                                                                                     | ip                | open       | Image proxy (`mail.` host, also capped per message), well-known files                  |
 
 Abuse-detection thresholds are **not** rate limits and are not published here (rule 33, `03-anti-spam-and-abuse.md`).
 

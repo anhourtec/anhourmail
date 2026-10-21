@@ -8,7 +8,7 @@ Public facts are defined once in `packages/shared/src/platform.ts`. This table e
 
 | Host / path                                                | Purpose                                                   | Served by                |
 | ---------------------------------------------------------- | --------------------------------------------------------- | ------------------------ |
-| `anhourmail.com`                                           | Marketing site and waitlist                               | `apps/site`              |
+| `anhourmail.com`                                           | Marketing site                                            | `apps/site`              |
 | `anhourmail.com/docs`                                      | Public docs (from `docs/public` + `docs/shared`)          | `apps/site` (Fumadocs)   |
 | `anhourmail.com/changelog`, `/credits`                     | Changelog, open-source credits                            | `apps/site`              |
 | `app.anhourmail.com`                                       | Console                                                   | `apps/web` (host-routed) |

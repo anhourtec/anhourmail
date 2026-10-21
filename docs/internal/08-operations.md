@@ -75,8 +75,8 @@ Security patches skip the soak but still follow steps 1–4 and 6.
 Decision 2026-10-21 (maintainer): until public launch the app is **not exposed to the internet**. The firewall
 allows HTTPS (443) only from allow-listed IPs (staff, invited testers); everyone else is dropped before NGINX.
 Within that boundary self-service sign-up is on (`SIGNUP_MODE=open`): new users get a personal Free account with
-themselves as Owner (`provisionSignUp`, audited). Invite-only sign-up replaces it before the public beta
-(`SIGNUP_MODE=closed` + invite acceptance, phase 3); `SIGNUP_MODE=closed` makes `/sign-up` a 404 and the auth
+themselves as Owner (`provisionSignUp`, audited). Who gets an account is decided outside the product (the
+allow-list; there is no waitlist — decision 2026-10-22). `SIGNUP_MODE=closed` makes `/sign-up` a 404 and the auth
 endpoint refuses sign-ups. The allow-list itself lives in the private ops repo. Mail ports (25/465/587/993/995/
 143/110/4190) are not behind the allow-list — mail must flow.
 

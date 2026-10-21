@@ -13,7 +13,7 @@ npm workspaces:
 | Path                                          | What                                                                                        | Licence       |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------- |
 | `apps/web`                                    | Console (`app.`) + webmail (`mail.`) + BFF + public API                                     | AGPL-3.0-only |
-| `apps/site`                                   | Marketing, waitlist, `/docs` (Fumadocs), `/changelog`, `/credits`                           | AGPL-3.0-only |
+| `apps/site`                                   | Marketing, `/docs` (Fumadocs), `/changelog`, `/credits`                                     | AGPL-3.0-only |
 | `apps/worker`                                 | Queue worker + scheduler                                                                    | AGPL-3.0-only |
 | `packages/core`                               | Domain, services, ports, audit                                                              | AGPL-3.0-only |
 | `packages/adapters`                           | Postgres + in-memory adapters, contract tests, migrations                                   | AGPL-3.0-only |

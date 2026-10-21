@@ -1,6 +1,6 @@
 ---
 name: marketing-site
-description: Use for the public marketing site in apps/site (outside /docs) — landing sections, pricing table, trust/privacy pages, waitlist form UI, changelog and blog pages, credits page, SEO metadata.
+description: Use for the public marketing site in apps/site (outside /docs) — landing sections, pricing table, trust/privacy pages, "Get started" and "Sign in" CTAs, changelog and blog pages, credits page, SEO metadata.
 tools: Read, Grep, Glob, Bash, Write, Edit
 ---
 
@@ -23,7 +23,7 @@ You are the AnhourMail marketing-site engineer.
 - Zero third-party requests: self-hosted fonts, no analytics, no cookies, no CDNs, no embedded widgets.
 - Prices, limits, hostnames come from `@anhourmail/shared` — never typed by hand.
 - Truthful: no invented stats, testimonials or logos. Never state or imply a hosting region or data-centre location (product decision 2026-10-21).
-- Waitlist posts same-origin to `/api/public/waitlist` (served by apps/web); validation and limits are server-side.
+- "Get started" links to the console's `/sign-up` (`SIGN_UP_URL` in `apps/site/src/lib/site.ts`) and "Sign in" to the console. The site has no forms that post data; sign-up, validation and limits live in apps/web.
 - Tone: short, concrete, warm, no exclamation marks, sentence case. Respect `prefers-reduced-motion`.
 
 ## Definition of done

@@ -43,9 +43,9 @@ The limits are the values in `packages/shared/src/sending.ts` (`TRUST_TIERS`); r
 
 Every comparable provider that offered open free signup later added gates: Disroot, Riseup, Proton, Tuta, mailbox.org (`research/deliverability.md` §7). Recommended launch posture:
 
-- Free stays **invite/waitlist-gated** with risk-based **phone verification**.
+- Free sign-up stays **gated**: `SIGNUP_MODE` is `open` only while the console sits behind the production firewall IP allow-list, otherwise `closed`; plus risk-based **phone verification**.
 - Free accounts in `new` **cannot send to external domains until verified and a minimum account age passes**. Internal delivery works immediately (the mailbox.org model).
-- Free outbound moves to a **separate outbound IP** before free signups open beyond the invite beta (`01-architecture.md` v2).
+- Free outbound moves to a **separate outbound IP** before free signups open to the public (`01-architecture.md` v2).
 - Per-recipient counting, not per-message.
 
 Status: proposed in `09-roadmap.md` Phase 6 exit criteria. The final decision is the owner's.
@@ -132,4 +132,4 @@ Each produces an `AbuseEvent` (`04-data-model.md`) and an audit entry.
 ## CASL posture (`research/market-and-legal.md` §4)
 
 - The carrier exemption covers mere transmission only. The CRTC position is that a host can be liable for **aiding** contraventions, so we keep a strict AUP, an abuse desk, documented enforcement, and records of actions.
-- Our own mail (waitlist confirmation, invites, product news) needs consent records (express consent with timestamp, source and IP; double opt-in for the waitlist) and a working unsubscribe that is honoured within 10 business days (we aim for immediately).
+- Our own mail (invites, product news) needs consent records (express consent with timestamp, source and IP) and a working unsubscribe that is honoured within 10 business days (we aim for immediately).

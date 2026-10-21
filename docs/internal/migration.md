@@ -33,14 +33,15 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 ## Summary
 
-| #    | Migration                          | Commit      | Date       | Change                                                                                   | Rollback |
-| ---- | ---------------------------------- | ----------- | ---------- | ---------------------------------------------------------------------------------------- | -------- |
-| 0005 | `0005_domain_claims`               | uncommitted | 2026-10-21 | Domain names unique per account; across accounts only once claimed (verified)            | Caution  |
-| 0004 | `0004_waitlist_opt_in_and_invites` | `3e75c1f`   | 2026-10-21 | Waitlist double opt-in columns; invite source/waitlist link/acceptance                   | Safe     |
-| 0003 | `0003_provisioning_queue`          | `843be65`   | 2026-10-21 | `provisioning_job` table; `customer_domain.stalwart_id/last_error`, `mailbox.last_error` | Safe     |
-| 0002 | `0002_user_first_last_name`        | `710e664`   | 2026-10-21 | `auth_user.first_name` (not null, default '') and `last_name`                            | Safe     |
-| 0001 | `0001_audit_append_only`           | `710e664`   | 2026-10-21 | Trigger blocking UPDATE/DELETE/TRUNCATE on `audit_log`                                   | Caution  |
-| 0000 | `0000_init`                        | `710e664`   | 2026-10-21 | Initial control-plane schema (14 tables)                                                 | Safe     |
+| #    | Migration                          | Commit      | Date       | Change                                                                                   | Rollback        |
+| ---- | ---------------------------------- | ----------- | ---------- | ---------------------------------------------------------------------------------------- | --------------- |
+| 0006 | `0006_remove_waitlist`             | uncommitted | 2026-10-22 | Drop `waitlist_entry`; drop `invite.source`, `invite.waitlist_entry_id`                  | Not recommended |
+| 0005 | `0005_domain_claims`               | uncommitted | 2026-10-21 | Domain names unique per account; across accounts only once claimed (verified)            | Caution         |
+| 0004 | `0004_waitlist_opt_in_and_invites` | `3e75c1f`   | 2026-10-21 | Waitlist double opt-in columns; invite source/waitlist link/acceptance                   | Safe            |
+| 0003 | `0003_provisioning_queue`          | `843be65`   | 2026-10-21 | `provisioning_job` table; `customer_domain.stalwart_id/last_error`, `mailbox.last_error` | Safe            |
+| 0002 | `0002_user_first_last_name`        | `710e664`   | 2026-10-21 | `auth_user.first_name` (not null, default '') and `last_name`                            | Safe            |
+| 0001 | `0001_audit_append_only`           | `710e664`   | 2026-10-21 | Trigger blocking UPDATE/DELETE/TRUNCATE on `audit_log`                                   | Caution         |
+| 0000 | `0000_init`                        | `710e664`   | 2026-10-21 | Initial control-plane schema (14 tables)                                                 | Safe            |
 
 ## Details
 
@@ -54,6 +55,17 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0006_remove_waitlist · uncommitted · 2026-10-22 · Not recommended
+
+- Added: —
+- Changed: —
+- Removed: table `waitlist_entry` (with its indexes); columns `invite.source` and `invite.waitlist_entry_id`. The
+  maintainer removed the waitlist from the product (2026-10-22); there was no production data yet.
+- Data: dev/demo waitlist rows and their attribution are deleted. In a deployment holding real sign-ups, export
+  them first (this migration is the drop step of add → move → drop; the move step is the maintainer's export).
+- Rollback: restore from the pre-migration backup; re-creating the empty table from 0004 is possible but the data
+  is gone.
 
 ### 0005_domain_claims · `d628175` · 2026-10-21 · Caution
 

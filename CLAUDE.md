@@ -5,7 +5,7 @@
 AnhourMail is a hosted email service by **Anhourtec** (Vancouver/Victoria, BC, Canada) for privacy-minded,
 tech-savvy individuals: free `@anhourmail.com` addresses, custom domains on paid plans, aliases and masked aliases,
 IMAP/SMTP/JMAP, and a fast open-source webmail. Mail is handled by **Stalwart** (AGPL-3.0, run unmodified and
-driven through its JMAP management API). Everything else — signup, waitlist, invites, plans, billing, domains,
+driven through its JMAP management API). Everything else — signup, invites, plans, billing, domains,
 mailboxes, aliases, quotas, abuse, audit — is our control plane.
 
 Start every session by reading `docs/internal/handoff.md` (local only), then the docs for the area you touch:
@@ -16,7 +16,7 @@ Start every session by reading `docs/internal/handoff.md` (local only), then the
 
 | Layer    | Choice                                                                                                                                                                                                                                                                                                                                                                                                |
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Apps     | `apps/web` (console on `app.` + webmail on `mail.`, one Next.js app routed by host), `apps/site` (marketing, waitlist UI, `/docs` via Fumadocs, `/changelog`, `/credits`), `apps/worker` (queue worker + scheduler)                                                                                                                                                                                   |
+| Apps     | `apps/web` (console on `app.` + webmail on `mail.`, one Next.js app routed by host), `apps/site` (marketing, `/docs` via Fumadocs, `/changelog`, `/credits`), `apps/worker` (queue worker + scheduler)                                                                                                                                                                                                |
 | Packages | `packages/core` (domain, services, ports — no ORM/SDK imports), `packages/adapters` (Postgres via drizzle, in-memory, contract tests), `packages/shared` (facts, plans, limits, DNS templates, RBAC matrix, zod schemas), `packages/server` (logger, health, Redis), `packages/stalwart-client`, `packages/jmap-client`, `packages/ui` (tokens, fonts, skeletons), `packages/config` (tsconfig bases) |
 | Frontend | Next.js 16 App Router, React 19, TypeScript strict, Tailwind v4 + shadcn/ui, self-hosted General Sans + Geist                                                                                                                                                                                                                                                                                         |
 | Auth     | better-auth (console identity); Stalwart OAuth tokens held server-side for webmail                                                                                                                                                                                                                                                                                                                    |
@@ -110,9 +110,9 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
     server code (enforced by `check:logging`). New secret or content keys go in `REDACT_KEYS`.
 13. **Health endpoints are cheap, public and non-sensitive:** `/api/health` (liveness, touches nothing) and
     `/api/health/ready` (Postgres, Redis, Stalwart; statuses and latencies only).
-14. **Every endpoint has a rate limit:** defaults plus tighter tiers for auth, signup, waitlist, invites, DNS verify,
+14. **Every endpoint has a rate limit:** defaults plus tighter tiers for auth, signup, invites, DNS verify,
     exports and sending-related actions. Table in `docs/internal/rate-limits.md`. Redis failures fail open, except
-    tiers marked fail-closed (send quotas, signup, waitlist, password reset, alias creation).
+    tiers marked fail-closed (send quotas, signup, password reset, alias creation).
 15. **Every migration is logged in `docs/internal/migration.md`** with its rollback level. Never edit an applied
     migration. Destructive changes ship in three steps (add, move data, drop) after a backup.
 16. **Third-party secrets** (Stripe, Stalwart API key, SMS/OTP provider, DNS provider) are encrypted at rest
@@ -276,3 +276,4 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 | 2026-10-21 | Nishchayjeet Singh (Nish) | Rule 54: /security-review + Cloudflare security-audit skill (quick, scoped) at the end of every session                            |
 | 2026-10-21 | Nishchayjeet Singh (Nish) | Rule 23: passwords stored only as salted argon2id hashes (console + mailbox)                                                       |
 | 2026-10-21 | Nishchayjeet Singh (Nish) | Rule 55: checkpoint after every slice (handoff + reviews + commit) so a usage-limit stop loses nothing                             |
+| 2026-10-22 | Nishchayjeet Singh (Nish) | Waitlist removed from the product (maintainer decision); sign-up is open (firewalled) or closed                                    |

@@ -8,7 +8,7 @@ The owner requires that business code is not designed around the database (secti
 
 ## Decision
 
-- `packages/core`: domain types, rules and services as plain TypeScript. It depends only on **port interfaces**: `WaitlistRepository`, `AuditRepository`, `UnitOfWork`, `Clock`, `IdGenerator`, `Hasher`, and later `MailboxRepository`, `DomainRepository`, `MailServer` (Stalwart), `Payments` (Stripe), `OtpSender`, `DnsResolver`.
+- `packages/core`: domain types, rules and services as plain TypeScript. It depends only on **port interfaces**: `DomainRepository`, `AuditRepository`, `UnitOfWork`, `Clock`, `IdGenerator`, `Hasher`, and later `MailboxRepository`, `MailServer` (Stalwart), `Payments` (Stripe), `OtpSender`, `DnsResolver`.
 - `packages/adapters`: `db-postgres` (drizzle; mapping between rows and domain objects happens only here), `memory` (for unit tests and the RBAC harness), and `contract` (a shared test suite every adapter must pass).
 - External systems (Stalwart, Stripe, SMS/OTP, DNS) each sit behind a port with a fake.
 - **Enforced by ESLint `no-restricted-imports`:** only `packages/adapters`, `packages/server`, `packages/stalwart-client`, `apps/*/src/server/adapters` and composition roots (`apps/*/src/server/container.ts`) may import `drizzle-orm`, `pg`, `ioredis`, `better-auth`, `stripe` or `@anhourmail/stalwart-client`. `packages/core` may import none of them.

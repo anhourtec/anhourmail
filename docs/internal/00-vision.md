@@ -4,7 +4,7 @@ Last updated: 2026-10-21
 
 ## What AnhourMail is
 
-A hosted email service from Anhourtec (British Columbia, Canada) for **privacy-minded, tech-savvy individuals**. It offers free `@anhourmail.com` addresses (invite-only), paid custom domains, aliases, catch-all and masked aliases, standard protocols (IMAP, SMTP, JMAP), and an **open-source, fast webmail**, the successor to HourMail.
+A hosted email service from Anhourtec (British Columbia, Canada) for **privacy-minded, tech-savvy individuals**. It offers free `@anhourmail.com` addresses, paid custom domains, aliases, catch-all and masked aliases, standard protocols (IMAP, SMTP, JMAP), and an **open-source, fast webmail**, the successor to HourMail.
 
 For families and small groups on Plus/Supporter it also offers the mail collaboration people know from Microsoft 365: shared mailboxes, distribution lists (static and dynamic), groups, delegated access (full access, send as, send on behalf, folder sharing), mail flow rules, forwarding, auto-replies and message trace — built on Stalwart Community, with policy in our control plane (`10-collaboration.md`, ADR-0013).
 
@@ -63,7 +63,7 @@ We are honest about limits. Mail is **not end-to-end encrypted** in v1 (it is en
 | Webmail speed   | Warm open (IndexedDB cache)                                               | ≤ 300 ms to list                                                  |
 | Webmail speed   | Open a message (p75)                                                      | ≤ 150 ms cached, ≤ 400 ms uncached                                |
 | Webmail speed   | Folder switch (p75)                                                       | ≤ 100 ms cached                                                   |
-| Onboarding      | Waitlist invite → first mail received (free)                              | ≤ 3 minutes                                                       |
+| Onboarding      | Sign-up → first mail received (free)                                      | ≤ 3 minutes                                                       |
 | Onboarding      | Custom domain: add → all required records verified (user with DNS access) | ≤ 15 minutes                                                      |
 | Trust           | Abuse reports actioned                                                    | first response ≤ 24 h                                             |
 | Economics       | Paying users covering fixed infra                                         | ≥ 300 by end of beta + 6 months (see `06-pricing-and-billing.md`) |

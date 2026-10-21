@@ -10,7 +10,7 @@ A free consumer mail service attracts abuse. If customer mail shared a domain wi
 
 - `anhourmail.com` is the product domain: free addresses, marketing, docs, console, webmail, mail hostnames.
 - `anhourtec.com` carries staff mail only. It is never used for customer or free accounts (rule 28). It is hosted on AnhourMail itself after dogfooding, as a separate domain.
-- Platform mail (notifications, waitlist confirmations) is sent from `anhourmail.com` addresses.
+- Platform mail (notifications, password resets) is sent from `anhourmail.com` addresses.
 
 ## Consequences
 
