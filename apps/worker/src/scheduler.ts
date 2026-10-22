@@ -18,6 +18,8 @@ export const JOBS: readonly Job[] = [
   { name: "reconcile", script: "job:reconcile", everyMs: 3600_000, timeoutMs: 10 * 60_000, enabled: true },
   // Pending customer domains: activate them once their DNS checks out (docs: "re-checks automatically").
   { name: "domain-recheck", script: "job:domain-recheck", everyMs: 5 * 60_000, timeoutMs: 4 * 60_000, enabled: true },
+  // Deleted mailboxes past their grace period: remove the Stalwart account, then the rows (audited).
+  { name: "mailbox-purge", script: "job:mailbox-purge", everyMs: 3600_000, timeoutMs: 10 * 60_000, enabled: true },
 ];
 
 const HEARTBEAT = process.env.SCHEDULER_HEARTBEAT ?? "/tmp/scheduler-heartbeat";

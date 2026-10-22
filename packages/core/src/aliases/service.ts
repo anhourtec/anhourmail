@@ -24,13 +24,14 @@ export type AliasView = {
   kind: AliasKind;
   enabled: boolean;
   description: string | null;
-  mailbox: { id: string; address: string };
+  /** `deleting`: the mailbox is in its deletion grace period, so this alias is off on the mail server. */
+  mailbox: { id: string; address: string; deleting: boolean };
   createdAt: Date;
 };
 
 export type AliasOverview = {
   aliases: AliasView[];
-  /** Mailboxes the person can point an alias at. */
+  /** Mailboxes the person can point an alias at (not ones being deleted). */
   mailboxes: { id: string; address: string }[];
   /** The account's active domains (chosen aliases can use any of them). */
   domains: { id: string; name: string }[];
@@ -72,7 +73,7 @@ const view = (a: MailAlias, mailbox: Mailbox): AliasView => ({
   kind: a.kind,
   enabled: a.enabled,
   description: a.description,
-  mailbox: { id: mailbox.id, address: mailbox.address },
+  mailbox: { id: mailbox.id, address: mailbox.address, deleting: mailbox.status === "deleting" },
   createdAt: a.createdAt,
 });
 
@@ -102,7 +103,7 @@ export async function listAliases(deps: Deps, actor: Actor, accountId: string): 
     const plan = await planOf(r, accountId);
     return {
       aliases,
-      mailboxes: mailboxes.map((m) => ({ id: m.id, address: m.address })),
+      mailboxes: mailboxes.filter((m) => m.status !== "deleting").map((m) => ({ id: m.id, address: m.address })),
       domains: (await r.domains.listByAccount(accountId))
         .filter((d) => d.status === "active")
         .map((d) => ({ id: d.id, name: d.name })),
@@ -139,6 +140,7 @@ export async function createAlias(
       const mailboxId = typeof input.mailboxId === "string" ? input.mailboxId : "";
       const mailbox = (await reachable(repos, actor, accountId)).find((m) => m.id === mailboxId);
       if (!mailbox) throw new ValidationError("Choose one of your mailboxes.");
+      if (mailbox.status === "deleting") throw new ConflictError("That mailbox is being deleted. Restore it first.");
       const description = normaliseDescription(input.description);
 
       let next: () => string; // the address to try (masked: a fresh random one each time)
@@ -217,6 +219,9 @@ export async function setAliasEnabled(
     async (repos) => {
       const { alias, mailbox } = await scopedAlias(repos, actor, accountId, id);
       if (typeof input.enabled !== "boolean") throw new ValidationError("Say whether the alias is on or off.");
+      if (mailbox.status === "deleting") {
+        throw new ConflictError("This alias's mailbox is being deleted. Restore the mailbox first.");
+      }
       await repos.aliases.setEnabled(alias.id, input.enabled);
       await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: mailbox.id, runAfter: deps.clock.now() });
       return {

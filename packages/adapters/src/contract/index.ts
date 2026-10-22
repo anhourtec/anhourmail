@@ -210,6 +210,7 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
           quotaBytes: 1024,
           stalwartId: null,
           lastError: null,
+          purgeAfter: null,
           createdAt: new Date(),
         };
         await uow.run((r) => r.mailboxes.insert(m));
@@ -319,6 +320,56 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
       }
     });
 
+    it("provisioning: never claims a job whose subject already has a job running", async () => {
+      const { uow, cleanup } = await factory();
+      try {
+        const subject = randomUUID();
+        const other = randomUUID();
+        const t0 = new Date(Date.UTC(1990, 0, 1));
+        const now = new Date(Date.UTC(1990, 0, 2));
+        const first = await uow.run((r) =>
+          r.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: subject, runAfter: t0 }),
+        );
+        // Claim until we hold `first` (a shared database may have older claimable jobs; finish those).
+        for (let i = 0; i < 50; i++) {
+          const j = await uow.run((r) => r.provisioning.claimNext(now));
+          if (!j || j.id === first.id) break;
+          await uow.run((r) => r.provisioning.complete(j.id, new Date()));
+        }
+        expect((await uow.run((r) => r.provisioning.get(first.id)))?.status).toBe("running");
+        // While it runs, a newer job for the same subject waits; another subject's job doesn't.
+        const second = await uow.run((r) =>
+          r.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: subject, runAfter: t0 }),
+        );
+        expect(second.id).not.toBe(first.id);
+        const third = await uow.run((r) =>
+          r.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: other, runAfter: t0 }),
+        );
+        const claimed: string[] = [];
+        for (let i = 0; i < 50; i++) {
+          const j = await uow.run((r) => r.provisioning.claimNext(now));
+          if (!j) break;
+          claimed.push(j.id);
+          await uow.run((r) => r.provisioning.complete(j.id, new Date()));
+          if (j.id === third.id) break;
+        }
+        expect(claimed).toContain(third.id);
+        expect(claimed).not.toContain(second.id);
+        // Once the first is done, the second can run.
+        await uow.run((r) => r.provisioning.complete(first.id, new Date()));
+        let got = false;
+        for (let i = 0; i < 50 && !got; i++) {
+          const j = await uow.run((r) => r.provisioning.claimNext(now));
+          if (!j) break;
+          got = j.id === second.id;
+          await uow.run((r) => r.provisioning.complete(j.id, new Date()));
+        }
+        expect(got).toBe(true);
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("directory: mailbox with aliases, status updates, desired state", async () => {
       const { uow, cleanup, seedMail } = await factory();
       try {
@@ -342,8 +393,77 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         expect((await uow.run((r) => r.directory.getMailbox(mailboxId)))?.stalwartId).toBe("s-mb");
         const desired = await uow.run((r) => r.directory.desired());
         expect(desired.domains).toContain(domain);
-        expect(desired.mailboxes).toContainEqual({ address: `owner@${domain}`, quotaBytes: 1024 });
+        expect(desired.mailboxes).toContainEqual({
+          id: mailboxId,
+          address: `owner@${domain}`,
+          quotaBytes: 1024,
+          status: "active",
+          provisioned: true,
+        });
         expect(await uow.run((r) => r.directory.getMailbox("not-a-uuid"))).toBeNull();
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("mailbox lifecycle: conditional transitions, purge listing, delete-if-due with its aliases", async () => {
+      const { uow, cleanup, seedMail } = await factory();
+      try {
+        const tag = randomUUID().slice(0, 8);
+        const domain = `life-${tag}.test`;
+        const address = `owner@${domain}`;
+        const alias = `hello@${domain}`;
+        const { mailboxId } = await seedMail({ domain, address, alias, quotaBytes: 1024 });
+        const accountId = (await uow.run((r) => r.directory.getMailbox(mailboxId)))?.accountId ?? "";
+
+        // A new intent clears the error from applying the previous one.
+        await uow.run((r) => r.directory.markMailbox(mailboxId, { status: "active", lastError: "Error: gave up" }));
+        // Conditional: only from one of the listed statuses.
+        expect(await uow.run((r) => r.mailboxes.transition(mailboxId, ["suspended"], "active", null))).toBe(false);
+        expect(await uow.run((r) => r.mailboxes.transition(mailboxId, [], "suspended", null))).toBe(false);
+        expect(await uow.run((r) => r.mailboxes.transition(mailboxId, ["active"], "suspended", null))).toBe(true);
+        expect(await uow.run((r) => r.mailboxes.get(accountId, mailboxId))).toMatchObject({
+          status: "suspended",
+          purgeAfter: null,
+          lastError: null,
+        });
+
+        // Far in the past, so this row sorts first among anything else due in a shared database.
+        const purgeAfter = new Date(Date.UTC(1990, 0, 1));
+        expect(
+          await uow.run((r) => r.mailboxes.transition(mailboxId, ["active", "suspended"], "deleting", purgeAfter)),
+        ).toBe(true);
+        expect((await uow.run((r) => r.mailboxes.get(accountId, mailboxId)))?.purgeAfter).toEqual(purgeAfter);
+        expect((await uow.run((r) => r.directory.getMailbox(mailboxId)))?.purgeAfter).toEqual(purgeAfter);
+        expect((await uow.run((r) => r.directory.desired())).mailboxes).toContainEqual({
+          id: mailboxId,
+          address,
+          quotaBytes: 1024,
+          status: "deleting",
+          provisioned: false,
+        });
+
+        // Not due before purgeAfter; due at or after it.
+        const before = new Date(purgeAfter.getTime() - 1);
+        expect((await uow.run((r) => r.mailboxes.dueForPurge(before, 1000))).map((m) => m.id)).not.toContain(mailboxId);
+        expect((await uow.run((r) => r.mailboxes.dueForPurge(purgeAfter, 1000))).map((m) => m.id)).toContain(mailboxId);
+        expect(await uow.run((r) => r.mailboxes.deleteIfDue(mailboxId, before))).toBe(false);
+
+        // A restore wins: no longer deleting, so nothing is deleted.
+        await uow.run((r) => r.mailboxes.transition(mailboxId, ["deleting"], "provisioning", null));
+        expect(await uow.run((r) => r.mailboxes.deleteIfDue(mailboxId, new Date()))).toBe(false);
+        expect((await uow.run((r) => r.mailboxes.dueForPurge(new Date(), 1000))).map((m) => m.id)).not.toContain(
+          mailboxId,
+        );
+
+        await uow.run((r) => r.mailboxes.transition(mailboxId, ["provisioning"], "deleting", purgeAfter));
+        expect(await uow.run((r) => r.mailboxes.deleteIfDue(mailboxId, new Date()))).toBe(true);
+        expect(await uow.run((r) => r.mailboxes.get(accountId, mailboxId))).toBeNull();
+        expect(await uow.run((r) => r.directory.getMailbox(mailboxId))).toBeNull();
+        // Its aliases went with it, so both addresses are free again.
+        expect(await uow.run((r) => r.mailboxes.addressTaken(address))).toBe(false);
+        expect(await uow.run((r) => r.mailboxes.addressTaken(alias))).toBe(false);
+        expect(await uow.run((r) => r.mailboxes.deleteIfDue(mailboxId, new Date()))).toBe(false);
       } finally {
         await cleanup();
       }

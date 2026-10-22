@@ -7,8 +7,9 @@ import { type AccessRepository, ConflictError, type Repositories, type UnitOfWor
 import type { AccountRepository } from "@anhourmail/core/account";
 import type { AliasKind, AliasRepository, MailAlias } from "@anhourmail/core/aliases";
 import type { CustomerDomain, DomainRepository, DomainStatus } from "@anhourmail/core/domains";
-import type { Mailbox, MailboxRepository, MailboxStatus } from "@anhourmail/core/mailboxes";
+import { type Mailbox, type MailboxRepository, MAILBOX_STATUSES, type MailboxStatus } from "@anhourmail/core/mailboxes";
 import type {
+  DesiredMailbox,
   DomainState,
   JobKind,
   MailboxState,
@@ -310,12 +311,20 @@ class PgProvisioningRepository implements ProvisioningRepository {
   /** Atomic claim: FOR UPDATE SKIP LOCKED, so concurrent workers never take the same job. */
   async claimNext(now: Date): Promise<ProvisioningJob | null> {
     const stale = new Date(now.getTime() - STALE_RUNNING_MS);
+    // Claims are serialised (cheap, held only for this transaction) so the "no other job for this subject is
+    // running" check below can't be passed by two workers at once: one subject is never applied twice in parallel,
+    // so an older job can't land after a newer one (e.g. an unsuspend after a suspend).
+    await this.x.execute(sql`select pg_advisory_xact_lock(hashtextextended('provisioning_job:claim', 0))`);
     const res = await this.x.execute<{ id: string }>(sql`
       update provisioning_job set status = 'running', attempts = attempts + 1, locked_at = ${now}, updated_at = ${now}
       where id = (
-        select id from provisioning_job
-        where (status = 'queued' and run_after <= ${now}) or (status = 'running' and locked_at < ${stale})
-        order by run_after
+        select j.id from provisioning_job j
+        where ((j.status = 'queued' and j.run_after <= ${now}) or (j.status = 'running' and j.locked_at < ${stale}))
+          and not exists (
+            select 1 from provisioning_job r
+            where r.subject_id = j.subject_id and r.id <> j.id and r.status = 'running' and r.locked_at >= ${stale}
+          )
+        order by j.run_after
         limit 1
         for update skip locked
       )
@@ -373,6 +382,7 @@ class PgMailDirectoryRepository implements MailDirectoryRepository {
       quotaBytes: m.quotaBytes,
       status: m.status,
       stalwartId: m.stalwartId,
+      purgeAfter: m.purgeAfter,
       aliases: aliases.map((a) => ({
         address: a.address,
         kind: a.kind === "masked" ? "masked" : "alias",
@@ -416,17 +426,31 @@ class PgMailDirectoryRepository implements MailDirectoryRepository {
       .where(eq(mailbox.id, id));
   }
 
-  async desired(): Promise<{ domains: string[]; mailboxes: { address: string; quotaBytes: number }[] }> {
+  async desired(): Promise<{ domains: string[]; mailboxes: DesiredMailbox[] }> {
     // Sequential: a transaction holds one database connection, which runs one query at a time.
     const domains = await this.x
       .select({ name: customerDomain.name })
       .from(customerDomain)
       .where(eq(customerDomain.status, "active"));
     const mailboxes = await this.x
-      .select({ address: mailbox.address, quotaBytes: mailbox.quotaBytes })
-      .from(mailbox)
-      .where(eq(mailbox.status, "active"));
-    return { domains: domains.map((d) => d.name), mailboxes };
+      .select({
+        id: mailbox.id,
+        address: mailbox.address,
+        quotaBytes: mailbox.quotaBytes,
+        status: mailbox.status,
+        stalwartId: mailbox.stalwartId,
+      })
+      .from(mailbox);
+    return {
+      domains: domains.map((d) => d.name),
+      mailboxes: mailboxes.map((m) => ({
+        id: m.id,
+        address: m.address,
+        quotaBytes: m.quotaBytes,
+        status: m.status,
+        provisioned: m.stalwartId !== null,
+      })),
+    };
   }
 }
 
@@ -528,8 +552,6 @@ class PgDomainRepository implements DomainRepository {
   }
 }
 
-const MAILBOX_STATUSES: readonly MailboxStatus[] = ["provisioning", "active", "failed", "suspended"];
-
 function toMailbox(r: typeof mailbox.$inferSelect): Mailbox {
   return {
     id: r.id,
@@ -540,6 +562,7 @@ function toMailbox(r: typeof mailbox.$inferSelect): Mailbox {
     quotaBytes: r.quotaBytes,
     stalwartId: r.stalwartId,
     lastError: r.lastError,
+    purgeAfter: r.purgeAfter,
     createdAt: r.createdAt,
   };
 }
@@ -594,6 +617,7 @@ class PgMailboxRepository implements MailboxRepository {
         quotaBytes: m.quotaBytes,
         stalwartId: m.stalwartId,
         lastError: m.lastError,
+        purgeAfter: m.purgeAfter,
         createdAt: m.createdAt,
       }),
     );
@@ -601,6 +625,41 @@ class PgMailboxRepository implements MailboxRepository {
 
   async setQuota(id: string, quotaBytes: number): Promise<void> {
     await this.x.update(mailbox).set({ quotaBytes }).where(eq(mailbox.id, id));
+  }
+
+  async transition(
+    id: string,
+    from: readonly MailboxStatus[],
+    to: MailboxStatus,
+    purgeAfter: Date | null,
+  ): Promise<boolean> {
+    if (from.length === 0) return false;
+    const rows = await this.x
+      .update(mailbox)
+      // A new intent: any error from applying the previous one no longer describes the mailbox.
+      .set({ status: to, purgeAfter, lastError: null })
+      .where(and(eq(mailbox.id, id), inArray(mailbox.status, [...from])))
+      .returning({ id: mailbox.id });
+    return rows.length > 0;
+  }
+
+  async dueForPurge(now: Date, limit: number): Promise<Mailbox[]> {
+    const rows = await this.x
+      .select()
+      .from(mailbox)
+      .where(and(eq(mailbox.status, "deleting"), lte(mailbox.purgeAfter, now)))
+      .orderBy(mailbox.purgeAfter)
+      .limit(limit);
+    return rows.map(toMailbox);
+  }
+
+  async deleteIfDue(id: string, now: Date): Promise<boolean> {
+    // Aliases go with it (mail_alias.mailbox_id is ON DELETE CASCADE).
+    const rows = await this.x
+      .delete(mailbox)
+      .where(and(eq(mailbox.id, id), eq(mailbox.status, "deleting"), lte(mailbox.purgeAfter, now)))
+      .returning({ id: mailbox.id });
+    return rows.length > 0;
   }
 }
 

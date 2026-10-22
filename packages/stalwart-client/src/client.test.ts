@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import { StalwartError, StalwartTransport } from "./client";
-import { StalwartManagement } from "./management";
+import { StalwartManagement, SUSPENDED_PERMISSIONS } from "./management";
 
 type Call = { url: string; body: unknown; auth: string | null };
 
@@ -101,6 +101,47 @@ describe("StalwartManagement", () => {
       /Unknown domain/,
     );
     expect(await m.ensureTenant("acct")).toBeNull();
+  });
+
+  it("suspends and resumes through permissions, and leaves them alone when not asked", async () => {
+    const updates: Record<string, Record<string, unknown>>[] = [];
+    const s = fakeServer({
+      "x:Domain/get": () => ({ list: [{ id: "d1", name: "a.test" }] }),
+      "x:Account/get": (args) =>
+        args.ids
+          ? {
+              list: (args.ids as string[]).includes("u1")
+                ? [
+                    {
+                      id: "u1",
+                      "@type": "User",
+                      name: "alice",
+                      domainId: "d1",
+                      permissions: SUSPENDED_PERMISSIONS,
+                    },
+                  ]
+                : [],
+            }
+          : { list: [{ id: "u1", name: "alice", domainId: "d1" }] },
+      "x:Account/set": (args) => {
+        updates.push(args.update as Record<string, Record<string, unknown>>);
+        return { updated: {} };
+      },
+    });
+    const m = new StalwartManagement(transport(s.fetchImpl));
+    const base = { name: "alice", domain: "a.test", password: "pw", quotaBytes: 1 };
+    await m.upsertUser({ ...base, suspended: true });
+    await m.upsertUser({ ...base, suspended: false });
+    await m.upsertUser(base);
+    expect(updates.map((u) => u.u1?.permissions)).toEqual([SUSPENDED_PERMISSIONS, { "@type": "Inherit" }, undefined]);
+    // Credentials are never touched by a suspension (app passwords and the password survive it).
+    expect(updates.every((u) => u.u1?.credentials === undefined)).toBe(true);
+    expect(SUSPENDED_PERMISSIONS.disabledPermissions).toMatchObject({ authenticate: true, emailReceive: true });
+    expect(await m.getUser("u1")).toEqual({ id: "u1", address: "alice@a.test", suspended: true });
+    expect(await m.getUser("gone")).toBeUndefined();
+    expect(await m.listUsers()).toEqual([
+      { id: "u1", address: "alice@a.test", quotaBytes: null, aliases: [], suspended: false },
+    ]);
   });
 
   it("routes, listeners, singletons, web UI and reload", async () => {

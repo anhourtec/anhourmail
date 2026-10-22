@@ -43,28 +43,46 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
     await deps.uow.run((r) => r.directory.markDomain(domain.id, { stalwartId: externalId, lastError: null }));
     return;
   }
-  const mailbox = await deps.uow.run((r) => r.directory.getMailbox(job.subjectId));
-  if (!mailbox) throw new Error("mailbox not found");
+  const first = await deps.uow.run((r) => r.directory.getMailbox(job.subjectId));
+  if (!first) throw new Error("mailbox not found");
   // Never create or update an address on a domain another account has verified (e.g. after a removal raced).
   const owner = await deps.uow.run((r) =>
-    r.directory.claimedDomainOwner(mailbox.address.slice(mailbox.address.lastIndexOf("@") + 1)),
+    r.directory.claimedDomainOwner(first.address.slice(first.address.lastIndexOf("@") + 1)),
   );
-  if (owner !== null && owner !== mailbox.accountId) throw new Error("domain belongs to another account");
+  if (owner !== null && owner !== first.accountId) throw new Error("domain belongs to another account");
+  // Read again right before talking to the mail server, so what we apply is the latest intent.
+  const mailbox = await deps.uow.run((r) => r.directory.getMailbox(job.subjectId));
+  if (!mailbox) throw new Error("mailbox not found");
+  const deleting = mailbox.status === "deleting";
+  // A deleted mailbox that never reached the mail server has nothing to take off it; one whose grace period has
+  // ended belongs to the purge, which may be removing it right now.
+  if (deleting && (mailbox.stalwartId === null || isDue(mailbox.purgeAfter, deps.clock.now()))) return;
   const { externalId } = await mail.ensureMailbox({
     externalId: mailbox.stalwartId,
     address: mailbox.address,
     quotaBytes: mailbox.quotaBytes,
-    aliases: mailbox.aliases.map((a) => ({ address: a.address, enabled: a.enabled, description: a.description })),
+    // Suspended and deleting mailboxes keep their mail but nobody can sign in, and their mail is refused.
+    suspended: mailbox.status === "suspended" || deleting,
+    // A deleting mailbox's aliases go with it: off the mail server, still reserved in the control plane.
+    aliases: deleting
+      ? []
+      : mailbox.aliases.map((a) => ({ address: a.address, enabled: a.enabled, description: a.description })),
   });
-  await deps.uow.run((r) =>
-    // A suspended mailbox stays suspended: provisioning syncs configuration, it never reinstates.
-    r.directory.markMailbox(mailbox.id, {
-      status: mailbox.status === "suspended" ? "suspended" : "active",
-      stalwartId: externalId,
-      lastError: null,
-    }),
-  );
+  await deps.uow.run(async (r) => {
+    const current = await r.directory.getMailbox(mailbox.id);
+    if (!current) return;
+    // Changed while we worked (suspended, resumed, deleted, restored): that change queued its own job, which applies
+    // it, so the status is left alone. Otherwise a new or resumed mailbox is now active; a suspension or deletion
+    // stays in force (provisioning syncs configuration, it never reinstates).
+    const status =
+      current.status !== mailbox.status || current.status === "suspended" || current.status === "deleting"
+        ? current.status
+        : "active";
+    await r.directory.markMailbox(mailbox.id, { status, stalwartId: externalId, lastError: null });
+  });
 }
+
+const isDue = (purgeAfter: Date | null, now: Date): boolean => purgeAfter !== null && purgeAfter <= now;
 
 /**
  * Claims and runs one job. Returns the job (or null when the queue is empty). Failures retry with backoff; the
@@ -93,10 +111,10 @@ export async function runNextJob(deps: Deps, mail: MailServer): Promise<Provisio
         async (repos) => {
           await repos.provisioning.giveUp(job.id, error, now);
           if (job.kind === "mailbox.ensure") {
-            // A suspension stays in force; only the error is recorded.
+            // A suspension or a scheduled deletion stays in force; only the error is recorded.
             const current = await repos.directory.getMailbox(job.subjectId);
             await repos.directory.markMailbox(job.subjectId, {
-              status: current?.status === "suspended" ? "suspended" : "failed",
+              status: current?.status === "suspended" || current?.status === "deleting" ? current.status : "failed",
               lastError: error,
             });
           } else {
@@ -120,6 +138,11 @@ export type DriftReport = {
   /** Present on the mail server but unknown to the control plane (never deleted automatically). */
   unknownOnMailServer: { domains: string[]; mailboxes: string[] };
   quotaMismatch: { address: string; desired: number; actual: number }[];
+  /**
+   * Suspension on the mail server differs from the control plane (e.g. a suspend whose job gave up, or an account
+   * changed by hand). Each one is re-queued for the worker; nothing is deleted.
+   */
+  suspensionMismatch: { address: string; desired: boolean; actual: boolean }[];
   clean: boolean;
 };
 
@@ -141,33 +164,57 @@ export async function reconcile(
   ]);
   const haveDomains = new Set(domains);
   const haveMailboxes = new Map(mailboxes.map((m) => [m.address, m.quotaBytes] as const));
+  const haveSuspended = new Map(mailboxes.map((m) => [m.address, m.suspended] as const));
+  // Must exist with this quota: active and suspended mailboxes (suspension keeps the account and its mail).
+  const required = desired.mailboxes.filter((m) => m.status === "active" || m.status === "suspended");
+  // Ours if present: those, plus deleting mailboxes (kept until the purge, or never created if they never got that
+  // far) and any mailbox the worker has created before (e.g. one being resumed). A deleting mailbox is neither
+  // missing nor unknown: either state is expected during its grace period.
+  const known = desired.mailboxes.filter(
+    (m) => m.status === "active" || m.status === "suspended" || m.status === "deleting" || m.provisioned,
+  );
   // Platform domains (free-tier and staff) have mailboxes but no customer-domain row: they are desired too.
-  const wantDomains = new Set([...desired.domains, ...desired.mailboxes.map((m) => domainOf(m.address))]);
-  const wantMailboxes = new Map(desired.mailboxes.map((m) => [m.address, m.quotaBytes] as const));
+  const wantDomains = new Set([...desired.domains, ...known.map((m) => domainOf(m.address))]);
+  const knownAddresses = new Set(known.map((m) => m.address));
 
   const report: DriftReport = {
     missingOnMailServer: {
       domains: desired.domains.filter((d) => !haveDomains.has(d)),
-      mailboxes: desired.mailboxes.map((m) => m.address).filter((a) => !haveMailboxes.has(a)),
+      mailboxes: required.map((m) => m.address).filter((a) => !haveMailboxes.has(a)),
     },
     unknownOnMailServer: {
       domains: domains.filter((d) => !wantDomains.has(d) && !ignore.has(d)),
-      mailboxes: mailboxes.map((m) => m.address).filter((a) => !wantMailboxes.has(a) && !ignore.has(domainOf(a))),
+      mailboxes: mailboxes.map((m) => m.address).filter((a) => !knownAddresses.has(a) && !ignore.has(domainOf(a))),
     },
-    quotaMismatch: desired.mailboxes.flatMap((m) => {
+    quotaMismatch: required.flatMap((m) => {
       const actual = haveMailboxes.get(m.address);
       return actual !== undefined && actual !== m.quotaBytes
         ? [{ address: m.address, desired: m.quotaBytes, actual }]
         : [];
     }),
+    suspensionMismatch: [],
     clean: true,
   };
+  // Settled states only: a provisioning or failed mailbox has a job (or an error) of its own.
+  const settled = desired.mailboxes.filter(
+    (m) => m.status === "active" || m.status === "suspended" || m.status === "deleting",
+  );
+  const requeue: string[] = [];
+  for (const m of settled) {
+    const actual = haveSuspended.get(m.address);
+    const want = m.status !== "active";
+    if (actual !== undefined && actual !== want) {
+      report.suspensionMismatch.push({ address: m.address, desired: want, actual });
+      requeue.push(m.id);
+    }
+  }
   report.clean =
     report.missingOnMailServer.domains.length +
       report.missingOnMailServer.mailboxes.length +
       report.unknownOnMailServer.domains.length +
       report.unknownOnMailServer.mailboxes.length +
-      report.quotaMismatch.length ===
+      report.quotaMismatch.length +
+      report.suspensionMismatch.length ===
     0;
 
   if (!report.clean) {
@@ -181,16 +228,24 @@ export async function reconcile(
         accountId: null,
         target: { type: "mail_server" },
       },
-      async () => ({
-        result: undefined,
-        meta: {
-          missingDomains: report.missingOnMailServer.domains.length,
-          missingMailboxes: report.missingOnMailServer.mailboxes.length,
-          unknownDomains: report.unknownOnMailServer.domains.length,
-          unknownMailboxes: report.unknownOnMailServer.mailboxes.length,
-          quotaMismatches: report.quotaMismatch.length,
-        },
-      }),
+      async (repos) => {
+        // Brings suspension back in line through the normal job (in the same unit of work as the audit entry).
+        for (const id of requeue) {
+          await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: id, runAfter: deps.clock.now() });
+        }
+        return {
+          result: undefined,
+          meta: {
+            missingDomains: report.missingOnMailServer.domains.length,
+            missingMailboxes: report.missingOnMailServer.mailboxes.length,
+            unknownDomains: report.unknownOnMailServer.domains.length,
+            unknownMailboxes: report.unknownOnMailServer.mailboxes.length,
+            quotaMismatches: report.quotaMismatch.length,
+            suspensionMismatches: report.suspensionMismatch.length,
+            requeued: requeue.length,
+          },
+        };
+      },
     );
   }
   return report;

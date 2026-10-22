@@ -36,6 +36,7 @@ describeAdapterContract("memory", async () => {
         status: "active",
         stalwartId: null,
         lastError: null,
+        purgeAfter: null,
       });
       uow.state.aliases.push({
         id: randomUUID(),

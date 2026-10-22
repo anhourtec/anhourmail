@@ -23,7 +23,7 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
       return { externalId: await mgmt.upsertDomain({ name: name.toLowerCase() }) };
     },
 
-    async ensureMailbox({ externalId: known, address, quotaBytes, aliases }) {
+    async ensureMailbox({ externalId: known, address, quotaBytes, suspended, aliases }) {
       const [local, domain] = split(address);
       // A new mailbox never takes over an account that already exists on the mail server: it may hold someone's
       // mail from before (e.g. a domain that changed hands). That needs a person to look at it.
@@ -36,6 +36,8 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
         // Used only when the account is new (resetPassword is false): a random secret nobody knows.
         password: await hashPassword(randomBytes(32).toString("base64url")),
         quotaBytes,
+        // Suspension disables sign-in, sending and delivery; credentials and mail are kept (SUSPENDED_PERMISSIONS).
+        suspended,
         // A turned-off alias isn't sent at all, so the server refuses it as an unknown recipient and won't accept
         // it as a sender, without relying on how it treats a disabled alias. The address stays held in Postgres.
         aliases: aliases
@@ -53,6 +55,19 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
       return { externalId };
     },
 
+    async destroyMailbox({ externalId, address }) {
+      // Never created by us: nothing of ours to remove (an account at that address is someone else's problem, and
+      // the reconciler reports it).
+      if (externalId === null) return;
+      const account = await mgmt.getUser(externalId);
+      if (!account) return; // already gone
+      const [local, domain] = split(address);
+      if (account.address !== `${local}@${domain}`) {
+        throw new Error("mail server account no longer matches this mailbox; not destroying it");
+      }
+      await mgmt.destroy("x:Account", account.id);
+    },
+
     async removeDomain(name) {
       const domain = (await mgmt.listDomains()).find((d) => d.name === name.toLowerCase());
       if (!domain) return;
@@ -68,7 +83,11 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
     },
 
     async listMailboxes() {
-      return (await mgmt.listUsers()).map((u) => ({ address: u.address, quotaBytes: u.quotaBytes ?? 0 }));
+      return (await mgmt.listUsers()).map((u) => ({
+        address: u.address,
+        quotaBytes: u.quotaBytes ?? 0,
+        suspended: u.suspended,
+      }));
     },
   };
 }

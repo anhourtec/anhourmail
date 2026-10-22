@@ -167,7 +167,9 @@ export async function removeDomain(deps: Deps, actor: Actor, accountId: string, 
       if (d.status === "removing") throw new ConflictError("This domain is already being removed.");
       // Only an active (claimed) domain can carry addresses; another account's addresses never block a pending row.
       if (d.status !== "pending_dns" && (await repos.domains.addressCount(d.name)) > 0) {
-        throw new ConflictError("Remove or move the mailboxes and aliases on this domain first.");
+        throw new ConflictError(
+          "Remove or move the mailboxes and aliases on this domain first. A deleted mailbox keeps its address until it's permanently removed.",
+        );
       }
       if (d.status === "pending_dns") {
         if (!(await repos.domains.deletePending(d.id))) {

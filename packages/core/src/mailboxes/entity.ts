@@ -1,8 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { ValidationError } from "../errors";
 
-/** `provisioning` until the worker has created it on the mail server; `failed` after retries ran out. */
-export type MailboxStatus = "provisioning" | "active" | "failed" | "suspended";
+/**
+ * `provisioning` until the worker has applied it to the mail server (a new or resumed mailbox); `failed` after
+ * retries ran out. `suspended`: nobody can sign in to it and its mail is refused, but everything it holds is kept.
+ * `deleting`: suspended, its aliases taken off the mail server, and permanently removed at `purgeAfter` unless
+ * restored first; its address stays reserved until then.
+ */
+export type MailboxStatus = "provisioning" | "active" | "failed" | "suspended" | "deleting";
+
+export const MAILBOX_STATUSES: readonly MailboxStatus[] = ["provisioning", "active", "failed", "suspended", "deleting"];
 
 export type Mailbox = {
   id: string;
@@ -14,6 +21,8 @@ export type Mailbox = {
   quotaBytes: number;
   stalwartId: string | null;
   lastError: string | null;
+  /** Set while `deleting`: when the scheduler removes it for good. */
+  purgeAfter: Date | null;
   createdAt: Date;
 };
 

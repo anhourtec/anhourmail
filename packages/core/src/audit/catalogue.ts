@@ -44,6 +44,8 @@ export const AUDIT_ACTIONS = [
   "mailbox.unsuspended",
   "mailbox.deleted",
   "mailbox.quota_changed",
+  "mailbox.deletion_scheduled",
+  "mailbox.restored",
   "alias.created",
   "alias.toggled",
   "alias.deleted",
@@ -89,6 +91,7 @@ export const AUDIT_ACTIONS = [
   "platform.stalwart_upgraded",
   "platform.provisioning_failed",
   "platform.reconciler_drift",
+  "platform.mailbox_purged",
   "platform.audit_chain_broken",
   "audit.exported",
   // collaboration (docs/internal/10-collaboration.md)

@@ -26,7 +26,18 @@ export type MailboxState = {
   quotaBytes: number;
   status: string;
   stalwartId: string | null;
+  /** Set while `deleting`: when the scheduler removes it for good. */
+  purgeAfter: Date | null;
   aliases: AliasState[];
+};
+
+/** What the reconciler compares with the mail server: every mailbox row, with whether it was ever created there. */
+export type DesiredMailbox = {
+  id: string;
+  address: string;
+  quotaBytes: number;
+  status: string;
+  provisioned: boolean;
 };
 
 /** Retries back off 10 s, 20 s, 40 s, 80 s; the 5th failure gives up and alerts (audit). */

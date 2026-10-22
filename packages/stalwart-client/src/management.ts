@@ -27,8 +27,40 @@ export type UserInput = {
   quotaBytes: number;
   /** Re-set the password on an existing account too (dev seed); new accounts always get it. */
   resetPassword?: boolean;
+  /**
+   * true: suspend (see `SUSPENDED_PERMISSIONS`); false: back to the role's permissions; omitted: leave them as
+   * they are.
+   */
+  suspended?: boolean;
   aliases?: { name: string; domain: string; enabled: boolean; description?: string }[];
 };
+
+/**
+ * How a suspended account looks on Stalwart v0.16 (verified against the pinned server; research/stalwart.md
+ * "Suspending an account"). `x:Account` has no enabled flag, so suspension disables permissions on top of the
+ * account's role (`Merge` + `disabledPermissions`, which win over anything the role grants): no sign-in over any
+ * protocol (`authenticate` covers JMAP, SMTP AUTH and app passwords; the protocol ones close IMAP, POP3 and
+ * ManageSieve logins), no sending, and no delivery (`emailReceive`: mail to it or its aliases is bounced to the
+ * sender). Credentials, app passwords and stored mail are untouched, so resuming (`Inherit`) restores everything.
+ */
+export const SUSPENDED_PERMISSIONS = {
+  "@type": "Merge",
+  enabledPermissions: {},
+  disabledPermissions: {
+    authenticate: true,
+    imapAuthenticate: true,
+    pop3Authenticate: true,
+    sieveAuthenticate: true,
+    emailSend: true,
+    emailReceive: true,
+  },
+} as const;
+
+const ROLE_PERMISSIONS = { "@type": "Inherit" } as const;
+
+/** Sign-in turned off by our suspension (what the reconciler compares). */
+const isSuspended = (p: { disabledPermissions?: Record<string, boolean> } | undefined): boolean =>
+  p?.disabledPermissions?.authenticate === true;
 
 export type RelayRouteInput = { name: string; description: string; host: string; port: number };
 
@@ -102,6 +134,9 @@ export class StalwartManagement {
     };
     const fields = {
       quotas: { maxDiskQuota: input.quotaBytes },
+      ...(input.suspended === undefined
+        ? {}
+        : { permissions: input.suspended ? SUSPENDED_PERMISSIONS : ROLE_PERMISSIONS }),
       aliases: list(
         (input.aliases ?? []).map((a) => ({
           name: a.name,
@@ -128,7 +163,7 @@ export class StalwartManagement {
           domainId: domainId(input.domain),
           credentials: list([{ "@type": "Password", secret: input.password }]),
           roles: { "@type": "User" },
-          permissions: { "@type": "Inherit" },
+          permissions: ROLE_PERMISSIONS,
           ...fields,
         },
       },
@@ -212,8 +247,10 @@ export class StalwartManagement {
     return this.transport.getAll<Named>("x:Domain", ["name"]);
   }
 
-  /** Individual accounts as full addresses with their disk quota and aliases. */
-  async listUsers(): Promise<{ id: string; address: string; quotaBytes: number | null; aliases: string[] }[]> {
+  /** Individual accounts as full addresses with their disk quota, aliases and whether they are suspended. */
+  async listUsers(): Promise<
+    { id: string; address: string; quotaBytes: number | null; aliases: string[]; suspended: boolean }[]
+  > {
     const [domains, accounts] = await Promise.all([
       this.listDomains(),
       this.transport.getAll<{
@@ -223,7 +260,8 @@ export class StalwartManagement {
         domainId: string;
         quotas?: { maxDiskQuota?: number };
         aliases?: Record<string, { name: string; domainId: string }>;
-      }>("x:Account", ["name", "domainId", "quotas", "aliases"]),
+        permissions?: { disabledPermissions?: Record<string, boolean> };
+      }>("x:Account", ["name", "domainId", "quotas", "aliases", "permissions"]),
     ]);
     const domainName = new Map(domains.map((d) => [d.id, d.name] as const));
     return accounts
@@ -233,7 +271,26 @@ export class StalwartManagement {
         address: `${a.name}@${domainName.get(a.domainId) ?? "?"}`,
         quotaBytes: a.quotas?.maxDiskQuota ?? null,
         aliases: Object.values(a.aliases ?? {}).map((x) => `${x.name}@${domainName.get(x.domainId) ?? "?"}`),
+        suspended: isSuspended(a.permissions),
       }));
+  }
+
+  /** One individual account by id, as a full address with whether it is suspended; undefined if it doesn't exist. */
+  async getUser(id: string): Promise<{ id: string; address: string; suspended: boolean } | undefined> {
+    const [account] = await this.transport.getAll<{
+      id: string;
+      "@type"?: string;
+      name: string;
+      domainId: string;
+      permissions?: { "@type"?: string; disabledPermissions?: Record<string, boolean> };
+    }>("x:Account", ["name", "domainId", "permissions"], [id]);
+    if (!account || (account["@type"] !== undefined && account["@type"] !== "User")) return undefined;
+    const domain = (await this.listDomains()).find((d) => d.id === account.domainId);
+    return {
+      id: account.id,
+      address: `${account.name}@${domain?.name ?? "?"}`,
+      suspended: isSuspended(account.permissions),
+    };
   }
 
   /**

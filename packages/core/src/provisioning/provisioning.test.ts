@@ -6,7 +6,7 @@ import type { MailServer } from "./ports";
 import { enqueueProvisioning, reconcile, runNextJob } from "./service";
 import { backoffMs, MAX_ATTEMPTS } from "./types";
 
-type Box = { address: string; quotaBytes: number; aliases: string[] };
+type Box = { address: string; quotaBytes: number; aliases: string[]; suspended: boolean };
 
 function fakeMailServer(opts: { failTimes?: number } = {}): MailServer & { domains: string[]; boxes: Box[] } {
   let failures = opts.failTimes ?? 0;
@@ -21,19 +21,24 @@ function fakeMailServer(opts: { failTimes?: number } = {}): MailServer & { domai
       if (!state.domains.includes(name)) state.domains.push(name);
       return { externalId: `dom:${name}` };
     },
-    ensureMailbox: async ({ address, quotaBytes, aliases }) => {
+    ensureMailbox: async ({ address, quotaBytes, suspended, aliases }) => {
       const existing = state.boxes.find((b) => b.address === address);
-      const box = { address, quotaBytes, aliases: aliases.map((a) => a.address) };
+      const box = { address, quotaBytes, suspended, aliases: aliases.map((a) => a.address) };
       if (existing) Object.assign(existing, box);
       else state.boxes.push(box);
       return { externalId: `acc:${address}` };
+    },
+    destroyMailbox: async ({ externalId, address }) => {
+      if (externalId === null) return;
+      state.boxes = state.boxes.filter((b) => b.address !== address);
     },
     removeDomain: async (name) => {
       if (state.boxes.some((b) => b.address.endsWith(`@${name}`))) throw new Error("domain still has mailboxes");
       state.domains = state.domains.filter((x) => x !== name);
     },
     listDomains: async () => [...state.domains],
-    listMailboxes: async () => state.boxes.map((b) => ({ address: b.address, quotaBytes: b.quotaBytes })),
+    listMailboxes: async () =>
+      state.boxes.map((b) => ({ address: b.address, quotaBytes: b.quotaBytes, suspended: b.suspended })),
     get domains() {
       return state.domains;
     },
@@ -42,6 +47,14 @@ function fakeMailServer(opts: { failTimes?: number } = {}): MailServer & { domai
     },
   };
 }
+
+const ensureArgs = (address: string, quotaBytes: number) => ({
+  externalId: null,
+  address,
+  quotaBytes,
+  suspended: false,
+  aliases: [],
+});
 
 function setup(clock = fixedClock("2026-10-21T12:00:00Z")) {
   const d = makeDeps(clock);
@@ -65,6 +78,7 @@ function setup(clock = fixedClock("2026-10-21T12:00:00Z")) {
     status: "provisioning",
     stalwartId: null,
     lastError: null,
+    purgeAfter: null,
   });
   d.uow.state.aliases.push({
     id: "al1",
@@ -89,7 +103,9 @@ describe("provisioning jobs", () => {
     expect((await runNextJob(d, mail))?.kind).toBe("mailbox.ensure");
     expect(await runNextJob(d, mail)).toBeNull();
     expect(mail.domains).toEqual(["example.test"]);
-    expect(mail.boxes).toEqual([{ address: "owner@example.test", quotaBytes: 1000, aliases: ["hello@example.test"] }]);
+    expect(mail.boxes).toEqual([
+      { address: "owner@example.test", quotaBytes: 1000, aliases: ["hello@example.test"], suspended: false },
+    ]);
     expect(d.uow.state.domains[0]?.stalwartId).toBe("dom:example.test");
     expect(d.uow.state.mailboxes[0]).toMatchObject({ status: "active", stalwartId: "acc:owner@example.test" });
     expect(d.uow.state.jobs.every((j) => j.status === "succeeded")).toBe(true);
@@ -132,12 +148,58 @@ describe("provisioning jobs", () => {
     expect(d.uow.state.jobs[0]?.lastError).toContain("domain not verified");
   });
 
-  it("keeps a suspended mailbox suspended", async () => {
+  it("keeps a suspended mailbox suspended, and suspends it on the mail server with its aliases kept", async () => {
     const { d } = setup();
     d.uow.state.mailboxes[0]!.status = "suspended";
+    const mail = fakeMailServer();
     await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
-    await runNextJob(d, fakeMailServer());
+    await runNextJob(d, mail);
     expect(d.uow.state.mailboxes[0]?.status).toBe("suspended");
+    expect(mail.boxes[0]).toMatchObject({ suspended: true, aliases: ["hello@example.test"] });
+  });
+
+  it("suspends a deleting mailbox and takes its aliases off the mail server", async () => {
+    const { d, clock } = setup();
+    const mail = fakeMailServer();
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    Object.assign(d.uow.state.mailboxes[0]!, {
+      status: "deleting",
+      purgeAfter: new Date(clock.now().getTime() + 1000),
+    });
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(mail.boxes[0]).toMatchObject({ suspended: true, aliases: [] });
+    expect(d.uow.state.mailboxes[0]).toMatchObject({ status: "deleting", lastError: null });
+    expect(d.uow.state.aliases).toHaveLength(1); // still reserved in the control plane
+  });
+
+  it("never creates a deleting mailbox that was never on the mail server, nor touches one due for purge", async () => {
+    const { d, clock } = setup();
+    const mail = fakeMailServer();
+    Object.assign(d.uow.state.mailboxes[0]!, { status: "deleting", purgeAfter: new Date(clock.now().getTime() + 1) });
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(mail.boxes).toEqual([]);
+    Object.assign(d.uow.state.mailboxes[0]!, { stalwartId: "acc:owner@example.test", purgeAfter: clock.now() });
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(mail.boxes).toEqual([]);
+    expect(d.uow.state.jobs.every((j) => j.status === "succeeded")).toBe(true);
+  });
+
+  it("leaves the status alone when it changed while the job ran (that change queued its own job)", async () => {
+    const { d } = setup();
+    const mail = fakeMailServer();
+    const ensure = mail.ensureMailbox.bind(mail);
+    mail.ensureMailbox = async (input) => {
+      const out = await ensure(input);
+      d.uow.state.mailboxes[0]!.status = "suspended"; // suspended from the console meanwhile
+      return out;
+    };
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(d.uow.state.mailboxes[0]).toMatchObject({ status: "suspended", stalwartId: "acc:owner@example.test" });
   });
 
   it("fails a job whose subject no longer exists", async () => {
@@ -165,7 +227,7 @@ describe("reconcile", () => {
     d.uow.state.mailboxes[0]!.status = "active";
     const mail = fakeMailServer();
     await mail.ensureDomain("example.test");
-    await mail.ensureMailbox({ externalId: null, address: "owner@example.test", quotaBytes: 1000, aliases: [] });
+    await mail.ensureMailbox(ensureArgs("owner@example.test", 1000));
     const report = await reconcile(d, mail);
     expect(report.clean).toBe(true);
     expect(d.uow.state.audit).toHaveLength(0);
@@ -177,10 +239,10 @@ describe("reconcile", () => {
     const mail = fakeMailServer();
     await mail.ensureDomain("stray.test");
     await mail.ensureDomain("dev.test");
-    await mail.ensureMailbox({ externalId: null, address: "ghost@stray.test", quotaBytes: 5, aliases: [] });
-    await mail.ensureMailbox({ externalId: null, address: "alice@dev.test", quotaBytes: 5, aliases: [] });
+    await mail.ensureMailbox(ensureArgs("ghost@stray.test", 5));
+    await mail.ensureMailbox(ensureArgs("alice@dev.test", 5));
     await mail.ensureDomain("example.test");
-    await mail.ensureMailbox({ externalId: null, address: "owner@example.test", quotaBytes: 999, aliases: [] });
+    await mail.ensureMailbox(ensureArgs("owner@example.test", 999));
     const report = await reconcile(d, mail, { ignoreDomains: ["dev.test"] });
     expect(report).toMatchObject({
       clean: false,
@@ -206,6 +268,7 @@ describe("reconcile", () => {
       status: "active",
       stalwartId: null,
       lastError: null,
+      purgeAfter: null,
     });
     const mail = fakeMailServer();
     await mail.ensureDomain("platform.test");
@@ -213,11 +276,156 @@ describe("reconcile", () => {
     expect(report.unknownOnMailServer.domains).not.toContain("platform.test");
   });
 
+  it("doesn't report deleting mailboxes as missing or unknown, nor stray quota on them", async () => {
+    const { d } = setup();
+    const base = { accountId: "a1", userId: null, createdAt: new Date(0), lastError: null };
+    d.uow.state.mailboxes = [
+      {
+        ...base,
+        id: "x1",
+        address: "gone@example.test",
+        quotaBytes: 1,
+        status: "deleting",
+        stalwartId: "s1",
+        purgeAfter: new Date(),
+      },
+      {
+        ...base,
+        id: "x2",
+        address: "never@example.test",
+        quotaBytes: 1,
+        status: "deleting",
+        stalwartId: null,
+        purgeAfter: new Date(),
+      },
+      {
+        ...base,
+        id: "x3",
+        address: "paused@example.test",
+        quotaBytes: 7,
+        status: "suspended",
+        stalwartId: "s3",
+        purgeAfter: null,
+      },
+      {
+        ...base,
+        id: "x4",
+        address: "back@example.test",
+        quotaBytes: 1,
+        status: "provisioning",
+        stalwartId: "s4",
+        purgeAfter: null,
+      },
+    ];
+    const mail = fakeMailServer();
+    await mail.ensureDomain("example.test");
+    await mail.ensureMailbox(ensureArgs("gone@example.test", 999));
+    await mail.ensureMailbox(ensureArgs("back@example.test", 1));
+    const report = await reconcile(d, mail);
+    expect(report.unknownOnMailServer.mailboxes).toEqual([]);
+    expect(report.missingOnMailServer.mailboxes).toEqual(["paused@example.test"]);
+    expect(report.quotaMismatch).toEqual([]);
+  });
+
   it("reports desired objects missing on the mail server", async () => {
     const { d } = setup();
     d.uow.state.mailboxes[0]!.status = "active";
     const report = await reconcile(d, fakeMailServer());
     expect(report.missingOnMailServer).toEqual({ domains: ["example.test"], mailboxes: ["owner@example.test"] });
+  });
+});
+
+describe("suspension drift", () => {
+  it("reports suspended or deleting mailboxes that are open on the mail server (and the reverse) and re-queues them", async () => {
+    const { d } = setup();
+    const base = { accountId: "a1", userId: null, createdAt: new Date(0), quotaBytes: 1, purgeAfter: null };
+    d.uow.state.mailboxes = [
+      {
+        ...base,
+        id: "s1",
+        address: "paused@example.test",
+        status: "suspended",
+        stalwartId: "x1",
+        lastError: "gave up",
+      },
+      { ...base, id: "s2", address: "open@example.test", status: "active", stalwartId: "x2", lastError: null },
+      { ...base, id: "s3", address: "ok@example.test", status: "suspended", stalwartId: "x3", lastError: null },
+      { ...base, id: "s4", address: "new@example.test", status: "provisioning", stalwartId: "x4", lastError: null },
+    ];
+    const mail = fakeMailServer();
+    await mail.ensureDomain("example.test");
+    await mail.ensureMailbox(ensureArgs("paused@example.test", 1)); // suspension never applied
+    await mail.ensureMailbox({ ...ensureArgs("open@example.test", 1), suspended: true }); // suspended by hand
+    await mail.ensureMailbox({ ...ensureArgs("ok@example.test", 1), suspended: true });
+    await mail.ensureMailbox(ensureArgs("new@example.test", 1)); // has its own job; not compared
+    const report = await reconcile(d, mail);
+    expect(report.suspensionMismatch).toEqual([
+      { address: "paused@example.test", desired: true, actual: false },
+      { address: "open@example.test", desired: false, actual: true },
+    ]);
+    expect(report.clean).toBe(false);
+    expect(d.uow.state.jobs.map((j) => [j.kind, j.subjectId])).toEqual([
+      ["mailbox.ensure", "s1"],
+      ["mailbox.ensure", "s2"],
+    ]);
+    expect(d.uow.state.audit.at(-1)?.meta).toMatchObject({ suspensionMismatches: 2, requeued: 2 });
+    expect(mail.boxes).toHaveLength(4); // nothing deleted
+
+    // The re-queued job brings the server back in line, and the next run is clean for these.
+    while (await runNextJob(d, mail)) {
+      /* drain */
+    }
+    expect(mail.boxes.find((b) => b.address === "paused@example.test")?.suspended).toBe(true);
+    expect(mail.boxes.find((b) => b.address === "open@example.test")?.suspended).toBe(false);
+    expect((await reconcile(d, mail)).suspensionMismatch).toEqual([]);
+  });
+});
+
+describe("one job per subject at a time", () => {
+  it("never claims a second job for a subject that already has one running", async () => {
+    const { d } = setup();
+    const mail = fakeMailServer();
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    const running = await d.uow.run((r) => r.provisioning.claimNext(d.clock.now()));
+    expect(running?.subjectId).toBe("m1");
+    // A newer change for the same mailbox queues a new job while the first one is still running.
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    expect((await runNextJob(d, mail))?.subjectId).toBe("d1"); // other subjects still run
+    expect(await runNextJob(d, mail)).toBeNull(); // m1's second job waits
+    await d.uow.run((r) => r.provisioning.complete(running?.id ?? "", d.clock.now()));
+    expect((await runNextJob(d, mail))?.subjectId).toBe("m1");
+  });
+
+  it("applies the latest status: it re-reads the mailbox right before calling the mail server", async () => {
+    const { d } = setup();
+    const mail = fakeMailServer();
+    let reads = 0;
+    const deps = {
+      clock: d.clock,
+      uow: {
+        run: <T>(fn: (r: Parameters<Parameters<typeof d.uow.run>[0]>[0]) => Promise<T>) =>
+          d.uow.run((r) =>
+            fn({
+              ...r,
+              directory: {
+                ...r.directory,
+                getMailbox: async (id: string) => {
+                  reads += 1;
+                  const out = await r.directory.getMailbox(id);
+                  // Suspended from the console just after the job's first read.
+                  if (reads === 1) d.uow.state.mailboxes[0]!.status = "suspended";
+                  return out;
+                },
+              },
+            }),
+          ),
+      },
+    };
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(deps, mail);
+    expect(mail.boxes[0]?.suspended).toBe(true);
+    expect(d.uow.state.mailboxes[0]?.status).toBe("suspended");
   });
 });
 

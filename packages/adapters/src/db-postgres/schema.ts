@@ -193,13 +193,23 @@ export const mailbox = pgTable(
     userId: text("user_id").references(() => authUser.id, { onDelete: "set null" }),
     address: text("address").notNull().unique(),
     stalwartId: text("stalwart_id"),
-    /** provisioning | active | failed | suspended — set by the provisioning job (CLAUDE.md rule 26). */
+    /**
+     * provisioning | active | failed | suspended | deleting. Suspend, resume, delete and restore set it from the
+     * console; the provisioning job moves provisioning → active / failed (CLAUDE.md rule 26).
+     */
     status: text("status").notNull().default("active"),
     lastError: text("last_error"),
     quotaBytes: bigint("quota_bytes", { mode: "number" }).notNull(),
+    /** Set while `deleting`: the scheduled purge removes the mailbox after this (grace period). */
+    purgeAfter: timestamp("purge_after", { withTimezone: true }),
     createdAt: createdAt(),
   },
-  (t) => [index("mailbox_account_idx").on(t.accountId)],
+  (t) => [
+    index("mailbox_account_idx").on(t.accountId),
+    index("mailbox_purge_idx")
+      .on(t.purgeAfter)
+      .where(sql`status = 'deleting'`),
+  ],
 );
 
 export const mailAlias = pgTable(

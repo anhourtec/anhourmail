@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { randomUUID } from "node:crypto";
 
-import { MAX_MAILBOXES, PLANS } from "@anhourmail/shared/plans";
+import { MAILBOX_DELETE_GRACE_DAYS, MAX_MAILBOXES, PLANS } from "@anhourmail/shared/plans";
 
 import { type Actor, authorize } from "../actor";
 import { maskEmail } from "../audit/record";
-import { ConflictError, NotFoundError, PlanLimitError, ValidationError } from "../errors";
+import { ConflictError, ForbiddenError, NotFoundError, PlanLimitError, ValidationError } from "../errors";
 import { mutation } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
+import type { MailServer } from "../provisioning/ports";
 import { GB, type Mailbox, type MailboxStatus, normaliseLocalPart } from "./entity";
 
 /** What the console and API show; mail-server ids and errors stay server-side. */
@@ -17,6 +18,13 @@ export type MailboxView = {
   status: MailboxStatus;
   quotaBytes: number;
   owner: { userId: string; email: string } | null;
+  /** While `deleting`: when it is removed for good (it can be restored until then). */
+  purgeAfter: Date | null;
+  /**
+   * The worker gave up applying the current state to the mail server (e.g. a suspension isn't in force yet). Only
+   * whether it happened; the error text stays server-side. Suspend or delete again to retry.
+   */
+  applyFailed: boolean;
   createdAt: Date;
 };
 
@@ -36,9 +44,31 @@ async function views(repos: Repositories, accountId: string, list: Mailbox[]): P
     status: m.status,
     quotaBytes: m.quotaBytes,
     owner: m.userId && members.has(m.userId) ? { userId: m.userId, email: members.get(m.userId) ?? "" } : null,
+    purgeAfter: m.purgeAfter,
+    applyFailed: m.lastError !== null,
     createdAt: m.createdAt,
   }));
 }
+
+/**
+ * Suspending, deleting or restoring a mailbox that belongs to an owner or an admin of the account (any role but
+ * Member) takes an Owner: a User Admin can't lock out the people above them or each other. Their own mailbox and
+ * unassigned or members' mailboxes are fine.
+ */
+function lifecycleLocked(
+  actor: Actor,
+  accountId: string,
+  m: Mailbox,
+  members: readonly { userId: string; role: string }[],
+): boolean {
+  if (actor.kind !== "user") return false;
+  if (actor.memberships.find((x) => x.accountId === accountId)?.role === "owner") return false;
+  if (m.userId === null || m.userId === actor.userId) return false;
+  const role = members.find((x) => x.userId === m.userId)?.role;
+  return role !== undefined && role !== "member";
+}
+
+const LOCKED_MESSAGE = "Only an owner can suspend, delete or restore a mailbox that belongs to an owner or an admin.";
 
 /**
  * Refuses changes to an address whose domain is no longer this account's: it must be one of the account's active
@@ -78,12 +108,18 @@ export async function getMailbox(
   actor: Actor,
   accountId: string,
   id: string,
-): Promise<MailboxView & { maxQuotaBytes: number }> {
+): Promise<MailboxView & { maxQuotaBytes: number; lifecycleLocked: boolean }> {
   authorize(actor, "mailbox.read", accountId);
   return deps.uow.run(async (r) => {
-    const [v] = await views(r, accountId, [await scoped(r, accountId, id)]);
+    const m = await scoped(r, accountId, id);
+    const [v] = await views(r, accountId, [m]);
     if (!v) throw new NotFoundError();
-    return { ...v, maxQuotaBytes: await planQuota(r, accountId) };
+    return {
+      ...v,
+      maxQuotaBytes: await planQuota(r, accountId),
+      /** True when this person may not suspend, delete or restore it (the console hides those actions). */
+      lifecycleLocked: lifecycleLocked(actor, accountId, m, await r.access.members(accountId)),
+    };
   });
 }
 
@@ -145,6 +181,7 @@ export async function createMailbox(
         quotaBytes,
         stalwartId: null,
         lastError: null,
+        purgeAfter: null,
         createdAt: deps.clock.now(),
       };
       await repos.mailboxes.insert(mailbox);
@@ -159,6 +196,8 @@ export async function createMailbox(
     },
   );
 }
+
+const BEING_DELETED = "This mailbox is being deleted. Restore it first.";
 
 /** Changes a mailbox's quota (1 GB to the plan's storage); the worker applies it to the mail server. */
 export async function setMailboxQuota(
@@ -176,6 +215,7 @@ export async function setMailboxQuota(
     { action: "mailbox.quota_changed", permission: "mailbox.manage", accountId, target: { type: "mailbox", id } },
     async (repos) => {
       const m = await scoped(repos, accountId, id);
+      if (m.status === "deleting") throw new ConflictError(BEING_DELETED);
       await assertDomainHeld(repos, accountId, m.address);
       if (input.quotaGb === undefined || input.quotaGb === null || input.quotaGb === "") {
         throw new ValidationError("Choose a quota in GB.");
@@ -192,4 +232,201 @@ export async function setMailboxQuota(
       };
     },
   );
+}
+
+const DAY_MS = 24 * 3600_000;
+
+/** One view of a mailbox after a lifecycle change, from inside the same unit of work. */
+async function viewOf(repos: Repositories, accountId: string, m: Mailbox): Promise<MailboxView> {
+  const [v] = await views(repos, accountId, [m]);
+  if (!v) throw new NotFoundError();
+  return v;
+}
+
+/**
+ * Applies a lifecycle change (status + purge date; clears the last error) and queues the worker, which brings the
+ * mail server to it. The change is conditional on the status read, so a concurrent change makes this one a conflict
+ * instead of a lost update. `to` may equal the current status: that re-queues a change whose job gave up.
+ */
+async function moveTo(
+  deps: Deps,
+  repos: Repositories,
+  m: Mailbox,
+  to: MailboxStatus,
+  purgeAfter: Date | null,
+): Promise<Mailbox> {
+  if (!(await repos.mailboxes.transition(m.id, [m.status], to, purgeAfter))) {
+    throw new ConflictError("This mailbox changed while you were working on it. Reload and try again.");
+  }
+  await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: m.id, runAfter: deps.clock.now() });
+  return { ...m, status: to, purgeAfter, lastError: null };
+}
+
+type LifecycleAction = "mailbox.suspended" | "mailbox.unsuspended" | "mailbox.deletion_scheduled" | "mailbox.restored";
+
+/**
+ * Shared shape of suspend / resume / delete / restore: `mailbox.manage`, scoped to the account (404), the
+ * owner-or-admin guard (403, audited as denied), then `change` in one audited unit of work.
+ */
+async function lifecycle(
+  deps: Deps,
+  actor: Actor,
+  accountId: string,
+  id: string,
+  req: RequestMeta,
+  action: LifecycleAction,
+  change: (repos: Repositories, m: Mailbox) => Promise<{ next: Mailbox; meta?: Record<string, unknown> }>,
+): Promise<MailboxView> {
+  const out = await mutation(
+    deps,
+    actor,
+    req,
+    { action, permission: "mailbox.manage", accountId, target: { type: "mailbox", id } },
+    async (repos) => {
+      const m = await scoped(repos, accountId, id);
+      if (lifecycleLocked(actor, accountId, m, await repos.access.members(accountId))) {
+        return { result: null, target: { label: m.address }, denied: { code: "forbidden" } };
+      }
+      const { next, meta } = await change(repos, m);
+      return { result: await viewOf(repos, accountId, next), target: { label: m.address }, meta: meta ?? {} };
+    },
+  );
+  if (out === null) throw new ForbiddenError(LOCKED_MESSAGE);
+  return out;
+}
+
+/**
+ * Suspends a mailbox: nobody can sign in to it over any protocol and its mail is refused, but nothing it holds is
+ * deleted. The worker applies it to the mail server. Suspending a suspended mailbox whose job gave up retries it.
+ */
+export async function suspendMailbox(
+  deps: Deps,
+  actor: Actor,
+  accountId: string,
+  id: string,
+  req: RequestMeta,
+): Promise<MailboxView> {
+  return lifecycle(deps, actor, accountId, id, req, "mailbox.suspended", async (repos, m) => {
+    if (m.status === "deleting") throw new ConflictError(BEING_DELETED);
+    if (m.status === "suspended") {
+      if (m.lastError === null) throw new ConflictError("This mailbox is already suspended.");
+      return { next: await moveTo(deps, repos, m, "suspended", null), meta: { from: m.status, retry: true } };
+    }
+    return { next: await moveTo(deps, repos, m, "suspended", null), meta: { from: m.status } };
+  });
+}
+
+/** Resumes a suspended mailbox: the worker restores access, then it shows as active again. */
+export async function resumeMailbox(
+  deps: Deps,
+  actor: Actor,
+  accountId: string,
+  id: string,
+  req: RequestMeta,
+): Promise<MailboxView> {
+  return lifecycle(deps, actor, accountId, id, req, "mailbox.unsuspended", async (repos, m) => {
+    if (m.status !== "suspended") throw new ConflictError("This mailbox isn't suspended.");
+    await assertDomainHeld(repos, accountId, m.address);
+    return { next: await moveTo(deps, repos, m, "provisioning", null) };
+  });
+}
+
+/**
+ * Deletes a mailbox with a grace period: it is suspended at once (mail kept, its aliases off the mail server, its
+ * address and theirs still reserved) and removed for good after `MAILBOX_DELETE_GRACE_DAYS`, unless restored.
+ * Deleting a deleting mailbox whose job gave up retries it (the purge date stays).
+ */
+export async function deleteMailbox(
+  deps: Deps,
+  actor: Actor,
+  accountId: string,
+  id: string,
+  req: RequestMeta,
+): Promise<MailboxView> {
+  return lifecycle(deps, actor, accountId, id, req, "mailbox.deletion_scheduled", async (repos, m) => {
+    if (m.status === "deleting") {
+      if (m.lastError === null) throw new ConflictError("This mailbox is already being deleted.");
+      const next = await moveTo(deps, repos, m, "deleting", m.purgeAfter);
+      return { next, meta: { from: m.status, retry: true, purgeAfter: m.purgeAfter?.toISOString() ?? null } };
+    }
+    const purgeAfter = new Date(deps.clock.now().getTime() + MAILBOX_DELETE_GRACE_DAYS * DAY_MS);
+    const next = await moveTo(deps, repos, m, "deleting", purgeAfter);
+    const aliases = (await repos.aliases.listByAccount(accountId)).filter((a) => a.mailboxId === m.id).length;
+    return { next, meta: { from: m.status, purgeAfter: purgeAfter.toISOString(), aliases } };
+  });
+}
+
+/**
+ * Restores a mailbox during its grace period: the worker turns access and its aliases back on. Refused once the
+ * grace period has ended, or when the mailbox's domain is no longer this account's.
+ */
+export async function restoreMailbox(
+  deps: Deps,
+  actor: Actor,
+  accountId: string,
+  id: string,
+  req: RequestMeta,
+): Promise<MailboxView> {
+  return lifecycle(deps, actor, accountId, id, req, "mailbox.restored", async (repos, m) => {
+    if (m.status !== "deleting") throw new ConflictError("This mailbox isn't being deleted.");
+    if (m.purgeAfter !== null && m.purgeAfter <= deps.clock.now()) {
+      throw new ConflictError("This mailbox's grace period has ended, so it can't be restored.");
+    }
+    await assertDomainHeld(repos, accountId, m.address);
+    return { next: await moveTo(deps, repos, m, "provisioning", null) };
+  });
+}
+
+const PURGE = { kind: "system", name: "mailbox-purge" } as const;
+
+/** Per scheduler run: at most this many mailboxes (the rest wait for the next run). */
+export const PURGE_BATCH = 25;
+
+/**
+ * Scheduler: permanently removes mailboxes whose grace period has ended — the mail-server account (and its mail)
+ * first, then the mailbox and alias rows, which frees their addresses. Each one is audited in its account's log as
+ * `platform.mailbox_purged` by the system; a failure is audited as `failed` and retried on the next run.
+ */
+export async function purgeDueMailboxes(
+  deps: Deps,
+  mail: MailServer,
+  limit = PURGE_BATCH,
+): Promise<{ purged: number; failed: number }> {
+  const due = await deps.uow.run((r) => r.mailboxes.dueForPurge(deps.clock.now(), limit));
+  const out = { purged: 0, failed: 0 };
+  for (const m of due) {
+    try {
+      await mutation(
+        deps,
+        PURGE,
+        { requestId: `purge-${m.id}`, ip: null, userAgent: null },
+        {
+          action: "platform.mailbox_purged",
+          permission: "mailbox.manage",
+          accountId: m.accountId,
+          target: { type: "mailbox", id: m.id, label: m.address },
+        },
+        async (repos) => {
+          const current = await repos.mailboxes.get(m.accountId, m.id);
+          const now = deps.clock.now();
+          if (current?.status !== "deleting" || current.purgeAfter === null || current.purgeAfter > now) {
+            throw new ConflictError("The mailbox changed before it could be removed."); // e.g. restored meanwhile
+          }
+          const aliases = (await repos.aliases.listByAccount(m.accountId)).filter((a) => a.mailboxId === m.id).length;
+          // Delete the row first (conditional: still deleting and due), which also locks it until this unit of work
+          // ends: a restore arriving now waits, then finds nothing to restore (409) instead of reporting success for
+          // a mailbox whose mail is being destroyed. If the mail server refuses, everything rolls back.
+          if (!(await repos.mailboxes.deleteIfDue(m.id, now))) {
+            throw new ConflictError("The mailbox changed before it could be removed.");
+          }
+          await mail.destroyMailbox({ externalId: current.stalwartId, address: current.address });
+          return { result: undefined, meta: { aliases, purgeAfter: current.purgeAfter.toISOString() } };
+        },
+      );
+      out.purged += 1;
+    } catch {
+      out.failed += 1; // audited as `failed` by mutation(); retried on the next run
+    }
+  }
+  return out;
 }

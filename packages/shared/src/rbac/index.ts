@@ -72,7 +72,10 @@ export const PERMISSIONS = {
   "domain.read": { scope: "account", description: "See domains and DNS status" },
   "domain.manage": { scope: "account", description: "Add, verify, remove domains; catch-all" },
   "mailbox.read": { scope: "account", description: "See mailboxes and quotas" },
-  "mailbox.manage": { scope: "account", description: "Create, suspend, delete mailboxes" },
+  "mailbox.manage": {
+    scope: "account",
+    description: "Create, suspend, delete and restore mailboxes (an Owner's or admin's mailbox: Owners only)",
+  },
   "member.credentials.reset": { scope: "account", description: "Reset a member's password or 2FA" },
   "alias.manage.any": { scope: "account", description: "Manage aliases for any mailbox in the account" },
   "alias.manage.own": { scope: "account", description: "Manage own aliases and masked aliases" },

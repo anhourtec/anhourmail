@@ -54,6 +54,7 @@ function setup(plan: "free" | "plus" = "plus") {
     quotaBytes: 1,
     stalwartId: "s",
     lastError: null,
+    purgeAfter: null,
     createdAt: new Date(0),
   });
   s.mailboxes.push(

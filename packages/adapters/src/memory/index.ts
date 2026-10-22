@@ -5,7 +5,7 @@ import { type AccessRepository, ConflictError, type Repositories, type UnitOfWor
 import type { AccountRepository } from "@anhourmail/core/account";
 import type { AliasRepository, MailAlias } from "@anhourmail/core/aliases";
 import type { CustomerDomain, DomainRepository } from "@anhourmail/core/domains";
-import type { Mailbox, MailboxRepository } from "@anhourmail/core/mailboxes";
+import { type Mailbox, type MailboxRepository, MAILBOX_STATUSES } from "@anhourmail/core/mailboxes";
 import type {
   DomainState,
   MailDirectoryRepository,
@@ -147,8 +147,10 @@ function repositories(s: MemoryState): Repositories {
       return clone(job);
     },
     claimNext: async (now) => {
+      // Never a second job for a subject that already has one running (mirrors Postgres).
+      const busy = new Set(s.jobs.filter((j) => j.status === "running").map((j) => j.subjectId));
       const job = s.jobs
-        .filter((j) => j.status === "queued" && j.runAfter <= now)
+        .filter((j) => j.status === "queued" && j.runAfter <= now && !busy.has(j.subjectId))
         .sort((a, b) => a.runAfter.getTime() - b.runAfter.getTime())[0];
       if (!job) return null;
       job.status = "running";
@@ -185,6 +187,7 @@ function repositories(s: MemoryState): Repositories {
         quotaBytes: m.quotaBytes,
         status: m.status,
         stalwartId: m.stalwartId,
+        purgeAfter: m.purgeAfter,
         aliases: s.aliases
           .filter((a) => a.mailboxId === m.id)
           .sort((a, b) => a.address.localeCompare(b.address))
@@ -208,7 +211,7 @@ function repositories(s: MemoryState): Repositories {
       const m = s.mailboxes.find((x) => x.id === id);
       if (m) {
         Object.assign(m, {
-          status: update.status,
+          status: MAILBOX_STATUSES.find((x) => x === update.status) ?? "provisioning",
           lastError: update.lastError,
           ...(update.stalwartId ? { stalwartId: update.stalwartId } : {}),
         });
@@ -216,9 +219,13 @@ function repositories(s: MemoryState): Repositories {
     },
     desired: async () => ({
       domains: s.domains.filter((d) => d.status === "active").map((d) => d.name),
-      mailboxes: s.mailboxes
-        .filter((m) => m.status === "active")
-        .map((m) => ({ address: m.address, quotaBytes: m.quotaBytes })),
+      mailboxes: s.mailboxes.map((m) => ({
+        id: m.id,
+        address: m.address,
+        quotaBytes: m.quotaBytes,
+        status: m.status,
+        provisioned: m.stalwartId !== null,
+      })),
     }),
   };
 
@@ -276,6 +283,28 @@ function repositories(s: MemoryState): Repositories {
     setQuota: async (id, quotaBytes) => {
       const m = s.mailboxes.find((x) => x.id === id);
       if (m) m.quotaBytes = quotaBytes;
+    },
+    transition: async (id, from, to, purgeAfter) => {
+      const m = s.mailboxes.find((x) => x.id === id && from.includes(x.status));
+      if (!m) return false;
+      Object.assign(m, { status: to, purgeAfter: clone(purgeAfter), lastError: null });
+      return true;
+    },
+    dueForPurge: async (now, limit) =>
+      clone(
+        s.mailboxes
+          .filter((m) => m.status === "deleting" && m.purgeAfter !== null && m.purgeAfter <= now)
+          .sort((a, b) => (a.purgeAfter?.getTime() ?? 0) - (b.purgeAfter?.getTime() ?? 0))
+          .slice(0, limit),
+      ),
+    deleteIfDue: async (id, now) => {
+      const m = s.mailboxes.find(
+        (x) => x.id === id && x.status === "deleting" && x.purgeAfter !== null && x.purgeAfter <= now,
+      );
+      if (!m) return false;
+      s.mailboxes = s.mailboxes.filter((x) => x.id !== id);
+      s.aliases = s.aliases.filter((a) => a.mailboxId !== id); // mirrors ON DELETE CASCADE in Postgres
+      return true;
     },
   };
 

@@ -81,6 +81,12 @@ export const MAX_CUSTOM_DOMAINS = 20;
 export const MAX_MAILBOXES = 10;
 
 /**
+ * Days a deleted mailbox is kept (suspended, mail intact, address reserved) before it's permanently removed. It can
+ * be restored until then. The docs render this number (`<Value of="mailboxDeleteGraceDays" />`).
+ */
+export const MAILBOX_DELETE_GRACE_DAYS = 30;
+
+/**
  * Aliases (and, separately, masked aliases) per account on plans listed as unlimited: an abuse ceiling, not a
  * selling point. Plans with a number use that number.
  */
