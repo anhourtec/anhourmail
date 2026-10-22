@@ -102,7 +102,8 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 5. **Run `/security-review` on everything you write.** Every route enforces permission **and** ownership scope;
    out-of-scope IDs return **404**, missing permission returns **403**.
 6. **Playwright MCP for all UI checks:** light + dark, 1440 + 390 wide, read the console. Screenshots only in
-   `.playwright-mcp/` (gitignored).
+   `.playwright-mcp/` (gitignored). Playwright MCP is a local, interactive tool only: CI never uses, installs,
+   references or depends on it (CI runs the Playwright test runner on `tests/e2e`).
 7. **Stay narrow, ship complete work.** No scope creep, no TODOs where working code belongs.
 8. **Keep `docs/internal/handoff.md` current every session:** current state, dated session entry (what changed,
    how it was verified, test counts and durations, anything flaky), open items.
@@ -198,6 +199,13 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 40. **Zero TypeScript errors, zero ESLint warnings, Prettier-formatted,** in every workspace, at every commit.
 41. **CI is the gate:** all required checks green before merge; never bypass hooks (`--no-verify`) or mark checks
     optional.
+    - **Run the CI pipeline locally before every push** with `npm run ci:local` (the same `.cicd/*.sh` jobs as
+      GitHub Actions, on a clean local clone of the commits being pushed, in its own Compose project and ports so
+      the dev stack is untouched; `--apply <path>` tests uncommitted fixes). Push only when every job is green locally; after pushing, check the Actions run and
+      fix any failure in the same session.
+    - CI files may name the open-source stack (Postgres, Redis, Stalwart, Mailpit, Node, Playwright) — the stack is
+      public in the README — but never secrets, hostnames, IPs, server addresses or anything private (rule 44);
+      secrets come only from the CI secret store.
 
 ### Open source and licensing
 
@@ -306,4 +314,5 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Rule 56: check GitHub Dependabot, code scanning and secret scanning alerts every session; fix or record                            |
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Rule 57: no competitor names in committed files; design references only in docs/internal/private                                   |
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Rule 3: small, granular commits (8–20 per slice), one concern each                                                                 |
+| 2026-10-22 | Nishchayjeet Singh (Nish) | Rules 6 and 41: Playwright MCP is local-only, never in CI; run the CI pipeline locally (`npm run ci:local`) before every push      |
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Waitlist removed from the product (maintainer decision); sign-up is open (firewalled) or closed                                    |
