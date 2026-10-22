@@ -1,30 +1,62 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { Metadata } from "next";
-import Link from "next/link";
 
 import { can } from "@anhourmail/core";
-import { domainAllowance, listDomains } from "@anhourmail/core/domains";
+import { type CheckedRecord, domainAllowance, getDomain, inspectDomain, listDomains } from "@anhourmail/core/domains";
+import { checkRateLimit, LIMITS } from "@anhourmail/server/rate-limit";
 import { PageHeader } from "@anhourmail/ui/page-header";
 
+import { UrlFlyout } from "@/components/console/flyout";
 import { AddDomainForm } from "@/components/domains/add-domain-form";
-import { DomainStatus } from "@/components/domains/domain-status";
+import { DomainList } from "@/components/domains/domain-list";
+import { DomainPanel } from "@/components/domains/domain-panel";
+import { domainState } from "@/components/domains/domain-status";
 import { requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
+import { env } from "@/server/env";
 import { forPage } from "@/server/page-guard";
+import { param } from "@/server/search-params";
 
 export const metadata: Metadata = { title: "Domains" };
 
 const dateFmt = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium" });
 
-export default async function DomainsPage({ params }: { params: Promise<{ accountId: string }> }) {
+/**
+ * Domains (console page template). `?domain=<id>` opens the details panel with the DNS records (checked live, within
+ * the person's `dnsVerify` budget), `?new=1` the "Add a domain" panel. `/domains/<id>` redirects here.
+ */
+export default async function DomainsPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ accountId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { accountId } = await params;
+  const sp = await searchParams;
   const actor = await requireUser();
   const deps = container().deps;
+  const openId = param(sp, "domain");
+  // Live lookups when a panel opens share the `dnsVerify` budget (per person); over it, the panel shows the records
+  // without their live state rather than querying DNS on every reload. The domain is read (scope checked) first, so
+  // an id from another account is a 404 without spending the budget.
+  const openDomain = async (id: string) => {
+    const { records, ...domain } = await getDomain(deps, actor, accountId, id);
+    const live = (await checkRateLimit(container().counter, "dnsInspect", LIMITS.dnsVerify, `user:${actor.userId}`))
+      .allowed;
+    if (live) return { ...(await inspectDomain(deps, container().dns, actor, accountId, id)), live };
+    return {
+      domain,
+      records: records.map((r): CheckedRecord => ({ ...r, fqdn: r.name, state: "error", found: [] })),
+      live,
+    };
+  };
   const data = await forPage(async () => ({
     domains: await listDomains(deps, actor, accountId),
     allowance: await domainAllowance(deps, actor, accountId),
+    open: openId ? await openDomain(openId) : null,
   }));
-  const crumbs = [{ label: "Overview", href: "/" }, { label: "Domains" }];
+  const crumbs = [{ label: "Home", href: "/" }, { label: "Domains" }];
   if (!data) {
     return (
       <>
@@ -34,7 +66,9 @@ export default async function DomainsPage({ params }: { params: Promise<{ accoun
     );
   }
   const canManage = can(actor, "domain.manage", accountId);
-  const { domains, allowance } = data;
+  const { domains, allowance, open } = data;
+  const path = `/accounts/${accountId}/domains`;
+  const canAdd = canManage && allowance.allowed && domains.length < allowance.max;
 
   return (
     <>
@@ -43,58 +77,50 @@ export default async function DomainsPage({ params }: { params: Promise<{ accoun
         description="Use your own domain for addresses and aliases. Each domain needs a few DNS records before it works."
         breadcrumbs={crumbs}
       />
-      {canManage &&
-        (allowance.allowed ? (
-          domains.length < allowance.max ? (
+      {canManage && !allowance.allowed && (
+        <p className="am-body rounded-lg border px-4 py-3">
+          Custom domains are part of the Plus and Supporter plans. Free accounts use an @anhourmail.com address.
+        </p>
+      )}
+      {canManage && allowance.allowed && !canAdd && (
+        <p className="am-small">This account has the most domains it can have ({allowance.max}).</p>
+      )}
+      <DomainList
+        accountId={accountId}
+        rows={domains.map((d) => ({
+          id: d.id,
+          name: d.name,
+          state: domainState(d),
+          added: dateFmt.format(new Date(d.createdAt)),
+          addedAt: new Date(d.createdAt).getTime(),
+        }))}
+        openId={open?.domain.id ?? null}
+        createHref={canAdd ? `${path}?new=1` : null}
+        docsHref={`${env().SITE_URL.replace(/\/$/, "")}/docs/custom-domain`}
+      />
+
+      {open && (
+        <UrlFlyout label={open.domain.name} closeHref={path}>
+          <DomainPanel
+            accountId={accountId}
+            domain={open.domain}
+            records={open.records}
+            live={open.live}
+            canManage={canManage}
+            tab={param(sp, "tab")}
+          />
+        </UrlFlyout>
+      )}
+      {canAdd && param(sp, "new") === "1" && (
+        <UrlFlyout label="Add a domain" closeHref={path} size="md">
+          <div className="flex flex-col gap-6">
+            <div className="flex flex-col gap-1.5">
+              <h2 className="am-h2">Add a domain</h2>
+              <p className="am-small">Addresses and aliases at a domain you own, once it&apos;s verified.</p>
+            </div>
             <AddDomainForm accountId={accountId} />
-          ) : (
-            <p className="am-small">This account has the most domains it can have ({allowance.max}).</p>
-          )
-        ) : (
-          <p className="am-body rounded-xl border px-4 py-3">
-            Custom domains are part of the Plus and Supporter plans. Free accounts use an @anhourmail.com address.
-          </p>
-        ))}
-      {domains.length === 0 ? (
-        <p className="am-small">No domains yet.</p>
-      ) : (
-        <div className="overflow-x-auto rounded-xl border">
-          <table className="w-full text-left">
-            <thead className="border-b bg-muted/50">
-              <tr>
-                <th scope="col" className="am-mono px-4 py-2.5 font-normal">
-                  Domain
-                </th>
-                <th scope="col" className="am-mono px-4 py-2.5 font-normal">
-                  Status
-                </th>
-                <th scope="col" className="am-mono hidden px-4 py-2.5 font-normal sm:table-cell">
-                  Added
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {domains.map((d) => (
-                <tr key={d.id}>
-                  <td className="px-4 py-3">
-                    <Link
-                      href={`/accounts/${accountId}/domains/${d.id}`}
-                      className="am-code underline-offset-2 hover:underline"
-                    >
-                      {d.name}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3">
-                    <DomainStatus d={d} />
-                  </td>
-                  <td className="am-small am-num hidden px-4 py-3 sm:table-cell">
-                    {dateFmt.format(new Date(d.createdAt))}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+          </div>
+        </UrlFlyout>
       )}
     </>
   );

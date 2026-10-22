@@ -8,7 +8,7 @@ import { type SyntheticEvent, useState } from "react";
 import { inputClass, primaryButtonClass } from "../ui-classes";
 import { callApi } from "../api";
 
-/** Add a domain, then open its page with the records to publish. */
+/** Add a domain (in the "Add a domain" panel), then open its details panel with the records to publish. */
 export function AddDomainForm({ accountId }: { accountId: string }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
@@ -28,7 +28,9 @@ export function AddDomainForm({ accountId }: { accountId: string }) {
       body: { name },
     });
     if (res.ok) {
-      router.push(`/accounts/${accountId}/domains/${(res.data as { id: string }).id}`);
+      router.push(`/accounts/${accountId}/domains?domain=${encodeURIComponent((res.data as { id: string }).id)}`, {
+        scroll: false,
+      });
       return;
     }
     setPending(false);
@@ -38,7 +40,7 @@ export function AddDomainForm({ accountId }: { accountId: string }) {
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-2" noValidate>
       <label htmlFor="domain-name" className="am-h4">
-        Add a domain
+        Domain name
       </label>
       <div className="flex flex-col gap-2 sm:flex-row">
         <input

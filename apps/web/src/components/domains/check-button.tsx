@@ -5,13 +5,25 @@ import { RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { inlineActionClass } from "../console/flyout";
 import { primaryButtonClass } from "../ui-classes";
 import { callApi } from "../api";
 
 type CheckResult = { activated: boolean; records: { required: boolean; state: string }[] };
 
-/** Re-checks the records live; the page refreshes with the new states (and the active status when they pass). */
-export function CheckButton({ accountId, domainId }: { accountId: string; domainId: string }) {
+/**
+ * Re-checks the records live; the page refreshes with the new states (and the active status when they pass).
+ * `inline`: a quiet action link for a details panel's header instead of a primary button.
+ */
+export function CheckButton({
+  accountId,
+  domainId,
+  inline = false,
+}: {
+  accountId: string;
+  domainId: string;
+  inline?: boolean;
+}) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<{ tone: "ok" | "warn" | "error"; text: string } | null>(null);
@@ -44,15 +56,20 @@ export function CheckButton({ accountId, domainId }: { accountId: string; domain
   }
 
   return (
-    <div className="flex flex-col items-start gap-2 sm:items-end">
-      <button type="button" onClick={() => void check()} disabled={pending} className={primaryButtonClass}>
+    <div className={inline ? "contents" : "flex flex-col items-start gap-2 sm:items-end"}>
+      <button
+        type="button"
+        onClick={() => void check()}
+        disabled={pending}
+        className={inline ? inlineActionClass : primaryButtonClass}
+      >
         <RefreshCw className={`size-4 ${pending ? "animate-spin" : ""}`} aria-hidden />
         {pending ? "Checking…" : "Check now"}
       </button>
       <p
         role="status"
         aria-live="polite"
-        className={`am-small max-w-[42ch] sm:text-right ${message?.tone === "error" ? "text-destructive" : ""}`}
+        className={`am-small max-w-[42ch] ${inline ? "order-last basis-full" : "sm:text-right"} ${message?.tone === "error" ? "text-destructive" : ""}`}
       >
         {message?.text}
       </p>
