@@ -27,6 +27,7 @@ const STATUS: Record<string, number> = {
   bad_request: 400,
   conflict: 409,
   plan_limit: 403,
+  enrolment_required: 403,
 };
 
 export type RouteOptions = {
