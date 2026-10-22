@@ -27,6 +27,7 @@ import { createAppPassword, type StalwartManagement, stalwart } from "@anhourmai
 
 import { applyDevMailPlan, DEV_DOMAIN, DEV_MAILBOXES, devWebmailOrigins } from "../../infra/stalwart/dev-plan";
 import { type CredentialRow, writeCredentials } from "./credentials";
+import { importSampleContacts } from "./sample-contacts";
 import { importSampleMail, sampleIds } from "./sample-mail";
 import {
   type AccountKey,
@@ -449,6 +450,8 @@ if (demo) {
   if (ownerJmap) {
     const n = await importSampleMail(ownerJmap, { name: "Alex Rivera", email: sampleOwner }, fam);
     log(n > 0 ? `sample mail: ${n} messages imported for ${sampleOwner}` : "sample mail: already present");
+    const c = await importSampleContacts(ownerJmap);
+    log(c > 0 ? `sample contacts: ${c} added for ${sampleOwner}` : "sample contacts: already present");
   }
 
   // App password for IMAP client testing
