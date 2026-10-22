@@ -47,7 +47,14 @@ export const NAV: readonly NavItem[] = [
     phase: 3,
     href: (accountId) => `/accounts/${accountId}/mailboxes`,
   },
-  { label: "Aliases", icon: "at-sign", permission: "alias.manage.own", scope: "account", phase: 3 },
+  {
+    label: "Aliases",
+    icon: "at-sign",
+    permission: "alias.manage.own",
+    scope: "account",
+    phase: 3,
+    href: (accountId) => `/accounts/${accountId}/aliases`,
+  },
   { label: "People and roles", icon: "users", permission: "account.admins.manage", scope: "account", phase: 3 },
   { label: "Billing", icon: "credit-card", permission: "billing.read", scope: "account", phase: 5 },
   {
