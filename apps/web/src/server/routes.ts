@@ -30,6 +30,37 @@ export const ROUTES: readonly RouteSpec[] = [
   { method: "GET", path: "/api/health/ready", file: "app/api/health/ready/route.ts", guard: "infra" },
   { method: "GET", path: "/api/auth/*", file: "app/api/auth/[...all]/route.ts", guard: "infra" },
   { method: "GET", path: "/api/me", file: "app/api/me/route.ts", guard: "session" },
+  // The person's own sign-in security (packages/core/src/security). Someone else's ids are a 404.
+  { method: "GET", path: "/api/me/security", file: "app/api/me/security/route.ts", guard: "self.security.manage" },
+  {
+    method: "DELETE",
+    path: "/api/me/sessions",
+    file: "app/api/me/sessions/route.ts",
+    guard: "self.security.manage",
+    audits: "auth.sessions_revoked_all",
+  },
+  {
+    method: "DELETE",
+    path: "/api/me/sessions/:sessionId",
+    file: "app/api/me/sessions/[sessionId]/route.ts",
+    guard: "self.security.manage",
+    probeStatus: 404,
+  },
+  {
+    method: "PATCH",
+    path: "/api/me/passkeys/:passkeyId",
+    file: "app/api/me/passkeys/[passkeyId]/route.ts",
+    guard: "self.security.manage",
+    // The harness sends no name: allowed callers get a validation error.
+    probeStatus: 400,
+  },
+  {
+    method: "DELETE",
+    path: "/api/me/passkeys/:passkeyId",
+    file: "app/api/me/passkeys/[passkeyId]/route.ts",
+    guard: "self.security.manage",
+    probeStatus: 404,
+  },
   { method: "GET", path: "/api/search", file: "app/api/search/route.ts", guard: "session" },
   { method: "GET", path: "/api/platform/audit", file: "app/api/platform/audit/route.ts", guard: "platform.audit.read" },
   {
@@ -174,6 +205,15 @@ export const ROUTES: readonly RouteSpec[] = [
     guard: "alias.manage.own",
     accountParam: "accountId",
     probeStatus: 404,
+  },
+  {
+    method: "PUT",
+    path: "/api/accounts/:accountId/sign-in-policy",
+    file: "app/api/accounts/[accountId]/sign-in-policy/route.ts",
+    guard: "account.security.manage",
+    accountParam: "accountId",
+    // The harness sends no policy: allowed callers get a validation error.
+    probeStatus: 400,
   },
   // People and roles (roles.md guard rails; packages/core/src/people).
   {
