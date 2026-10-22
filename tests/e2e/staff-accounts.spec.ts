@@ -11,7 +11,7 @@ test("a Global Administrator finds an account, opens it, and its owner sees the 
   await (await openNav(page)).getByRole("link", { name: "Customer accounts" }).click();
   await expect(page.getByRole("heading", { name: "Customer accounts", level: 1 })).toBeVisible();
   await page.getByLabel("Search accounts").fill(u.run);
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   await page.getByRole("link", { name: u.accountName }).click();
   await expect(page.getByRole("heading", { name: u.accountName, level: 1 })).toBeVisible();
   await expect(page.getByText("Opening this page is recorded in the account's audit log")).toBeVisible();
