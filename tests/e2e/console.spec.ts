@@ -19,7 +19,7 @@ test("signed-out visitors land on sign-in; a wrong password shows an error", asy
   await expect(page).toHaveURL(/\/sign-in$/);
   await page.getByLabel("Email").fill("nobody@e2e.test");
   await page.getByLabel("Password", { exact: true }).fill("wrong-password-123");
-  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByText("Email or password is wrong.")).toBeVisible();
 });
 

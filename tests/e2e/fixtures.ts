@@ -10,6 +10,11 @@ export type E2eUsers = {
   users: Record<"globalAdmin" | "reportsReader" | "owner" | "member" | "userAdmin", string>;
   /** A mailbox of this run's own (fresh mail-server allowance per run) for webmail send/receive journeys. */
   recipient: { address: string; password: string };
+  /** Per browser project: logins for the sign-in security journeys (their own account for the requirement). */
+  security: Record<
+    string,
+    { totp: string; passkey: string; owner: string; member: string; pkOwner: string; pkMember: string }
+  >;
 };
 
 export const urls = {
@@ -41,7 +46,7 @@ export async function signIn(page: Page, email: string, password: string): Promi
   await page.goto(`${urls.app}/sign-in`);
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
-  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(homeHeading(page)).toBeVisible();
 }
 

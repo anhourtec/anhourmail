@@ -34,7 +34,7 @@ if (mode === "create") {
     ["member", { account: "member" }],
     ["userAdmin", { account: "user_admin" }],
   ];
-  for (const [key, roles] of people) {
+  const addLogin = async (key: string): Promise<{ id: string; email: string }> => {
     const id = randomUUID();
     const email = `${run}-${key.toLowerCase()}@e2e.test`;
     await db.insert(schema.authUser).values({ id, name: key, email, emailVerified: true });
@@ -45,11 +45,58 @@ if (mode === "create") {
       userId: id,
       password: await hashPassword(password),
     });
+    return { id, email };
+  };
+  for (const [key, roles] of people) {
+    const { id, email } = await addLogin(key);
     if (roles.platform) await db.insert(schema.platformRoleAssignment).values({ userId: id, role: roles.platform });
     if (roles.account) {
       await db.insert(schema.accountMembership).values({ accountId: account.id, userId: id, role: roles.account });
     }
     users[key] = email;
+  }
+  // Sign-in security journeys change people's sign-in factors and an account's requirement, so each browser project
+  // gets its own logins and its own account: nobody else's sign-in changes.
+  const security: Record<
+    string,
+    { totp: string; passkey: string; owner: string; member: string; pkOwner: string; pkMember: string }
+  > = {};
+  for (const project of ["desktop", "mobile"]) {
+    const [secAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} Security ${project}`, plan: "plus" })
+      .returning();
+    if (!secAccount) throw new Error("security account not created");
+    const logins = {
+      totp: await addLogin(`sec-${project}-totp`),
+      passkey: await addLogin(`sec-${project}-passkey`),
+      owner: await addLogin(`sec-${project}-owner`),
+      member: await addLogin(`sec-${project}-member`),
+    };
+    await db.insert(schema.accountMembership).values([
+      { accountId: secAccount.id, userId: logins.owner.id, role: "owner" },
+      { accountId: secAccount.id, userId: logins.member.id, role: "member" },
+    ]);
+    // A second account per project: its member signs in only with a passkey once the owner requires a second step.
+    const [pkAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} Passkeys ${project}`, plan: "plus" })
+      .returning();
+    if (!pkAccount) throw new Error("passkey account not created");
+    const pkOwner = await addLogin(`sec-${project}-pk-owner`);
+    const pkMember = await addLogin(`sec-${project}-pk-member`);
+    await db.insert(schema.accountMembership).values([
+      { accountId: pkAccount.id, userId: pkOwner.id, role: "owner" },
+      { accountId: pkAccount.id, userId: pkMember.id, role: "member" },
+    ]);
+    security[project] = {
+      totp: logins.totp.email,
+      passkey: logins.passkey.email,
+      owner: logins.owner.email,
+      member: logins.member.email,
+      pkOwner: pkOwner.email,
+      pkMember: pkMember.email,
+    };
   }
   // A mailbox of the run's own for webmail journeys that send and receive. Stalwart throttles mail per sender domain
   // and recipient (25 an hour by default, rule 27 — left as is), so sending to a shared demo mailbox runs out after
@@ -80,9 +127,13 @@ if (mode === "create") {
     quotaBytes: 50 * 1024 * 1024,
   });
   mkdirSync("test-results", { recursive: true });
-  writeFileSync(FILE, JSON.stringify({ run, password, accountName: account.name, users, recipient }, null, 2), {
-    mode: 0o600,
-  });
+  writeFileSync(
+    FILE,
+    JSON.stringify({ run, password, accountName: account.name, users, recipient, security }, null, 2),
+    {
+      mode: 0o600,
+    },
+  );
 } else if (mode === "delete") {
   const { run } = JSON.parse(readFileSync(FILE, "utf8")) as { run: string };
   // Cleanup matches names by run id; refuse anything that isn't one, so a bad file can't match everything.

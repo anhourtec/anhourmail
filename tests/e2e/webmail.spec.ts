@@ -49,7 +49,7 @@ async function signInWebmail(page: Page, address: string) {
   await page.goto(`${urls.webmail}/sign-in`);
   await page.getByLabel("Mailbox address").fill(address);
   await page.getByLabel("Password", { exact: true }).fill(demoPassword(address));
-  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible();
   await hideDevOverlay(page);
 }
@@ -85,7 +85,7 @@ test.describe("deliberate wrong passwords", () => {
     // A native submit (before the page's JavaScript runs) must never put the password in a URL.
     await expect(page.locator("form")).toHaveAttribute("method", "post");
     await page.getByLabel("Password", { exact: true }).fill("not-the-password");
-    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await expect(page.getByRole("alert").filter({ hasText: "Mailbox address or password is wrong." })).toBeVisible();
   });
 });
@@ -99,7 +99,7 @@ test("a person signs in to the webmail, reads mail with remote images blocked, a
   await expect(page).toHaveURL(/\/sign-in$/);
   await page.getByLabel("Mailbox address").fill(OWNER);
   await page.getByLabel("Password", { exact: true }).fill(demoPassword(OWNER));
-  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible();
   const list = page.getByRole("listbox", { name: "Inbox messages" });
   await expect(list.getByRole("option", { name: /Your holds are ready for pickup/ })).toBeVisible();
@@ -146,14 +146,14 @@ test("a person signs in to the webmail, reads mail with remote images blocked, a
 test("the console sign-in form posts too, never a GET with the password", async ({ page }) => {
   await page.goto(`${urls.app}/sign-in`);
   await expect(page.locator("form")).toHaveAttribute("method", "post");
-  await expect(page.getByRole("button", { name: "Sign in" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeEnabled();
 });
 
 test("keyboard: j and k move through the list, u goes back @desktop-only", async ({ page, consoleErrors }) => {
   await page.goto(`${urls.webmail}/sign-in`);
   await page.getByLabel("Mailbox address").fill(OWNER);
   await page.getByLabel("Password", { exact: true }).fill(demoPassword(OWNER));
-  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   const list = page.getByRole("listbox", { name: "Inbox messages" });
   await expect(list.getByRole("option").first()).toBeVisible();
   await page.keyboard.press("j");
