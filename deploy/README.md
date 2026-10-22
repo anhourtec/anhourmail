@@ -18,10 +18,12 @@ version. CI builds all three on every push (`.cicd/build.sh`).
   `docs/internal/research/deliverability.md`).
 - **NGINX** terminates HTTPS for the HTTP hosts only (site, `app.`, `mail.`, `mta-sts.`, `autoconfig.`), sets
   `X-Request-Id`, overwrites `X-Forwarded-*`, and never logs `/api/health`.
-- **Stalwart owns the mail ports** (25, 465, 587, 993, 995, 4190) and their TLS via its built-in ACME. Its HTTP
+- **Stalwart owns the mail ports** (25, 465, 587, 993, 995) and their TLS via its built-in ACME. Its HTTP
   management and JMAP endpoints are reachable only on the internal Docker network; the webmail reaches JMAP through
   `apps/web`'s same-origin proxy.
-- **Published ports in production are only NGINX 80/443 and Stalwart's mail ports 25, 465, 587, 993, 995, 4190.**
+- **Published ports in production are only NGINX 80/443 and Stalwart's mail ports 25, 465, 587, 993, 995.**
+  ManageSieve (4190) and the cleartext-upgrade ports IMAP 143 / POP3 110 are not published, and mail apps are
+  never told about them (`clientEndpoints` in `packages/shared/src/platform.ts`).
   App, worker, Postgres, Redis and Stalwart's HTTP listener have no host ports; containers talk only over internal
   Docker networks (CLAUDE.md rule 18).
 - Local dev differs on purpose: `.env.example` binds infra to `127.0.0.1` (`DEV_BIND_ADDRESS`); a developer's own
@@ -31,7 +33,7 @@ version. CI builds all three on every push (`.cicd/build.sh`).
   This public repo ships the images (these Dockerfiles), the dev/CI `docker-compose.yml` and the
   self-hosting guide (`/docs/self-hosting`), which is a starting point for operators, not our production setup.
 - Production shape (documented in `docs/internal/01-architecture.md`): containers talk only over internal Docker
-  networks; the only published ports are NGINX 80/443 and Stalwart's mail ports 25/465/587/993/995/4190.
+  networks; the only published ports are NGINX 80/443 and Stalwart's mail ports 25/465/587/993/995.
   Until then this directory only builds images.
 
 ## Rules
@@ -60,6 +62,21 @@ version. CI builds all three on every push (`.cicd/build.sh`).
   the webmail couldn't pass each visitor's address to Stalwart, whose failed-login ban would then hit the app
   itself. (Dev also runs with `true`: its port forwarder sets the header; see `.env.example`.)
 - `APP_URL`, `WEBMAIL_URL`, `SITE_URL` must be `https://` (session cookies are `Secure`).
+- `PLATFORM_DOMAIN` — the deployment's own domain, **required in production** (production uses `anhourmail.com`;
+  the unset default exists for development only). Every hostname customers are told about is built under it: MX
+  `mx1.`, SPF include `_spf.`, DKIM targets `<selector>.<customer domain>.dkim.`, `imap.`, `smtp.`, `autoconfig.`,
+  `autodiscover.`, the console's mail-app settings and the free address domain; domain verification checks the same
+  names. Set it on the web app **and** the worker, scheduler and any job. The web app refuses to start unless it is
+  set and `APP_URL` and `WEBMAIL_URL` are directly under it (`app.<domain>`, `mail.<domain>`); worker processes
+  refuse unless it is set and `APP_URL` (which they also need) is directly under it. A staging install on
+  `staging.example.org` sets `PLATFORM_DOMAIN=staging.example.org` and publishes those hosts in its own DNS.
+- `MAIL_TRANSPORT_URL` — `smtp://` or `smtps://` with optional `user:password@`; the only query options accepted are
+  `secure`, `requireTLS`, `tls.servername` and `tls.rejectUnauthorized`. Anything else (including `logger` and
+  `debug`, which would print SMTP transcripts) is refused at start-up; transport logging is always off.
+- Never run `npm run db:seed` on a server: it applies the dev mail-server plan and creates demo logins. It refuses
+  when `NODE_ENV=production` (unless `--force-dev-seed`), and — even with that flag — when `APP_URL` isn't a local
+  `http://` address (`localhost`, `*.localhost`, loopback) or `PLATFORM_DOMAIN` is set to anything but a `.test`
+  domain. The first administrator comes from `job:bootstrap-admin` (below).
 - `BETTER_AUTH_SECRET` must not be the `.env.example` placeholder.
 - `SECRETS_KEYRING` — the secrets-at-rest key ring (`id:base64(32 random bytes)`, newest first; older ids stay
   listed until nothing is sealed under them). Webmail sessions keep their mail-server tokens sealed with it.
@@ -83,3 +100,52 @@ version. CI builds all three on every push (`.cicd/build.sh`).
 - NGINX access logs must not record invite tokens: redact the path segment after `/invite/` and the `next` query on
   `/sign-in` (e.g. a `map` on `$request_uri` into the log format), since both carry a single-use invite token
   (`docs/internal/07-security.md` "Invites"). Invite acceptance creates console logins even when sign-up is closed.
+
+## First platform administrator
+
+On a fresh server (migrations applied, mail transport working), create the first Global Administrator once from the
+worker container:
+
+```sh
+npx tsx --env-file=/path/to/.env apps/worker/src/jobs/bootstrap-admin.ts --email you@example.org --first-name Ada \
+  [--last-name Lovelace]
+# or: npm run job:bootstrap-admin --workspace @anhourmail/worker -- --email … --first-name …
+```
+
+- It needs `DATABASE_URL`, `APP_URL`, `MAIL_TRANSPORT_URL`, `MAIL_FROM` and `PLATFORM_DOMAIN`. It creates a console
+  login with a verified email and **no password**, grants `global_admin`, and emails a one-time link to the
+  console's "Choose a new password" page (valid 60 minutes, single use). No password goes on the command line; the
+  link is never printed or logged. After it expires, "Forgot password" on the console sends a new one.
+- It **refuses and changes nothing** when anyone already holds a platform role (it can't be used to add admins
+  later — grant roles from the console) or when the email already has a console login (a pre-registered sign-up is
+  never promoted).
+- Every run is audited in the platform scope as `platform.admin_bootstrapped` (system actor `bootstrap-admin`;
+  refusals as `denied` with `admin_exists` / `login_exists`).
+- It touches only Postgres and the system mailer: no mail-server plan, no mailboxes, no demo data.
+- Exit codes: `0` created and emailed, `1` refused or bad input, `2` created but the email failed.
+- In production it refuses to start unless `PLATFORM_DOMAIN` is set and `APP_URL` is directly under it (same check
+  as the web app and the other worker processes).
+
+**If the email failed (exit 2).** The login and role exist; only the link didn't go out. Fix the mail transport
+(`MAIL_TRANSPORT_URL`, `MAIL_FROM`, the no-reply mailbox), then open the console's sign-in page, choose "Forgot
+password" and enter the same address: it sends a fresh one-hour link. Don't re-run the job — it refuses, because an
+administrator now exists.
+
+**If the email address was mistyped.** The job won't run again, and nobody can receive the link. Remove the mistaken
+login by hand, but only while it has never been used (no password set, no session), then run the job again with the
+right address. In a `psql` session on the control-plane database:
+
+```sql
+begin;
+-- Must return exactly one row; if it returns none, the login was used: stop and investigate instead.
+select u.id from auth_user u
+ where u.email = 'mistyped@example.org'
+   and not exists (select 1 from auth_account a where a.user_id = u.id)
+   and not exists (select 1 from auth_session s where s.user_id = u.id);
+delete from auth_verification where value = '<id from above>';      -- the unused set-password token
+delete from auth_user where id = '<id from above>';                 -- cascades its role and profile
+commit;
+```
+
+The original `platform.admin_bootstrapped` audit entry stays (audit is append-only) and the re-run writes a second
+one; note the manual removal and why in the operations log, since it bypasses the application.

@@ -34,7 +34,7 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `abuse` | `abuse.report_received`, `abuse.report_resolved` |
 | `staff` | `staff.role_granted`, `staff.role_revoked`, `staff.act_as_started`, `staff.act_as_ended`, `staff.account_viewed`, `staff.credentials_reset` |
 | `data` | `data.export_requested`, `data.export_downloaded`, `data.import_started`, `data.import_finished`, `data.deletion_requested`, `data.deleted` |
-| `platform` | `platform.settings_changed`, `platform.secret_changed`, `platform.stalwart_upgraded`, `platform.provisioning_failed`, `platform.reconciler_drift`, `platform.mailboxes_requeued`, `platform.mailbox_purged`, `platform.audit_chain_broken` |
+| `platform` | `platform.settings_changed`, `platform.admin_bootstrapped`, `platform.secret_changed`, `platform.stalwart_upgraded`, `platform.provisioning_failed`, `platform.reconciler_drift`, `platform.mailboxes_requeued`, `platform.mailbox_purged`, `platform.audit_chain_broken` |
 | `audit` | `audit.exported` |
 | `shared_mailbox` | `shared_mailbox.created`, `shared_mailbox.deleted`, `shared_mailbox.member_added`, `shared_mailbox.member_removed` |
 | `distribution_list` | `distribution_list.created`, `distribution_list.deleted`, `distribution_list.member_added`, `distribution_list.member_removed`, `distribution_list.senders_changed` |
@@ -82,6 +82,12 @@ Suspending or deleting again after the worker gave up is recorded with `retry: t
 on an Owner's or admin's mailbox is recorded as `denied` (`forbidden`). The reconciler's `platform.reconciler_drift`
 meta includes `suspensionMismatches` and `requeued`.
 `mailbox.deleted` stays reserved for an immediate deletion without a grace period (not offered today).
+
+First platform administrator: `platform.admin_bootstrapped` is written by the system actor `bootstrap-admin` (worker
+job `job:bootstrap-admin`, deploy/README.md "First platform administrator") in the **platform** scope, with the new
+login as the target (label = the email). Success meta: `role` (`global_admin`) and `linkExpiresAt`; never the
+set-password token or link. A refused run is `denied` with code `admin_exists` (someone already holds a platform role)
+or `login_exists` (the email already has a console login); an invalid email or name throws before anything is written.
 
 App passwords (ADR-0020), in the mailbox's **account** scope with the mailbox as the target:
 `auth.app_password_created` (meta `name`, `protocols`; never the secret or Stalwart's credential id) and

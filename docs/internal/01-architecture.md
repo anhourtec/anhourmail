@@ -20,7 +20,7 @@ flowchart LR
     end
     P[(Postgres<br/>control plane)]
     R[(Redis<br/>sessions, queues, rate limits, cache)]
-    ST[Stalwart v0.16.27<br/>25 465 587 993 995 4190]
+    ST[Stalwart v0.16.27<br/>25 465 587 993 995]
   end
   B -->|HTTPS| N
   N --> S
@@ -45,7 +45,7 @@ browser ──HTTPS──► NGINX ─┬─► apps/site  (anhourmail.com: mark
                                  ├─► Redis
                                  └─► Stalwart /jmap  (internal network only)
 apps/worker ─► Postgres, Redis, Stalwart management (provisioning jobs, DNS checks, reconciler, imports)
-mail clients ─► Stalwart 465/587/993/995/4190 (TLS by Stalwart itself)    MX traffic ─► Stalwart 25
+mail clients ─► Stalwart 465/587/993/995 (TLS by Stalwart itself)    MX traffic ─► Stalwart 25
 ```
 
 ## Components
@@ -198,7 +198,32 @@ The Stalwart Community edition has no tenants (Enterprise-only, `research/stalwa
 | Edge          | NGINX for 80/443 (console, webmail, site, JMAP proxy); Stalwart terminates TLS on mail ports via its own ACME                                                 | Same, behind a load balancer                                                        |
 | Orchestration | Docker Compose from the **private ops repo**                                                                                                                  | Compose per node                                                                    |
 
-**Production exposure.** Only NGINX **80/443** and Stalwart's mail ports **25, 465, 587, 993, 995, 4190** are published on public interfaces. The app, worker, Postgres, Redis and Stalwart's HTTP/JMAP/management listener are reachable only on internal Docker networks. The management API is never on a public interface; NGINX proxies only what the BFF needs, and the BFF is the only path to user JMAP.
+**Production exposure.** Only NGINX **80/443** and Stalwart's mail ports **25, 465, 587, 993, 995** are published on public interfaces (ManageSieve 4190 and the cleartext-upgrade ports IMAP 143 / POP3 110 are not, so mail apps are only ever told about 465/587/993/995). The app, worker, Postgres, Redis and Stalwart's HTTP/JMAP/management listener are reachable only on internal Docker networks. The management API is never on a public interface; NGINX proxies only what the BFF needs, and the BFF is the only path to user JMAP.
+
+**Platform hostnames.** The hostnames customers are told about — MX (`mx1.`), SPF include (`_spf.`), DKIM CNAME
+targets (`<selector>.<domain>.dkim.`), autoconfig/autodiscover, SRV targets, IMAP/SMTP/JMAP/CardDAV hosts — are built
+from one setting, `PLATFORM_DOMAIN` (default `anhourmail.com`), so a staging or self-hosted install never sends its
+customers to production names. Facts flow two ways from `packages/shared/src/platform.ts`:
+
+- **Server code (configured):** `platformFacts(domain)` builds a `Platform` (hosts, `spfInclude`, `dkimZone`, client
+  endpoints, CardDAV). The web app reads it per request (`apps/web/src/server/platform.ts`, validated in `env.ts`),
+  the worker via `workerPlatform()` (`apps/worker/src/platform.ts`), the seed from the same variable. Core services get it as
+  `deps.platform`: domain records (`customerDomainRecords(…, platform)`), live verification (`checkRecords`), the
+  dev resolver's answers, reserved names (`normaliseDomain` and catch-all refuse the platform domain too). The
+  console's mail-app settings, the "Free accounts use @…" line and the sign-in/webmail placeholders show it. In
+  production `PLATFORM_DOMAIN` must be set explicitly and the app refuses to start unless `APP_URL` and `WEBMAIL_URL`
+  are hosts directly under it (`app.<domain>`, `mail.<domain>`); worker processes (`apps/worker/src/platform.ts`) run
+  the same check on `APP_URL` (`productionPlatformProblems` in `platform.ts`). Free `@…` addresses live on the
+  platform domain itself (`Platform.freeAddressDomain`). `npm run db:seed` refuses a non-`.test` `PLATFORM_DOMAIN` or
+  a non-local `APP_URL` (`scripts/seed/guard.ts`). System emails carry no
+  hostnames of their own: their links come from `APP_URL` and their sender from `MAIL_FROM`.
+- **Public site and docs (static):** `apps/site` and `docs/public` publish the product's own names through
+  `PUBLIC_PLATFORM` / `HOSTS` / `CLIENT_ENDPOINTS` / `CARDDAV` / `PRODUCT_DOMAIN` (anhourmail.com), checked at build
+  time by `check:docs`. They never read `PLATFORM_DOMAIN`: the public docs describe the hosted product.
+
+ESLint (`no-restricted-syntax` in `eslint.config.mjs`) stops server code (`packages/core`, `packages/adapters`,
+`apps/worker`) and `apps/web/src` from importing the published facts, so a new caller can't reintroduce production
+names. There are no per-host overrides: every customer-facing host is `<label>.<PLATFORM_DOMAIN>`.
 
 **What lives where.** This public repo ships the **images** (`deploy/Dockerfile.*`), the dev/CI `docker-compose.yml` and a self-hosting guide (`/docs/self-hosting`). Production compose files, NGINX config, server IPs, deploy secrets and tuned abuse thresholds live in a **private ops repo** and on the server, never here (rule 44).
 

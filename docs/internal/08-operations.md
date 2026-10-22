@@ -4,12 +4,16 @@ Last updated: 2026-10-22.
 
 ## Environments
 
-| Env     | Where                                                                                                                                                                                               | Mail                                                                                  | Data                                                                                      |
-| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| dev     | Developer machine, public repo `docker-compose.yml` profile `dev` (infra binds `DEV_BIND_ADDRESS`, default 127.0.0.1; apps listen on `DEV_HOST`)                                                    | Stalwart on an isolated network; all non-local mail goes to Mailpit                   | Seeded demo data (`npm run db:seed -- --demo`); `credentials.md` generated and gitignored |
-| ci      | GitHub Actions, profile `ci`                                                                                                                                                                        | Same isolation as dev                                                                 | Throwaway                                                                                 |
-| staging | Small VPS (later), same private-ops compose as prod                                                                                                                                                 | Real Stalwart; outbound only to an allow-list of our own test domains + seed accounts | Synthetic only                                                                            |
-| prod    | One VPS, provider and region chosen in the private ops repo (`01-architecture.md` deploy shape); compose, NGINX and secrets from the private ops repo; only 80/443 + 25/465/587/993/995/4190 public | Real                                                                                  | Customer data                                                                             |
+| Env     | Where                                                                                                                                                                                          | Mail                                                                                  | Data                                                                                      |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| dev     | Developer machine, public repo `docker-compose.yml` profile `dev` (infra binds `DEV_BIND_ADDRESS`, default 127.0.0.1; apps listen on `DEV_HOST`)                                               | Stalwart on an isolated network; all non-local mail goes to Mailpit                   | Seeded demo data (`npm run db:seed -- --demo`); `credentials.md` generated and gitignored |
+| ci      | GitHub Actions, profile `ci`                                                                                                                                                                   | Same isolation as dev                                                                 | Throwaway                                                                                 |
+| staging | Small VPS (later), same private-ops compose as prod                                                                                                                                            | Real Stalwart; outbound only to an allow-list of our own test domains + seed accounts | Synthetic only                                                                            |
+| prod    | One VPS, provider and region chosen in the private ops repo (`01-architecture.md` deploy shape); compose, NGINX and secrets from the private ops repo; only 80/443 + 25/465/587/993/995 public | Real                                                                                  | Customer data                                                                             |
+
+Staging and production never run `npm run db:seed` (it refuses under `NODE_ENV=production`): the first Global
+Administrator comes from the worker job `job:bootstrap-admin` (deploy/README.md "First platform administrator"), and
+each environment sets `PLATFORM_DOMAIN` to its own domain so customers are shown that environment's mail hostnames.
 
 The public repo's `docker-compose.yml` is **dev/CI only**. Production compose files, NGINX config, server IPs, deploy secrets and tuned abuse thresholds live only in the **private ops repo** and on the server (rule 44). The public repo ships images (`deploy/Dockerfile.*`), `.env.example` placeholders and the self-hosting guide.
 
@@ -86,8 +90,8 @@ allows HTTPS (443) only from allow-listed IPs (staff, invited testers); everyone
 Within that boundary self-service sign-up is on (`SIGNUP_MODE=open`): new users get a personal Free account with
 themselves as Owner (`provisionSignUp`, audited). Who gets an account is decided outside the product (the
 allow-list; there is no waitlist — decision 2026-10-22). `SIGNUP_MODE=closed` makes `/sign-up` a 404 and the auth
-endpoint refuses sign-ups. The allow-list itself lives in the private ops repo. Mail ports (25/465/587/993/995/
-143/110/4190) are not behind the allow-list — mail must flow.
+endpoint refuses sign-ups. The allow-list itself lives in the private ops repo. Mail ports (25/465/587/993/995;
+143, 110 and 4190 aren't published) are not behind the allow-list — mail must flow.
 
 Password reset: `/forgot-password` (same answer whether or not the address exists) → one-hour link by email
 (transactional mail via `MAIL_TRANSPORT_URL`; Mailpit in dev) → `/reset-password` → new argon2id hash, every

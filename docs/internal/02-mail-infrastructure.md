@@ -5,6 +5,10 @@ Last updated: 2026-10-21. Research: `research/stalwart.md`, `research/deliverabi
 ## URL and hostname map
 
 Public facts are defined once in `packages/shared/src/platform.ts`. This table explains them; it does not redefine them.
+Every host below `anhourmail.com` is built from the deployment's `PLATFORM_DOMAIN` (default `anhourmail.com`;
+`01-architecture.md` "Platform hostnames"): a staging or self-hosted install on `staging.example.org` serves
+`mx1.staging.example.org`, `_spf.staging.example.org`, `<sel>.<domain>.dkim.staging.example.org` and so on, and its
+console tells customers exactly those names. The marketing site and public docs always show the product's names.
 
 | Host / path                                                | Purpose                                                   | Served by                |
 | ---------------------------------------------------------- | --------------------------------------------------------- | ------------------------ |
@@ -15,12 +19,16 @@ Public facts are defined once in `packages/shared/src/platform.ts`. This table e
 | `mail.anhourmail.com`                                      | Webmail and same-origin JMAP proxy                        | `apps/web` (host-routed) |
 | `mx1.anhourmail.com`                                       | Inbound MX for every hosted domain; PTR target; EHLO name | Stalwart :25             |
 | `smtp.anhourmail.com`                                      | Client submission 465 (implicit TLS), 587 (STARTTLS)      | Stalwart                 |
-| `imap.anhourmail.com`                                      | IMAP 993, ManageSieve 4190, JMAP for third-party clients  | Stalwart                 |
+| `imap.anhourmail.com`                                      | IMAP 993, POP3 995, JMAP and CardDAV for third-party apps | Stalwart                 |
 | `autoconfig.anhourmail.com`, `autodiscover.anhourmail.com` | Client auto-setup; customer domains CNAME here            | Stalwart / NGINX         |
 | `mta-sts.anhourmail.com`                                   | MTA-STS policy (`/.well-known/mta-sts.txt`)               | NGINX (static)           |
 | `status.anhourmail.com`                                    | Status page (external provider, decided later)            | —                        |
 
 `anhourtec.com` is staff mail only (ADR-0006). No customer or free account ever lives there.
+
+Mail apps are told only the published ports: IMAP 993 and POP3 995 (implicit TLS), SMTP 465 (implicit TLS) and 587
+(STARTTLS), JMAP/CardDAV on 443 (`clientEndpoints`). The cleartext-upgrade ports 143 and 110 and ManageSieve 4190
+exist inside the dev stack only and are never published in production or advertised.
 
 ## DNS for anhourmail.com
 
@@ -28,7 +36,7 @@ The full record set (A/AAAA/PTR, MX, SPF with `-all`, DKIM RSA-2048 selectors, D
 
 ## Customer domain records
 
-The template is **code**: `customerDomainRecords(domain, verifyToken)` in `packages/shared/src/dns.ts`. The console renders it with live per-record verification, the docs render it per DNS provider, and the worker checks it. In summary:
+The template is **code**: `customerDomainRecords(domain, verifyToken, platform)` in `packages/shared/src/dns.ts`. The console renders it with live per-record verification and the worker checks it, both with the configured platform (`deps.platform`, from `PLATFORM_DOMAIN`); the docs render it per DNS provider with the product's published names (`PUBLIC_PLATFORM`). SPF verification looks for the include in the rendered template, so it follows the platform too. In summary:
 
 - **Required:** ownership TXT (`_anhourmail`), MX → `mx1`, SPF include, two DKIM CNAMEs.
 - **Recommended:** DMARC, autoconfig and autodiscover CNAMEs, client SRV records.
