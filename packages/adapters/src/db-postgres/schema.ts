@@ -237,6 +237,11 @@ export const customerDomain = pgTable(
     /** Stalwart's id once provisioned; null until the provisioning job succeeds. */
     stalwartId: text("stalwart_id"),
     lastError: text("last_error"),
+    /**
+     * Catch-all (paid plans): the account's mailbox that receives mail for unknown addresses at the domain; null =
+     * off (unknown recipients refused). Cleared when that mailbox is suspended or deleted.
+     */
+    catchAllMailboxId: uuid("catch_all_mailbox_id").references(() => mailbox.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },
   (t) => [
@@ -356,4 +361,74 @@ export const provisioningJob = pgTable(
     index("provisioning_job_ready_idx").on(t.status, t.runAfter),
     index("provisioning_job_subject_idx").on(t.kind, t.subjectId),
   ],
+);
+
+// --- webmail settings (docs/internal/05-webmail.md "Settings") ----------------------------------------------
+
+/**
+ * Display preferences per mailbox (layout, density, formats). Never mail content and no addresses: the values are
+ * the closed choices in `@anhourmail/shared/webmail`, normalised on read.
+ */
+export const webmailPreference = pgTable("webmail_preference", {
+  mailboxId: uuid("mailbox_id")
+    .primaryKey()
+    .references(() => mailbox.id, { onDelete: "cascade" }),
+  prefs: jsonb("prefs").notNull(),
+  updatedAt: updatedAt(),
+});
+
+/**
+ * A mailbox's one forwarding target and its confirmation (the target's owner must confirm before forwarding can be
+ * turned on). The token is stored as its sha256 only. Forwarding itself is a rule in the mail server.
+ */
+export const forwardingTarget = pgTable(
+  "forwarding_target",
+  {
+    mailboxId: uuid("mailbox_id")
+      .primaryKey()
+      .references(() => mailbox.id, { onDelete: "cascade" }),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    address: text("address").notNull(),
+    /** pending | confirmed */
+    status: text("status").notNull(),
+    tokenHash: text("token_hash"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull(),
+    sendsInWindow: integer("sends_in_window").notNull().default(0),
+    windowStartedAt: timestamp("window_started_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [uniqueIndex("forwarding_target_token_idx").on(t.tokenHash)],
+);
+
+// --- app passwords (docs/internal/07-security.md "App passwords") --------------------------------------------
+
+/**
+ * App passwords for mail apps: metadata only. The secret is generated and stored (hashed) by Stalwart and shown to
+ * the person once; it never reaches this table, a log or the audit log (CLAUDE.md rules 23, 48).
+ */
+export const appPassword = pgTable(
+  "app_password",
+  {
+    id: uuid("id").primaryKey(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    mailboxId: uuid("mailbox_id")
+      .notNull()
+      .references(() => mailbox.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    /** imap | pop3 | smtp | dav (shared/security.ts APP_PASSWORD_PROTOCOLS) */
+    protocols: text("protocols").array().notNull(),
+    /** Stalwart's credential id; reused after a revocation, so matched together with its creation time. */
+    credentialId: text("credential_id").notNull(),
+    credentialCreatedAt: timestamp("credential_created_at", { withTimezone: true }).notNull(),
+    /** active | revoking */
+    status: text("status").notNull().default("active"),
+    createdBy: text("created_by"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("app_password_mailbox_idx").on(t.mailboxId)],
 );
