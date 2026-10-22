@@ -11,3 +11,37 @@
 @source "../../../../docs/public";
 @source "../../node_modules/fumadocs-ui/dist";
 @source "../../../../node_modules/fumadocs-ui/dist";
+
+/*
+ * Docs sidebar, collapsed: instead of the small floating pill in the corner, the expand and search buttons sit in a
+ * slim full-height rail on the left (the same shape as the console and webmail rails), and the page keeps clear of
+ * it. Unlayered rules, so they win over the docs UI's utility classes.
+ */
+@media (min-width: 768px) {
+  #nd-docs-layout[data-sidebar-collapsed="true"] [data-sidebar-panel] {
+    top: 0;
+    bottom: 0;
+    inset-inline-start: 0;
+    width: 3.5rem;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.75rem 0;
+    border-width: 0;
+    border-inline-end-width: 1px;
+    border-radius: 0;
+    box-shadow: none;
+    background: var(--color-fd-card);
+  }
+  #nd-docs-layout[data-sidebar-collapsed="true"] [data-sidebar-panel] > button {
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 0.5rem;
+  }
+  #nd-docs-layout[data-sidebar-collapsed="true"] [data-layout-main] {
+    padding-inline-start: 3.5rem;
+  }
+  #nd-docs-layout[data-sidebar-collapsed="true"] #nd-page {
+    padding-top: 3.5rem;
+  }
+}
