@@ -24,6 +24,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Trash2,
+  UserPlus,
   X,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
@@ -31,6 +32,8 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Bone, ReaderSkeleton } from "@anhourmail/ui/skeletons";
 
 import type { Address, MessageView } from "@/server/webmail/view";
+
+import { Tooltip } from "@/components/tooltip";
 
 import { displayName, folderLabel, folderTree, fullDate, initials, subjectOf } from "./format";
 import type { Folder, MailClient, Summary } from "./mail-client";
@@ -102,6 +105,8 @@ export function Reader({
   onKeyword,
   onSignedOut,
   onComposeTo,
+  knownAddresses,
+  onAddContact,
   registerActions,
 }: {
   client: MailClient;
@@ -123,6 +128,9 @@ export function Reader({
   onSignedOut: () => void;
   /** Writes to an address found in a message (opens the composer). */
   onComposeTo: (address: string) => void;
+  /** Addresses already in an address book (lowercase); others get "Add to contacts". */
+  knownAddresses: ReadonlySet<string>;
+  onAddContact: (person: Address) => void;
   registerActions: (a: ReaderActions | null) => void;
 }) {
   const [thread, setThread] = useState<Summary[] | null>(null);
@@ -346,115 +354,118 @@ export function Reader({
   ];
 
   const deleteButton = (
-    <button
-      type="button"
-      onClick={() => {
-        onAction(inTrash || inJunk ? { kind: "deleteForever" } : { kind: "trash" });
-      }}
-      aria-label={inTrash || inJunk ? "Delete forever" : "Delete"}
-      title={inTrash || inJunk ? "Delete forever" : "Delete (#)"}
-      className={`${iconButtonClass} text-destructive hover:text-destructive`}
-    >
-      <Trash2 className="size-4" aria-hidden />
-    </button>
+    <Tooltip label={inTrash || inJunk ? "Delete forever" : "Delete"} shortcut={inTrash || inJunk ? undefined : "#"}>
+      <button
+        type="button"
+        onClick={() => {
+          onAction(inTrash || inJunk ? { kind: "deleteForever" } : { kind: "trash" });
+        }}
+        aria-label={inTrash || inJunk ? "Delete forever" : "Delete"}
+        className={`${iconButtonClass} text-destructive hover:text-destructive`}
+      >
+        <Trash2 className="size-4" aria-hidden />
+      </button>
+    </Tooltip>
   );
 
   const senderName = displayName(expanded?.from?.[0]);
   return (
     <section aria-label="Message" className="flex h-full min-h-0 flex-col">
       <div className="flex h-14 shrink-0 items-center gap-0.5 border-b px-2">
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close message"
-          title="Close (Esc)"
-          className={iconButtonClass}
-        >
-          <X className="hidden size-4 md:block" aria-hidden />
-          <ArrowLeft className="size-4 md:hidden" aria-hidden />
-        </button>
+        <Tooltip label="Close" shortcut="Esc">
+          <button type="button" onClick={onClose} aria-label="Close message" className={iconButtonClass}>
+            <X className="hidden size-4 md:block" aria-hidden />
+            <ArrowLeft className="size-4 md:hidden" aria-hidden />
+          </button>
+        </Tooltip>
         <span aria-hidden className="mx-1 h-4 w-px bg-border" />
-        <button
-          type="button"
-          onClick={onPrev}
-          disabled={!canPrev}
-          aria-label="Previous message"
-          title="Previous (k)"
-          className={iconButtonClass}
-        >
-          <ChevronLeft className="size-4" aria-hidden />
-        </button>
-        <button
-          type="button"
-          onClick={onNext}
-          disabled={!canNext}
-          aria-label="Next message"
-          title="Next (j)"
-          className={iconButtonClass}
-        >
-          <ChevronRight className="size-4" aria-hidden />
-        </button>
+        <Tooltip label="Previous" shortcut="k">
+          <button
+            type="button"
+            onClick={onPrev}
+            disabled={!canPrev}
+            aria-label="Previous message"
+            className={iconButtonClass}
+          >
+            <ChevronLeft className="size-4" aria-hidden />
+          </button>
+        </Tooltip>
+        <Tooltip label="Next" shortcut="j">
+          <button
+            type="button"
+            onClick={onNext}
+            disabled={!canNext}
+            aria-label="Next message"
+            className={iconButtonClass}
+          >
+            <ChevronRight className="size-4" aria-hidden />
+          </button>
+        </Tooltip>
         <div className="flex-1" />
-        <button
-          type="button"
-          disabled={!thread}
-          onClick={() => {
-            if (thread)
-              setKeyword(
-                thread.map((e) => e.id),
-                "$pinned",
-                !pinned,
-              );
-          }}
-          aria-label={pinned ? "Unpin" : "Pin"}
-          aria-pressed={pinned}
-          title={pinned ? "Unpin (p)" : "Pin (p)"}
-          className={iconButtonClass}
-        >
-          <Pin className={`size-4 ${pinned ? "fill-current text-primary" : ""}`} aria-hidden />
-        </button>
-        <button
-          type="button"
-          disabled={!expanded}
-          onClick={() => {
-            if (expanded) setKeyword([expanded.id], "$flagged", !flagged);
-          }}
-          aria-label="Priority"
-          aria-pressed={flagged}
-          title={flagged ? "Remove from Priority (s)" : "Add to Priority (s)"}
-          className={iconButtonClass}
-        >
-          <Flag
-            className={`size-4 ${flagged ? "fill-current text-[rgb(var(--am-status-warning-bg))]" : ""}`}
-            aria-hidden
-          />
-        </button>
+        <Tooltip label={pinned ? "Unpin" : "Pin"} shortcut="p">
+          <button
+            type="button"
+            disabled={!thread}
+            onClick={() => {
+              if (thread)
+                setKeyword(
+                  thread.map((e) => e.id),
+                  "$pinned",
+                  !pinned,
+                );
+            }}
+            aria-label={pinned ? "Unpin" : "Pin"}
+            aria-pressed={pinned}
+            className={iconButtonClass}
+          >
+            <Pin className={`size-4 ${pinned ? "fill-current text-primary" : ""}`} aria-hidden />
+          </button>
+        </Tooltip>
+        <Tooltip label={flagged ? "Remove from Priority" : "Add to Priority"} shortcut="s">
+          <button
+            type="button"
+            disabled={!expanded}
+            onClick={() => {
+              if (expanded) setKeyword([expanded.id], "$flagged", !flagged);
+            }}
+            aria-label="Priority"
+            aria-pressed={flagged}
+            className={iconButtonClass}
+          >
+            <Flag
+              className={`size-4 ${flagged ? "fill-current text-[rgb(var(--am-status-warning-bg))]" : ""}`}
+              aria-hidden
+            />
+          </button>
+        </Tooltip>
         <span className="hidden items-center gap-0.5 md:flex">
           {role !== "archive" && (
+            <Tooltip label="Archive" shortcut="e">
+              <button
+                type="button"
+                onClick={() => {
+                  onAction({ kind: "archive" });
+                }}
+                aria-label="Archive"
+                className={iconButtonClass}
+              >
+                <Archive className="size-4" aria-hidden />
+              </button>
+            </Tooltip>
+          )}
+          <Tooltip label="Reply" shortcut="r">
             <button
               type="button"
               onClick={() => {
-                onAction({ kind: "archive" });
+                reply("reply");
               }}
-              aria-label="Archive"
-              title="Archive (e)"
+              disabled={!loaded}
+              aria-label="Reply"
               className={iconButtonClass}
             >
-              <Archive className="size-4" aria-hidden />
+              <Reply className="size-4" aria-hidden />
             </button>
-          )}
-          <button
-            type="button"
-            onClick={() => {
-              reply("reply");
-            }}
-            disabled={!loaded}
-            aria-label="Reply"
-            title="Reply (r)"
-            className={iconButtonClass}
-          >
-            <Reply className="size-4" aria-hidden />
-          </button>
+          </Tooltip>
           <Menu label="More actions" icon={EllipsisVertical} items={more} />
           <span aria-hidden className="mx-1 h-4 w-px bg-border" />
           {deleteButton}
@@ -514,6 +525,18 @@ export function Reader({
                 <span className="truncate font-mono text-[12.5px] text-muted-foreground">
                   {expanded.from?.[0]?.email}
                 </span>
+                {expanded.from?.[0] && !knownAddresses.has(expanded.from[0].email.toLowerCase()) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const f = expanded.from?.[0];
+                      if (f) onAddContact(f);
+                    }}
+                    className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-[12px] text-primary hover:bg-accent"
+                  >
+                    <UserPlus className="size-3.5" aria-hidden /> Add to contacts
+                  </button>
+                )}
               </div>
               {loaded ? (
                 <>

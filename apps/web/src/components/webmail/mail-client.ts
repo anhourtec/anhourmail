@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { JmapClient, JmapError } from "@anhourmail/jmap-client";
 
+import type { BookView, ContactInput, ContactView } from "@/server/webmail/contacts";
 import type { Address, MessageView } from "@/server/webmail/view";
 
 /**
@@ -54,6 +55,18 @@ export type DraftPayload = {
 
 /** What the list shows: a folder, or "Priority" (flagged everywhere but Trash and Junk). */
 export type View = { kind: "folder"; id: string } | { kind: "priority" };
+
+export type ContactsData = {
+  /** The account these contacts belong to: sent back with every change, refused if another mailbox is active. */
+  accountId: string;
+  books: BookView[];
+  contacts: ContactView[];
+  autoSave: boolean;
+  /** More than the 5,000 shown. */
+  truncated: boolean;
+};
+/** The fields the contact form edits (the BFF validates and builds the card). */
+export type ContactFields = ContactInput;
 
 /** List narrowing from the filter menu and the search box. */
 export type ListFilter = {
@@ -122,6 +135,9 @@ export function listFilter(view: View, f: ListFilter, hidden: string[], opts: { 
 }
 
 export type MailClient = ReturnType<typeof createMailClient>;
+
+/** The account the app is showing, sent with contacts changes (the BFF refuses another active mailbox). */
+const ACCOUNT = "X-Webmail-Account";
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
@@ -403,14 +419,17 @@ export function createMailClient(origin = "") {
       }
     },
 
-    /** People this mailbox recently wrote to or heard from (for address suggestions). */
-    async recentCorrespondents(sentId: string | undefined): Promise<Address[]> {
+    /**
+     * People this mailbox recently wrote to (and heard from), most emailed first: how many of the last 200 sent
+     * messages went to each (for address suggestions).
+     */
+    async recentCorrespondents(sentId: string | undefined): Promise<(Address & { score: number })[]> {
       const a = await accountId();
       const filter = sentId ? { inMailbox: sentId } : {};
       const res = await call([
         [
           "Email/query",
-          { accountId: a, filter, sort: [{ property: "receivedAt", isAscending: false }], limit: 100 },
+          { accountId: a, filter, sort: [{ property: "receivedAt", isAscending: false }], limit: 200 },
           "q",
         ],
         [
@@ -423,7 +442,7 @@ export function createMailClient(origin = "") {
           "g",
         ],
       ]);
-      const seen = new Map<string, Address>();
+      const seen = new Map<string, Address & { score: number }>();
       for (const e of (res.get("g")?.list ?? []) as {
         to: Address[] | null;
         cc: Address[] | null;
@@ -431,10 +450,14 @@ export function createMailClient(origin = "") {
       }[]) {
         for (const x of [...(e.to ?? []), ...(e.cc ?? []), ...(e.from ?? [])]) {
           const key = x.email.toLowerCase();
-          if (!seen.has(key) || (!seen.get(key)?.name && x.name)) seen.set(key, x);
+          const cur = seen.get(key);
+          if (cur) {
+            cur.score += 1;
+            if (!cur.name && x.name) cur.name = x.name;
+          } else seen.set(key, { name: x.name, email: key, score: 1 });
         }
       }
-      return [...seen.values()];
+      return [...seen.values()].sort((x, y) => y.score - x.score);
     },
 
     /** The sanitised message for the reader; null when it no longer exists. `full` lifts the body cap. */
@@ -511,6 +534,46 @@ export function createMailClient(origin = "") {
         method: "PUT",
         body: JSON.stringify({ address }),
       }),
+
+    contacts: () => api<ContactsData>(`${origin}/api/webmail/contacts`),
+    createContact: (account: string, contact: ContactFields, book: "mine" | "other" = "mine") =>
+      api<{ id: string }>(`${origin}/api/webmail/contacts`, {
+        method: "POST",
+        headers: { [ACCOUNT]: account },
+        body: JSON.stringify({ contact, book }),
+      }),
+    updateContact: (account: string, id: string, contact: ContactFields) =>
+      api<{ id: string }>(`${origin}/api/webmail/contacts/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { [ACCOUNT]: account },
+        body: JSON.stringify(contact),
+      }),
+    deleteContacts: (account: string, ids: string[]) =>
+      api<{ deleted: number }>(`${origin}/api/webmail/contacts`, {
+        method: "DELETE",
+        headers: { [ACCOUNT]: account },
+        body: JSON.stringify({ ids }),
+      }),
+    moveContacts: (account: string, ids: string[], to: "mine" | "other") =>
+      api<{ moved: number }>(`${origin}/api/webmail/contacts/move`, {
+        method: "POST",
+        headers: { [ACCOUNT]: account },
+        body: JSON.stringify({ ids, to }),
+      }),
+    setAutoSave: (account: string, autoSave: boolean) =>
+      api<{ autoSave: boolean }>(`${origin}/api/webmail/contacts/settings`, {
+        method: "PUT",
+        headers: { [ACCOUNT]: account },
+        body: JSON.stringify({ autoSave }),
+      }),
+    importContacts: (account: string, file: File) =>
+      api<{ imported: number; skipped: number; full: boolean }>(`${origin}/api/webmail/contacts/import`, {
+        method: "POST",
+        headers: { "Content-Type": "text/vcard", [ACCOUNT]: account },
+        body: file,
+      }),
+    exportContactsUrl: (ids?: string[]) =>
+      `${origin}/api/webmail/contacts/export${ids && ids.length > 0 ? `?ids=${ids.map(encodeURIComponent).join(",")}` : ""}`,
 
     async signOut(): Promise<void> {
       await fetch(`${origin}/api/webmail/auth`, { method: "DELETE" });

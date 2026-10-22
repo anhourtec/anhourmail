@@ -25,8 +25,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageListSkeleton } from "@anhourmail/ui/skeletons";
 
 import type { Address, MessageView } from "@/server/webmail/view";
+import { Tooltip } from "@/components/tooltip";
 
 import { type ComposeSeed, Composer } from "./composer";
+import { ContactsView } from "./contacts-view";
 import { AddMailboxDialog, ConfirmDialog, Modal } from "./dialogs";
 import {
   type ComposeMode,
@@ -49,6 +51,7 @@ import {
   type SearchQuery,
   SignedOutError,
   type View,
+  type ContactsData,
 } from "./mail-client";
 import { iconButtonClass, Menu, type MenuEntry } from "./menu";
 import { MessageList } from "./message-list";
@@ -143,6 +146,8 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
   const [mailboxes, setMailboxes] = useState<Mailboxes>({ active: username, others: [] });
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [contacts, setContacts] = useState<Address[]>([]);
+  const [section, setSection] = useState<"mail" | "contacts">("mail");
+  const [book, setBook] = useState<ContactsData | null>(null);
   const [composer, setComposer] = useState<ComposerState | null>(null);
   const [collapsed, setCollapsed] = useState(initialCollapsed);
   const [drawer, setDrawer] = useState(false);
@@ -308,6 +313,10 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
     client
       .identities()
       .then(setIdentities)
+      .catch(() => undefined);
+    client
+      .contacts()
+      .then(setBook)
       .catch(() => undefined);
     return () => {
       live = false;
@@ -528,13 +537,85 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
 
   // ---- composing ----------------------------------------------------------------------------------------
 
+  /**
+   * Address suggestions for the composer: everyone in the address books plus recent correspondents, the people
+   * this mailbox emails most first.
+   */
   const ensureContacts = useCallback(() => {
     if (contacts.length > 0) return;
-    client
-      .recentCorrespondents(roles.sent)
-      .then(setContacts)
-      .catch(() => undefined);
+    void Promise.all([
+      client.recentCorrespondents(roles.sent).catch(() => []),
+      client.contacts().catch(() => null),
+    ]).then(([recent, saved]) => {
+      const all = new Map<string, Address & { score: number }>();
+      for (const r of recent) all.set(r.email, { ...r });
+      for (const c of saved?.contacts ?? []) {
+        for (const e of c.emails) {
+          const cur = all.get(e.address);
+          if (cur) cur.name = c.name || cur.name;
+          else all.set(e.address, { name: c.name || null, email: e.address, score: 0 });
+        }
+      }
+      setContacts(
+        [...all.values()]
+          .sort((a, b) => b.score - a.score || (a.name ?? a.email).localeCompare(b.name ?? b.email))
+          .map(({ name, email }) => ({ name, email })),
+      );
+    });
   }, [contacts.length, client, roles.sent]);
+
+  const loadBook = useCallback(async () => {
+    try {
+      setBook(await client.contacts());
+    } catch (err) {
+      fail(err, "Couldn't load your contacts. Try again.");
+    }
+  }, [client, fail]);
+
+  const known = useMemo(
+    () => new Set((book?.contacts ?? []).flatMap((c) => c.emails.map((e) => e.address.toLowerCase()))),
+    [book],
+  );
+
+  /** "Add to contacts" from a sender card or an address chip: saved to My contacts. */
+  const addContact = useCallback(
+    (person: Address) => {
+      const email = person.email.toLowerCase();
+      void (async () => {
+        try {
+          // The account the contacts belong to (loaded with them); changes refuse another active mailbox.
+          const current = book ?? (await client.contacts());
+          const existing = current.contacts.find((c) => c.emails.some((e) => e.address === email));
+          if (existing) await client.moveContacts(current.accountId, [existing.id], "mine");
+          else
+            await client.createContact(current.accountId, {
+              given: "",
+              surname: "",
+              name: (person.name ?? "").trim().slice(0, 200),
+              emails: [{ address: email, label: "" }],
+              phones: [],
+              organization: "",
+              notes: "",
+              birthday: null,
+              labels: [],
+            });
+          await loadBook();
+          toasts.show({ message: `${person.name ?? email} added to contacts.` });
+        } catch (err) {
+          fail(err);
+        }
+      })();
+    },
+    [book, client, loadBook, toasts, fail],
+  );
+
+  const openContacts = () => {
+    setDrawer(false);
+    setOpenThread(null);
+    setChecked(new Set());
+    setSection("contacts");
+    void loadBook();
+  };
 
   const openComposer = useCallback(
     (seed: ComposeSeed, variant: "panel" | "inline" = "panel") => {
@@ -611,6 +692,7 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
   const onSent = useCallback(
     (submissionId: string) => {
       setComposer(null);
+      setContacts([]); // New recipients may have been saved: suggestions reload next time.
       refresh();
       toasts.show({
         message: "Message sent.",
@@ -692,6 +774,7 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
   );
 
   const selectView = (v: View) => {
+    setSection("mail");
     setDrawer(false);
     setSearchText("");
     setOpenThread(null);
@@ -719,6 +802,13 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
         return;
       }
       if (help || drawer) return;
+      if (section === "contacts") {
+        if (e.key === "c") compose();
+        else if (e.key === "?") setHelp(true);
+        else return;
+        e.preventDefault();
+        return;
+      }
       const t = targets();
       switch (e.key) {
         case "j":
@@ -833,7 +923,9 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
   const sidebar = (rail: boolean) => (
     <Sidebar
       folders={folders}
-      view={view}
+      view={section === "mail" ? view : null}
+      contactsCurrent={section === "contacts"}
+      onContacts={openContacts}
       priorityCount={priorityCount}
       mailboxes={mailboxes}
       collapsed={rail}
@@ -980,6 +1072,8 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
         client={client}
         identities={identities}
         contacts={contacts}
+        knownAddresses={known}
+        onAddContact={addContact}
         seed={composer.seed}
         variant="inline"
         trashId={roles.trash}
@@ -1021,251 +1115,283 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
         </div>
       )}
 
-      <section
-        aria-label={title}
-        className={`flex min-h-0 flex-col border-r ${openThread !== null ? "hidden md:flex" : "flex"}`}
-      >
-        <header className="flex h-14 shrink-0 items-center gap-1 px-2">
-          <button
-            type="button"
-            onClick={toggleSidebar}
-            aria-label="Toggle folders"
-            title="Folders"
-            className={iconButtonClass}
+      {section === "contacts" ? (
+        <ContactsView
+          client={client}
+          data={book}
+          onChanged={loadBook}
+          onToggleSidebar={toggleSidebar}
+          onCompose={(address, name) => {
+            openComposer({
+              title: "New message",
+              to: [{ name: name || null, email: address }],
+              cc: [],
+              bcc: [],
+              subject: "",
+              text: "",
+              attachments: [],
+              focus: "body",
+            });
+          }}
+        />
+      ) : (
+        <>
+          <section
+            aria-label={title}
+            className={`flex min-h-0 flex-col border-r ${openThread !== null ? "hidden md:flex" : "flex"}`}
           >
-            <PanelLeft className="size-4" aria-hidden />
-          </button>
-          <span aria-hidden className="mx-1 h-4 w-px bg-border" />
-          <h1 className="min-w-0 flex-1 truncate font-display font-medium text-[1.25rem] tracking-tight">{title}</h1>
-          <Menu
-            label={narrowed ? "Filter (on)" : "Filter"}
-            icon={SlidersHorizontal}
-            items={filterItems}
-            className={narrowed ? "[&>button]:text-primary" : ""}
-          />
-          <button type="button" onClick={refresh} aria-label="Refresh" title="Refresh" className={iconButtonClass}>
-            <RotateCw className="size-4" aria-hidden />
-          </button>
-          <Menu label="More" icon={Ellipsis} items={moreItems} />
-        </header>
-
-        {checked.size > 0 ? (
-          <div
-            role="toolbar"
-            aria-label="Selected conversations"
-            className="mx-2 mb-2 flex h-10 shrink-0 items-center gap-0.5 rounded-lg border bg-accent/60 px-1.5"
-          >
-            <button
-              type="button"
-              onClick={() => {
-                setChecked(new Set());
-              }}
-              aria-label="Clear selection"
-              className={iconButtonClass}
-            >
-              <X className="size-4" aria-hidden />
-            </button>
-            <span className="min-w-0 flex-1 truncate px-1 font-medium text-[13px]">{checked.size} selected</span>
-            {currentFolder?.role !== "archive" && (
-              <button
-                type="button"
-                onClick={() => {
-                  act(t, { kind: "archive" });
-                }}
-                aria-label="Archive selected"
-                title="Archive"
-                className={iconButtonClass}
-              >
-                <Archive className="size-4" aria-hidden />
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                act(t, { kind: "trash" });
-              }}
-              aria-label="Delete selected"
-              title="Delete"
-              className={`${iconButtonClass} text-destructive hover:text-destructive`}
-            >
-              <Trash2 className="size-4" aria-hidden />
-            </button>
-            <Menu
-              label="More for selected"
-              icon={Ellipsis}
-              items={[
-                { label: "Mark as read", icon: MailOpen, onSelect: () => void bulkKeyword(t, "$seen", true) },
-                { label: "Mark as unread", icon: Mail, onSelect: () => void bulkKeyword(t, "$seen", false) },
-                { label: "Add to Priority", icon: Flag, onSelect: () => void bulkKeyword(t, "$flagged", true) },
-                { label: "Pin", icon: Pin, onSelect: () => void bulkKeyword(t, "$pinned", true) },
-                { label: "Unpin", icon: Pin, onSelect: () => void bulkKeyword(t, "$pinned", false) },
-                currentFolder?.role === "junk"
-                  ? {
-                      label: "Not junk",
-                      icon: ShieldAlert,
-                      onSelect: () => {
-                        act(t, { kind: "notJunk" });
-                      },
-                    }
-                  : {
-                      label: "Report junk",
-                      icon: ShieldAlert,
-                      onSelect: () => {
-                        act(t, { kind: "junk" });
-                      },
-                    },
-                { separator: true },
-                { heading: "Move to" },
-                ...bulkMove,
-              ]}
-            />
-          </div>
-        ) : (
-          <form
-            role="search"
-            className="mx-2 mb-2 shrink-0"
-            onSubmit={(e) => {
-              e.preventDefault();
-              show({ search: parseSearch(searchText) });
-              setOpenThread(null);
-            }}
-          >
-            <label className="relative flex items-center">
-              <span className="sr-only">Search mail</span>
-              <Search className="pointer-events-none absolute left-2.5 size-3.5 text-muted-foreground" aria-hidden />
-              <input
-                ref={searchBox}
-                type="search"
-                value={searchText}
-                onChange={(e) => {
-                  setSearchText(e.target.value);
-                  if (e.target.value === "" && search) show({ search: null });
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    setSearchText("");
-                    if (search) show({ search: null });
-                    e.currentTarget.blur();
-                  }
-                }}
-                placeholder="Search…"
-                aria-label="Search mail"
-                title="from:, to:, subject:, has:attachment, is:unread"
-                className="h-8 w-full rounded-lg border bg-background pr-8 pl-8 text-[13px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring"
+            <header className="flex h-14 shrink-0 items-center gap-1 px-2">
+              <Tooltip label="Folders">
+                <button type="button" onClick={toggleSidebar} aria-label="Toggle folders" className={iconButtonClass}>
+                  <PanelLeft className="size-4" aria-hidden />
+                </button>
+              </Tooltip>
+              <span aria-hidden className="mx-1 h-4 w-px bg-border" />
+              <h1 className="min-w-0 flex-1 truncate font-display font-medium text-[1.25rem] tracking-tight">
+                {title}
+              </h1>
+              <Menu
+                label={narrowed ? "Filter (on)" : "Filter"}
+                icon={SlidersHorizontal}
+                items={filterItems}
+                className={narrowed ? "[&>span>button]:text-primary" : ""}
               />
-              <kbd className="pointer-events-none absolute right-2.5 hidden font-mono text-[11px] text-muted-foreground md:block">
-                /
-              </kbd>
-            </label>
-          </form>
-        )}
+              <Tooltip label="Refresh">
+                <button type="button" onClick={refresh} aria-label="Refresh" className={iconButtonClass}>
+                  <RotateCw className="size-4" aria-hidden />
+                </button>
+              </Tooltip>
+              <Menu label="More" icon={Ellipsis} items={moreItems} />
+            </header>
 
-        {error && (
-          <div role="alert" className="flex items-center justify-between gap-3 border-y bg-destructive/8 px-4 py-2.5">
-            <p className="am-small text-destructive">{error}</p>
-            <button
-              type="button"
-              onClick={refresh}
-              className="am-small shrink-0 font-medium text-foreground underline underline-offset-2"
-            >
-              Retry
-            </button>
-          </div>
-        )}
-        <div className="flex min-h-0 flex-1 flex-col border-t">
-          {!list || total === null ? (
-            <div className="min-h-0 flex-1 overflow-hidden">
-              <MessageListSkeleton rows={8} />
-            </div>
-          ) : total === 0 && pinned.length === 0 ? (
-            <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
-              <span className="flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
-                {searching ? <Search className="size-5" aria-hidden /> : <Inbox className="size-5" aria-hidden />}
-              </span>
-              <p className="am-h4">
-                {searching ? "No messages match" : narrowed ? "Nothing matches the filter" : `Nothing in ${title}`}
-              </p>
-              <p className="am-small max-w-64">
-                {searching
-                  ? "Try other words, or from:, to:, subject: and has:attachment."
-                  : view?.kind === "priority"
-                    ? "Flag a message (s) to keep it here."
-                    : ((currentFolder?.role && EMPTY_COPY[currentFolder.role]) ?? "This folder is empty.")}
-              </p>
-            </div>
-          ) : (
-            <MessageList
-              pinned={pinned}
-              total={total}
-              rows={list.rows}
-              sectionLabel={title}
-              selectedIndex={selected}
-              checked={checked}
-              sentFolder={currentFolder?.role === "sent" || currentFolder?.role === "drafts"}
-              label={`${title} messages`}
-              onOpen={open}
-              onCheck={toggleCheck}
-              onRange={onRange}
-            />
-          )}
-        </div>
-      </section>
+            {checked.size > 0 ? (
+              <div
+                role="toolbar"
+                aria-label="Selected conversations"
+                className="mx-2 mb-2 flex h-10 shrink-0 items-center gap-0.5 rounded-lg border bg-accent/60 px-1.5"
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setChecked(new Set());
+                  }}
+                  aria-label="Clear selection"
+                  className={iconButtonClass}
+                >
+                  <X className="size-4" aria-hidden />
+                </button>
+                <span className="min-w-0 flex-1 truncate px-1 font-medium text-[13px]">{checked.size} selected</span>
+                {currentFolder?.role !== "archive" && (
+                  <Tooltip label="Archive" shortcut="e">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        act(t, { kind: "archive" });
+                      }}
+                      aria-label="Archive selected"
+                      className={iconButtonClass}
+                    >
+                      <Archive className="size-4" aria-hidden />
+                    </button>
+                  </Tooltip>
+                )}
+                <Tooltip label="Delete" shortcut="#">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      act(t, { kind: "trash" });
+                    }}
+                    aria-label="Delete selected"
+                    className={`${iconButtonClass} text-destructive hover:text-destructive`}
+                  >
+                    <Trash2 className="size-4" aria-hidden />
+                  </button>
+                </Tooltip>
+                <Menu
+                  label="More for selected"
+                  icon={Ellipsis}
+                  items={[
+                    { label: "Mark as read", icon: MailOpen, onSelect: () => void bulkKeyword(t, "$seen", true) },
+                    { label: "Mark as unread", icon: Mail, onSelect: () => void bulkKeyword(t, "$seen", false) },
+                    { label: "Add to Priority", icon: Flag, onSelect: () => void bulkKeyword(t, "$flagged", true) },
+                    { label: "Pin", icon: Pin, onSelect: () => void bulkKeyword(t, "$pinned", true) },
+                    { label: "Unpin", icon: Pin, onSelect: () => void bulkKeyword(t, "$pinned", false) },
+                    currentFolder?.role === "junk"
+                      ? {
+                          label: "Not junk",
+                          icon: ShieldAlert,
+                          onSelect: () => {
+                            act(t, { kind: "notJunk" });
+                          },
+                        }
+                      : {
+                          label: "Report junk",
+                          icon: ShieldAlert,
+                          onSelect: () => {
+                            act(t, { kind: "junk" });
+                          },
+                        },
+                    { separator: true },
+                    { heading: "Move to" },
+                    ...bulkMove,
+                  ]}
+                />
+              </div>
+            ) : (
+              <form
+                role="search"
+                className="mx-2 mb-2 shrink-0"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  show({ search: parseSearch(searchText) });
+                  setOpenThread(null);
+                }}
+              >
+                <label className="relative flex items-center">
+                  <span className="sr-only">Search mail</span>
+                  <Search
+                    className="pointer-events-none absolute left-2.5 size-3.5 text-muted-foreground"
+                    aria-hidden
+                  />
+                  <input
+                    ref={searchBox}
+                    type="search"
+                    value={searchText}
+                    onChange={(e) => {
+                      setSearchText(e.target.value);
+                      if (e.target.value === "" && search) show({ search: null });
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        setSearchText("");
+                        if (search) show({ search: null });
+                        e.currentTarget.blur();
+                      }
+                    }}
+                    placeholder="Search (from:, subject:, has:attachment)"
+                    aria-label="Search mail"
+                    className="h-8 w-full rounded-lg border bg-background pr-8 pl-8 text-[13px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                  <kbd className="pointer-events-none absolute right-2.5 hidden font-mono text-[11px] text-muted-foreground md:block">
+                    /
+                  </kbd>
+                </label>
+              </form>
+            )}
 
-      <main className={`min-h-0 ${openThread !== null ? "flex flex-col" : "hidden md:flex md:flex-col"}`}>
-        {openThread !== null ? (
-          <Reader
-            key={openThread}
-            client={client}
-            threadId={openThread}
-            folders={folders ?? []}
-            currentFolder={currentFolder}
-            hiddenMailboxIds={hidden.filter((id) => id !== currentFolder?.id)}
-            canPrev={(selected ?? 0) > 0}
-            canNext={selected !== null && selected < flatTotal - 1}
-            inlineComposer={inlineComposer}
-            onPrev={() => {
-              move(-1);
-            }}
-            onNext={() => {
-              move(1);
-            }}
-            onClose={close}
-            onAction={(a) => {
-              if (a.kind === "reply" || a.kind === "replyAll" || a.kind === "forward")
-                replyTo(a.message, a.kind, a.inline);
-              else act([openThread], a);
-            }}
-            onKeyword={onKeyword}
-            onSignedOut={signedOut}
-            onComposeTo={(address) => {
-              openComposer({
-                title: "New message",
-                to: [{ name: null, email: address.toLowerCase() }],
-                cc: [],
-                bcc: [],
-                subject: "",
-                text: "",
-                attachments: [],
-                focus: "body",
-              });
-            }}
-            registerActions={(a) => {
-              readerActions.current = a;
-            }}
-          />
-        ) : (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
-            <span className="flex size-14 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
-              <Inbox className="size-6" aria-hidden />
-            </span>
-            <p className="am-h3">No message selected</p>
-            <p className="am-small max-w-72">
-              Pick a conversation to read it. Press <kbd className="font-mono">c</kbd> to write,{" "}
-              <kbd className="font-mono">?</kbd> for all shortcuts.
-            </p>
-          </div>
-        )}
-      </main>
+            {error && (
+              <div
+                role="alert"
+                className="flex items-center justify-between gap-3 border-y bg-destructive/8 px-4 py-2.5"
+              >
+                <p className="am-small text-destructive">{error}</p>
+                <button
+                  type="button"
+                  onClick={refresh}
+                  className="am-small shrink-0 font-medium text-foreground underline underline-offset-2"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            <div className="flex min-h-0 flex-1 flex-col border-t">
+              {!list || total === null ? (
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  <MessageListSkeleton rows={8} />
+                </div>
+              ) : total === 0 && pinned.length === 0 ? (
+                <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
+                  <span className="flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+                    {searching ? <Search className="size-5" aria-hidden /> : <Inbox className="size-5" aria-hidden />}
+                  </span>
+                  <p className="am-h4">
+                    {searching ? "No messages match" : narrowed ? "Nothing matches the filter" : `Nothing in ${title}`}
+                  </p>
+                  <p className="am-small max-w-64">
+                    {searching
+                      ? "Try other words, or from:, to:, subject: and has:attachment."
+                      : view?.kind === "priority"
+                        ? "Flag a message (s) to keep it here."
+                        : ((currentFolder?.role && EMPTY_COPY[currentFolder.role]) ?? "This folder is empty.")}
+                  </p>
+                </div>
+              ) : (
+                <MessageList
+                  pinned={pinned}
+                  total={total}
+                  rows={list.rows}
+                  sectionLabel={title}
+                  selectedIndex={selected}
+                  checked={checked}
+                  sentFolder={currentFolder?.role === "sent" || currentFolder?.role === "drafts"}
+                  label={`${title} messages`}
+                  onOpen={open}
+                  onCheck={toggleCheck}
+                  onRange={onRange}
+                />
+              )}
+            </div>
+          </section>
+
+          <main className={`min-h-0 ${openThread !== null ? "flex flex-col" : "hidden md:flex md:flex-col"}`}>
+            {openThread !== null ? (
+              <Reader
+                key={openThread}
+                client={client}
+                threadId={openThread}
+                folders={folders ?? []}
+                currentFolder={currentFolder}
+                hiddenMailboxIds={hidden.filter((id) => id !== currentFolder?.id)}
+                canPrev={(selected ?? 0) > 0}
+                canNext={selected !== null && selected < flatTotal - 1}
+                inlineComposer={inlineComposer}
+                onPrev={() => {
+                  move(-1);
+                }}
+                onNext={() => {
+                  move(1);
+                }}
+                onClose={close}
+                onAction={(a) => {
+                  if (a.kind === "reply" || a.kind === "replyAll" || a.kind === "forward")
+                    replyTo(a.message, a.kind, a.inline);
+                  else act([openThread], a);
+                }}
+                onKeyword={onKeyword}
+                onSignedOut={signedOut}
+                onComposeTo={(address) => {
+                  openComposer({
+                    title: "New message",
+                    to: [{ name: null, email: address.toLowerCase() }],
+                    cc: [],
+                    bcc: [],
+                    subject: "",
+                    text: "",
+                    attachments: [],
+                    focus: "body",
+                  });
+                }}
+                knownAddresses={known}
+                onAddContact={addContact}
+                registerActions={(a) => {
+                  readerActions.current = a;
+                }}
+              />
+            ) : (
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
+                <span className="flex size-14 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+                  <Inbox className="size-6" aria-hidden />
+                </span>
+                <p className="am-h3">No message selected</p>
+                <p className="am-small max-w-72">
+                  Pick a conversation to read it. Press <kbd className="font-mono">c</kbd> to write,{" "}
+                  <kbd className="font-mono">?</kbd> for all shortcuts.
+                </p>
+              </div>
+            )}
+          </main>
+        </>
+      )}
 
       {composer?.variant === "panel" && (
         <Composer
@@ -1273,6 +1399,8 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
           client={client}
           identities={identities}
           contacts={contacts}
+          knownAddresses={known}
+          onAddContact={addContact}
           seed={composer.seed}
           variant="panel"
           trashId={roles.trash}

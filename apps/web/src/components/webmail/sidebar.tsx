@@ -18,11 +18,13 @@ import {
   ShieldAlert,
   Trash2,
   UserPlus,
+  Users,
 } from "lucide-react";
 
 import { FolderTreeSkeleton } from "@anhourmail/ui/skeletons";
 
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Tooltip } from "@/components/tooltip";
 
 import { folderLabel, folderTree } from "./format";
 import type { Folder, View } from "./mail-client";
@@ -81,40 +83,41 @@ function NavItem({
   emphasis?: boolean;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-current={current ? "page" : undefined}
-      aria-label={count > 0 ? `${label}, ${String(count)}` : label}
-      title={collapsed ? label : undefined}
-      className={`group flex h-8 w-full items-center gap-2.5 rounded-lg text-left text-[13.5px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-sidebar-ring ${
-        collapsed ? "justify-center px-0" : "px-2.5"
-      } ${
-        current
-          ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
-          : "text-sidebar-foreground/80 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
-      }`}
-    >
-      <span className="relative">
-        <Icon className={`size-4 shrink-0 ${current ? "text-primary" : "text-muted-foreground"}`} aria-hidden />
-        {collapsed && count > 0 && (
-          <span aria-hidden className="-right-1 -top-1 absolute size-1.5 rounded-full bg-primary" />
-        )}
-      </span>
-      {!collapsed && (
-        <>
-          <span className="min-w-0 flex-1 truncate">{label}</span>
-          {count > 0 && (
-            <span
-              aria-hidden
-              className={`font-mono text-[11.5px] tabular-nums ${emphasis || current ? "text-primary" : "text-muted-foreground"}`}
-            >
-              {count > 999 ? "999+" : count}
-            </span>
+    <Tooltip label={label} side="right" disabled={!collapsed}>
+      <button
+        type="button"
+        onClick={onClick}
+        aria-current={current ? "page" : undefined}
+        aria-label={count > 0 ? `${label}, ${String(count)}` : label}
+        className={`group flex h-8 w-full items-center gap-2.5 rounded-lg text-left text-[13.5px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-sidebar-ring ${
+          collapsed ? "justify-center px-0" : "px-2.5"
+        } ${
+          current
+            ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+            : "text-sidebar-foreground/80 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
+        }`}
+      >
+        <span className="relative">
+          <Icon className={`size-4 shrink-0 ${current ? "text-primary" : "text-muted-foreground"}`} aria-hidden />
+          {collapsed && count > 0 && (
+            <span aria-hidden className="-right-1 -top-1 absolute size-1.5 rounded-full bg-primary" />
           )}
-        </>
-      )}
-    </button>
+        </span>
+        {!collapsed && (
+          <>
+            <span className="min-w-0 flex-1 truncate">{label}</span>
+            {count > 0 && (
+              <span
+                aria-hidden
+                className={`font-mono text-[11.5px] tabular-nums ${emphasis || current ? "text-primary" : "text-muted-foreground"}`}
+              >
+                {count > 999 ? "999+" : count}
+              </span>
+            )}
+          </>
+        )}
+      </button>
+    </Tooltip>
   );
 }
 
@@ -126,6 +129,8 @@ function NavItem({
 export function Sidebar({
   folders,
   view,
+  contactsCurrent,
+  onContacts,
   priorityCount,
   mailboxes,
   collapsed,
@@ -139,6 +144,8 @@ export function Sidebar({
 }: {
   folders: Folder[] | null;
   view: View | null;
+  contactsCurrent: boolean;
+  onContacts: () => void;
   priorityCount: number;
   mailboxes: Mailboxes;
   collapsed: boolean;
@@ -185,20 +192,20 @@ export function Sidebar({
             <>
               <div role="radiogroup" aria-label="Mailboxes" className="flex flex-1 flex-wrap items-center gap-1.5">
                 {all.map((address) => (
-                  <button
-                    key={address}
-                    type="button"
-                    role="radio"
-                    aria-checked={address === mailboxes.active}
-                    aria-label={address}
-                    title={address}
-                    onClick={() => {
-                      if (address !== mailboxes.active) onSwitchMailbox(address);
-                    }}
-                    className="rounded-md focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-                  >
-                    <MailboxTile address={address} active={address === mailboxes.active} />
-                  </button>
+                  <Tooltip key={address} label={address}>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={address === mailboxes.active}
+                      aria-label={address}
+                      onClick={() => {
+                        if (address !== mailboxes.active) onSwitchMailbox(address);
+                      }}
+                      className="rounded-md focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                    >
+                      <MailboxTile address={address} active={address === mailboxes.active} />
+                    </button>
+                  </Tooltip>
                 ))}
               </div>
               <Menu label="Mailboxes and account" icon={EllipsisVertical} items={accountMenu} />
@@ -208,23 +215,24 @@ export function Sidebar({
         {!collapsed && (
           <div className="flex min-w-0 flex-col gap-0.5 border-sidebar-border border-t pt-3">
             <span className="truncate font-medium text-[14px]">{localName(mailboxes.active)}</span>
-            <span className="truncate font-mono text-[12px] text-muted-foreground" title={mailboxes.active}>
-              {mailboxes.active}
-            </span>
+            <Tooltip label={mailboxes.active}>
+              <span className="truncate font-mono text-[12px] text-muted-foreground">{mailboxes.active}</span>
+            </Tooltip>
           </div>
         )}
-        <button
-          type="button"
-          onClick={onCompose}
-          aria-label="New email"
-          title={collapsed ? "New email (c)" : undefined}
-          className={`inline-flex h-9 items-center justify-center gap-2 rounded-lg border bg-background font-medium text-[13.5px] shadow-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${
-            collapsed ? "w-9" : "w-full"
-          }`}
-        >
-          <PenLine className="size-4" aria-hidden />
-          {!collapsed && "New email"}
-        </button>
+        <Tooltip label="New email" shortcut="c" side={collapsed ? "right" : "bottom"}>
+          <button
+            type="button"
+            onClick={onCompose}
+            aria-label="New email"
+            className={`inline-flex h-9 items-center justify-center gap-2 rounded-lg border bg-background font-medium text-[13.5px] shadow-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${
+              collapsed ? "w-9" : "w-full"
+            }`}
+          >
+            <PenLine className="size-4" aria-hidden />
+            {!collapsed && "New email"}
+          </button>
+        </Tooltip>
       </div>
 
       <nav aria-label="Folders" className={`min-h-0 flex-1 overflow-y-auto pb-3 ${collapsed ? "px-2" : "px-2"}`}>
@@ -273,6 +281,15 @@ export function Sidebar({
                 />
               </div>
             ))}
+            {collapsed ? <div className="mx-2 my-2 h-px bg-sidebar-border" /> : <div className="pt-3" />}
+            <NavItem
+              icon={Users}
+              label="Contacts"
+              count={0}
+              current={contactsCurrent}
+              collapsed={collapsed}
+              onClick={onContacts}
+            />
           </div>
         )}
       </nav>
@@ -280,39 +297,42 @@ export function Sidebar({
       <div
         className={`flex shrink-0 flex-col gap-0.5 border-sidebar-border border-t p-2 ${collapsed ? "items-center" : ""}`}
       >
-        <a
-          href={helpHref}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={collapsed ? "Help & feedback" : undefined}
-          aria-label="Help & feedback"
-          className={`flex h-8 w-full items-center gap-2.5 rounded-lg text-[13.5px] text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent/70 hover:text-sidebar-foreground ${collapsed ? "justify-center" : "px-2.5"}`}
-        >
-          <LifeBuoy className="size-4 text-muted-foreground" aria-hidden />
-          {!collapsed && "Help & feedback"}
-        </a>
-        <button
-          type="button"
-          onClick={onShortcuts}
-          title={collapsed ? "Keyboard shortcuts" : undefined}
-          aria-label="Keyboard shortcuts"
-          className={`flex h-8 w-full items-center gap-2.5 rounded-lg text-left text-[13.5px] text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent/70 hover:text-sidebar-foreground ${collapsed ? "justify-center" : "px-2.5"}`}
-        >
-          <Keyboard className="size-4 text-muted-foreground" aria-hidden />
-          {!collapsed && "Keyboard shortcuts"}
-        </button>
+        <Tooltip label="Help & feedback" side="right" disabled={!collapsed}>
+          <a
+            href={helpHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Help & feedback"
+            className={`flex h-8 w-full items-center gap-2.5 rounded-lg text-[13.5px] text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent/70 hover:text-sidebar-foreground ${collapsed ? "justify-center" : "px-2.5"}`}
+          >
+            <LifeBuoy className="size-4 text-muted-foreground" aria-hidden />
+            {!collapsed && "Help & feedback"}
+          </a>
+        </Tooltip>
+        <Tooltip label="Keyboard shortcuts" shortcut="?" side="right" disabled={!collapsed}>
+          <button
+            type="button"
+            onClick={onShortcuts}
+            aria-label="Keyboard shortcuts"
+            className={`flex h-8 w-full items-center gap-2.5 rounded-lg text-left text-[13.5px] text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent/70 hover:text-sidebar-foreground ${collapsed ? "justify-center" : "px-2.5"}`}
+          >
+            <Keyboard className="size-4 text-muted-foreground" aria-hidden />
+            {!collapsed && "Keyboard shortcuts"}
+          </button>
+        </Tooltip>
         {!collapsed && (
           <div className="flex items-center justify-between gap-2 px-1 pt-2">
             <ThemeToggle />
-            <button
-              type="button"
-              onClick={onSignOut}
-              aria-label="Sign out"
-              title="Sign out"
-              className="inline-flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-            >
-              <LogOut className="size-4" aria-hidden />
-            </button>
+            <Tooltip label="Sign out">
+              <button
+                type="button"
+                onClick={onSignOut}
+                aria-label="Sign out"
+                className="inline-flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+              >
+                <LogOut className="size-4" aria-hidden />
+              </button>
+            </Tooltip>
           </div>
         )}
       </div>

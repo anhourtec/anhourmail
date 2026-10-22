@@ -23,6 +23,7 @@ import { Bone } from "@anhourmail/ui/skeletons";
 
 import type { CalendarEvent, MdBlock, MdInline, TextBlock } from "@/server/webmail/body";
 import type { AttachmentView, MessageView } from "@/server/webmail/view";
+import { Tooltip } from "@/components/tooltip";
 
 import { Modal } from "./dialogs";
 import { displayName, fileKind, fileSize, fullDate, subjectOf } from "./format";
@@ -94,18 +95,19 @@ function QuoteBlock({ text, onCompose }: { text: string; onCompose?: (a: string)
   const [open, setOpen] = useState(false);
   return (
     <div className="flex flex-col gap-2">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-label={open ? "Hide quoted text" : "Show quoted text"}
-        title={open ? "Hide quoted text" : "Show quoted text"}
-        onClick={() => {
-          setOpen((o) => !o);
-        }}
-        className="inline-flex h-5 w-9 items-center justify-center rounded-md bg-muted text-muted-foreground hover:bg-accent hover:text-foreground"
-      >
-        <Ellipsis className="size-4" aria-hidden />
-      </button>
+      <Tooltip label={open ? "Hide quoted text" : "Show quoted text"}>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-label={open ? "Hide quoted text" : "Show quoted text"}
+          onClick={() => {
+            setOpen((o) => !o);
+          }}
+          className="inline-flex h-5 w-9 items-center justify-center rounded-md bg-muted text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <Ellipsis className="size-4" aria-hidden />
+        </button>
+      </Tooltip>
       {open && (
         <blockquote className="border-l-2 pl-3 text-muted-foreground">
           <Linkified text={text} {...(onCompose ? { onCompose } : {})} />
@@ -393,15 +395,16 @@ function AttachmentChips({
                     <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{fileSize(a.size)}</span>
                   </span>
                 )}
-                <a
-                  href={client.downloadUrl(a.blobId)}
-                  download={a.name}
-                  aria-label={`Download ${a.name}`}
-                  title="Download"
-                  className="flex items-center px-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
-                  <Download className="size-3.5" aria-hidden />
-                </a>
+                <Tooltip label="Download">
+                  <a
+                    href={client.downloadUrl(a.blobId)}
+                    download={a.name}
+                    aria-label={`Download ${a.name}`}
+                    className="flex items-center px-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    <Download className="size-3.5" aria-hidden />
+                  </a>
+                </Tooltip>
               </li>
             );
           })}
@@ -452,7 +455,6 @@ function BlockedImages({ count, trackers }: { count: number; trackers: number })
       <button
         type="button"
         disabled
-        title="Coming soon"
         className="hidden h-8 shrink-0 items-center rounded-lg border px-3 text-[12.5px] text-muted-foreground sm:inline-flex"
       >
         Load images

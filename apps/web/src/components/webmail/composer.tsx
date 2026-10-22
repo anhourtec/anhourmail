@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 "use client";
 
-import { Loader2, Maximize2, Minimize2, Paperclip, Send, Trash2, X } from "lucide-react";
+import { Loader2, Maximize2, Minimize2, Paperclip, Send, Trash2, UserPlus, X } from "lucide-react";
 import { type KeyboardEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { WEBMAIL_ATTACHMENTS } from "@anhourmail/shared";
 
 import type { Address } from "@/server/webmail/view";
+import { Tooltip } from "@/components/tooltip";
 
 import { displayName, fileSize } from "./format";
 import {
@@ -63,12 +64,16 @@ function AddressField({
   onChange,
   contacts,
   autoFocus,
+  knownAddresses,
+  onAddContact,
 }: {
   label: string;
   value: Address[];
   onChange: (next: Address[]) => void;
   contacts: Address[];
   autoFocus?: boolean;
+  knownAddresses: ReadonlySet<string>;
+  onAddContact: (person: Address) => void;
 }) {
   const id = useId();
   const [text, setText] = useState("");
@@ -126,10 +131,21 @@ function AddressField({
           <span
             key={a.email}
             className="inline-flex max-w-full items-center gap-1 rounded-md bg-accent py-0.5 pr-1 pl-2 text-[12.5px]"
-            title={a.email}
           >
             <span className="truncate">{a.name ? `${a.name} ` : ""}</span>
             <span className={`truncate font-mono ${a.name ? "text-muted-foreground" : ""}`}>{a.email}</span>
+            {!knownAddresses.has(a.email.toLowerCase()) && (
+              <button
+                type="button"
+                aria-label={`Add ${a.email} to contacts`}
+                onClick={() => {
+                  onAddContact(a);
+                }}
+                className="inline-flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-background hover:text-primary"
+              >
+                <UserPlus className="size-3" aria-hidden />
+              </button>
+            )}
             <button
               type="button"
               aria-label={`Remove ${a.email}`}
@@ -214,6 +230,8 @@ export function Composer({
   client,
   identities,
   contacts,
+  knownAddresses,
+  onAddContact,
   seed,
   variant,
   trashId,
@@ -224,6 +242,9 @@ export function Composer({
   client: MailClient;
   identities: Identity[];
   contacts: Address[];
+  /** Addresses already in an address book (lowercase); other chips offer "Add to contacts". */
+  knownAddresses: ReadonlySet<string>;
+  onAddContact: (person: Address) => void;
   seed: ComposeSeed;
   variant: "panel" | "inline";
   /** Where a discarded draft goes. */
@@ -441,17 +462,18 @@ export function Composer({
             {expanded ? <Minimize2 className="size-4" aria-hidden /> : <Maximize2 className="size-4" aria-hidden />}
           </button>
         )}
-        <button
-          type="button"
-          onClick={() => {
-            void close();
-          }}
-          aria-label="Close and keep as draft"
-          title="Close (Esc)"
-          className="inline-flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
-          <X className="size-4" aria-hidden />
-        </button>
+        <Tooltip label="Close and keep as draft" shortcut="Esc">
+          <button
+            type="button"
+            onClick={() => {
+              void close();
+            }}
+            aria-label="Close and keep as draft"
+            className="inline-flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <X className="size-4" aria-hidden />
+          </button>
+        </Tooltip>
       </header>
 
       {identities.length > 1 ? (
@@ -483,7 +505,15 @@ export function Composer({
         )
       )}
       <div className="relative">
-        <AddressField label="To" value={to} onChange={setTo} contacts={contacts} autoFocus={seed.focus === "to"} />
+        <AddressField
+          label="To"
+          value={to}
+          onChange={setTo}
+          contacts={contacts}
+          autoFocus={seed.focus === "to"}
+          knownAddresses={knownAddresses}
+          onAddContact={onAddContact}
+        />
         {!showCc && (
           <button
             type="button"
@@ -498,8 +528,22 @@ export function Composer({
       </div>
       {showCc && (
         <>
-          <AddressField label="Cc" value={cc} onChange={setCc} contacts={contacts} />
-          <AddressField label="Bcc" value={bcc} onChange={setBcc} contacts={contacts} />
+          <AddressField
+            label="Cc"
+            value={cc}
+            onChange={setCc}
+            contacts={contacts}
+            knownAddresses={knownAddresses}
+            onAddContact={onAddContact}
+          />
+          <AddressField
+            label="Bcc"
+            value={bcc}
+            onChange={setBcc}
+            contacts={contacts}
+            knownAddresses={knownAddresses}
+            onAddContact={onAddContact}
+          />
         </>
       )}
       <div className="flex h-10 items-center gap-2 border-b px-4">
@@ -590,26 +634,28 @@ export function Composer({
             e.target.value = "";
           }}
         />
-        <button
-          type="button"
-          onClick={() => file.current?.click()}
-          aria-label="Attach files"
-          title={`Attach files (${String(WEBMAIL_ATTACHMENTS.perFileMb)} MB each)`}
-          className="inline-flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
-          <Paperclip className="size-4" aria-hidden />
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            void discard();
-          }}
-          aria-label="Discard draft"
-          title="Discard draft"
-          className="inline-flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-destructive"
-        >
-          <Trash2 className="size-4" aria-hidden />
-        </button>
+        <Tooltip label={`Attach files (${String(WEBMAIL_ATTACHMENTS.perFileMb)} MB each)`}>
+          <button
+            type="button"
+            onClick={() => file.current?.click()}
+            aria-label="Attach files"
+            className="inline-flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <Paperclip className="size-4" aria-hidden />
+          </button>
+        </Tooltip>
+        <Tooltip label="Discard draft">
+          <button
+            type="button"
+            onClick={() => {
+              void discard();
+            }}
+            aria-label="Discard draft"
+            className="inline-flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-destructive"
+          >
+            <Trash2 className="size-4" aria-hidden />
+          </button>
+        </Tooltip>
       </footer>
     </section>
   );

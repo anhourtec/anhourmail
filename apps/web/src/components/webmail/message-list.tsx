@@ -98,7 +98,7 @@ function Row({
         }}
         className="relative size-9 shrink-0 rounded-md focus-visible:ring-2 focus-visible:ring-ring"
       >
-        {/* Like Gmail: the avatar square becomes a checkbox on hover, and stays one while anything is selected. */}
+        {/* The avatar square becomes a checkbox on hover, and stays one while anything is selected. */}
         <span className={checked || selecting ? "hidden" : "group-hover:hidden"}>
           <SenderAvatar email={who?.email} label={initials(who)} />
         </span>
