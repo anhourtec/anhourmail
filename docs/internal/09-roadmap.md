@@ -70,8 +70,8 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
 
 ## Phase 7 — Dogfood (2–4 weeks)
 
-- Production VPS (port 25 tested on day one), IP and /24 screening, DNS for `anhourmail.com`, Postmaster/SNDS/Yahoo registration, warm-up weeks −4 to −1 (`research/deliverability.md` "Warm-up schedule"), staff mail on AnhourMail.
-- **Exit:** mail-tester 10/10; seed placement ≥ 95% inbox at Gmail/Outlook/Yahoo; zero blocklist listings; DMARC reports clean.
+- Production VPS (port 25 tested on day one), IP and /24 screening, DNS for `anhourmail.com`, mailbox-provider postmaster and feedback-loop registration (`research/deliverability.md` §3), warm-up weeks −4 to −1 (`research/deliverability.md` "Warm-up schedule"), staff mail on AnhourMail.
+- **Exit:** mail-tester 10/10; seed placement ≥ 95% inbox at the big free mailbox providers; zero blocklist listings; DMARC reports clean.
 
 ## Phase 8 — Closed beta
 
@@ -97,7 +97,7 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
 ## Phase 10 — Newsletters and bulk sending add-on (post-launch)
 
 - Only after personal-mail deliverability is proven (≥ 8 weeks post-launch with complaints < 0.1 %). Separate bulk IP pool + warm-up, bulk subdomain onboarding, lists/consent/imports, campaign sender in the worker, RFC 8058 one-click unsubscribe, bounce/complaint processing and suppression, Trust & Safety review queue, pricing tiers (`11-bulk-sending.md`, ADR-0015).
-- **Exit:** a reviewed test sender reaches Gmail/Outlook/Yahoo inboxes from the bulk pool with DMARC alignment; one-click unsubscribe suppresses within seconds; automatic pause triggers in staging at the configured thresholds; zero tracking pixels or rewritten links in sent mail (tested).
+- **Exit:** a reviewed test sender reaches the big free mailbox providers' inboxes from the bulk pool with DMARC alignment; one-click unsubscribe suppresses within seconds; automatic pause triggers in staging at the configured thresholds; zero tracking pixels or rewritten links in sent mail (tested).
 
 ## Later
 

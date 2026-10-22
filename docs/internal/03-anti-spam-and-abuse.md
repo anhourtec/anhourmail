@@ -41,10 +41,10 @@ The limits are the values in `packages/shared/src/sending.ts` (`TRUST_TIERS`); r
 
 ### Free-tier risk (research recommendation, flagged to the owner)
 
-Every comparable provider that offered open free signup later added gates: Disroot, Riseup, Proton, Tuta, mailbox.org (`research/deliverability.md` §7). Recommended launch posture:
+Every comparable privacy-focused provider we looked at that offered open free signup later added gates — invites, verification, approval holds or paid-only signup (`research/deliverability.md` §7). Recommended launch posture:
 
 - Free sign-up stays **gated**: `SIGNUP_MODE` is `open` only while the console sits behind the production firewall IP allow-list, otherwise `closed`; plus risk-based **phone verification**.
-- Free accounts in `new` **cannot send to external domains until verified and a minimum account age passes**. Internal delivery works immediately (the mailbox.org model).
+- Free accounts in `new` **cannot send to external domains until verified and a minimum account age passes**. Internal delivery works immediately (a model other providers use successfully).
 - Free outbound moves to a **separate outbound IP** before free signups open to the public (`01-architecture.md` v2).
 - Per-recipient counting, not per-message.
 

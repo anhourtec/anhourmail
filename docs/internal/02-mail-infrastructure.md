@@ -37,7 +37,7 @@ We compare against Stalwart's own expectation (`x:Domain/get dnsZoneFile`) so th
 
 ### DKIM
 
-- **RSA-2048 is primary.** Gmail does not verify Ed25519 signatures, so Ed25519 is an optional second signature only (`research/deliverability.md` §4).
+- **RSA-2048 is primary.** The largest mailbox provider does not verify Ed25519 signatures, so Ed25519 is an optional second signature only (`research/deliverability.md` §4).
 - Customer domains delegate DKIM by CNAME: `am1._domainkey.<domain> → am1.<domain>.dkim.anhourmail.com` (likewise `am2`). We publish the keys behind these and rotate them without the customer touching DNS.
 - **Fixed selectors — answered in Phase 1 (ADR-0017, verified 2026-10-21 on v0.16.27):**
   - `dkimManagement: {"@type":"Automatic","selectorTemplate":"am1","algorithms":{"Dkim1RsaSha256":true}}` creates
