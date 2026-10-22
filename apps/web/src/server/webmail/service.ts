@@ -21,6 +21,21 @@ import { QueueFullError, UserQueue, withLimitRetry } from "./queue";
 import { MAX_MAILBOXES, type MailboxTokens, type WebmailSession, type WebmailSessionStore } from "./session-store";
 import { calendarEvents, type CalendarEvent, MAX_MARKDOWN } from "./body";
 import {
+  AUTO_SAVE_OFF,
+  AUTO_SAVE_ON,
+  type BookView,
+  CARD_PROPERTIES,
+  cardFields,
+  type ContactInput,
+  type ContactView,
+  contactView,
+  MAX_CONTACTS,
+  newCard,
+  OTHER_BOOK_NAME,
+  parseVcards,
+  toVcards,
+} from "./contacts";
+import {
   BODY_PROPERTIES,
   type BodyExtras,
   type BodyPart,
@@ -101,12 +116,20 @@ export type WebmailDeps = {
   /** Refresh when the access token has less than this left (ms). */
   refreshSkewMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** Runs `fn` later (auto-saving recipients once the undo hold is over). Defaults to an unref'd timer. */
+  defer?: (fn: () => void, ms: number) => void;
 };
 
 const MAIL = "urn:ietf:params:jmap:mail";
 const SUBMISSION = "urn:ietf:params:jmap:submission";
 const USING = ["urn:ietf:params:jmap:core", MAIL];
 const USING_SUBMISSION = [...USING, SUBMISSION];
+const USING_CONTACTS = ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:contacts"];
+/** At most this many recipients of one message are saved to Other contacts. */
+const MAX_AUTO_SAVE = 100;
+/** Cards per `ContactCard/get` (the server's `getMaxResults`); MAX_CONTACTS / CARD_BATCH ≤ 16 calls a request. */
+const CARD_BATCH = 500;
+const CONTACTS_FULL = `A mailbox can keep up to ${MAX_CONTACTS.toLocaleString("en-CA")} contacts. Delete some to add more.`;
 /** Mailbox roles and identities change rarely: cache them per account for this long. */
 const META_TTL_MS = 60_000;
 
@@ -137,6 +160,10 @@ export class WebmailService {
       queue: new UserQueue(),
       now: Date.now,
       refreshSkewMs: 60_000,
+      defer: (fn, ms) => {
+        // Unref'd: a pending auto-save never keeps the process alive.
+        setTimeout(fn, ms).unref();
+      },
       ...deps,
     };
     this.#base = deps.stalwartUrl.replace(/\/+$/, "");
@@ -841,6 +868,9 @@ export class WebmailService {
       log.warn("webmail submission refused", { component: "webmail", type: why ?? "unknown" });
       throw new WebmailRefusedError("The mail server didn't accept this message.");
     }
+    // Save new recipients to Other contacts once the message is really sent (after the undo hold), never while
+    // the person can still undo it, and never delaying this response.
+    this.#afterHold(sessionId, account, draft, created.id, 0);
     return { submissionId: created.id, sendAt: created.sendAt ?? new Date(this.#d.now()).toISOString() };
   }
 
@@ -906,5 +936,379 @@ export class WebmailService {
       throw new WebmailUnavailableError("upload failed");
     }
     return { blobId: body.blobId, type, size: typeof body.size === "number" ? body.size : bytes.length };
+  }
+
+  // ---- contacts (JMAP Contacts, RFC 9610) ---------------------------------------------------------------------
+  //
+  // Every contacts call takes the account the app is showing (`account`) and refuses if the session's active
+  // mailbox is another one (it was switched in another tab), like send.
+
+  async #books(sessionId: string, account: string): Promise<(BookView & { description: string | null })[]> {
+    const r = await this.#call(
+      sessionId,
+      (x) => [["AddressBook/get", { accountId: x.accountId, ids: null }, "b"]],
+      USING_CONTACTS,
+      account,
+    );
+    return (
+      (r.get("b")?.list ?? []) as { id: string; name: string; isDefault?: boolean; description?: string | null }[]
+    ).map((b) => ({
+      id: b.id,
+      name: b.name === OTHER_BOOK_NAME ? OTHER_BOOK_NAME : b.isDefault ? "My contacts" : b.name,
+      isDefault: b.isDefault === true,
+      isOther: b.name === OTHER_BOOK_NAME,
+      description: b.description ?? null,
+    }));
+  }
+
+  /** The address book for contacts you add yourself ("My contacts"): the default one, else the first non-Other. */
+  async #mineBook(sessionId: string, account: string): Promise<string> {
+    const books = await this.#books(sessionId, account);
+    const mine = books.find((b) => b.isDefault && !b.isOther) ?? books.find((b) => !b.isOther);
+    if (mine) return mine.id;
+    const r = await this.#call(
+      sessionId,
+      (x) => [["AddressBook/set", { accountId: x.accountId, create: { b: { name: "My contacts" } } }, "s"]],
+      USING_CONTACTS,
+      account,
+    );
+    const id = (r.get("s")?.created as Record<string, { id: string }> | undefined)?.b?.id;
+    if (!id) throw new WebmailUnavailableError("address book not created");
+    return id;
+  }
+
+  /** The "Other contacts" book (created when first needed, with automatic saving on). */
+  async #otherBook(sessionId: string, account: string): Promise<string> {
+    const existing = (await this.#books(sessionId, account)).find((b) => b.isOther);
+    if (existing) return existing.id;
+    const r = await this.#call(
+      sessionId,
+      (x) => [
+        [
+          "AddressBook/set",
+          { accountId: x.accountId, create: { o: { name: OTHER_BOOK_NAME, description: AUTO_SAVE_ON } } },
+          "s",
+        ],
+      ],
+      USING_CONTACTS,
+      account,
+    );
+    const id = (r.get("s")?.created as Record<string, { id: string }> | undefined)?.o?.id;
+    if (!id) throw new WebmailUnavailableError("address book not created");
+    return id;
+  }
+
+  /** How many cards the mailbox holds (any book, including ones added over CardDAV). */
+  async #cardCount(sessionId: string, account: string): Promise<number> {
+    const r = await this.#call(
+      sessionId,
+      (x) => [["ContactCard/query", { accountId: x.accountId, limit: 1, calculateTotal: true }, "q"]],
+      USING_CONTACTS,
+      account,
+    );
+    return Number(r.get("q")?.total ?? 0);
+  }
+
+  /**
+   * The first `MAX_CONTACTS` cards with these properties, and how many there are in all: the ids first, then the
+   * cards in batches the server accepts (`getMaxResults` is 500 per `ContactCard/get`).
+   */
+  async #allCards(
+    sessionId: string,
+    properties: readonly string[],
+    account?: string,
+  ): Promise<{ cards: Record<string, unknown>[]; total: number; accountId: string }> {
+    let accountId = "";
+    const q = await this.#call(
+      sessionId,
+      (x) => {
+        accountId = x.accountId;
+        return [["ContactCard/query", { accountId: x.accountId, limit: MAX_CONTACTS, calculateTotal: true }, "q"]];
+      },
+      USING_CONTACTS,
+      account,
+    );
+    const ids = ((q.get("q")?.ids ?? []) as string[]).slice(0, MAX_CONTACTS);
+    const total = Math.max(Number(q.get("q")?.total ?? 0), ids.length);
+    if (ids.length === 0) return { cards: [], total, accountId };
+    const batches: string[][] = [];
+    for (let i = 0; i < ids.length; i += CARD_BATCH) batches.push(ids.slice(i, i + CARD_BATCH));
+    const r = await this.#call(
+      sessionId,
+      (x) =>
+        batches.map((b, i) => ["ContactCard/get", { accountId: x.accountId, ids: b, properties }, `g${String(i)}`]),
+      USING_CONTACTS,
+      accountId,
+    );
+    return {
+      cards: batches.flatMap((_, i) => (r.get(`g${String(i)}`)?.list ?? []) as Record<string, unknown>[]),
+      total,
+      accountId,
+    };
+  }
+
+  /**
+   * The contacts (the first `MAX_CONTACTS`; `truncated` says there are more), the address books, whether people
+   * you email are saved, and the account they belong to (the app sends it back with every change).
+   */
+  async contacts(sessionId: string): Promise<{
+    accountId: string;
+    books: BookView[];
+    contacts: ContactView[];
+    autoSave: boolean;
+    truncated: boolean;
+  }> {
+    const { cards, total, accountId } = await this.#allCards(sessionId, CARD_PROPERTIES);
+    const books = await this.#books(sessionId, accountId);
+    const contacts = (cards as Parameters<typeof contactView>[0][])
+      .filter((c) => c.kind === undefined || c.kind === "individual")
+      .map(contactView)
+      .sort((a, b) => a.name.localeCompare(b.name, "en-CA", { sensitivity: "base" }));
+    const other = books.find((b) => b.isOther);
+    return {
+      accountId,
+      books: books.map(({ description: _d, ...b }) => b),
+      contacts,
+      autoSave: other ? other.description !== AUTO_SAVE_OFF : true,
+      truncated: total > MAX_CONTACTS,
+    };
+  }
+
+  async createContact(
+    sessionId: string,
+    account: string,
+    input: ContactInput,
+    book: "mine" | "other" = "mine",
+  ): Promise<{ id: string }> {
+    if ((await this.#cardCount(sessionId, account)) >= MAX_CONTACTS) throw new WebmailRefusedError(CONTACTS_FULL);
+    const bookId =
+      book === "other" ? await this.#otherBook(sessionId, account) : await this.#mineBook(sessionId, account);
+    const r = await this.#call(
+      sessionId,
+      (x) => [["ContactCard/set", { accountId: x.accountId, create: { c: newCard(input, bookId) } }, "s"]],
+      USING_CONTACTS,
+      account,
+    );
+    const id = (r.get("s")?.created as Record<string, { id: string }> | undefined)?.c?.id;
+    if (!id) throw new WebmailRefusedError("The contact couldn't be saved.");
+    return { id };
+  }
+
+  /** Replaces the fields we manage (name, emails, phones, organisation, notes, birthday, labels) on a contact. */
+  async updateContact(sessionId: string, account: string, id: string, input: ContactInput): Promise<void> {
+    const r = await this.#call(
+      sessionId,
+      (x) => [["ContactCard/set", { accountId: x.accountId, update: { [id]: cardFields(input) } }, "s"]],
+      USING_CONTACTS,
+      account,
+    );
+    const updated = r.get("s")?.updated as Record<string, unknown> | undefined;
+    if (!updated || !(id in updated)) throw new WebmailRefusedError("That contact couldn't be changed.");
+  }
+
+  async deleteContacts(sessionId: string, account: string, ids: string[]): Promise<number> {
+    const r = await this.#call(
+      sessionId,
+      (x) => [["ContactCard/set", { accountId: x.accountId, destroy: ids }, "s"]],
+      USING_CONTACTS,
+      account,
+    );
+    return ((r.get("s")?.destroyed ?? []) as string[]).length;
+  }
+
+  /** Moves contacts to My contacts or Other contacts; returns how many the server actually moved. */
+  async moveContacts(sessionId: string, account: string, ids: string[], to: "mine" | "other"): Promise<number> {
+    const bookId =
+      to === "other" ? await this.#otherBook(sessionId, account) : await this.#mineBook(sessionId, account);
+    const r = await this.#call(
+      sessionId,
+      (x) => [
+        [
+          "ContactCard/set",
+          {
+            accountId: x.accountId,
+            update: Object.fromEntries(ids.map((id) => [id, { addressBookIds: { [bookId]: true } }])),
+          },
+          "s",
+        ],
+      ],
+      USING_CONTACTS,
+      account,
+    );
+    return Object.keys((r.get("s")?.updated as Record<string, unknown> | undefined) ?? {}).length;
+  }
+
+  /** Turns saving people you email on or off (stored on the Other contacts book in Stalwart). */
+  async setAutoSave(sessionId: string, account: string, on: boolean): Promise<void> {
+    const id = await this.#otherBook(sessionId, account);
+    await this.#call(
+      sessionId,
+      (x) => [
+        [
+          "AddressBook/set",
+          { accountId: x.accountId, update: { [id]: { description: on ? AUTO_SAVE_ON : AUTO_SAVE_OFF } } },
+          "s",
+        ],
+      ],
+      USING_CONTACTS,
+      account,
+    );
+  }
+
+  /**
+   * Imports a .vcf file into My contacts (parsed and capped here). Cards beyond the mailbox's room (`MAX_CONTACTS`
+   * in all) are skipped, and `full` says so.
+   */
+  async importContacts(
+    sessionId: string,
+    account: string,
+    vcf: string,
+  ): Promise<{ imported: number; skipped: number; full: boolean }> {
+    const { contacts: parsed, skipped } = parseVcards(vcf);
+    if (parsed.length === 0) return { imported: 0, skipped, full: false };
+    const room = Math.max(0, MAX_CONTACTS - (await this.#cardCount(sessionId, account)));
+    const contacts = parsed.slice(0, room);
+    const full = contacts.length < parsed.length;
+    if (contacts.length === 0) return { imported: 0, skipped: skipped + parsed.length, full };
+    const bookId = await this.#mineBook(sessionId, account);
+    let imported = 0;
+    for (let i = 0; i < contacts.length; i += 200) {
+      const chunk = contacts.slice(i, i + 200);
+      const r = await this.#call(
+        sessionId,
+        (x) => [
+          [
+            "ContactCard/set",
+            {
+              accountId: x.accountId,
+              create: Object.fromEntries(chunk.map((c, j) => [`c${String(j)}`, newCard(c, bookId)])),
+            },
+            "s",
+          ],
+        ],
+        USING_CONTACTS,
+        account,
+      );
+      imported += Object.keys((r.get("s")?.created as Record<string, unknown> | undefined) ?? {}).length;
+    }
+    return { imported, skipped: skipped + parsed.length - imported, full };
+  }
+
+  /** Contacts (all, or these ids) as a vCard file. */
+  async exportContacts(sessionId: string, ids?: string[]): Promise<string> {
+    const { contacts } = await this.contacts(sessionId);
+    const wanted = ids ? new Set(ids) : null;
+    return toVcards(wanted ? contacts.filter((c) => wanted.has(c.id)) : contacts);
+  }
+
+  /**
+   * Schedules auto-save for a send: after the undo hold, check the submission and save only if it wasn't undone.
+   * Best effort and in this process (a restart in those few seconds skips it); errors are logged by kind only.
+   */
+  #afterHold(sessionId: string, account: string, draft: StoredDraft, submissionId: string, attempt: number): void {
+    const run = () => {
+      this.#autoSaveIfSent(sessionId, account, draft, submissionId, attempt).catch((err: unknown) => {
+        // The error's kind only: nothing about recipients reaches the logs (rule 24).
+        log.warn("webmail contact auto-save failed", {
+          component: "webmail",
+          error: err instanceof Error ? err.name : "unknown",
+        });
+      });
+    };
+    this.#d.defer(run, attempt === 0 ? (UNDO_SECONDS + 2) * 1000 : 5000);
+  }
+
+  async #autoSaveIfSent(
+    sessionId: string,
+    account: string,
+    draft: StoredDraft,
+    submissionId: string,
+    attempt: number,
+  ): Promise<void> {
+    const r = await this.#call(
+      sessionId,
+      (x) => [
+        ["EmailSubmission/get", { accountId: x.accountId, ids: [submissionId], properties: ["undoStatus"] }, "g"],
+      ],
+      USING_SUBMISSION,
+      account,
+    );
+    const status = ((r.get("g")?.list ?? []) as { undoStatus?: string }[])[0]?.undoStatus;
+    if (status === "canceled") return; // Undone: nobody was emailed.
+    if (status === "pending") {
+      if (attempt < 3) this.#afterHold(sessionId, account, draft, submissionId, attempt + 1);
+      return;
+    }
+    await this.#autoSave(sessionId, account, draft);
+  }
+
+  /**
+   * Every recipient not on any card (matched case-insensitively by address) is added to Other contacts with the
+   * name the message used. Existing contacts are never changed; at most `MAX_AUTO_SAVE` per send, and never past
+   * the mailbox's `MAX_CONTACTS`.
+   */
+  async #autoSave(sessionId: string, account: string, draft: StoredDraft): Promise<void> {
+    const people = new Map<string, string | null>();
+    for (const a of [...(draft.to ?? []), ...(draft.cc ?? []), ...(draft.bcc ?? [])]) {
+      const key = a.email.toLowerCase();
+      if (!people.has(key) || (!people.get(key) && a.name)) people.set(key, a.name ?? null);
+    }
+    if (people.size === 0) return;
+    const books = await this.#books(sessionId, account);
+    const other = books.find((b) => b.isOther);
+    if (other?.description === AUTO_SAVE_OFF) return;
+    const addresses = [...people.keys()].slice(0, MAX_AUTO_SAVE);
+    // Addresses already saved, read from the cards themselves: the `email` query filter goes through the search
+    // index, which lags fresh writes (a contact saved a moment ago would be missed and duplicated).
+    const { cards, total } = await this.#allCards(sessionId, ["emails"], account);
+    if (total >= MAX_CONTACTS) return;
+    const known = new Set(
+      (cards as { emails?: Record<string, { address?: string }> }[]).flatMap((c) =>
+        Object.values(c.emails ?? {}).map((e) => (e.address ?? "").toLowerCase()),
+      ),
+    );
+    // Below the cap every card was read, so this check is complete; at the cap nothing more is saved.
+    const fresh = addresses.filter((a) => !known.has(a)).slice(0, Math.max(0, MAX_CONTACTS - total));
+    if (fresh.length === 0) return;
+    const bookId = other?.id ?? (await this.#otherBook(sessionId, account));
+    await this.#call(
+      sessionId,
+      (x) => [
+        [
+          "ContactCard/set",
+          {
+            accountId: x.accountId,
+            create: Object.fromEntries(
+              fresh.map((email, j) => {
+                const name = (people.get(email) ?? "")
+                  .replace(/[\p{Cc}]/gu, " ")
+                  .trim()
+                  .slice(0, 200);
+                return [
+                  `a${String(j)}`,
+                  newCard(
+                    {
+                      given: "",
+                      surname: "",
+                      name,
+                      emails: [{ address: email, label: "" }],
+                      phones: [],
+                      organization: "",
+                      notes: "",
+                      birthday: null,
+                      labels: [],
+                    },
+                    bookId,
+                  ),
+                ];
+              }),
+            ),
+          },
+          "s",
+        ],
+      ],
+      USING_CONTACTS,
+      account,
+    );
   }
 }

@@ -154,10 +154,10 @@ export type StoredDraft = {
   id: string;
   mailboxIds: Record<string, boolean>;
   keywords: Record<string, boolean>;
-  from: { email: string }[] | null;
-  to: { email: string }[] | null;
-  cc: { email: string }[] | null;
-  bcc: { email: string }[] | null;
+  from: { email: string; name?: string | null }[] | null;
+  to: { email: string; name?: string | null }[] | null;
+  cc: { email: string; name?: string | null }[] | null;
+  bcc: { email: string; name?: string | null }[] | null;
   size: number;
 };
 

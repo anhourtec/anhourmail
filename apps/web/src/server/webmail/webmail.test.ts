@@ -131,6 +131,14 @@ describe("JMAP allow-list", () => {
     expect(ok(many).ok).toBe(false);
   });
 
+  it("refuses contacts through the generic proxy (they go through the dedicated contacts endpoints)", () => {
+    const CONTACTS = "urn:ietf:params:jmap:contacts";
+    expect(ok([["AddressBook/get", { accountId: "acc1" }, "a"]], [CORE, CONTACTS]).ok).toBe(false);
+    for (const m of ["AddressBook/get", "AddressBook/set", "ContactCard/get", "ContactCard/query", "ContactCard/set"]) {
+      expect(ok([[m, { accountId: "acc1" }, "a"]])).toEqual({ ok: false, message: `Method not available: ${m}` });
+    }
+  });
+
   it("lets Email/set change keywords and folders, and destroy (checked later), but never create", () => {
     const set = (args: Record<string, unknown>) =>
       checkJmapRequest(

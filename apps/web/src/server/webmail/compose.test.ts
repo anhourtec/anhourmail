@@ -9,6 +9,7 @@ import { setLogSinkForTests } from "@anhourmail/server/log";
 
 import { TRUST_TIERS } from "@anhourmail/shared";
 
+import { ContactInput } from "./contacts";
 import {
   COMPOSED_KEYWORD,
   DraftInput,
@@ -188,8 +189,64 @@ function fakeStalwart() {
     calls: [] as string[],
     uploads: [] as { type: string | null; size: number }[],
     refuseSubmission: false,
+    books: new Map<string, { id: string; name: string; isDefault: boolean; description: string | null }>([
+      ["b", { id: "b", name: "Stalwart Address Book", isDefault: true, description: null }],
+    ]),
+    cards: new Map<string, Record<string, unknown> & { id: string }>(),
+    failContacts: false,
   };
   const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
+    "AddressBook/get": () => ({ list: [...state.books.values()] }),
+    "AddressBook/set": (a) => {
+      const created: Record<string, { id: string }> = {};
+      for (const [k, v] of Object.entries((a.create ?? {}) as Record<string, { name: string; description?: string }>)) {
+        const id = `bk${String(++state.seq)}`;
+        state.books.set(id, { id, name: v.name, isDefault: false, description: v.description ?? null });
+        created[k] = { id };
+      }
+      for (const [id, patch] of Object.entries((a.update ?? {}) as Record<string, { description?: string }>)) {
+        const b = state.books.get(id);
+        if (b && patch.description !== undefined) b.description = patch.description;
+      }
+      return { created, updated: {} };
+    },
+    "ContactCard/query": (a) => {
+      const email = (a.filter as { email?: string } | undefined)?.email?.toLowerCase();
+      const ids = [...state.cards.values()]
+        .filter(
+          (c) =>
+            email === undefined ||
+            Object.values((c.emails ?? {}) as Record<string, { address: string }>).some(
+              (e) => e.address.toLowerCase() === email,
+            ),
+        )
+        .map((c) => c.id);
+      const limit = typeof a.limit === "number" ? a.limit : ids.length;
+      return { ids: ids.slice(0, limit), ...(a.calculateTotal === true ? { total: ids.length } : {}) };
+    },
+    "ContactCard/get": (a) => ({
+      list: (Array.isArray(a.ids) ? (a.ids as string[]) : [...state.cards.keys()])
+        .map((id) => state.cards.get(id))
+        .filter(Boolean),
+    }),
+    "ContactCard/set": (a) => {
+      const created: Record<string, { id: string }> = {};
+      for (const [k, v] of Object.entries((a.create ?? {}) as Record<string, Record<string, unknown>>)) {
+        const id = `ct${String(++state.seq)}`;
+        state.cards.set(id, { ...v, id });
+        created[k] = { id };
+      }
+      const updated: Record<string, null> = {};
+      for (const [id, patch] of Object.entries((a.update ?? {}) as Record<string, Record<string, unknown>>)) {
+        const c = state.cards.get(id);
+        if (!c) continue;
+        Object.assign(c, patch);
+        updated[id] = null;
+      }
+      const destroyed: string[] = [];
+      for (const id of (a.destroy ?? []) as string[]) if (state.cards.delete(id)) destroyed.push(id);
+      return { created, updated, destroyed };
+    },
     "Mailbox/get": () => ({
       list: ["inbox", "drafts", "sent", "archive", "junk", "trash"].map((role) => ({ id: role, role })),
     }),
@@ -270,7 +327,14 @@ function fakeStalwart() {
       if (name.startsWith("EmailSubmission") || name === "Identity/get") {
         expect(req.using).toContain("urn:ietf:params:jmap:submission");
       }
-      const h = handlers[name];
+      if (name.startsWith("ContactCard") || name.startsWith("AddressBook")) {
+        expect(req.using).toContain("urn:ietf:params:jmap:contacts");
+      }
+      const h = state.failContacts && name.startsWith("ContactCard") ? undefined : handlers[name];
+      // Like the server: at most 500 objects per /get (getMaxResults).
+      if (name.endsWith("/get") && Array.isArray(args.ids) && args.ids.length > 500) {
+        return ["error", { type: "requestTooLarge" }, id];
+      }
       return h ? [name, h(args), id] : ["error", { type: "unknownMethod" }, id];
     });
     return Response.json({ methodResponses });
@@ -280,6 +344,16 @@ function fakeStalwart() {
 
 function setup(allowed: (a: string) => boolean = () => true, quota: SlidingQuotaStore = memorySlidingQuota()) {
   const fake = fakeStalwart();
+  const deferred: { fn: () => void; ms: number }[] = [];
+  /** Lets held submissions go out (or not), then runs what the service deferred and waits for it. */
+  const afterHold = async (release = true) => {
+    if (release)
+      for (const sub of fake.state.submissions.values()) if (sub.undoStatus === "pending") sub.undoStatus = "final";
+    const due = deferred.splice(0);
+    for (const d of due) d.fn();
+    await new Promise((r) => setTimeout(r, 30));
+    return due;
+  };
   const svc = new WebmailService({
     store: new WebmailSessionStore(memoryKv(), createKeyRing([{ id: "k", key: randomBytes(32) }])),
     oauth: {
@@ -293,8 +367,11 @@ function setup(allowed: (a: string) => boolean = () => true, quota: SlidingQuota
     access: { allowed: async (a) => allowed(a) },
     quota,
     fetch: fake.fetchImpl,
+    defer: (fn, ms) => {
+      deferred.push({ fn, ms });
+    },
   });
-  return { svc, ...fake };
+  return { svc, deferred, afterHold, ...fake };
 }
 
 const draft = (over: Record<string, unknown> = {}) =>
@@ -523,5 +600,168 @@ describe("session writes are compare-and-set", () => {
     release();
     expect((await refreshing)?.username).toBe("a@x.test");
     expect((await store.read(sessionId))?.username).toBe("a@x.test");
+  });
+});
+
+describe("contacts through the BFF", () => {
+  const contact = (over: Record<string, unknown> = {}) =>
+    ContactInput.parse({ given: "Sam", surname: "Rivera", emails: [{ address: "s@x.test" }], ...over });
+  const ACC = "acc-a@x.test";
+  const cards = (t: ReturnType<typeof setup>, n: number) => {
+    for (let i = 0; i < n; i++) {
+      t.state.cards.set(`k${String(i)}`, {
+        id: `k${String(i)}`,
+        name: { full: `P${String(i)}` },
+        addressBookIds: { b: true },
+      });
+    }
+  };
+
+  it("creates, lists, edits, moves and deletes contacts, and imports and exports vCards", async () => {
+    const t = setup();
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const { id } = await t.svc.createContact(sessionId, ACC, contact());
+    let list = await t.svc.contacts(sessionId);
+    expect(list).toMatchObject({ accountId: ACC, autoSave: true, truncated: false });
+    expect(list.contacts.map((c) => [c.name, c.bookIds])).toEqual([["Sam Rivera", ["b"]]]);
+    expect(list.books).toEqual([{ id: "b", name: "My contacts", isDefault: true, isOther: false }]);
+
+    await t.svc.updateContact(sessionId, ACC, id, contact({ organization: "Trail Club" }));
+    // The count the server actually moved (an unknown id isn't counted).
+    expect(await t.svc.moveContacts(sessionId, ACC, [id, "missing"], "other")).toBe(1);
+    list = await t.svc.contacts(sessionId);
+    const other = list.books.find((b) => b.isOther);
+    expect(list.contacts[0]).toMatchObject({ organization: "Trail Club", bookIds: [other?.id] });
+    await expect(t.svc.updateContact(sessionId, ACC, "missing", contact())).rejects.toBeInstanceOf(WebmailRefusedError);
+
+    const imported = await t.svc.importContacts(
+      sessionId,
+      ACC,
+      "BEGIN:VCARD\nFN:Jo\nEMAIL:jo@x.test\nEND:VCARD\nBEGIN:VCARD\nEND:VCARD\n",
+    );
+    expect(imported).toEqual({ imported: 1, skipped: 1, full: false });
+    expect(await t.svc.exportContacts(sessionId)).toContain("EMAIL:jo@x.test");
+    expect(await t.svc.importContacts(sessionId, ACC, "nothing here")).toEqual({
+      imported: 0,
+      skipped: 0,
+      full: false,
+    });
+
+    expect(await t.svc.deleteContacts(sessionId, ACC, [id])).toBe(1);
+    expect((await t.svc.contacts(sessionId)).contacts.map((c) => c.name)).toEqual(["Jo"]);
+  });
+
+  it("refuses every change made for another mailbox than the active one", async () => {
+    const t = setup();
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const { id } = await t.svc.createContact(sessionId, ACC, contact());
+    const other = "acc-b@x.test";
+    const refused = [
+      t.svc.createContact(sessionId, other, contact()),
+      t.svc.updateContact(sessionId, other, id, contact()),
+      t.svc.deleteContacts(sessionId, other, [id]),
+      t.svc.moveContacts(sessionId, other, [id], "other"),
+      t.svc.setAutoSave(sessionId, other, false),
+      t.svc.importContacts(sessionId, other, "BEGIN:VCARD\nFN:Jo\nEND:VCARD\n"),
+    ];
+    for (const p of refused) await expect(p).rejects.toBeInstanceOf(WebmailRefusedError);
+    expect((await t.svc.contacts(sessionId)).contacts.map((c) => c.name)).toEqual(["Sam Rivera"]);
+  });
+
+  it("keeps a mailbox to 5,000 contacts, and says when the list is cut", async () => {
+    const t = setup();
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    cards(t, 4999);
+    expect(
+      (await t.svc.importContacts(sessionId, ACC, "BEGIN:VCARD\nFN:A\nEND:VCARD\nBEGIN:VCARD\nFN:B\nEND:VCARD\n")).full,
+    ).toBe(true);
+    await expect(t.svc.createContact(sessionId, ACC, contact())).rejects.toThrow(/up to 5,000 contacts/);
+    const list = await t.svc.contacts(sessionId);
+    expect([list.contacts.length, list.truncated]).toEqual([5000, false]);
+    t.state.cards.set("extra", { id: "extra", name: { full: "Extra" }, addressBookIds: { b: true } });
+    expect((await t.svc.contacts(sessionId)).truncated).toBe(true);
+  });
+
+  it("reads more contacts than one /get allows, in batches", async () => {
+    const t = setup();
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    cards(t, 620);
+    expect((await t.svc.contacts(sessionId)).contacts).toHaveLength(620);
+  });
+
+  it("saves new recipients to Other contacts once the send is released, never touching existing contacts", async () => {
+    const t = setup();
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    await t.svc.createContact(
+      sessionId,
+      ACC,
+      contact({ given: "Known", surname: "", emails: [{ address: "known@x.test" }] }),
+    );
+    const d = await t.svc.saveDraft(
+      sessionId,
+      draft({
+        to: [
+          { name: "New Person", email: "New@X.test" },
+          { email: "KNOWN@x.test", name: "Other Name" },
+        ],
+        cc: [{ email: "new@x.test" }],
+      }),
+    );
+    await t.svc.send(sessionId, d.id, "i1");
+    // Nothing yet: the send can still be undone. Checked after the hold (6 s + 2 s).
+    expect((await t.svc.contacts(sessionId)).contacts).toHaveLength(1);
+    expect(t.deferred.map((x) => x.ms)).toEqual([8000]);
+    await t.afterHold();
+    const list = await t.svc.contacts(sessionId);
+    const other = list.books.find((b) => b.isOther);
+    expect(other).toBeDefined();
+    expect(list.contacts.map((c) => [c.name, c.emails[0]?.address, c.bookIds[0] === other?.id])).toEqual([
+      ["Known", "known@x.test", false],
+      ["New Person", "new@x.test", true],
+    ]);
+  });
+
+  it("saves nobody from an undone send, and checks again while the server still holds it", async () => {
+    const t = setup();
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const d = await t.svc.saveDraft(sessionId, draft({ to: [{ email: "undone@x.test" }] }));
+    const sent = await t.svc.send(sessionId, d.id, "i1");
+    await t.svc.undoSend(sessionId, sent.submissionId);
+    await t.afterHold(false);
+    expect((await t.svc.contacts(sessionId)).contacts).toEqual([]);
+
+    const d2 = await t.svc.saveDraft(sessionId, draft({ to: [{ email: "slow@x.test" }] }));
+    await t.svc.send(sessionId, d2.id, "i1");
+    await t.afterHold(false); // Still pending: try again in 5 s.
+    expect(t.deferred.map((x) => x.ms)).toEqual([5000]);
+    await t.afterHold();
+    expect((await t.svc.contacts(sessionId)).contacts.map((c) => c.emails[0]?.address)).toEqual(["slow@x.test"]);
+  });
+
+  it("respects the setting and the cap, and a failing contacts store never fails the send", async () => {
+    const t = setup();
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    await t.svc.setAutoSave(sessionId, ACC, false);
+    expect((await t.svc.contacts(sessionId)).autoSave).toBe(false);
+    const d = await t.svc.saveDraft(sessionId, draft({ to: [{ email: "someone@x.test" }] }));
+    await t.svc.send(sessionId, d.id, "i1");
+    await t.afterHold();
+    expect((await t.svc.contacts(sessionId)).contacts).toEqual([]);
+
+    await t.svc.setAutoSave(sessionId, ACC, true);
+    cards(t, 5000);
+    const full = await t.svc.saveDraft(sessionId, draft({ to: [{ email: "over@x.test" }] }));
+    await t.svc.send(sessionId, full.id, "i1");
+    await t.afterHold();
+    expect(t.state.cards.size).toBe(5000);
+    t.state.cards.clear();
+
+    t.state.failContacts = true; // The contacts store errors: the message still goes out.
+    const d2 = await t.svc.saveDraft(sessionId, draft({ to: [{ email: "x2@x.test" }] }));
+    await expect(t.svc.send(sessionId, d2.id, "i1")).resolves.toMatchObject({
+      submissionId: expect.any(String) as unknown,
+    });
+    await t.afterHold();
+    expect(t.state.calls.filter((c) => c.startsWith("submit"))).toHaveLength(3);
   });
 });
