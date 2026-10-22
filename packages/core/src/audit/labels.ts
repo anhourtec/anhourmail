@@ -145,6 +145,7 @@ const EXPLICIT: Partial<Record<AuditAction, string>> = {
   "data.deletion_requested": "Deletion requested",
   "data.deleted": "Data deleted",
   "platform.settings_changed": "Platform settings changed",
+  "platform.admin_bootstrapped": "First platform administrator created",
   "platform.secret_changed": "Platform secret changed",
   "platform.stalwart_upgraded": "Mail server upgraded",
   "platform.provisioning_failed": "Mail server change failed",

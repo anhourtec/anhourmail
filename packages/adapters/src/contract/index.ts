@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
-import type { UnitOfWork } from "@anhourmail/core";
+import { ConflictError, type UnitOfWork } from "@anhourmail/core";
 import { type AuditEntryInput, type AuditQuery, verifyChain } from "@anhourmail/core/audit";
 
 /** `createUser` makes a console user the adapter can reference (memberships need one in Postgres). */
@@ -1014,6 +1014,37 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         expect(await uow.run((r) => r.security.stepUpFresh(lee, s1, now))).toBe(false);
         expect(await uow.run((r) => r.security.stepUpFresh(sam, randomUUID(), now))).toBe(false);
         expect(await uow.run((r) => r.security.stepUpFresh(sam, s1, new Date(now.getTime() + 61_000)))).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("staff: a password-less login, a platform role and a set-password token; duplicates refused", async () => {
+      const { uow, cleanup } = await factory();
+      try {
+        const email = `bootstrap-${randomUUID()}@example.test`;
+        const names = { name: "First Admin", firstName: "First", lastName: "Admin" };
+        // Rolled back with the unit of work like every other write.
+        await expect(
+          uow.run(async (r) => {
+            await r.staff.createLogin({ email, ...names });
+            throw new Error("boom");
+          }),
+        ).rejects.toThrow("boom");
+        expect(await uow.run((r) => r.people.userByEmail(email))).toBeNull();
+
+        const id = await uow.run(async (r) => {
+          await r.staff.lockBootstrap();
+          const { id: created } = await r.staff.createLogin({ email, ...names });
+          await r.staff.grantRole(created, "global_admin", "contract");
+          await r.staff.grantRole(created, "global_admin", "contract"); // idempotent
+          await r.staff.issuePasswordSetToken(created, `t-${randomUUID()}`, new Date(Date.now() + 60_000));
+          return created;
+        });
+        expect(await uow.run((r) => r.people.userByEmail(email))).toEqual({ id, name: "First Admin" });
+        expect(await uow.run((r) => r.access.platformRoles(id))).toEqual(["global_admin"]);
+        expect(await uow.run((r) => r.staff.anyPlatformRole())).toBe(true);
+        await expect(uow.run((r) => r.staff.createLogin({ email, ...names }))).rejects.toBeInstanceOf(ConflictError);
       } finally {
         await cleanup();
       }

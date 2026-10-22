@@ -101,6 +101,7 @@ export const AUDIT_ACTIONS = [
   "data.deleted",
   // platform
   "platform.settings_changed",
+  "platform.admin_bootstrapped",
   "platform.secret_changed",
   "platform.stalwart_upgraded",
   "platform.provisioning_failed",

@@ -6,7 +6,7 @@ import type { AccountRepository } from "@anhourmail/core/account";
 import type { AliasRepository, MailAlias } from "@anhourmail/core/aliases";
 import type { AppPassword, AppPasswordRepository } from "@anhourmail/core/app-passwords";
 import type { Invite, InviteRepository, PeopleRepository } from "@anhourmail/core/people";
-import type { AccountSummary, PlatformAccountRepository } from "@anhourmail/core/platform";
+import type { AccountSummary, PlatformAccountRepository, StaffRepository } from "@anhourmail/core/platform";
 import type { CatchAllRepository, CustomerDomain, DomainRepository } from "@anhourmail/core/domains";
 import { type Mailbox, type MailboxRepository, MAILBOX_STATUSES } from "@anhourmail/core/mailboxes";
 import type {
@@ -71,6 +71,8 @@ export type MemoryState = {
   catchAll: { domainId: string; mailboxId: string }[];
   /** Step-up markers by console session (Postgres: better-auth verification rows `step-up-<session id>`). */
   stepUps: { userId: string; sessionId: string; expiresAt: Date }[];
+  /** One-time set-password tokens (Postgres: better-auth `reset-password:<token>` verification rows). */
+  passwordSetTokens: { userId: string; token: string; expiresAt: Date }[];
 };
 
 export const emptyState = (): MemoryState => ({
@@ -98,6 +100,7 @@ export const emptyState = (): MemoryState => ({
   appPasswords: [],
   catchAll: [],
   stepUps: [],
+  passwordSetTokens: [],
 });
 
 const EPOCH = new Date(0);
@@ -497,6 +500,27 @@ function repositories(s: MemoryState): Repositories {
     createdAt: clone(a.createdAt ?? EPOCH),
   });
 
+  const staff: StaffRepository = {
+    // Runs are already serialised by MemoryUnitOfWork.
+    lockBootstrap: async () => undefined,
+    anyPlatformRole: async () => s.platformRoles.length > 0,
+    createLogin: async ({ email, name }) => {
+      if (Object.values(s.userEmails).some((e) => e.toLowerCase() === email.toLowerCase())) {
+        throw new ConflictError("That address already has a login.");
+      }
+      const id = randomUUID();
+      s.userEmails[id] = email;
+      s.userNames[id] = name;
+      return { id };
+    },
+    grantRole: async (userId, role) => {
+      if (!s.platformRoles.some((r) => r.userId === userId && r.role === role)) s.platformRoles.push({ userId, role });
+    },
+    issuePasswordSetToken: async (userId, token, expiresAt) => {
+      s.passwordSetTokens.push({ userId, token, expiresAt });
+    },
+  };
+
   const platformAccounts: PlatformAccountRepository = {
     search: async ({ query, limit, offset }) => {
       const q = query?.toLowerCase() ?? null;
@@ -700,6 +724,7 @@ function repositories(s: MemoryState): Repositories {
     people,
     invites,
     platformAccounts,
+    staff,
     security,
   };
 }

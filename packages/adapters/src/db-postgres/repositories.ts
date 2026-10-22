@@ -7,7 +7,7 @@ import { type AccessRepository, ConflictError, type Repositories, type UnitOfWor
 import type { AccountRepository } from "@anhourmail/core/account";
 import type { AliasKind, AliasRepository, MailAlias } from "@anhourmail/core/aliases";
 import type { Invite, InviteRepository, InviteStatus, MemberRecord, PeopleRepository } from "@anhourmail/core/people";
-import type { AccountSummary, PlatformAccountRepository } from "@anhourmail/core/platform";
+import type { AccountSummary, PlatformAccountRepository, StaffRepository } from "@anhourmail/core/platform";
 import type { CustomerDomain, DomainRepository, DomainStatus } from "@anhourmail/core/domains";
 import { type Mailbox, type MailboxRepository, MAILBOX_STATUSES, type MailboxStatus } from "@anhourmail/core/mailboxes";
 import type {
@@ -39,6 +39,7 @@ import {
   auditLog,
   authAccount,
   authUser,
+  authVerification,
   customerAccount,
   customerDomain,
   invite,
@@ -1017,6 +1018,60 @@ class PgPlatformAccountRepository implements PlatformAccountRepository {
   }
 }
 
+/** Same key for every bootstrap run, so two at once can't both see an empty platform. */
+const BOOTSTRAP_LOCK = "anhourmail.bootstrap-admin";
+
+class PgStaffRepository implements StaffRepository {
+  constructor(private readonly x: Executor) {}
+
+  async lockBootstrap(): Promise<void> {
+    await this.x.execute(sql`select pg_advisory_xact_lock(hashtext(${BOOTSTRAP_LOCK}))`);
+  }
+
+  async anyPlatformRole(): Promise<boolean> {
+    const [r] = await this.x.select({ userId: platformRoleAssignment.userId }).from(platformRoleAssignment).limit(1);
+    return r !== undefined;
+  }
+
+  async createLogin(input: {
+    email: string;
+    name: string;
+    firstName: string;
+    lastName: string | null;
+  }): Promise<{ id: string }> {
+    const id = randomUUID();
+    try {
+      // better-auth's user row with a verified email and no credential account yet: its reset-password endpoint
+      // creates the credential (argon2id hash) when the person sets a password through the link.
+      await this.x.insert(authUser).values({
+        id,
+        name: input.name,
+        firstName: input.firstName,
+        lastName: input.lastName,
+        email: input.email,
+        emailVerified: true,
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new ConflictError("That address already has a login.");
+      throw err;
+    }
+    await this.x.insert(userProfile).values({ userId: id }).onConflictDoNothing();
+    return { id };
+  }
+
+  async grantRole(userId: string, role: PlatformRole, grantedBy: string): Promise<void> {
+    await this.x.insert(platformRoleAssignment).values({ userId, role, grantedBy }).onConflictDoNothing();
+  }
+
+  async issuePasswordSetToken(userId: string, token: string, expiresAt: Date): Promise<void> {
+    // The row better-auth's request-password-reset writes (identifier `reset-password:<token>`, value = user id), so
+    // the console's reset-password page and POST /api/auth/reset-password accept and consume it once.
+    await this.x
+      .insert(authVerification)
+      .values({ id: randomUUID(), identifier: `reset-password:${token}`, value: userId, expiresAt });
+  }
+}
+
 const repositories = (x: Executor): Repositories => ({
   audit: new PgAuditRepository(x),
   access: new PgAccessRepository(x),
@@ -1029,6 +1084,7 @@ const repositories = (x: Executor): Repositories => ({
   people: new PgPeopleRepository(x),
   invites: new PgInviteRepository(x),
   platformAccounts: new PgPlatformAccountRepository(x),
+  staff: new PgStaffRepository(x),
   security: new PgSecurityRepository(x),
   webmailSettings: new PgWebmailSettingsRepository(x),
   appPasswords: new PgAppPasswordRepository(x),
