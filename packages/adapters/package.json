@@ -21,18 +21,20 @@
   },
   "dependencies": {
     "@anhourmail/core": "0.0.0",
-    "drizzle-orm": "0.45.4",
-    "pg": "8.23.1",
-    "better-auth": "1.7.12",
     "@anhourmail/shared": "0.0.0",
+    "@anhourmail/stalwart-client": "0.0.0",
+    "@better-auth/passkey": "1.7.12",
     "@node-rs/argon2": "2.2.2",
+    "better-auth": "1.7.12",
+    "drizzle-orm": "0.45.4",
     "nodemailer": "10.1.7",
-    "@anhourmail/stalwart-client": "0.0.0"
+    "pg": "8.23.1"
   },
   "devDependencies": {
     "@anhourmail/config": "0.0.0",
+    "@anhourmail/server": "0.0.0",
+    "@types/nodemailer": "8.0.2",
     "@types/pg": "8.23.1",
-    "drizzle-kit": "0.31.11",
-    "@types/nodemailer": "8.0.2"
+    "drizzle-kit": "0.31.11"
   }
 }

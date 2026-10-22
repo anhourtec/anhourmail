@@ -5,14 +5,33 @@
  * open while the app is reachable only from allow-listed IPs (docs/internal/08-operations.md "Access control"),
  * closed to stop self-service sign-up entirely.
  */
-import { betterAuth } from "better-auth";
+import { getAuthenticatorName, passkey } from "@better-auth/passkey";
+import {
+  isSignInMethod,
+  SECOND_STEP_LIMITS,
+  type SignInMethod,
+  TOTP,
+  TRUSTED_DEVICE_DAYS,
+} from "@anhourmail/shared/security";
+import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { APIError } from "better-auth/api";
+import { APIError, getSessionFromCtx } from "better-auth/api";
 import { toNextJsHandler } from "better-auth/next-js";
+import { twoFactor } from "better-auth/plugins/two-factor";
 
 import type { Db } from "../db-postgres/client";
-import { authAccount, authSession, authUser, authVerification } from "../db-postgres/schema";
+import {
+  authAccount,
+  authPasskey,
+  authSession,
+  authTwoFactor,
+  authUser,
+  authVerification,
+} from "../db-postgres/schema";
 import { hashPassword, verifyPassword } from "./password";
+import { hashedBackupCodeStore, newRecoveryCodes } from "./recovery-codes";
+import { type Sealer, sealTwoFactorSecrets } from "./sealed-adapter";
+import { type SecurityHooks, securityPlugin } from "./security-plugin";
 
 export type AuthOptions = {
   db: Db;
@@ -30,17 +49,49 @@ export type AuthOptions = {
   sendPasswordReset: (input: { email: string; name: string; url: string }) => Promise<void>;
   /** After a successful reset (audit, notifications). */
   onPasswordReset?: (user: { id: string; email: string }) => Promise<void>;
+  /** Key ring that seals TOTP secrets at rest (rule 16). */
+  sealer: Sealer;
+  /**
+   * WebAuthn relying party: the console origin only (never the webmail's). `id` is the console host name
+   * (`app.anhourmail.com`; `localhost` in development).
+   */
+  relyingParty: { id: string; name: string; origin: string };
+  /** Behind our proxy (TRUST_PROXY=true): take the client address from X-Forwarded-For; otherwise never. */
+  trustProxy: boolean;
+  /** Auditing and checks around sign-in factors (`security-plugin.ts`). */
+  security: SecurityHooks;
 };
+
+/** Passkeys must prove the person, not just the device (PIN, fingerprint or face): a passkey signs in on its own. */
+function requireUserVerified(verified: boolean): void {
+  if (!verified) {
+    throw new APIError("UNAUTHORIZED", {
+      code: "USER_NOT_VERIFIED",
+      message: "Your passkey didn't confirm it's you. Use one with a PIN, fingerprint or face check.",
+    });
+  }
+}
 
 export function createAuth(opts: AuthOptions) {
   return betterAuth({
     secret: opts.secret,
     baseURL: opts.baseURL,
     trustedOrigins: opts.trustedOrigins,
-    database: drizzleAdapter(opts.db, {
-      provider: "pg",
-      schema: { user: authUser, session: authSession, account: authAccount, verification: authVerification },
-    }),
+    database: (options: BetterAuthOptions) =>
+      sealTwoFactorSecrets(
+        drizzleAdapter(opts.db, {
+          provider: "pg",
+          schema: {
+            user: authUser,
+            session: authSession,
+            account: authAccount,
+            verification: authVerification,
+            twoFactor: authTwoFactor,
+            passkey: authPasskey,
+          },
+        })(options),
+        opts.sealer,
+      ),
     emailAndPassword: {
       enabled: true,
       disableSignUp: opts.signUp === "closed",
@@ -56,7 +107,12 @@ export function createAuth(opts: AuthOptions) {
         await opts.onPasswordReset?.({ id: user.id, email: user.email });
       },
     },
-    session: { expiresIn: 60 * 60 * 24 * 7, updateAge: 60 * 60 * 24 },
+    session: {
+      expiresIn: 60 * 60 * 24 * 7,
+      updateAge: 60 * 60 * 24,
+      // How the session was signed in (account requirements depend on it; never set from input).
+      additionalFields: { signInMethod: { type: "string", required: false, input: false } },
+    },
     // First name is required, last name optional; `name` is the editable display name (defaults to "First Last").
     user: {
       additionalFields: {
@@ -65,6 +121,18 @@ export function createAuth(opts: AuthOptions) {
       },
     },
     databaseHooks: {
+      session: {
+        create: {
+          before: async (session, context) => {
+            // The session this one replaces, if any: endpoints without session middleware (e.g. turning on an
+            // authenticator via verify-totp) haven't loaded it, so read it from the request.
+            const current =
+              context?.context.session?.session ??
+              (context ? ((await getSessionFromCtx(context).catch(() => null))?.session ?? null) : null);
+            return { data: { ...session, signInMethod: signInMethodFor(context?.path, current) } };
+          },
+        },
+      },
       user: {
         create: {
           before: async (user) => {
@@ -104,13 +172,83 @@ export function createAuth(opts: AuthOptions) {
         },
       },
     },
+    plugins: [
+      twoFactor({
+        issuer: "AnhourMail",
+        totpOptions: { digits: TOTP.digits, period: TOTP.periodSeconds },
+        // Recovery codes: our format, stored as hashes only (recovery-codes.ts).
+        backupCodeOptions: {
+          storeBackupCodes: hashedBackupCodeStore,
+          customBackupCodesGenerate: () => newRecoveryCodes(),
+        },
+        trustDeviceMaxAge: TRUSTED_DEVICE_DAYS * 24 * 3600,
+        twoFactorCookieMaxAge: SECOND_STEP_LIMITS.challengeMinutes * 60,
+        accountLockout: {
+          enabled: true,
+          maxFailedAttempts: SECOND_STEP_LIMITS.perAccount,
+          durationSeconds: SECOND_STEP_LIMITS.lockMinutes * 60,
+        },
+      }),
+      passkey({
+        rpID: opts.relyingParty.id,
+        rpName: opts.relyingParty.name,
+        origin: opts.relyingParty.origin,
+        // Discoverable credentials (so a passkey can sign in without typing an email) that check the person.
+        authenticatorSelection: { residentKey: "required", userVerification: "required" },
+        registration: {
+          // The name typed is checked first (security-plugin.ts); without one, name it after the authenticator.
+          afterVerification: ({ verification }) => {
+            requireUserVerified(verification.registrationInfo?.userVerified === true);
+            return { name: getAuthenticatorName(verification.registrationInfo?.aaguid) ?? "Passkey" };
+          },
+        },
+        authentication: {
+          afterVerification: ({ verification }) => {
+            requireUserVerified(verification.authenticationInfo.userVerified);
+          },
+        },
+      }),
+      // Last, so its after-hooks see the two plugins' final answers.
+      securityPlugin(opts.security),
+    ],
     // Host-only cookies (no Domain attribute): app.* and mail.* never share a session cookie (ADR-0003).
-    advanced: { cookiePrefix: "am", useSecureCookies: opts.secureCookies },
+    advanced: {
+      cookiePrefix: "am",
+      useSecureCookies: opts.secureCookies,
+      // Session and audit addresses: only from our proxy's header. Directly reachable (dev), a client could set it,
+      // so read a header nobody sends (better-auth then records loopback in development).
+      ipAddress: { ipAddressHeaders: opts.trustProxy ? ["x-forwarded-for"] : ["x-anhourmail-no-client-ip"] },
+    },
     telemetry: { enabled: false },
   });
 }
 
 export type Auth = ReturnType<typeof createAuth>;
+
+/**
+ * The sign-in method for a session being created, from the endpoint creating it. Sessions re-created by a signed-in
+ * endpoint (turning two-factor on or off, changing the password) keep the method of the session they replace.
+ */
+export function signInMethodFor(path: string | undefined, current: unknown): SignInMethod {
+  switch (path) {
+    case "/two-factor/verify-totp": {
+      // Turning on an authenticator in a passkey session keeps the stronger method.
+      const m = (current as { signInMethod?: unknown } | null | undefined)?.signInMethod;
+      return m === "passkey" ? "passkey" : "password+totp";
+    }
+    case "/two-factor/verify-backup-code":
+      return "password+recovery_code";
+    case "/passkey/verify-authentication":
+      return "passkey";
+    case "/sign-in/email":
+    case "/sign-up/email":
+      return "password";
+    default: {
+      const m = (current as { signInMethod?: unknown } | null | undefined)?.signInMethod;
+      return isSignInMethod(m) ? m : "password";
+    }
+  }
+}
 
 const clean = (v: unknown, max: number): string =>
   typeof v === "string" ? v.trim().replace(/\s+/g, " ").slice(0, max) : "";
@@ -135,15 +273,32 @@ export function normaliseNames(input: { firstName?: unknown; lastName?: unknown;
   };
 }
 
-export type SessionUser = { id: string; email: string; name: string };
+export type SessionUser = {
+  id: string;
+  email: string;
+  name: string;
+  sessionId: string;
+  signInMethod: SignInMethod | null;
+};
 
 export async function sessionUser(auth: Auth, headers: Headers): Promise<SessionUser | null> {
   const session = await auth.api.getSession({ headers });
   if (!session) return null;
-  return { id: session.user.id, email: session.user.email, name: session.user.name };
+  const m = (session.session as { signInMethod?: unknown }).signInMethod;
+  return {
+    id: session.user.id,
+    email: session.user.email,
+    name: session.user.name,
+    sessionId: session.session.id,
+    signInMethod: isSignInMethod(m) ? m : null,
+  };
 }
 
 export const authRouteHandlers = (auth: Auth) => toNextJsHandler(auth);
 
 /** Password hashing for server-side account creation (seed). Same scheme as sign-in. */
 export { hashPassword, needsRehash, verifyPassword } from "./password";
+export { hashRecoveryCode, newRecoveryCodes, recoveryCodesLeft } from "./recovery-codes";
+export type { Sealer } from "./sealed-adapter";
+export type { AuthSecurityEvent, SecurityHooks } from "./security-plugin";
+export { totpAt, verifyTotp } from "./totp";
