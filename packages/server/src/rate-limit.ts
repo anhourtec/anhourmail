@@ -43,6 +43,10 @@ export const LIMITS = {
   // The contacts list reads every card (up to 5,000 in batches): tighter than the proxy.
   webmailContacts: { limit: 120, windowSec: 60, by: "caller", failMode: "open" },
   webmailUpload: { limit: 60, windowSec: 600, by: "caller", failMode: "closed" },
+  // The settings window reads preferences, identities, quota and the managed Sieve script at once.
+  webmailSettings: { limit: 60, windowSec: 60, by: "caller", failMode: "open" },
+  // Each call emails an outside address (forwarding confirmation); a per-mailbox daily cap applies in the service.
+  forwardingVerify: { limit: 10, windowSec: 3600, by: "caller", failMode: "closed" },
 } as const satisfies Record<string, RateLimit>;
 
 export type LimitName = keyof typeof LIMITS;
