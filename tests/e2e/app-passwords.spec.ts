@@ -66,10 +66,13 @@ test("an owner creates an app password for their own mailbox, sees it once, and 
   await expect(page.getByText(secret)).toHaveCount(0);
   expect(await page.content()).not.toContain(secret);
 
-  // The mail-app settings come from the public facts.
+  // The mail-app settings come from the configured platform (PLATFORM_DOMAIN; anhourmail.com by default) and list
+  // only the published, encrypted ports: never the cleartext-upgrade 143 or 110.
   const settings = page.getByRole("region", { name: "Settings for your mail app" });
   await expect(settings.getByText("imap.anhourmail.com").first()).toBeVisible();
   await expect(settings.getByRole("listitem").filter({ hasText: "IMAP" }).getByText("993")).toBeVisible();
+  await expect(settings.getByRole("listitem").filter({ hasText: "POP3" }).getByText("995")).toBeVisible();
+  await expect(settings.getByText(/^(143|110)$/)).toHaveCount(0);
 
   // The mailbox panel lists it for people who manage mailboxes (no secret there either).
   await (await openNav(page)).getByRole("link", { name: "Mailboxes" }).click();

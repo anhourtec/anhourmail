@@ -13,6 +13,7 @@ import { requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
 import { env } from "@/server/env";
 import { forPage } from "@/server/page-guard";
+import { platform } from "@/server/platform";
 
 export const metadata: Metadata = { title: "App passwords" };
 
@@ -121,7 +122,7 @@ export default async function AppPasswordsPage({ params }: { params: Promise<{ a
         title="Settings for your mail app"
         description="Most apps fill these in when you type your email address. If yours asks, use these values."
       >
-        <MailAppSettings address={data.length === 1 ? (data[0]?.address ?? null) : null} />
+        <MailAppSettings address={data.length === 1 ? (data[0]?.address ?? null) : null} platform={platform()} />
         <p className="am-small">
           Step-by-step guides are in the{" "}
           <a href={docs} className="text-primary underline-offset-2 hover:underline">

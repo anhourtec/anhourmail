@@ -15,8 +15,19 @@ const MESSAGES: Record<number, string> = {
   503: "The mail server isn't answering. Try again in a moment.",
 };
 
-/** Posts the mailbox address and password to the BFF once; on success the session cookie is already set. */
-export function WebmailSignInForm({ home, defaultAddress }: { home: string; defaultAddress: string }) {
+/**
+ * Posts the mailbox address and password to the BFF once; on success the session cookie is already set. `domain` is the
+ * deployment's free address domain, for the placeholder.
+ */
+export function WebmailSignInForm({
+  home,
+  defaultAddress,
+  domain,
+}: {
+  home: string;
+  defaultAddress: string;
+  domain: string;
+}) {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const hydrated = useHydrated();
@@ -63,7 +74,7 @@ export function WebmailSignInForm({ home, defaultAddress }: { home: string; defa
           name="address"
           type="email"
           autoComplete="username"
-          placeholder="you@anhourmail.com"
+          placeholder={`you@${domain}`}
           defaultValue={defaultAddress}
           autoFocus={defaultAddress === ""}
           required

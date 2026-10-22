@@ -22,6 +22,7 @@ import { requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
 import { env } from "@/server/env";
 import { forPage } from "@/server/page-guard";
+import { platform } from "@/server/platform";
 import { param } from "@/server/search-params";
 
 export const metadata: Metadata = { title: "Domains" };
@@ -87,7 +88,8 @@ export default async function DomainsPage({
       />
       {canManage && !allowance.allowed && (
         <p className="am-body rounded-lg border px-4 py-3">
-          Custom domains are part of the Plus and Supporter plans. Free accounts use an @anhourmail.com address.
+          Custom domains are part of the Plus and Supporter plans. Free accounts use an @{platform().freeAddressDomain}{" "}
+          address.
         </p>
       )}
       {canManage && allowance.allowed && !canAdd && (

@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { AuthSplit, LegalConsent } from "@/components/auth-split";
 import { WebmailSignInForm } from "@/components/webmail/sign-in-form";
 import { env } from "@/server/env";
+import { platform } from "@/server/platform";
 import { BLOCKED_MESSAGE, NOTICE_COOKIE } from "@/server/webmail/http";
 import { webmail, webmailCookieName } from "@/server/webmail/instance";
 import { prefillAddress, webmailBasePath } from "@/server/webmail/paths";
@@ -47,7 +48,11 @@ export default async function WebmailSignInPage({
           {BLOCKED_MESSAGE} If you think this is a mistake, ask your account's admin.
         </p>
       )}
-      <WebmailSignInForm home={base === "" ? "/" : base} defaultAddress={address} />
+      <WebmailSignInForm
+        home={base === "" ? "/" : base}
+        defaultAddress={address}
+        domain={platform().freeAddressDomain}
+      />
       <p className="am-micro">Remote images stay blocked until you choose to load them.</p>
       <LegalConsent verb="signing in" />
     </AuthSplit>

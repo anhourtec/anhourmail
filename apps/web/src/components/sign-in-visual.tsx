@@ -4,8 +4,6 @@
 import { Check, Copy, EyeOff, ImageOff, Lock, ShieldCheck, Shuffle } from "lucide-react";
 import { useRef } from "react";
 
-import { PRODUCT_DOMAIN } from "@anhourmail/shared";
-
 import { ALIASES, usePrivacyLoop } from "./sign-in/use-privacy-loop";
 import { useTilt } from "./sign-in/use-tilt";
 
@@ -21,7 +19,8 @@ const FACTS = [
   { icon: ImageOff, text: "Remote images blocked until you allow them" },
 ] as const;
 
-export function SignInVisual() {
+/** `domain`: the deployment's free address domain (`Platform.freeAddressDomain`), passed from the server. */
+export function SignInVisual({ domain }: { domain: string }) {
   const panel = useRef<HTMLDivElement>(null);
   const stack = useRef<HTMLDivElement>(null);
   const { step, typed, cycle } = usePrivacyLoop(panel);
@@ -122,7 +121,7 @@ export function SignInVisual() {
                     {shown}
                   </span>
                   <span className="am-si-caret" />
-                  <span className="am-si-domain">@{PRODUCT_DOMAIN}</span>
+                  <span className="am-si-domain">@{domain}</span>
                 </span>
                 {aliasOn ? <Check className="am-si-copied size-4" /> : <Copy className="size-4 opacity-60" />}
               </div>
@@ -155,7 +154,7 @@ export function SignInVisual() {
 }
 
 /** Below lg the panel is hidden; a slim band keeps the story on phones: a masked alias switching on. */
-export function SignInBand() {
+export function SignInBand({ domain }: { domain: string }) {
   return (
     <div aria-hidden className="am-si-band">
       <div className="am-si-aurora">
@@ -167,7 +166,7 @@ export function SignInBand() {
         <Shuffle className="size-3.5 shrink-0 text-[rgb(var(--am-cyan-hi))]" />
         <span className="am-si-mono min-w-0 flex-1 truncate">
           <span className="am-si-typed">{ALIASES[0]}</span>
-          <span className="am-si-domain">@{PRODUCT_DOMAIN}</span>
+          <span className="am-si-domain">@{domain}</span>
         </span>
         <span className="am-si-toggle am-si-band-toggle">
           <span className="am-si-knob" />
