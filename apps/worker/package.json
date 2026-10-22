@@ -13,7 +13,8 @@
     "job:reconcile": "tsx src/jobs/reconcile.ts",
     "start": "tsx src/worker.ts",
     "job:domain-recheck": "tsx src/jobs/domain-recheck.ts",
-    "job:mailbox-purge": "tsx src/jobs/mailbox-purge.ts"
+    "job:mailbox-purge": "tsx src/jobs/mailbox-purge.ts",
+    "job:mailbox-backfill": "tsx src/jobs/mailbox-backfill.ts"
   },
   "dependencies": {
     "@anhourmail/adapters": "0.0.0",
