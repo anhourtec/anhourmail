@@ -194,7 +194,7 @@ The back-reference in `c2` follows standard RFC 8620 semantics. **UNVERIFIED** t
 - **Masked email: Enterprise-only.**
   - "Masked email is available exclusively in the Enterprise Edition ... not included in the Community Edition" [S26]. The compare table marks it Enterprise [S27].
   - It is implemented as Stalwart's own `x:MaskedEmail/get|query|set` under `urn:stalwart:jmap`. Fields: `email`, `enabled`, `description`, `forDomain`, `url`, `createdBy`, `expiresAt`, `emailPrefix`, `emailDomain` [S26].
-  - It is **not** the Fastmail `https://www.fastmail.com/dev/maskedemail` capability. No such URN appears in the v0.16.27 source. The advertised JMAP capability URNs are listed in §5 [S59].
+  - It is **not** the vendor-specific MaskedEmail JMAP capability another provider publishes. No such URN appears in the v0.16.27 source. The advertised JMAP capability URNs are listed in §5 [S59].
   - Its count is capped by `quotas.maxMaskedAddresses` [S26].
 
 ### Suspending an account (verified on the pinned v0.16.27, 2026-10-22)

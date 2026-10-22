@@ -203,45 +203,42 @@ CASL's private right of action (ss.47–51) was suspended in 2017 ([Osler](https
 
 ---
 
-## 5. Competitor scan (checked 2026-10-21 unless noted)
+## 5. Market scan (checked 2026-10-21 unless noted)
 
-### 5.1 Price and feature table
+Providers are described by type, not named, in this public doc (CLAUDE.md rule 57). The named table, quotes and
+links are kept locally in `docs/internal/private/competitors/market-and-legal.named-2026-10-22.md` (gitignored).
 
-| Provider | Cheapest relevant paid plan (annual) | Storage | Custom domains | Aliases / masked | Send limits | Open source | Jurisdiction | IMAP / JMAP |
-|---|---|---|---|---|---|---|---|---|
-| **AnhourMail Plus** | **US$12 / CA$15** | 30 GB | Yes | Unlimited + catch-all + masked | TBD | TBD | Canada (BC) | Planned |
-| Purelymail | **US$10/yr** "simple" pricing; heavy users moved to usage pricing (US$0.56/GB-yr, US$4/yr account fee) ([pricing](https://purelymail.com/pricing), [advanced](https://purelymail.com/advancedpricing)) | "No hard limits" (soft) | Unlimited, no extra charge | Yes (routing rules) **[not re-verified]** | Rate limiting on large external sends | No | US | IMAP/SMTP |
-| Proton Mail Plus | US$47.88/yr (US$3.99/mo); Unlimited US$119.88 ([pricing](https://proton.me/mail/pricing)) | 15 GB (Free 1 GB) | 1 (Unlimited: 3) | 10 addresses, 10 hide-my-email (Unlimited: unlimited) | Free: 150/day; paid unlimited | Clients yes **[not re-verified]** | Switzerland | **Only via Bridge (paid)** |
-| Tuta Revolutionary | ~€3/mo billed yearly (≈€36/yr) **[EUR yearly total UNVERIFIED; page only showed family €3/user/mo]**; Legend €8/mo ([pricing](https://tuta.com/pricing), [Toolradar](https://toolradar.com/tools/tuta/pricing)) | 20 GB (Free 1 GB) | 3 (Legend 10) | 15 (Legend 30) | n/a | Clients yes ([Tuta](https://tuta.com/blog/open-source-email-service)) | Germany | **No IMAP** by design ([Tuta](https://tuta.com/blog/desktop-clients-tutanota)) |
-| Fastmail Individual | **US$60/yr** (US$5/mo yearly; US$6 monthly) ([US pricing](https://www.fastmail.com/pricing/us/)) | 60 GB (50 mail + 10 files) | Yes | Aliases + Masked Email | n/a | No (sponsors JMAP/Cyrus) | Australia | IMAP + **JMAP** |
-| Migadu Micro | US$19/yr; Mini US$90/yr ([pricing](https://www.migadu.com/pricing/)) | 5 GB (Mini 30 GB), soft | "Almost unlimited" | Unlimited addresses | **20 out / 200 in per day** (Mini 100/1,000) | No | Switzerland (OVH-hosted, per [HN](https://news.ycombinator.com/item?id=34428952)) | IMAP |
-| mailbox.org Standard | €36/yr (€3/mo yearly); Light €12/yr ([prices](https://mailbox.org/en/prices)) | 20 GB mail + 10 GB drive (Light 2 GB) | Standard: yes (Light: no) | 25 + 50 custom-domain aliases | n/a | Partly (OX-based) **[not re-verified]** | Germany | IMAP |
-| SimpleLogin Premium (alias only) | US$36/yr ([pricing](https://simplelogin.io/pricing/)) | — | Unlimited | Unlimited aliases, catch-all | — | **Yes** | Switzerland (Proton AG) | Forwarder |
-| addy.io Lite / Pro (alias only) | ~US$12/yr / ~US$36/yr (US$1 & US$3/mo yearly) ([Toolradar](https://toolradar.com/tools/addy-io/pricing); [addy blog](https://addy.io/blog/introducing-duo-and-family-plans/)) **[addy.io site unreachable today]** | — | 1 / 20 | 50 shared-domain / unlimited | — | Yes **[not re-verified]** | UK **[not re-verified]** | Forwarder |
-| Posteo | €12/yr (€1/mo, prepaid) ([features](https://posteo.de/en/site/features)) | 4 GB (to 75 GB at €0.25/GB-mo) | **No** (Posteo domains only) | 2–3 incl., extra €0.10/mo | n/a | Partly **[not re-verified]** | Germany | IMAP/POP |
-| StartMail Personal | US$59.88/yr; Custom Domain US$83.88/yr ([pricing](https://www.startmail.com/pricing)) | 20 GB / 30 GB | 1 (Business: unlimited) | Unlimited | n/a | No | Netherlands | IMAP/SMTP |
-| Zoho Mail Free (optional) | Free (Mail Lite ~US$1/user/mo) ([itechguides](https://www.itechguides.com/best/email-hosting/zoho-mail/)) **[not re-verified]** | 5 GB/user | 1 | — | — | No | India/US | **No IMAP on Free** |
-| Infomaniak my kSuite (optional) | Free tier on @ik.me; my kSuite+ paid ([FAQ](https://www.infomaniak.com/en/support/faq/2497/understanding-the-different-infomaniak-suites-ksuite-my-ksuite)) **[price UNVERIFIED]** | — | Paid tiers | — | — | — | Switzerland | IMAP |
+### 5.1 Price and feature ranges
+
+| Provider type | Cheapest relevant paid plan (annual) | Storage | Custom domains | Aliases / masked | Send limits | IMAP / JMAP |
+|---|---|---|---|---|---|---|
+| **AnhourMail Plus** | **US$12 / CA$15** | 30 GB | Yes | Unlimited + catch-all + masked | TBD | Planned |
+| Low-cost, one-operator provider (US) | ~US$10/yr flat; heavy users moved to usage pricing (~US$0.56/GB-yr + US$4/yr account fee) | Soft, "no hard limits" | Unlimited | Yes (routing rules) | Rate limiting on large external sends | IMAP/SMTP |
+| Privacy-focused, end-to-end providers (EU/CH) | ~US$36–48/yr; top tiers ~US$120/yr | 15–20 GB (free tiers 1 GB) | 1–3 | 10–15 addresses + alias add-ons | Free: ~150/day | **IMAP only via a paid local bridge, or not at all** |
+| Established JMAP provider (AU) | ~US$60/yr and rising | 60 GB | Yes | Aliases + masked | n/a | IMAP + **JMAP** |
+| Multi-domain budget host (CH) | ~US$19/yr; ~US$90/yr next tier | 5–30 GB, soft | "Almost unlimited" | Unlimited addresses | **20 out / 200 in per day** on the cheapest tier | IMAP |
+| European privacy hosts (DE/NL) | ~€12–36/yr; ~US$60–84/yr for some | 4–30 GB | Varies (some none) | 2–unlimited | n/a | IMAP/SMTP |
+| Alias-only forwarding services | ~US$12–36/yr on top of a mailbox | — | 1–unlimited | Unlimited aliases, catch-all | — | Forwarder |
+| Free tiers of business suites | Free; ~US$1/user/mo paid | ~5 GB/user | 1 | — | — | **No IMAP on free** |
 
 ### 5.2 What communities praise and complain about
 
-Reddit search results were not retrievable on the research date, so the evidence below is from Hacker News (via the Algolia API), Lemmy and the Techlore forum. **[Reddit sentiment UNVERIFIED]**
+Reddit search results were not retrievable on the research date, so the evidence is from Hacker News (via the Algolia API), Lemmy and the Techlore forum. **[Reddit sentiment UNVERIFIED]**
 
-- **Purelymail.** Praised for price and reliability: "laughably small cost" ([HN](https://news.ycombinator.com/item?id=34123294)) and "never had a single mail delivery issue" ([HN](https://news.ycombinator.com/item?id=45814888)). The persistent complaint is **bus factor**: "one person show" ([HN](https://news.ycombinator.com/item?id=42499661)), "if he goes under a bus..." ([HN](https://news.ycombinator.com/item?id=36135131)), "not suitable for anything other than your hobby email domain" ([HN](https://news.ycombinator.com/item?id=42838061)). Also "rough UI" ([HN](https://news.ycombinator.com/item?id=30402959)). In March 2025 the founder **sold Purelymail** to a new owner (Kevin Ryan) for health reasons, and prices stay for now with 24-month grandfathering promised if they change ([Purelymail news](https://news.purelymail.com/posts/updates/2025-03-06-a-new-chapter.html)). That validates the bus-factor fear and shows price-change uncertainty.
-- **Proton.** IMAP needs the paid **Bridge** ("It sucks that I have to have the paid version to have their 'bridge' access" ([Lemmy](https://feddit.it/post/1059574/1589175)); [Techlore: "Proton Bridge should be free?"](https://discuss.techlore.tech/t/proton-bridge-should-be-free/9294)); "requires a Proton Bridge thing that acts as a local IMAP/SMTP proxy" ([HN](https://news.ycombinator.com/item?id=45227754)); export only on paid plans ([HN](https://news.ycombinator.com/item?id=48381110)). Some users are happy with the Bridge ([HN](https://news.ycombinator.com/item?id=47783809)).
-- **Tuta.** No IMAP/SMTP is the dominant complaint, and it recurs into 2026: "Tuta without SMTP/POP3/IMAP is just a joke" ([HN](https://news.ycombinator.com/item?id=49527025)), "effectively useless without any support for IMAP/SMTP" ([HN](https://news.ycombinator.com/item?id=49567034)). Tuta's stated reason is end-to-end encryption ([Tuta blog](https://tuta.com/blog/desktop-clients-tutanota)).
-- **Fastmail.** A respected product, but **price** draws complaints: "quite expensive compared to other email services" ([HN](https://news.ycombinator.com/item?id=49414676) thread "Fastmail Pricing Changes", Aug 2026) and "the increase would be ~42%" (same thread). Local-currency billing was welcomed (same thread).
-- **Migadu.** Loved for flat multi-domain pricing ([HN 2021](https://news.ycombinator.com/item?id=27708580)), but **daily send limits** put people off: "20 outgoing emails limit is just so off-putting" ([HN](https://news.ycombinator.com/item?id=47488485)), "weirdly low" ([HN](https://news.ycombinator.com/item?id=30028305)), soft limits "make him uncomfortable" ([HN](https://news.ycombinator.com/item?id=49228115)).
-- **Alias services.** Paying for both an alias service ($12–36) and a mailbox doubles cost and adds a dependency. SimpleLogin's no-refund policy is notable against our 14-day window ([SimpleLogin pricing](https://simplelogin.io/pricing/)).
+- **Low-cost one-operator provider.** Praised for price and reliability. The persistent complaint is **bus factor** ("one person show") and a rough UI. In 2025 the founder sold the service, with prices held for now and grandfathering promised if they change — which validates the bus-factor fear and shows price-change uncertainty.
+- **Privacy-focused end-to-end providers.** IMAP needing a paid local bridge, or no IMAP/SMTP at all, is the dominant and recurring complaint (into 2026); export only on paid plans. The stated reason is end-to-end encryption.
+- **Established JMAP provider.** Respected, but **price** draws complaints (a ~42% increase discussed in Aug 2026). Local-currency billing was welcomed.
+- **Multi-domain budget host.** Loved for flat multi-domain pricing, but **daily send limits** ("20 outgoing emails") put people off.
+- **Alias services.** Paying for both an alias service ($12–36) and a mailbox doubles cost and adds a dependency; some have no-refund policies, against our 14-day window.
 
 ### 5.3 The gap AnhourMail fills
 
-**"Purelymail-level price, standard protocols, built-in alias/masked addresses, a polished UI, and Canadian jurisdiction, from a company that isn't one person."**
+**"Budget-provider price, standard protocols, built-in alias/masked addresses, a polished UI, and Canadian jurisdiction, from a company that isn't one person."**
 
-- Cheapest *full* package: custom domains + unlimited aliases + catch-all + masked aliases + 30 GB for US$12. Matching this today means Purelymail ($10, no masked-alias UX) or Proton/Fastmail ($48–60), or a mailbox plus SimpleLogin/addy ($12–36 extra).
-- **IMAP/SMTP (and ideally JMAP) on every paid plan, with no bridge.** This directly answers the top Proton and Tuta complaints.
-- **No punitive daily send caps on Plus.** This answers the Migadu complaint. Use reputation-based throttling instead of a hard 20/day.
-- **Canadian jurisdiction** is a real differentiator against US (Purelymail), EU and Swiss options for Canadian users and for anyone wanting a non-US, non-EU option. Be honest about C-22 (§3.4), because this audience will ask.
+- Cheapest *full* package: custom domains + unlimited aliases + catch-all + masked aliases + 30 GB for US$12. Matching this today means a ~US$10 provider with no masked-alias UX, a US$48–60 provider, or a mailbox plus an alias service ($12–36 extra).
+- **IMAP/SMTP (and ideally JMAP) on every paid plan, with no bridge.** This directly answers the top complaints about privacy-focused providers.
+- **No punitive daily send caps on Plus.** Use reputation-based throttling instead of a hard 20/day.
+- **Canadian jurisdiction** is a real differentiator against US, EU and Swiss options for Canadian users and for anyone wanting a non-US, non-EU option. Be honest about C-22 (§3.4), because this audience will ask.
 - **Bus-factor answers:** publish a continuity plan (escrowed credentials, a documented export path, at least 2 operators), standard IMAP export, and custom-domain portability.
 
 ---
@@ -271,17 +268,17 @@ Takeaways: annual billing is right, since the fixed fee is only about 2.5% of $1
 - With 3× (primary SSD/replica plus backup) at about US$0.25/GB-year:
   - Plus at the **full 30 GB** costs about **US$7.50/yr**, while typical use (~3–5 GB) costs about US$1/yr **[usage assumption]**.
   - Free at the **full 10 GB** costs about **US$2.50/yr**, with no revenue.
-- Market benchmark: Purelymail's *usage* rate (cost plus margin of the cheapest competitor) is US$0.56/GB-yr plus a US$4 account fee. At that rate a 30 GB user would cost **US$20.80/yr**, above our Plus price ([advanced pricing](https://purelymail.com/advancedpricing)). Purelymail's own $10 plan only works because most users are small, and it reserves the right to move heavy users.
+- Market benchmark: the cheapest low-cost provider's *usage* rate (cost plus margin) is US$0.56/GB-yr plus a US$4 account fee. At that rate a 30 GB user would cost **US$20.80/yr**, above our Plus price. Its own ~$10 plan only works because most users are small, and it reserves the right to move heavy users.
 - The real costs are fixed: IP reputation and deliverability work, anti-abuse, backups, on-call, and support. These don't scale with storage. **[No primary-source infra quotes gathered for BC/Canadian VPS; get OVH BHS / Canadian colo quotes.]**
 
 ### 6.3 Verdict and recommendations on price and plan structure
 
 US$12 is **viable as a launch or founding price but thin as the long-term list price**. Net revenue is about US$11, worst-case storage is about US$7.50 at full 30 GB, and fixed costs need roughly 150–300 paying users just to cover a modest CA$2–4k/yr in infrastructure **[rough assumption]**.
 
-1. **Keep US$12/yr as a "founding member" price, locked for life or 3 years for early users.** Announce the standard price up front at **US$15 / CA$20**. That is still about 70% below Proton Mail Plus (US$47.88) and 75% below Fastmail (US$60), and in line with Purelymail-plus-aliases.
+1. **Keep US$12/yr as a "founding member" price, locked for life or 3 years for early users.** Announce the standard price up front at **US$15 / CA$20**. That is still about 70% below the privacy-focused providers (~US$48) and 75% below the established JMAP provider (US$60), and in line with a budget mailbox plus an alias service.
 2. **CAD/USD parity:** CA$15 vs US$12 is about a 9% discount for Canadians at ~1.37 CAD/USD **[FX rate assumed, check on the day]**. That works as an intentional home-market discount. Otherwise set **CA$16 founding / CA$20 standard**. Make all prices **tax-exclusive** so a later GST/HST registration doesn't eat margin.
-3. **Make 30 GB a soft quota**, with paid storage add-ons (e.g. +50 GB for $X/yr) and an AUP clause about heavy use, as Purelymail and Migadu do.
-4. **Cut Free storage from 10 GB to 1–5 GB.** Proton and Tuta Free give 1 GB. Keep Free invite-only with tight send limits, since Free is the main spam-liability vector (§4.1) and costs storage with no revenue.
+3. **Make 30 GB a soft quota**, with paid storage add-ons (e.g. +50 GB for $X/yr) and an AUP clause about heavy use, as budget providers do.
+4. **Cut Free storage from 10 GB to 1–5 GB.** Privacy-focused providers' free tiers give 1 GB. Keep Free invite-only with tight send limits, since Free is the main spam-liability vector (§4.1) and costs storage with no revenue.
 5. **Supporter minimum US$24 is fine** at about 7.7% fees. Use the inline `price_data` recurring pattern (§1.5) and show suggested amounts ($24/$48/$96).
 6. **No monthly plan and no lifetime deals.** Both are confirmed as correct by the fee maths and the tail storage risk.
 7. **Absorb Stripe fees.** Don't add a surcharge, which is unusual and off-putting for consumers.
@@ -311,7 +308,7 @@ US$12 is **viable as a launch or founding price but thin as the long-term list p
 - For our own email: unticked consent box, double opt-in, consent records (s.13 onus), unsubscribe honoured in ≤10 business days, and no promo in transactional mail.
 
 **Positioning**
-- "Full IMAP/SMTP on every paid plan, unlimited masked aliases included, Canadian-run, not a one-person shop, at Purelymail-like prices."
+- "Full IMAP/SMTP on every paid plan, unlimited masked aliases included, Canadian-run, not a one-person shop, at budget-provider prices."
 - Publish a continuity plan and an export guarantee to neutralise the bus-factor objection.
 
 ---
@@ -327,7 +324,7 @@ US$12 is **viable as a launch or founding price but thin as the long-term list p
 - BC PIPA s.35 one-year retention period (text paraphrased, not quoted); CRA six-year record retention.
 - Canada–US CLOUD Act agreement status.
 - Telecommunications Act status of an email host (likely not a TSP or common carrier).
-- Tuta yearly EUR totals; addy.io prices (site unreachable); Infomaniak and Zoho current prices; open-source status and jurisdiction of some competitors.
+- Some providers' yearly EUR totals and current prices; open-source status and jurisdiction of some providers (details in the local named copy).
 - Reddit community threads (not retrievable; HN, Lemmy and Techlore used instead).
 - Storage and VPS prices in Canadian regions; typical per-user mailbox usage; CAD/USD rate.
 
@@ -395,21 +392,7 @@ US$12 is **viable as a launch or founding price but thin as the long-term list p
 - Mondaq, intermediaries: https://www.mondaq.com/canada/telecoms-mobile-cable-communications/764348/digital-intermediaries-responsibility-for-unknown-casl-violations
 - Osler, PRA suspension 2017: https://www.osler.com/en/insights/updates/canadian-government-suspends-casl-private-right-of/
 
-**Competitors and community**
-- Purelymail: https://purelymail.com/pricing, https://purelymail.com/advancedpricing, https://news.purelymail.com/posts/updates/2025-03-06-a-new-chapter.html
-- Proton: https://proton.me/mail/pricing
-- Tuta: https://tuta.com/pricing, https://tuta.com/blog/desktop-clients-tutanota, https://tuta.com/blog/open-source-email-service, https://toolradar.com/tools/tuta/pricing
-- Fastmail: https://www.fastmail.com/pricing/us/
-- Migadu: https://www.migadu.com/pricing/
-- mailbox.org: https://mailbox.org/en/prices
-- SimpleLogin: https://simplelogin.io/pricing/
-- addy.io: https://addy.io/blog/introducing-duo-and-family-plans/, https://toolradar.com/tools/addy-io/pricing
-- Posteo: https://posteo.de/en/site/features
-- StartMail: https://www.startmail.com/pricing
-- Zoho (secondary): https://www.itechguides.com/best/email-hosting/zoho-mail/
-- Infomaniak: https://www.infomaniak.com/en/support/faq/2497/understanding-the-different-infomaniak-suites-ksuite-my-ksuite
+**Market and storage**
+- Provider pricing pages and community threads: see the local named copy in `docs/internal/private/competitors/` (gitignored).
 - Backblaze B2: https://www.backblaze.com/cloud-storage/pricing
 - OVH object storage (announcement): https://iteuropa.com/news/ovhcloud-launches-new-object-storage-solution
-- HN threads and comments: https://news.ycombinator.com/item?id=27707857, https://news.ycombinator.com/item?id=42836818, https://news.ycombinator.com/item?id=34123294, https://news.ycombinator.com/item?id=45814888, https://news.ycombinator.com/item?id=42499661, https://news.ycombinator.com/item?id=36135131, https://news.ycombinator.com/item?id=42838061, https://news.ycombinator.com/item?id=30402959, https://news.ycombinator.com/item?id=45227754, https://news.ycombinator.com/item?id=48381110, https://news.ycombinator.com/item?id=47783809, https://news.ycombinator.com/item?id=49527025, https://news.ycombinator.com/item?id=49567034, https://news.ycombinator.com/item?id=49414676, https://news.ycombinator.com/item?id=27708580, https://news.ycombinator.com/item?id=47488485, https://news.ycombinator.com/item?id=30028305, https://news.ycombinator.com/item?id=49228115, https://news.ycombinator.com/item?id=34428952
-- Lemmy (Proton Bridge): https://feddit.it/post/1059574/1589175
-- Techlore (Proton Bridge): https://discuss.techlore.tech/t/proton-bridge-should-be-free/9294

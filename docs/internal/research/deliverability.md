@@ -64,12 +64,12 @@ Gmail requires valid forward and reverse DNS for **all** senders, and the PTR ho
 - **Price.** Usage-based and well above VPS pricing for 8 GB. Not priced here.
 - **Sovereignty.** US-owned.
 
-**Google Cloud (US): Montreal, Toronto**
-- **Port 25.** Egress to external TCP/25 is blocked by default. Google "automatically removes this block once it determines a project is at low risk". There is no formal request process; Google says to contact sales. The status shows as a console banner [S34][S35]. **Unsuitable** for a v1 that must send on day 1.
+**Hyperscaler A (US): Montreal, Toronto**
+- **Port 25.** Egress to external TCP/25 is blocked by default. The vendor "automatically removes this block once it determines a project is at low risk". There is no formal request process; the vendor says to contact sales. The status shows as a console banner. **Unsuitable** for a v1 that must send on day 1.
 
-**Microsoft Azure (US): Canada Central Toronto, Canada East Quebec City**
-- **Port 25.** Open only for Enterprise Agreement and MCA-E subscriptions. Enterprise Dev/Test can self-exempt. Port 25 is blocked for all other types, with no unblock path (doc updated 2026-07-16) [S36]. **Unsuitable** for a startup on pay-as-you-go.
-- **Sovereignty.** In 2025 Microsoft stated it "cannot guarantee" data sovereignty against US requests [S37].
+**Hyperscaler B (US): Toronto, Quebec City**
+- **Port 25.** Open only for Enterprise Agreement and MCA-E subscriptions. Enterprise Dev/Test can self-exempt. Port 25 is blocked for all other types, with no unblock path (doc updated 2026-07-16). **Unsuitable** for a startup on pay-as-you-go.
+- **Sovereignty.** In 2025 the vendor stated it "cannot guarantee" data sovereignty against US requests.
 
 **LunaNode (LunaNode Hosting Inc.)**
 - **Canadian location.** Toronto only now. The locations page lists only Toronto [S38]. A 2023 forum post mentioned Montreal and France sites that were OVH resellers [S39].
@@ -111,8 +111,8 @@ Price is for about 4 vCPU / 8 GB / 100+ GB SSD.
 | **FullHost** | Vancouver, Calgary, Toronto, Montreal | Unknown | Unknown | Unknown | from $7 [S43] | Canadian (Victoria) | Candidate, verify |
 | **AWS** | Montreal, Calgary | Blocked; per-region form; denials happen [S32][S33] | Via the same form | Yes | High | US | Poor |
 | **DigitalOcean** | Toronto | Blocked 25/465/587; no documented unblock [S22] | Yes | Yes | US$48 [S24] | US | **No** |
-| **Google Cloud** | Montreal, Toronto | Blocked; auto-lifted only if Google deems project low-risk [S35] | Yes | Yes | High | US | **No** |
-| **Azure** | Toronto, Quebec City | Blocked except EA/MCA-E [S36] | Yes | Yes | High | US [S37] | **No** |
+| **Hyperscaler A** | Montreal, Toronto | Blocked; auto-lifted only if the vendor deems project low-risk | Yes | Yes | High | US | **No** |
+| **Hyperscaler B** | Toronto, Quebec City | Blocked except enterprise agreements | Yes | Yes | High | US | **No** |
 | **Hetzner** | None [S17] | — | — | — | — | German | **No** |
 | **ThinkOn** | Yes | Unknown | Unknown | Unknown | Partner quote [S44] | Canadian | No (enterprise) |
 
@@ -156,7 +156,7 @@ Before signing, send the same three written questions (port 25, PTR v4/v6, mail-
 1. **The IP itself.** It should be absent from Spamhaus SBL, CSS and XBL, and from Barracuda, SpamCop and PSBL. A PBL hit on a server IP can be self-removed with a PTR in place. Talos should show "Neutral" or better. AbuseIPDB should show no reports in the last 90 days.
 2. **The /24.** Run the MXToolbox and valli sweeps on several neighbours (.1, .50, .100, .200). Check Spamhaus for SBL listings covering the range. A neighbourhood with many listings is a reason to ask for a different IP or buy an additional IP from a different block. OVH community reports describe entire /24s being listed [S12].
 3. **The ASN.** Check UCEPROTECT L3 status (informational) [S54].
-4. **History.** Search the IP in Google and in search engines' cached spam reports. Run `dig -x` to see any stale PTR.
+4. **History.** Search the IP in web search engines and in their cached spam reports. Run `dig -x` to see any stale PTR.
 5. **IPv6.** Check the /64 on Spamhaus and valli. Many receivers prefer IPv4 for new senders. Consider sending to Gmail and Outlook over IPv4 only until the IPv6 reputation is established (Stalwart supports per-destination source IP selection; confirm config).
 6. **Receiver handshake.** Before announcing, send test messages to Gmail, Outlook.com and Yahoo and read the SMTP responses for 4xx/5xx codes such as Outlook S3150/S3140 block-list codes [S13].
 7. **Repeat checks.** Run the same sweep weekly through warm-up and daily during any spike.
@@ -218,14 +218,16 @@ The customer publishes CNAMEs pointing into a zone the provider controls. The pr
 
 | Provider | Customer publishes |
 |---|---|
-| Fastmail | `fm1._domainkey`, `fm2._domainkey`, `fm3._domainkey` CNAME to `fmN.<customerdomain>.dkim.fmhosted.com` (all three required) [S73] |
-| Purelymail | `purelymail1/2/3._domainkey` CNAME to `key1/2/3.dkimroot.purelymail.com`. Purelymail signs "with one of three different keys, which we regularly rotate" [S74]. It also delegates `_dmarc` by CNAME to `dmarcroot.purelymail.com` [S74]. |
-| Migadu | Uses the same CNAME pattern (key1–key3 under its own zone). Migadu's DNS guide URL returned 404 on 2026-10-21, so the exact target names are **UNVERIFIED**. |
+| Provider K (established JMAP provider) | Three `<prefix>1/2/3._domainkey` CNAMEs to per-customer names under the provider's DKIM zone (all three required) |
+| Provider L (low-cost) | Three `<prefix>1/2/3._domainkey` CNAMEs to `key1/2/3` under the provider's DKIM root zone. It signs "with one of three different keys, which we regularly rotate". It also delegates `_dmarc` by CNAME to its own DMARC zone. |
+| Provider M (budget host) | Uses the same CNAME pattern (key1–key3 under its own zone). Its DNS guide URL returned 404 on 2026-10-21, so the exact target names are **UNVERIFIED**. |
+
+Providers anonymised (rule 57); the named version is kept locally in `docs/internal/private/competitors/deliverability.named-2026-10-22.md` (gitignored).
 
 **Design for AnhourMail (custom domains, post-v1)**
 - **Customer records.** `ah1._domainkey.customer.com CNAME ah1.customer-com.dkim.anhourmail.net.`, plus the same for `ah2` and `ah3`.
 - **Separate DKIM zone.** Host the provider side in a dedicated zone (e.g. `dkim.anhourmail.net`), with DNSSEC on and a short TTL (300–3600 s).
-- **Three selectors.** At any time, one selector signs, one is pre-published as the next key, and one is retiring. This is the Fastmail/Purelymail pattern [S73][S74].
+- **Three selectors.** At any time, one selector signs, one is pre-published as the next key, and one is retiring. This is the pattern established providers use (table above).
 - **Stalwart caveat.** Stalwart's automatic rotation generates **date-based selector names** (`v1-ed25519-20260101`) and requires automatic DNS management of the signing domain [S70]. That conflicts with fixed customer-facing CNAME selectors. Either:
   - (a) run Stalwart's DNS automation against the `dkim.anhourmail.net` zone and map fixed selectors in our own tooling, or
   - (b) manage rotation of the three fixed selectors with a small script calling Stalwart's API.
@@ -298,7 +300,7 @@ This is not a bulk sender. Mail volume is organic and grows with users, so the w
 
 - **Week −4 to −2: infrastructure and dogfooding.**
   - DNS, PTR, SPF, DKIM, DMARC (`p=none`), MTA-STS (`testing`) and TLS-RPT all in place.
-  - Staff (2–5 people) use AnhourMail as their **primary** mailbox and write real, replied-to mail to colleagues and contacts at Gmail, Outlook.com, Yahoo, iCloud and Proton.
+  - Staff (2–5 people) use AnhourMail as their **primary** mailbox and write real, replied-to mail to colleagues and contacts at the big free mailbox providers and a privacy-focused provider.
   - Ask recipients to mark "Not spam" and add the address to contacts if the mail lands in spam.
 - **Seed testing in the same window.**
   - mail-tester.com (aim for 10/10).
@@ -330,59 +332,61 @@ See the recommendations section for the schedule table.
 
 ## 7. Free-tier abuse: lessons from other providers
 
-**Disroot**
-- In Sept 2018 Disroot closed registrations, estimating that "about 80% of our user base are scammers, spammers and abusers". It cleaned up accounts and redesigned signup [S83].
+Providers are anonymised in this public doc (CLAUDE.md rule 57); the named version is kept locally in `docs/internal/private/competitors/deliverability.named-2026-10-22.md` (gitignored), with every source.
+
+**Provider A (community-run, free)**
+- In 2018 it closed registrations, estimating that "about 80% of our user base are scammers, spammers and abusers". It cleaned up accounts and redesigned signup.
 - Lesson: open, anonymous, free signup overwhelms a small team within a year.
 
-**Riseup**
-- Email is invite-only because "spammers and scammers" abused the previous system and caused Riseup's services to be blocked by other providers [S84][S85].
-- Each invite ties the new account to the inviter for a period. New accounts cannot create invites. Accounts linked to a ToS violator can be suspended together [S85][S86].
-- Lesson: invites plus inviter accountability work, but they severely limit growth [S87].
+**Provider B (activist collective, free)**
+- Email is invite-only because "spammers and scammers" abused the previous system and caused its services to be blocked by other providers.
+- Each invite ties the new account to the inviter for a period. New accounts cannot create invites. Accounts linked to a ToS violator can be suspended together.
+- Lesson: invites plus inviter accountability work, but they severely limit growth.
 
-**Proton**
+**Provider C (privacy-focused, free tier)**
 - Human verification uses CAPTCHA, email or SMS. The method is chosen by risk signals, and multiple account creation or Tor triggers harder methods.
-- Phone numbers and emails are stored only as hashes. The stated reason is that spam via Proton would get Proton's IPs blocked by other providers [S88].
-- Free accounts are capped at 50 emails/hour and 150/day. Each recipient counts separately [S89].
-- Automated anti-abuse disables new accounts soon after creation, and Proton acknowledges false positives [S90].
+- Phone numbers and emails are stored only as hashes. The stated reason is that spam via its service would get its IPs blocked by other providers.
+- Free accounts are capped at 50 emails/hour and 150/day. Each recipient counts separately.
+- Automated anti-abuse disables new accounts soon after creation, and the provider acknowledges false positives.
 
-**Tuta (Tutanota)**
-- New free addresses can be held about 48 hours pending approval "to prevent abuse by spammers and still offer an anonymous email registration" [S91].
-- Users report waits of up to a week [S92].
+**Provider D (privacy-focused, free tier)**
+- New free addresses can be held about 48 hours pending approval "to prevent abuse by spammers and still offer an anonymous email registration".
+- Users report waits of up to a week.
 
-**mailbox.org (no free tier)**
-- The 30-day trial can send only 10 emails/day, only to other mailbox.org users, with external sending blocked. The trial also limits inbound mail from social/payment/verification senders and caps storage at 100 MB.
-- The stated reason is that trials were misused for spam, fraudulent third-party signups and illegal file sharing. A payment lifts all limits [S93].
-- Ongoing abuse scoring uses account age and recent volume, with criteria not disclosed [S94].
+**Provider E (paid, with a trial)**
+- The 30-day trial can send only 10 emails/day, only to other users of the same provider, with external sending blocked. The trial also limits inbound mail from social/payment/verification senders and caps storage at 100 MB.
+- The stated reason is that trials were misused for spam, fraudulent third-party signups and illegal file sharing. A payment lifts all limits.
+- Ongoing abuse scoring uses account age and recent volume, with criteria not disclosed.
 - Lesson: **payment as identity** is the cleanest gate.
 
-**Zoho Mail free plan**
-- The free plan was quietly cut to webmail-only, with no IMAP, POP or SMTP. Users complained of no notice [S95].
-- Zoho gave no official reason; abuse is a likely but **UNVERIFIED** motive.
+**Provider F (business suite, free plan)**
+- The free plan was quietly cut to webmail-only, with no IMAP, POP or SMTP. Users complained of no notice.
+- No official reason was given; abuse is a likely but **UNVERIFIED** motive.
 
-**cock.li**
-- Widely classified as a disposable or high-risk domain and blocked by signup-verification services since at least 2020 [S96][S97]. Registration went offline in Nov 2024 amid what the operator described as government pressure [S98].
+**Provider G (anonymous, free)**
+- Widely classified as a disposable or high-risk domain and blocked by signup-verification services since at least 2020. Registration went offline in Nov 2024 amid what the operator described as government pressure.
 - Lesson: once a domain gets a reputation for anonymous abuse, recipients block the **domain**, not just IPs, and that is permanent.
 
-**GMX**
-- Large-scale spam from **compromised** GMX accounts has been reported, with attackers using botnets to bypass per-IP login rate limits [S99]. New GMX accounts are reportedly blocked when several are created [S100] (anecdotal).
+**Provider H (large free webmail)**
+- Large-scale spam from **compromised** accounts has been reported, with attackers using botnets to bypass per-IP login rate limits. New accounts are reportedly blocked when several are created (anecdotal).
 - Lesson: hijacked legitimate accounts are as big a threat as fake signups. Account-takeover defences (2FA, impossible-travel login alerts, outbound anomaly detection) are part of deliverability.
 
-**Purelymail and Migadu (paid-only)**
-- Neither offers a perpetual free tier. Purelymail requires prepayment, and Migadu limits use to "non-automated personal or business correspondence" and bans bulk, newsletters, transactional mail and automation [S101].
+**Providers I and J (paid-only, low cost)**
+- Neither offers a perpetual free tier. One requires prepayment; the other limits use to "non-automated personal or business correspondence" and bans bulk, newsletters, transactional mail and automation.
 - No public reports of major spam waves were found for either. Absence of evidence is not proof.
 
 ### 7.1 Controls that worked
 
 | Control | Evidence |
 |---|---|
-| Payment as identity (even $1) | mailbox.org lifts all limits on payment [S93]; Purelymail and Migadu are paid-only |
-| New-account outbound restriction (internal-only or very low caps) | mailbox.org trial: 10/day, internal only [S93] |
-| Hard per-account rate caps | Proton free: 50/hr, 150/day, each recipient counted [S89] |
-| Risk-based verification (CAPTCHA → email → SMS, hashed storage) | Proton [S88] |
-| Manual or delayed approval of new accounts | Tuta 48 h hold [S91] |
-| Invite codes with inviter accountability | Riseup [S85][S86] |
-| Behavioural scoring (account age, volume history) | mailbox.org [S94] |
-| Closing signups during an abuse wave, then purging | Disroot [S83] |
+| Payment as identity (even $1) | Provider E lifts all limits on payment; Providers I and J are paid-only |
+| New-account outbound restriction (internal-only or very low caps) | Provider E trial: 10/day, internal only |
+| Hard per-account rate caps | Provider C free: 50/hr, 150/day, each recipient counted |
+| Risk-based verification (CAPTCHA → email → SMS, hashed storage) | Provider C |
+| Manual or delayed approval of new accounts | Provider D: 48 h hold |
+| Invite codes with inviter accountability | Provider B |
+| Behavioural scoring (account age, volume history) | Provider E |
+| Closing signups during an abuse wave, then purging | Provider A |
 
 **Implication for AnhourMail.** A free tier with open, anonymous signup at launch, on a **single shared IP**, is the highest-risk configuration. Every one of the providers above that offered anonymous free signup eventually had to add gates.
 
@@ -392,7 +396,7 @@ See the recommendations section for the schedule table.
 
 ### 8.1 Separate outbound IPs for free and paid
 
-- **Why.** IP reputation is shared. Abuse from free accounts would poison delivery for paying users. Proton's verification rationale shows this risk directly [S88].
+- **Why.** IP reputation is shared. Abuse from free accounts would poison delivery for paying users. Provider C's verification rationale (§7) shows this risk directly.
 - **When.**
   - **Before** any free tier is opened to the public, or
   - when free-account volume exceeds about 10–20% of outbound, or
@@ -524,11 +528,11 @@ Notes:
 
 ### Things that contradict or put the plan at risk
 
-1. **A free tier at launch is high-risk on a single IP.** Every comparable provider that offered anonymous free signup later added gates: Disroot (80% abusers, signup closure) [S83], Riseup invites [S84], Proton verification and caps [S88][S89], Tuta approval holds [S91], mailbox.org paid-only external sending [S93]. Recommendation:
-   - Launch **paid-only**, or with a **free tier that cannot send externally until verified** (mailbox.org model), on a **separate outbound IP**.
+1. **A free tier at launch is high-risk on a single IP.** Every comparable provider that offered anonymous free signup later added gates (§7): signup closure after an 80%-abuser estimate, invites, verification and caps, approval holds, paid-only external sending. Recommendation:
+   - Launch **paid-only**, or with a **free tier that cannot send externally until verified** (the Provider E model, §7), on a **separate outbound IP**.
    - Gate signups with invite or waitlist plus risk-based phone verification.
    - Count each recipient against hard per-account caps.
-2. **Port 25 is blocked by default at most big clouds in Canada.** DigitalOcean, Azure (non-EA) and GCP are effectively unusable. AWS and Vultr are discretionary. Linode is a predictable ticket. OVH is reportedly open by default but auto-blocks on detected spam. A reasonable Canadian option exists (OVH Beauharnois), so the plan holds. One conflicting third-party claim [S9] means port 25 must be tested before committing.
+2. **Port 25 is blocked by default at most big clouds in Canada.** DigitalOcean and the two big US hyperscalers (outside enterprise agreements) are effectively unusable. AWS and Vultr are discretionary. Linode is a predictable ticket. OVH is reportedly open by default but auto-blocks on detected spam. A reasonable Canadian option exists (OVH Beauharnois), so the plan holds. One conflicting third-party claim [S9] means port 25 must be tested before committing.
 3. **"Canadian data centre" does not equal "no foreign access".** OVH (French parent with a US subsidiary) has been ordered by a Canadian court to produce EU-stored data [S16], and it acknowledges CLOUD Act reach [S15]. All other large candidates are US-owned. Marketing should claim "hosted in Canada", not "immune to foreign legal process". Only ThinkOn-class providers claim no foreign exposure [S44], and they do not fit v1.
 4. **Shared IP on one VPS.** App traffic and mail share the box. A compromise of the web app is also a compromise of the mail server's reputation. Keep the mail IP dedicated to mail. If the app serves public web traffic, consider putting it on a separate Additional IP.
 
@@ -540,7 +544,7 @@ Notes:
 - Linode Toronto price; Vultr 4/8 price [S21][S29].
 - Microsoft hard-reject date for 5.7.515 [S60][S61]; exact SNDS/JMRP change dates (practitioner sources only) [S62][S63].
 - Microsoft outbound DANE enforcement status [S78]; Gmail DANE support (no source found).
-- Migadu's exact DKIM CNAME targets (guide URL returned 404).
+- Provider M's exact DKIM CNAME targets (guide URL returned 404).
 - Whether Stalwart supports fixed-selector rotation behind customer CNAMEs [S70].
 - Data-residency claims of Cyberimpact and Maileroo [S102][S103].
 
@@ -581,10 +585,7 @@ Notes:
 - [S31] AWS News Blog, Canada West (Calgary) Region: https://aws.amazon.com/blogs/aws/the-aws-canada-west-calgary-region-is-now-available
 - [S32] AWS re:Post, Remove port 25 throttle on EC2: https://repost.aws/knowledge-center/ec2-port-25-throttle ; Lightsail rDNS doc: https://docs.aws.amazon.com/lightsail/latest/userguide/amazon-lightsail-configuring-reverse-dns.html
 - [S33] AWS re:Post, SMTP via NAT Gateway still blocked: https://www.repost.aws/questions/QUIQDkVrDaQZuuwpgPsaRF8Q/smtp-egress-ports-25-465-587-through-nat-gateway-silently-dropped-even-after-ec2-email-sending-limits-were-removed
-- [S34] Google Cloud, Sending email from an instance (updated 2026-10-13): https://docs.cloud.google.com/compute/docs/tutorials/sending-mail
-- [S35] Google Cloud, VPC firewall rules, "SMTP (port 25) traffic": https://docs.cloud.google.com/vpc/docs/firewalls
-- [S36] Microsoft Learn, Troubleshoot outbound SMTP connectivity in Azure (updated 2026-07-16): https://learn.microsoft.com/en-us/azure/virtual-network/troubleshoot-outbound-smtp-connectivity
-- [S37] The Register, Microsoft admits it cannot guarantee data sovereignty (Jul 2025): https://www.theregister.com/2025/07/25/microsoft_admits_it_cannot_guarantee/
+- Hyperscaler, provider DKIM and §7 provider sources: in the local named copy in `docs/internal/private/competitors/` (gitignored).
 - [S38] LunaNode Locations: https://www.lunanode.com/features/locations
 - [S39] Mail-in-a-Box forum, "SMTP restricted by Digital Ocean" (LunaNode remarks): https://discourse.mailinabox.email/t/smtp-restricted-by-digital-ocean/9822
 - [S40] LunaNode Wiki FAQ: https://wiki.lunanode.com/index.php/Frequently_asked_questions
@@ -620,8 +621,6 @@ Notes:
 - [S70] Stalwart docs, DKIM key rotation: https://stalw.art/docs/domains/dkim-rotation/
 - [S71] Stalwart support forum, Ed25519 fails at Gmail (Jun 2026): https://support.stalw.art/t/ed25519-dkim-signatures-fail-verification-at-gmail-while-rsa-signatures-on-the-same-message-pass/562
 - [S72] Palisade, What is a DKIM CNAME record: https://www.palisade.email/learning/dkim-cname.md
-- [S73] Fastmail Help, Manual DNS configuration: https://www.fastmail.help/hc/en-us/articles/360060591153
-- [S74] Purelymail, Domain DNS docs: https://mailserver.purelymail.com/docs/domainDocs ; https://support.purelymail.com/support/solutions/articles/159000360245-how-to-set-up-your-email-dns-records
 - [S75] RFC 8461, SMTP MTA Strict Transport Security: https://www.rfc-editor.org/rfc/rfc8461
 - [S76] RFC 8460, SMTP TLS Reporting: https://www.rfc-editor.org/rfc/rfc8460
 - [S77] RFC 7672, SMTP Security via Opportunistic DANE TLS: https://www.rfc-editor.org/rfc/rfc7672
@@ -630,25 +629,6 @@ Notes:
 - [S80] RFC 8617, Authenticated Received Chain: https://www.rfc-editor.org/rfc/rfc8617
 - [S81] Google, Best practices for forwarding email to Gmail: https://support.google.com/mail/answer/175365
 - [S82] Google, Top 10 Gmail sender issues: https://support.google.com/mail/answer/15256272
-- [S83] Disroot blog, Temporary closed registration (7 Sep 2018): https://disroot.org/blog/temporary-closed-registration
-- [S84] Riseup Help, Mail accounts: https://help.riseup.net/en/mail-accounts
-- [S85] Riseup Support, How do I get an account: https://support.riseup.net/en/knowledgebase/1-accounts/docs/13-how-do-i-get-an-account
-- [S86] Ravi Dwivedi, Suspension of my Riseup account: https://ravidwivedi.in/posts/suspension-of-my-riseup-account/
-- [S87] Techlore forum, difficulty getting a Riseup invite: https://discuss.techlore.tech/t/it-is-incredibly-difficult-to-get-a-riseup-net-invite-ive-had-no-chance-for-10-years-do-you-have-any-ideas/10388
-- [S88] Proton Support, Human verification: https://proton.me/support/human-verification
-- [S89] Proton Support, Email sending limits: https://proton.me/support/email-sending-limits
-- [S90] Proton Support, Account disabled for abuse or fraud: https://proton.me/support/account-disabled
-- [S91] Tuta blog, Registering with a Tutanota address fails (approval hold): https://tuta.com/blog/website-blocks-secure-email-tutanota
-- [S92] Techlore forum, Confused about Tuta's approval process: https://discuss.techlore.tech/t/confused-about-tutas-approval-process/6780
-- [S93] mailbox.org KB, Free trial account: https://kb.mailbox.org/en/private/account-article/mailbox-org-free-trial-account
-- [S94] mailbox.org KB, Sending limits: https://kb.mailbox.org/en/private/e-mail-article/is-there-a-limit-on-the-amount-of-e-mails-that-i-can-send-from-my-account
-- [S95] Zoho Community, No more IMAP/POP/SMTP on free plans: https://help.zoho.com/portal/pt/community/topic/no-more-imap-pop-smtp-on-free-plans-even-on-referrals-with-no-notice?page=15
-- [S96] verifymail.io, cock.li: https://verifymail.io/domain/cock.li
-- [S97] check-mail.org, cock.li: https://check-mail.org/domain/cock.li/
-- [S98] Privacy Guides forum, cock.li outage (Nov 2024): https://discuss.privacyguides.net/t/cock-li-being-taken-down-by-the-government/22401
-- [S99] WinFuture, Hijacked GMX accounts used for spam: https://winfuture.de/news,70793.html
-- [S100] ComputerBase forum, New GMX account immediately blocked: https://www.computerbase.de/forum/threads/neuer-gmx-account-sofort-gesperrt.2222358/
-- [S101] Migadu, Intended purpose: https://migadu.com/use/
 - [S102] Cyberimpact SMTP: https://www.cyberimpact.com/en/smtp/
 - [S103] Maileroo, Enterprise SMTP hosting in Canada: https://maileroo.com/enterprise-smtp-hosting/canada
 - [S104] Wikipedia, SMTP, Inc.: https://en.wikipedia.org/wiki/SMTP,_Inc.

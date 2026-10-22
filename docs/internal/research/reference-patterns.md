@@ -14,7 +14,7 @@ Sources (read only; nothing in either repo was changed):
 - **iotkinect-portal** is the engineering template: Next.js 16.3.8 App Router, React 19.2.7, TypeScript 5.9.3 strict, Tailwind 4.3.1 + shadcn (CLI 4.21.2, `radix-nova` style), better-auth 1.6.22, drizzle-orm 0.45.2 / drizzle-kit 0.31.10 on Postgres 17, ioredis 6.0.0 on Redis 7, zod 4.4.3, Biome 2.5.1, husky 9.1.7 + lint-staged 16.4.0, Node 22 Alpine images.
 - Its best reusable parts are small and self-contained: the `route()` API wrapper (rate limit, CSRF origin check, error mapping, request id, access log), the redacting JSON logger, the Redis fixed-window rate limiter with named tiers, AES-256-GCM secret storage, cheap liveness and readiness endpoints, a single scheduler container, the `loading.tsx` skeleton rule enforced by a pre-commit script, the migration log with rollback levels, and the handoff session log.
 - Some things need changing before AnhourMail uses them. The secrets scheme has no key id, so a key cannot be rotated. The rate limiter reads `X-Forwarded-For` without checking that the request came through the proxy. The CSP is too thin for a webmail that renders untrusted HTML. NGINX only covers HTTP; Stalwart has to own the mail ports and their TLS.
-- **BookYourPTO-Frontend** is the visual template for marketing: Nuxt 4.2.2, Vue 3.5.25, @nuxt/content 3.9.0, @nuxt/ui 4.2.1, Tailwind 4.1.18, statically generated to Netlify. It follows a Shotbase-style look: General Sans display at weight 500, a single blue accent, big soft cards, dark "night" bands and scroll reveals. It pulls in third-party fonts, analytics (PostHog, GA), Zoho forms and image CDNs. A privacy-focused mail product must drop all of these.
+- **BookYourPTO-Frontend** is the visual template for marketing: Nuxt 4.2.2, Vue 3.5.25, @nuxt/content 3.9.0, @nuxt/ui 4.2.1, Tailwind 4.1.18, statically generated to Netlify. It follows a Shotbase-style look: General Sans display at weight 500, a single blue accent, big soft cards, dark "night" bands and scroll reveals. It pulls in third-party fonts, analytics (PostHog, a third-party web-analytics service), a third-party form vendor and image CDNs. A privacy-focused mail product must drop all of these.
 - **Recommendation:** option (c). Build the marketing site as a Next.js app (`apps/site`) in the same monorepo, statically exported, re-creating the BookYourPTO style as tokens in a shared package. The waitlist goes through a public endpoint in the console app that uses the shared zod schema.
 
 ---
@@ -647,7 +647,7 @@ Rules:
 - **Toasts** (sonner) confirm completed actions. Errors that need a decision stay inline.
 - **Scrollbars** are transparent until scrolling. A `ScrollbarActivity` component sets `data-scrolling`, which shows the thumb at 28% foreground tint.
 - **Responsive checks** at 1440 / 1024 / 390, with no horizontal scroll at 390, tap targets ≥ 40 px and a 16 px gutter.
-- **Transactional email:** one plain 570 px layout using tables and inline styles, an Outlook VML button, system fonts, a hidden preheader, a `prefers-color-scheme` dark block and a plain-text part. Hex is allowed only here. **ADOPT** for AnhourMail's own system mail.
+- **Transactional email:** one plain 570 px layout using tables and inline styles, a VML fallback button for desktop clients that ignore CSS buttons, system fonts, a hidden preheader, a `prefers-color-scheme` dark block and a plain-text part. Hex is allowed only here. **ADOPT** for AnhourMail's own system mail.
 
 ---
 
@@ -961,11 +961,11 @@ Section titles are a short h2, followed by one sentence of lead at max 44–52ch
 All of these are **SKIP** for AnhourMail:
 
 - PostHog (opt-out by default, opted in from the cookie-consent `analytics` flag, manual `$pageview` on route change, suppressed inside the native app's web view)
-- a Google Analytics id in the consent composable
+- a third-party analytics id in the consent composable
 - a cookie banner with essential, analytics, functional and marketing categories
-- third-party font CDNs (Fontshare, Google Fonts)
+- third-party font CDNs
 - Cloudinary and Unsplash images
-- a Google Maps key
+- a third-party maps API key
 - a third-party form vendor
 
 AnhourMail's site should make **zero third-party requests**:
