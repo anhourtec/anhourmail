@@ -263,6 +263,17 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
     (e.g. dev-only, input we control). Never dismiss an alert without that note. A leaked-secret alert is an incident:
     rotate first, then record it.
 
+57. **No competitor names in the repo.** Never name other mail, productivity or admin-console products or their
+    companies in committed files — Markdown/MDX docs (internal and public), code comments, identifiers, test names,
+    commit messages or PR text — including as a design reference ("like X", "X parity", "X-compatible shortcuts").
+    Describe the behaviour itself instead ("conventional webmail shortcuts", "familiar admin-centre layout").
+    - Design references (screenshots, notes, walkthroughs of other products) live only in the gitignored
+      `docs/internal/private/` folder, and are captured read-only: navigate and screenshot, never change settings,
+      submit forms or create data in someone else's product.
+    - The only exception is user-facing setup and compatibility text where a person must recognise a third-party
+      product to act — e.g. a mail-app setup guide, importing mail from another provider, or a mailbox provider's
+      published sender requirements. Name the product plainly there, never as a comparison or endorsement.
+
 ## Project conventions
 
 - **Services hold the logic; route handlers only parse, call and map errors.** Services take the actor and check
@@ -286,4 +297,5 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 | 2026-10-21 | Nishchayjeet Singh (Nish) | Rule 23: passwords stored only as salted argon2id hashes (console + mailbox)                                                       |
 | 2026-10-21 | Nishchayjeet Singh (Nish) | Rule 55: checkpoint after every slice (handoff + reviews + commit) so a usage-limit stop loses nothing                             |
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Rule 56: check GitHub Dependabot, code scanning and secret scanning alerts every session; fix or record                            |
+| 2026-10-22 | Nishchayjeet Singh (Nish) | Rule 57: no competitor names in committed files; design references only in docs/internal/private                                   |
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Waitlist removed from the product (maintainer decision); sign-up is open (firewalled) or closed                                    |
