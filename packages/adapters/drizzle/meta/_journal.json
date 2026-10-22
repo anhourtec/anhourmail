@@ -64,6 +64,20 @@
       "when": 1792645669279,
       "tag": "0008_invite_send_log",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792658342880,
+      "tag": "0009_sign_in_security",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792662354859,
+      "tag": "0010_session_sign_in_method",
+      "breakpoints": true
     }
   ]
 }

@@ -33,6 +33,8 @@ export const authUser = pgTable("auth_user", {
   email: text("email").notNull().unique(),
   emailVerified: boolean("email_verified").notNull().default(false),
   image: text("image"),
+  /** better-auth two-factor plugin: set once an authenticator app is verified. */
+  twoFactorEnabled: boolean("two_factor_enabled").notNull().default(false),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -45,6 +47,8 @@ export const authSession = pgTable(
     token: text("token").notNull().unique(),
     ipAddress: text("ip_address"),
     userAgent: text("user_agent"),
+    /** How this session was signed in (shared/security.ts SIGN_IN_METHODS); account requirements depend on it. */
+    signInMethod: text("sign_in_method"),
     userId: text("user_id")
       .notNull()
       .references(() => authUser.id, { onDelete: "cascade" }),
@@ -85,6 +89,49 @@ export const authVerification = pgTable("auth_verification", {
   updatedAt: updatedAt(),
 });
 
+/**
+ * better-auth two-factor plugin (one row per person). `secret` is the plugin's encrypted TOTP secret, sealed again
+ * with the key ring (AAD = user id; `packages/adapters/src/auth/sealed-adapter.ts`). `backup_codes` is a JSON array of
+ * SHA-256 hashes of the unused recovery codes, never the codes (`auth/recovery-codes.ts`).
+ */
+export const authTwoFactor = pgTable(
+  "auth_two_factor",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    secret: text("secret").notNull(),
+    backupCodes: text("backup_codes").notNull(),
+    verified: boolean("verified").notNull().default(true),
+    failedVerificationCount: integer("failed_verification_count").notNull().default(0),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("auth_two_factor_user_idx").on(t.userId)],
+);
+
+/** better-auth passkey plugin: WebAuthn credentials (public keys only; the private key never leaves the device). */
+export const authPasskey = pgTable(
+  "auth_passkey",
+  {
+    id: text("id").primaryKey(),
+    name: text("name"),
+    publicKey: text("public_key").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    credentialID: text("credential_id").notNull(),
+    counter: bigint("counter", { mode: "number" }).notNull(),
+    deviceType: text("device_type").notNull(),
+    backedUp: boolean("backed_up").notNull(),
+    transports: text("transports"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    aaguid: text("aaguid"),
+  },
+  (t) => [index("auth_passkey_user_idx").on(t.userId), uniqueIndex("auth_passkey_credential_idx").on(t.credentialID)],
+);
+
 // --- roles, accounts, people ------------------------------------------------------------------------------
 
 /** Staff roles (packages/shared/src/rbac PLATFORM_ROLES). */
@@ -118,6 +165,8 @@ export const customerAccount = pgTable("customer_account", {
   name: text("name").notNull(),
   plan: text("plan").notNull().default("free"),
   status: text("status").notNull().default("active"),
+  /** What everyone in the account must use to sign in: none | two_factor | passkey (shared/security.ts). */
+  signInPolicy: text("sign_in_policy").notNull().default("none"),
   createdAt: createdAt(),
 });
 
