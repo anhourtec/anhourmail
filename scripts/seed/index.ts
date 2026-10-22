@@ -9,6 +9,13 @@
  *
  * Plans are not seeded: they live in packages/shared/src/plans.ts (single source of truth, rule 32).
  * Passwords are generated here, never hard-coded, and only ever written to credentials.md.
+ *
+ * Development and CI only (`./guard.ts`): it refuses NODE_ENV=production (unless `--force-dev-seed`, for a local
+ * production-mode build), an APP_URL that isn't a local http:// address, and a PLATFORM_DOMAIN that isn't `.test` —
+ * the last two even with `--force-dev-seed`. It applies the dev mail-server plan, creates demo logins and writes
+ * passwords to a file.
+ * A real server gets its first Global Administrator from the worker job `job:bootstrap-admin` instead
+ * (deploy/README.md "First platform administrator").
  */
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -22,11 +29,19 @@ import { type Deps, systemClock } from "@anhourmail/core";
 import type { AuditAction, AuditEntryInput } from "@anhourmail/core/audit";
 import { enqueueProvisioning } from "@anhourmail/core/provisioning";
 import { JmapClient } from "@anhourmail/jmap-client";
-import { APP_PASSWORD_PROTOCOLS, customerDomainRecords, MAILBOX_DELETE_GRACE_DAYS, PLANS } from "@anhourmail/shared";
+import {
+  APP_PASSWORD_PROTOCOLS,
+  customerDomainRecords,
+  MAILBOX_DELETE_GRACE_DAYS,
+  parsePlatformDomain,
+  platformFacts,
+  PLANS,
+} from "@anhourmail/shared";
 import { type StalwartManagement, stalwart } from "@anhourmail/stalwart-client";
 
 import { applyDevMailPlan, DEV_DOMAIN, DEV_MAILBOXES, devWebmailOrigins } from "../../infra/stalwart/dev-plan";
 import { type CredentialRow, writeCredentials } from "./credentials";
+import { seedRefusal } from "./guard";
 import { importSampleContacts } from "./sample-contacts";
 import { importSampleMail, sampleIds } from "./sample-mail";
 import {
@@ -42,6 +57,15 @@ import {
 
 const ROOT = path.join(import.meta.dirname, "../..");
 const demo = process.argv.includes("--demo");
+
+const refusal = seedRefusal(process.env, process.argv);
+if (refusal) {
+  process.stderr.write(
+    `db:seed refused: ${refusal}\nThe seed is for development and CI only (dev mail plan, demo logins, passwords in ` +
+      "credentials.md).\nCreate the first administrator on a server with the worker's job:bootstrap-admin.\n",
+  );
+  process.exit(1);
+}
 const need = (k: string) => {
   const v = process.env[k];
   if (!v) throw new Error(`${k} is not set (copy .env.example to .env)`);
@@ -238,7 +262,11 @@ function sample(
 // ---- main ---------------------------------------------------------------------------------------------------
 
 const { db, pool } = createDb(DATABASE_URL);
-const deps: Deps = { uow: new PgUnitOfWork(db), clock: systemClock };
+const deps: Deps = {
+  uow: new PgUnitOfWork(db),
+  clock: systemClock,
+  platform: platformFacts(parsePlatformDomain(process.env.PLATFORM_DOMAIN)),
+};
 const mgmt = stalwart();
 
 log("migrations…");
@@ -553,7 +581,7 @@ if (demo) {
     await enqueueProvisioning(deps, { kind: "domain.ensure", subjectId: groupDomain.id });
   }
 
-  const records = customerDomainRecords(UNVERIFIED_DOMAIN.name, unverifiedToken);
+  const records = customerDomainRecords(UNVERIFIED_DOMAIN.name, unverifiedToken, deps.platform);
   special.push(
     {
       label: "Catch-all",
