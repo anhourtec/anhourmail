@@ -23,7 +23,8 @@
 #   - Runs `.cicd/setup.sh` (npm ci) once, then each job's own `.cicd/<job>.sh`, exactly as ci.yml does. Between jobs
 #     the clone is reset (`git clean`, node_modules kept) and the ci stack is removed, as each CI job starts fresh.
 #   - Always tears down, also on failure or Ctrl-C: kills the job's process group and anything left listening on the
-#     ci app ports, `docker compose down -v` for anhourmail-ci, removes the clone (credentials.md and .env included).
+#     ci app ports, `docker compose down -v` for anhourmail-ci, removes the build job's :ci images and the clone
+#     (credentials.md and .env included).
 #     Job logs stay in the run directory and are printed by path; they hold no secrets beyond the committed dev
 #     placeholders (the demo passwords only ever live in the clone's credentials.md).
 set -euo pipefail
@@ -122,6 +123,8 @@ stack_down() {
   else
     docker compose -p "$PROJECT" down -v --remove-orphans >>"${logs}/teardown.log" 2>&1 || true
   fi
+  # The build job's images are only for this run; leave nothing behind but the dev project.
+  docker image rm anhourmail/web:ci anhourmail/site:ci anhourmail/worker:ci >>"${logs}/teardown.log" 2>&1 || true
 }
 
 cleaned=0
