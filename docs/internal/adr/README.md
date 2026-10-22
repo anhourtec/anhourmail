@@ -17,7 +17,7 @@ One decision per file, numbered, never rewritten. A later ADR supersedes an earl
 | [0011](0011-dev-mail-isolation.md)                           | Dev mail isolation: internal network + relay to Mailpit                       | Accepted |
 | [0012](0012-licence-exception-general-sans.md)               | Licence exception: General Sans font (ITF Free Font License)                  | Accepted |
 | [0013](0013-collaboration-features-on-stalwart-community.md) | Collaboration features (M365 parity) on Stalwart Community                    | Accepted |
-| [0014](0014-folders-and-signatures.md)                       | Folders and signatures (Outlook parity) on JMAP                               | Accepted |
+| [0014](0014-folders-and-signatures.md)                       | Folders and signatures (a familiar full-depth set) on JMAP                    | Accepted |
 | [0015](0015-bulk-sending-add-on.md)                          | Newsletters and bulk sending as a separate paid add-on                        | Accepted |
 | [0016](0016-encryption-at-rest-and-security-baseline.md)     | Encryption at rest (opt-in zero-access) and security baseline                 | Accepted |
 | [0017](0017-dkim-rotation-and-management-api-key.md)         | DKIM fixed selectors rotated by the worker; scoped management API key         | Accepted |

@@ -1,11 +1,11 @@
-# ADR-0014: Folders and signatures (Outlook / Microsoft 365 parity) on JMAP
+# ADR-0014: Folders and signatures (a familiar full-depth set) on JMAP
 
 - **Status:** Accepted, 2026-10-21
 - **Related:** `05-webmail.md` "Folders" and "Signatures", `10-collaboration.md`, `04-data-model.md`, ADR-0003, ADR-0013
 
 ## Context
 
-Users expect Outlook-level folders (nested folders, favourites, archive, rules, search folders, retention) and
+Users expect full-depth folders (nested folders, favourites, archive, rules, search folders, retention) and
 signatures (several per person, defaults for new mail vs replies, admin-managed templates, an organisation
 disclaimer). Stalwart Community v0.16.27 exposes mail folders as JMAP `Mailbox` objects (RFC 8621 §2) and
 signatures as `Identity.textSignature` / `htmlSignature` (RFC 8621 §6). We probed the running dev server
@@ -42,7 +42,7 @@ retention from the pinned server's configuration schema (`x:DataRetention`, `x:E
    live in the control plane (`folder_preference`), keyed by the JMAP mailbox id; they are cosmetic, never ACLs.
 5. **Search folders** are saved JMAP `Email/query` filters (`saved_search`), evaluated by the client; no server
    copies.
-6. **Archive by year** (Outlook "Archive" policy) is a webmail action + optional account policy
+6. **Archive by year** (a common archive-policy pattern) is a webmail action + optional account policy
    (`folder_policy`): move to `Archive/<year>`, created on demand.
 7. **Trash/Junk clean-up**: the server-wide `expungeTrashAfter` stays at 30 days (published as a fact in
    `packages/shared` when the clean-up page ships). Per-account shorter clean-up is done by a worker job that
@@ -67,7 +67,7 @@ retention from the pinned server's configuration schema (`x:DataRetention`, `x:E
    prototype (`x:MtaStageData.script`) is tracked for later and must run before signing.
 5. **Shared mailboxes / send as**: each shared mailbox identity has its own signature set (managed by members
    with access); send-on-behalf uses the sender's signature.
-6. IMAP/SMTP clients (Thunderbird, Apple Mail, Outlook) keep their own signatures — server signatures apply to
+6. IMAP/SMTP clients (desktop and phone mail apps) keep their own signatures — server signatures apply to
    the webmail and JMAP clients only.
 
 ## Consequences

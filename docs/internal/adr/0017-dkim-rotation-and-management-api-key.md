@@ -33,7 +33,7 @@ sysDkimSignature*}}` manages domains, accounts and DKIM keys; without `authentic
    Message-ID, plus Reply-To, Cc, MIME-Version, Content-Type once tested), and rotates every 90 days:
    `pending` (publish TXT behind the CNAME, wait ≥ 2 × TTL, verify resolution) → swap `active`/`retiring` →
    `retired` after 7 days → destroy after 30 days. Private keys are sent to Stalwart once and never stored by us.
-   Ed25519 is an optional second signature, never the only one (Gmail ignores it).
+   Ed25519 is an optional second signature, never the only one (the largest mailbox provider ignores it).
 2. Outside dev, the control plane and worker authenticate to Stalwart with an **API key** owned by a dedicated
    Admin-role service account, `Replace` permissions limited to `authenticate` plus the `sys*` permissions they use,
    `allowedIps` set to the control-plane hosts, stored encrypted (rule 16) and rotated quarterly. The key is

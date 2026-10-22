@@ -5,10 +5,10 @@
 
 ## Context
 
-The maintainer wants AnhourMail to be more secure than Purelymail and honest about encryption. Mainstream providers
-(Gmail, Microsoft 365) encrypt at rest with provider-held keys; customer-held keys exist only on enterprise tiers.
-Purelymail encrypts mail with a password-derived key but documents no MTA-STS/DANE, no open source and S/MIME only
-as "planned". On the pinned Stalwart v0.16.27, per-user OpenPGP/S/MIME encryption at rest, MTA-STS, TLS-RPT, DANE,
+The maintainer wants AnhourMail to be more secure than the low-cost providers it is priced against, and honest about
+encryption. Mainstream providers encrypt at rest with provider-held keys; customer-held keys exist only on enterprise
+tiers. One low-cost provider encrypts mail with a password-derived key but documents no MTA-STS/DANE, no open source
+and S/MIME only as "planned". On the pinned Stalwart v0.16.27, per-user OpenPGP/S/MIME encryption at rest, MTA-STS, TLS-RPT, DANE,
 REQUIRETLS and TLS 1.2/1.3-only listeners are all **Community** features (schema flags + a live end-to-end test:
 message body stored as `application/pkcs7-mime`, absent from the raw blob, decryptable only with the user's key).
 Stalwart has no WebAuthn/passkeys.
@@ -37,8 +37,8 @@ Stalwart has no WebAuthn/passkeys.
 
 ## Alternatives considered
 
-- **Password-derived server-side keys (Purelymail model):** protects data at rest from staff while the user is
+- **Password-derived server-side keys (a low-cost-provider model):** protects data at rest from staff while the user is
   offline, but the server holds the password at every login. Not available in Stalwart without forking (ADR-0001).
-- **Zero-access by default (Proton model):** breaks IMAP/POP for most clients and server-side search; rejected as a
+- **Zero-access by default (the privacy-provider model):** breaks IMAP/POP for most clients and server-side search; rejected as a
   default, offered as opt-in.
 - **Key escrow for recovery:** defeats the purpose; rejected.

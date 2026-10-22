@@ -1,4 +1,4 @@
-# ADR-0013: Collaboration features (M365 parity) on Stalwart Community
+# ADR-0013: Collaboration features (familiar business-mail set) on Stalwart Community
 
 - Status: Accepted 2026-10-21
 - Deciders: Nishchayjeet Singh (Nish)
@@ -6,7 +6,7 @@
 
 ## Context
 
-The product should offer the mail collaboration features users know from Microsoft 365 / Exchange Online:
+The product should offer the mail collaboration features users know from mainstream business mail suites:
 shared mailboxes, distribution lists (incl. dynamic), groups, delegated access (full access, send as, send on
 behalf, folder sharing), resource mailboxes, mail flow rules, forwarding, auto-replies, message trace. We run
 Stalwart v0.16.27 Community, unmodified, driven only through its JMAP management API.
