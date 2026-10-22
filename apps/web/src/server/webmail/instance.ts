@@ -2,15 +2,18 @@
 import "server-only";
 
 import { db, pgMailboxStatusLookup } from "@anhourmail/adapters/postgres";
-import { MailboxAccessGate } from "@anhourmail/core/webmail";
+import { MailboxAccessGate, WebmailSettingsService } from "@anhourmail/core/webmail";
 import { keyRingFromEnv } from "@anhourmail/server/keyring";
 import { type FailureStore, redisFailureStore, redisSlidingQuota } from "@anhourmail/server/rate-limit";
 import { redis } from "@anhourmail/server/redis";
 
+import { managedSieve } from "../adapters/stalwart";
 import { stalwartOAuthPort } from "../adapters/stalwart-oauth";
+import { container } from "../container";
 import { env } from "../env";
 import { type SessionKv, WebmailSessionStore } from "./session-store";
 import { WebmailService } from "./service";
+import { WebmailSettings } from "./settings";
 import { WEBMAIL_COOKIE_NAMES } from "../host-routing";
 
 /**
@@ -97,7 +100,35 @@ export function webmail(): WebmailService {
       stalwartUrl,
       access: new MailboxAccessGate(pgMailboxStatusLookup(db())),
       quota: redisSlidingQuota(redis()),
+      // The undo-send hold each mailbox chose in its settings.
+      holdSeconds: async (address) => (await settingsService().preferences(address)).undoSeconds,
+      // The managed Sieve script is written with management credentials (internal network only, rule 21), never
+      // the user's token: customer mailboxes can't manage their own Sieve (CUSTOMER_PERMISSIONS).
+      sieve: managedSieve(),
+      confirmedForward: async (address) => {
+        const f = await settingsService().forwarding(address);
+        return f?.status === "confirmed" ? f.address : null;
+      },
     });
   }
   return instance;
+}
+
+let settingsCore: WebmailSettingsService | null = null;
+/** Control-plane webmail settings (preferences, forwarding confirmation, audit). */
+export function settingsService(): WebmailSettingsService {
+  settingsCore ??= new WebmailSettingsService(container().deps);
+  return settingsCore;
+}
+
+let settingsInstance: WebmailSettings | null = null;
+/** Webmail settings: control plane + mail server, for the session's own mailbox. */
+export function webmailSettings(): WebmailSettings {
+  settingsInstance ??= new WebmailSettings({
+    mail: webmail(),
+    settings: settingsService(),
+    mailer: container().mailer,
+    webmailUrl: env().WEBMAIL_URL,
+  });
+  return settingsInstance;
 }

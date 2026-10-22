@@ -230,6 +230,8 @@ function fakeStalwart() {
         .filter(Boolean),
     }),
     "ContactCard/set": (a) => {
+      // Which account the cards were written to (auto-save must use the account that sent).
+      if (a.create) state.calls.push(`cards@${String(a.accountId)}`);
       const created: Record<string, { id: string }> = {};
       for (const [k, v] of Object.entries((a.create ?? {}) as Record<string, Record<string, unknown>>)) {
         const id = `ct${String(++state.seq)}`;
@@ -342,7 +344,11 @@ function fakeStalwart() {
   return { state, fetchImpl };
 }
 
-function setup(allowed: (a: string) => boolean = () => true, quota: SlidingQuotaStore = memorySlidingQuota()) {
+function setup(
+  allowed: (a: string) => boolean = () => true,
+  quota: SlidingQuotaStore = memorySlidingQuota(),
+  holdSeconds?: (address: string) => Promise<number>,
+) {
   const fake = fakeStalwart();
   const deferred: { fn: () => void; ms: number }[] = [];
   /** Lets held submissions go out (or not), then runs what the service deferred and waits for it. */
@@ -366,10 +372,13 @@ function setup(allowed: (a: string) => boolean = () => true, quota: SlidingQuota
     stalwartUrl: "http://stalwart",
     access: { allowed: async (a) => allowed(a) },
     quota,
+    sieve: { read: async () => null, write: async () => undefined },
+    confirmedForward: async () => null,
     fetch: fake.fetchImpl,
     defer: (fn, ms) => {
       deferred.push({ fn, ms });
     },
+    ...(holdSeconds ? { holdSeconds } : {}),
   });
   return { svc, deferred, afterHold, ...fake };
 }
@@ -378,6 +387,26 @@ const draft = (over: Record<string, unknown> = {}) =>
   DraftInput.parse({ identityId: "i1", to: [{ email: "s@x.test" }], subject: "Hi", text: "Hello", ...over });
 
 describe("compose and send through the BFF", () => {
+  it("refuses drafts, sending, undo and uploads for a mailbox the tab doesn't show any more", async () => {
+    const t = setup();
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const a = "acc-a@x.test";
+    // The tab showing a@ works normally with its own account.
+    const d = await t.svc.saveDraft(sessionId, draft(), a);
+    const sent = await t.svc.send(sessionId, d.id, "i1", a);
+    // Another tab switches the session to b@: the first tab's requests are refused, never applied to b@.
+    await t.svc.addMailbox(sessionId, "b@x.test", "right");
+    const changed = /active mailbox changed/;
+    await expect(t.svc.saveDraft(sessionId, draft(), a)).rejects.toThrow(changed);
+    await expect(t.svc.send(sessionId, d.id, "i1", a)).rejects.toThrow(changed);
+    await expect(t.svc.undoSend(sessionId, sent.submissionId, a)).rejects.toThrow(changed);
+    await expect(t.svc.upload(sessionId, new Uint8Array([1, 2, 3]), "text/plain", a)).rejects.toThrow(changed);
+    // The tab now showing b@ can.
+    await expect(t.svc.upload(sessionId, new Uint8Array([1]), "text/plain", "acc-b@x.test")).resolves.toMatchObject({
+      blobId: expect.any(String) as unknown,
+    });
+  });
+
   it("saves a draft, replaces it on autosave, sends it held for undo, and undo puts it back in Drafts", async () => {
     const t = setup();
     const { sessionId } = await t.svc.signIn("a@x.test", "right");
@@ -400,6 +429,22 @@ describe("compose and send through the BFF", () => {
     // Too late (already cancelled or released): refused.
     await expect(t.svc.undoSend(sessionId, sent.submissionId)).rejects.toBeInstanceOf(WebmailRefusedError);
     await expect(t.svc.undoSend(sessionId, "nope")).rejects.toBeInstanceOf(WebmailRefusedError);
+  });
+
+  it("holds a send for the mailbox's chosen undo delay, falling back to the default when it can't be read", async () => {
+    const chosen = setup(undefined, undefined, async () => 20);
+    const a = await chosen.svc.signIn("a@x.test", "right");
+    const d = await chosen.svc.saveDraft(a.sessionId, draft());
+    expect((await chosen.svc.send(a.sessionId, d.id, "i1")).holdSeconds).toBe(20);
+    expect(chosen.state.calls.find((c) => c.startsWith("submit "))).toContain('"HOLDFOR":"20"');
+    expect(chosen.deferred[0]?.ms).toBe(22_000);
+
+    for (const broken of [async () => Promise.reject(new Error("db down")), async () => 600]) {
+      const t = setup(undefined, undefined, broken);
+      const s = await t.svc.signIn("a@x.test", "right");
+      const d2 = await t.svc.saveDraft(s.sessionId, draft());
+      expect((await t.svc.send(s.sessionId, d2.id, "i1")).holdSeconds).toBe(UNDO_SECONDS);
+    }
   });
 
   it("refuses someone else's identity, non-drafts, and drafts it can't replace", async () => {
@@ -582,6 +627,8 @@ describe("session writes are compare-and-set", () => {
       stalwartUrl: "http://stalwart",
       access: { allowed: async () => true },
       quota: memorySlidingQuota(),
+      sieve: { read: async () => null, write: async () => undefined },
+      confirmedForward: async () => null,
       fetch: fake.fetchImpl,
       now: () => now,
     });
@@ -736,6 +783,23 @@ describe("contacts through the BFF", () => {
     expect(t.deferred.map((x) => x.ms)).toEqual([5000]);
     await t.afterHold();
     expect((await t.svc.contacts(sessionId)).contacts.map((c) => c.emails[0]?.address)).toEqual(["slow@x.test"]);
+  });
+
+  it("saves to the account that sent, even after switching mailbox during the hold", async () => {
+    const t = setup();
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const d = await t.svc.saveDraft(sessionId, draft({ to: [{ email: "fresh@x.test" }] }));
+    await t.svc.send(sessionId, d.id, "i1");
+    // Another tab adds (and switches to) a second mailbox before the hold is over.
+    await t.svc.addMailbox(sessionId, "b@x.test", "right");
+    expect((await t.svc.mailboxes(sessionId))?.active).toBe("b@x.test");
+    await t.afterHold();
+    expect(t.state.calls.filter((c) => c.startsWith("cards@"))).toEqual(["cards@acc-a@x.test"]);
+    expect(
+      [...t.state.cards.values()].map(
+        (c) => Object.values(c.emails as Record<string, { address: string }>)[0]?.address,
+      ),
+    ).toEqual(["fresh@x.test"]);
   });
 
   it("respects the setting and the cap, and a failing contacts store never fails the send", async () => {

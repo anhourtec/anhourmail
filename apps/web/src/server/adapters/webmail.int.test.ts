@@ -80,6 +80,8 @@ function service(autoSave = false) {
     stalwartUrl: STALWART_URL,
     access: { allowed: async () => true },
     quota: memorySlidingQuota(),
+    sieve: { read: async () => null, write: async () => undefined },
+    confirmedForward: async () => null,
     ...(autoSave ? {} : { defer: () => undefined }),
   });
 }

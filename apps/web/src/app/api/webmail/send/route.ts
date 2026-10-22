@@ -2,7 +2,7 @@
 import { z } from "zod";
 
 import { ok, readJson, route } from "@/server/http/route";
-import { badRequest, handleWebmail, unauthorized } from "@/server/webmail/http";
+import { badRequest, handleWebmail, noAccount, shownAccount, unauthorized } from "@/server/webmail/http";
 import { webmail, webmailSessionId } from "@/server/webmail/instance";
 
 const Send = z.object({
@@ -20,11 +20,16 @@ export const POST = route(
   async ({ req }) => {
     const id = webmailSessionId(req.headers.get("cookie"));
     if (!id) return unauthorized();
+    // The mailbox this tab shows: refused (400) if another tab switched the session to a different mailbox.
+    const account = shownAccount(req);
+    if (!account) return noAccount();
     const parsed = Send.safeParse(await readJson(req));
     if (!parsed.success) return badRequest("Choose a draft and a sender.");
     // Trust-tier quotas (per mailbox and per session, by recipients) are checked inside send(), against the
     // mailbox it actually sends from.
-    return handleWebmail(async () => ok(await webmail().send(id, parsed.data.draftId, parsed.data.identityId)));
+    return handleWebmail(async () =>
+      ok(await webmail().send(id, parsed.data.draftId, parsed.data.identityId, account)),
+    );
   },
   { session: "webmail", limit: "sending" },
 );

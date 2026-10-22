@@ -5,7 +5,8 @@ import { redirect } from "next/navigation";
 
 import { SIDEBAR_COOKIE, WebmailApp } from "@/components/webmail/webmail-app";
 import { env } from "@/server/env";
-import { webmail, webmailCookieName } from "@/server/webmail/instance";
+import { settingsService, webmail, webmailCookieName } from "@/server/webmail/instance";
+import { DEFAULT_PREFERENCES } from "@anhourmail/shared/webmail";
 import { webmailBasePath } from "@/server/webmail/paths";
 import { WebmailBlockedError } from "@/server/webmail/service";
 
@@ -32,12 +33,24 @@ export default async function WebmailPage() {
     blocked = err instanceof WebmailBlockedError;
   }
   if (!session) redirect(`${base}/sign-in${blocked ? "?reason=unavailable" : ""}`);
+  // Display preferences only (no mail): read here so the first paint already has the chosen layout.
+  const [preferences, mailbox] = await Promise.all([
+    settingsService()
+      .preferences(session.username)
+      .catch(() => DEFAULT_PREFERENCES),
+    settingsService()
+      .mailbox(session.username)
+      .catch(() => null),
+  ]);
+  const app = env().APP_URL.replace(/\/$/, "");
   return (
     <WebmailApp
       username={session.username}
       signInHref={`${base}/sign-in`}
       helpHref={`${env().SITE_URL.replace(/\/$/, "")}/docs/webmail`}
+      consoleHref={mailbox ? `${app}/accounts/${mailbox.accountId}/aliases` : app}
       initialCollapsed={jar.get(SIDEBAR_COOKIE)?.value === "collapsed"}
+      initialPreferences={preferences}
     />
   );
 }

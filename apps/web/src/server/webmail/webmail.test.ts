@@ -419,6 +419,8 @@ function setup(opts: { upstream?: Upstream; allowed?: (a: string) => boolean; oa
     stalwartUrl: "http://stalwart:8080/",
     access: { allowed: async (a) => allowed(a) },
     quota: memorySlidingQuota(),
+    sieve: { read: async () => null, write: async () => undefined },
+    confirmedForward: async () => null,
     fetch: fetchImpl,
     now: () => now,
     sleep: async () => undefined,

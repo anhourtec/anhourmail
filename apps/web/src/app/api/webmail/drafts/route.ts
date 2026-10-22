@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { ok, readJson, route } from "@/server/http/route";
 import { DraftInput } from "@/server/webmail/compose";
-import { badRequest, handleWebmail, unauthorized } from "@/server/webmail/http";
+import { badRequest, handleWebmail, noAccount, shownAccount, unauthorized } from "@/server/webmail/http";
 import { webmail, webmailSessionId } from "@/server/webmail/instance";
 
 /**
@@ -13,9 +13,12 @@ export const PUT = route(
   async ({ req }) => {
     const id = webmailSessionId(req.headers.get("cookie"));
     if (!id) return unauthorized();
+    // The mailbox this tab shows: refused (400) if another tab switched the session to a different mailbox.
+    const account = shownAccount(req);
+    if (!account) return noAccount();
     const parsed = DraftInput.safeParse(await readJson(req));
     if (!parsed.success) return badRequest("Check the addresses, subject and attachments.");
-    return handleWebmail(async () => ok(await webmail().saveDraft(id, parsed.data)));
+    return handleWebmail(async () => ok(await webmail().saveDraft(id, parsed.data, account)));
   },
   { session: "webmail", limit: "write" },
 );

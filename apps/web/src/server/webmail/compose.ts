@@ -110,7 +110,8 @@ export const DraftInput = z.object({
 });
 export type DraftInput = z.infer<typeof DraftInput>;
 
-export type Identity = { id: string; name: string; email: string };
+/** A sending identity; `signature` is its plain-text signature (Identity.textSignature), when one is set. */
+export type Identity = { id: string; name: string; email: string; signature?: string };
 
 export type ComposeProblem = { message: string };
 

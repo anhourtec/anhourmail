@@ -17,6 +17,16 @@ import {
   UNDO_SECONDS,
 } from "./compose";
 import { isLimitError, type JmapRequestBody } from "./jmap-policy";
+import {
+  buildScript,
+  DEFAULT_RULES,
+  fitContacts,
+  MAILBOX_RULES_LIMIT_MESSAGE,
+  MAX_SCRIPT_BYTES,
+  type MailRules,
+  parseScript,
+  usesContacts,
+} from "./sieve";
 import { QueueFullError, UserQueue, withLimitRetry } from "./queue";
 import { MAX_MAILBOXES, type MailboxTokens, type WebmailSession, type WebmailSessionStore } from "./session-store";
 import { calendarEvents, type CalendarEvent, MAX_MARKDOWN } from "./body";
@@ -118,6 +128,15 @@ export type WebmailDeps = {
   sleep?: (ms: number) => Promise<void>;
   /** Runs `fn` later (auto-saving recipients once the undo hold is over). Defaults to an unref'd timer. */
   defer?: (fn: () => void, ms: number) => void;
+  /** The mailbox's chosen undo-send hold in seconds (its webmail preferences); `UNDO_SECONDS` when unset. */
+  holdSeconds?: (address: string) => Promise<number>;
+  /** The managed Sieve script (automatic replies, forwarding, junk rules), via management credentials. */
+  sieve: ManagedSieve;
+  /**
+   * The mailbox's confirmed forwarding target in the control plane (`forwarding_target`), or null. Every rules write
+   * keeps a redirect only to this address — never what the script comment or the caller says.
+   */
+  confirmedForward: (address: string) => Promise<string | null>;
 };
 
 const MAIL = "urn:ietf:params:jmap:mail";
@@ -125,6 +144,28 @@ const SUBMISSION = "urn:ietf:params:jmap:submission";
 const USING = ["urn:ietf:params:jmap:core", MAIL];
 const USING_SUBMISSION = [...USING, SUBMISSION];
 const USING_CONTACTS = ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:contacts"];
+const USING_QUOTA = ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:quota"];
+
+/** Whether the managed rules are in force: none written yet, active, or switched off (re-activated on next save). */
+export type RulesState = "none" | "active" | "inactive";
+
+/**
+ * The mailbox's one managed Sieve script, read and written with management credentials (customer mailboxes can't
+ * manage their own Sieve — `CUSTOMER_PERMISSIONS`). `accountId` is the mailbox's JMAP account id. Behind the
+ * stalwart-client management port; faked in tests.
+ */
+export type ManagedSieve = {
+  /** The script and whether it's the active one, or null when the mailbox has none yet. */
+  read(accountId: string): Promise<{ content: string; active: boolean } | null>;
+  /** Writes it and makes it the active one. */
+  write(accountId: string, script: string): Promise<void>;
+};
+
+const escapeHtml = (s: string) =>
+  s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
+/** The HTML twin of a plain-text signature: escaped text with line breaks, nothing else (no links, no images). */
+export const signatureHtml = (text: string): string =>
+  text === "" ? "" : `<div>${text.split("\n").map(escapeHtml).join("<br>")}</div>`;
 /** At most this many recipients of one message are saved to Other contacts. */
 const MAX_AUTO_SAVE = 100;
 /** Cards per `ContactCard/get` (the server's `getMaxResults`); MAX_CONTACTS / CARD_BATCH ≤ 16 calls a request. */
@@ -164,6 +205,7 @@ export class WebmailService {
         // Unref'd: a pending auto-save never keeps the process alive.
         setTimeout(fn, ms).unref();
       },
+      holdSeconds: async () => UNDO_SECONDS,
       ...deps,
     };
     this.#base = deps.stalwartUrl.replace(/\/+$/, "");
@@ -638,7 +680,19 @@ export class WebmailService {
     using: string[] = USING,
     /** Refuse if the active mailbox is no longer this account (it was switched during a multi-step action). */
     expectAccount?: string,
+    /**
+     * Server-internal follow-ups of something that account already did (auto-saving the recipients of a send after
+     * the undo hold): if the person switched mailbox meanwhile, act on `expectAccount` with its own tokens (it's still
+     * signed in to this session) instead of refusing.
+     */
+    opts: { inactive?: boolean } = {},
   ): Promise<Map<string, Record<string, unknown>>> {
+    if (opts.inactive && expectAccount !== undefined) {
+      const current = await this.session(sessionId);
+      if (current && current.accountId !== expectAccount) {
+        return this.#callOther(current, expectAccount, build, using);
+      }
+    }
     const res = (await this.jmapAs(sessionId, (s) => {
       if (expectAccount !== undefined && s.accountId !== expectAccount) {
         throw new WebmailRefusedError("Your active mailbox changed. Try again.");
@@ -656,6 +710,72 @@ export class WebmailService {
       if (!out.has(id)) out.set(id, args);
     }
     return out;
+  }
+
+  /**
+   * Runs calls for a signed-in but not active mailbox of this session, with that mailbox's own tokens (refreshed in
+   * memory if due; the stored record isn't rewritten, so a concurrent switch is never undone). Refused when it's no
+   * longer signed in here, or the control plane blocks it.
+   */
+  async #callOther(
+    session: WebmailSession,
+    account: string,
+    build: (s: WebmailSession) => [string, Record<string, unknown>, string][],
+    using: string[],
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const t = (session.others ?? []).find((o) => o.accountId === account);
+    if (!t) throw new WebmailRefusedError("That mailbox isn't signed in here any more.");
+    if (!(await this.#d.access.allowed(t.username))) throw new WebmailBlockedError("mailbox unavailable");
+    let token = t.accessToken;
+    if (t.expiresAt - this.#d.now() <= this.#d.refreshSkewMs && t.refreshToken) {
+      try {
+        token = (await this.#d.oauth.refresh(t.refreshToken)).accessToken;
+      } catch (err) {
+        if (err instanceof GrantRefusedError) throw new WebmailSignedOutError("signed out");
+        throw err;
+      }
+    }
+    const target: WebmailSession = { ...t, createdAt: session.createdAt };
+    const result = await this.#d.queue.run(t.username, () =>
+      withLimitRetry(
+        async () => {
+          const res = await this.#upstream(`${this.#base}/jmap/`, {
+            method: "POST",
+            headers: { ...this.#auth(token), "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({ using, methodCalls: build(target) }),
+          });
+          const json: unknown = await res.json().catch(() => null);
+          return isLimitError(res.status, json)
+            ? { retry: true as const }
+            : { retry: false as const, value: { status: res.status, body: json } };
+        },
+        this.#d.sleep ? { sleep: this.#d.sleep } : {},
+      ),
+    );
+    if (result === null) throw new WebmailBusyError("busy");
+    if (result.status === 401) throw new WebmailSignedOutError("signed out");
+    if (result.status !== 200) throw new WebmailUnavailableError("mail server error");
+    const out = new Map<string, Record<string, unknown>>();
+    const body = result.body as { methodResponses?: [string, Record<string, unknown>, string][] } | null;
+    for (const [name, args, id] of body?.methodResponses ?? []) {
+      if (name === "error") throw new WebmailUnavailableError("mail server error");
+      if (!out.has(id)) out.set(id, args);
+    }
+    return out;
+  }
+
+  /**
+   * Refuses when the browser tab shows another mailbox than the session's active one (switched in another tab):
+   * drafts, sending, undo and uploads must never act on a mailbox the person isn't looking at. `account` undefined =
+   * a server-internal caller (tests, the BFF itself).
+   */
+  async #pin(sessionId: string, account: string | undefined): Promise<WebmailSession> {
+    const s = await this.session(sessionId);
+    if (!s) throw new WebmailSignedOutError("signed out");
+    if (account !== undefined && s.accountId !== account) {
+      throw new WebmailRefusedError("Your active mailbox changed. Try again.");
+    }
+    return s;
   }
 
   /** The active mailbox's account id (signed-out → error). */
@@ -690,10 +810,17 @@ export class WebmailService {
     if (hit && this.#d.now() - hit.at < META_TTL_MS) return hit.list;
     const r = await this.#call(
       sessionId,
-      (s) => [["Identity/get", { accountId: s.accountId, ids: null, properties: ["name", "email"] }, "i"]],
+      (s) => [
+        ["Identity/get", { accountId: s.accountId, ids: null, properties: ["name", "email", "textSignature"] }, "i"],
+      ],
       USING_SUBMISSION,
     );
-    const list = ((r.get("i")?.list ?? []) as Identity[]).map((i) => ({ id: i.id, name: i.name, email: i.email }));
+    const list = ((r.get("i")?.list ?? []) as (Identity & { textSignature?: string | null })[]).map((i) => ({
+      id: i.id,
+      name: i.name,
+      email: i.email,
+      signature: i.textSignature ?? "",
+    }));
     this.#identities.set(accountId, { at: this.#d.now(), list });
     return list;
   }
@@ -721,9 +848,10 @@ export class WebmailService {
   }
 
   /** Saves a draft (replacing the previous version of it), from one of the person's own identities. */
-  async saveDraft(sessionId: string, input: DraftInput): Promise<{ id: string }> {
+  async saveDraft(sessionId: string, input: DraftInput, account?: string): Promise<{ id: string }> {
     const problem = draftProblem(input);
     if (problem) throw new WebmailRefusedError(problem.message);
+    const pinned = (await this.#pin(sessionId, account)).accountId;
     const [identity, roles] = await Promise.all([this.#identity(sessionId, input.identityId), this.roles(sessionId)]);
     const drafts = roles.drafts;
     if (!drafts) throw new WebmailUnavailableError("no Drafts folder");
@@ -734,17 +862,22 @@ export class WebmailService {
         throw new WebmailRefusedError("That draft can't be changed.");
       }
     }
-    const r = await this.#call(sessionId, (s) => [
-      [
-        "Email/set",
-        {
-          accountId: s.accountId,
-          create: { draft: draftEmail(input, identity, drafts) },
-          ...(input.replaces ? { destroy: [input.replaces] } : {}),
-        },
-        "d",
+    const r = await this.#call(
+      sessionId,
+      (s) => [
+        [
+          "Email/set",
+          {
+            accountId: s.accountId,
+            create: { draft: draftEmail(input, identity, drafts) },
+            ...(input.replaces ? { destroy: [input.replaces] } : {}),
+          },
+          "d",
+        ],
       ],
-    ]);
+      USING,
+      pinned,
+    );
     const created = (r.get("d")?.created as Record<string, { id: string }> | undefined)?.draft;
     if (!created) {
       const why = (r.get("d")?.notCreated as Record<string, { type?: string }> | undefined)?.draft?.type;
@@ -779,13 +912,16 @@ export class WebmailService {
     sessionId: string,
     draftId: string,
     identityId: string,
-  ): Promise<{ submissionId: string; sendAt: string }> {
-    // Everything below runs against this mailbox: the quota is charged to it, and every call refuses if the active
-    // mailbox changes meanwhile.
-    const s = await this.session(sessionId);
-    if (!s) throw new WebmailSignedOutError("signed out");
+    shown?: string,
+  ): Promise<{ submissionId: string; sendAt: string; holdSeconds: number }> {
+    // Everything below runs against this mailbox — the one the tab shows: the quota is charged to it, and every call
+    // refuses if the active mailbox changes meanwhile.
+    const s = await this.#pin(sessionId, shown);
     const account = s.accountId;
     const limits = sendingLimits(s.username);
+    const chosen = await this.#d.holdSeconds(s.username).catch(() => UNDO_SECONDS);
+    // Within what the server's hold supports and the app offers; anything else falls back to the default.
+    const hold = Number.isInteger(chosen) && chosen >= 1 && chosen <= 60 ? chosen : UNDO_SECONDS;
     const [identity, roles] = await Promise.all([this.#identity(sessionId, identityId), this.roles(sessionId)]);
     if (!roles.drafts || !roles.sent) throw new WebmailUnavailableError("no Drafts or Sent folder");
     const drafts = roles.drafts;
@@ -847,7 +983,7 @@ export class WebmailService {
                 identityId: identity.id,
                 emailId: draftId,
                 envelope: {
-                  mailFrom: { email: identity.email, parameters: { HOLDFOR: String(UNDO_SECONDS) } },
+                  mailFrom: { email: identity.email, parameters: { HOLDFOR: String(hold) } },
                   rcptTo: check.rcptTo.map((email) => ({ email })),
                 },
               },
@@ -870,12 +1006,17 @@ export class WebmailService {
     }
     // Save new recipients to Other contacts once the message is really sent (after the undo hold), never while
     // the person can still undo it, and never delaying this response.
-    this.#afterHold(sessionId, account, draft, created.id, 0);
-    return { submissionId: created.id, sendAt: created.sendAt ?? new Date(this.#d.now()).toISOString() };
+    this.#afterHold(sessionId, account, draft, created.id, 0, hold);
+    return {
+      submissionId: created.id,
+      sendAt: created.sendAt ?? new Date(this.#d.now() + hold * 1000).toISOString(),
+      holdSeconds: hold,
+    };
   }
 
   /** Cancels a held submission and puts its message back in Drafts. "Already sent" when it is too late. */
-  async undoSend(sessionId: string, submissionId: string): Promise<{ draftId: string }> {
+  async undoSend(sessionId: string, submissionId: string, account?: string): Promise<{ draftId: string }> {
+    const pinned = (await this.#pin(sessionId, account)).accountId;
     const roles = await this.roles(sessionId);
     if (!roles.drafts || !roles.sent) throw new WebmailUnavailableError("no Drafts or Sent folder");
     const drafts = roles.drafts;
@@ -895,22 +1036,28 @@ export class WebmailService {
         ],
       ],
       USING_SUBMISSION,
+      pinned,
     );
     const sub = ((r.get("g")?.list ?? []) as { emailId: string; undoStatus: string }[])[0];
     const updated = r.get("u")?.updated as Record<string, unknown> | undefined;
     if (!sub || !updated || !(submissionId in updated)) throw new WebmailRefusedError("It has already been sent.");
-    await this.#call(sessionId, (s) => [
-      [
-        "Email/set",
-        {
-          accountId: s.accountId,
-          update: {
-            [sub.emailId]: { [`mailboxIds/${sent}`]: null, [`mailboxIds/${drafts}`]: true, "keywords/$draft": true },
+    await this.#call(
+      sessionId,
+      (s) => [
+        [
+          "Email/set",
+          {
+            accountId: s.accountId,
+            update: {
+              [sub.emailId]: { [`mailboxIds/${sent}`]: null, [`mailboxIds/${drafts}`]: true, "keywords/$draft": true },
+            },
           },
-        },
-        "e",
+          "e",
+        ],
       ],
-    ]);
+      USING,
+      pinned,
+    );
     return { draftId: sub.emailId };
   }
 
@@ -919,8 +1066,12 @@ export class WebmailService {
     sessionId: string,
     bytes: Uint8Array<ArrayBuffer>,
     type: string,
+    account?: string,
   ): Promise<{ blobId: string; type: string; size: number }> {
+    const pinned = (await this.#pin(sessionId, account)).accountId;
     const { value } = await this.#withSession(sessionId, async (s) => {
+      // Switched between the pin and now: refuse rather than upload into another mailbox.
+      if (s.accountId !== pinned) throw new WebmailRefusedError("Your active mailbox changed. Try again.");
       const res = await this.#upstream(`${this.#base}/jmap/upload/${encodeURIComponent(s.accountId)}/`, {
         method: "POST",
         headers: { ...this.#auth(s.accessToken), "Content-Type": type },
@@ -943,12 +1094,17 @@ export class WebmailService {
   // Every contacts call takes the account the app is showing (`account`) and refuses if the session's active
   // mailbox is another one (it was switched in another tab), like send.
 
-  async #books(sessionId: string, account: string): Promise<(BookView & { description: string | null })[]> {
+  async #books(
+    sessionId: string,
+    account: string,
+    inactive = false,
+  ): Promise<(BookView & { description: string | null })[]> {
     const r = await this.#call(
       sessionId,
       (x) => [["AddressBook/get", { accountId: x.accountId, ids: null }, "b"]],
       USING_CONTACTS,
       account,
+      { inactive },
     );
     return (
       (r.get("b")?.list ?? []) as { id: string; name: string; isDefault?: boolean; description?: string | null }[]
@@ -978,8 +1134,8 @@ export class WebmailService {
   }
 
   /** The "Other contacts" book (created when first needed, with automatic saving on). */
-  async #otherBook(sessionId: string, account: string): Promise<string> {
-    const existing = (await this.#books(sessionId, account)).find((b) => b.isOther);
+  async #otherBook(sessionId: string, account: string, inactive = false): Promise<string> {
+    const existing = (await this.#books(sessionId, account, inactive)).find((b) => b.isOther);
     if (existing) return existing.id;
     const r = await this.#call(
       sessionId,
@@ -992,6 +1148,7 @@ export class WebmailService {
       ],
       USING_CONTACTS,
       account,
+      { inactive },
     );
     const id = (r.get("s")?.created as Record<string, { id: string }> | undefined)?.o?.id;
     if (!id) throw new WebmailUnavailableError("address book not created");
@@ -1017,6 +1174,7 @@ export class WebmailService {
     sessionId: string,
     properties: readonly string[],
     account?: string,
+    inactive = false,
   ): Promise<{ cards: Record<string, unknown>[]; total: number; accountId: string }> {
     let accountId = "";
     const q = await this.#call(
@@ -1027,6 +1185,7 @@ export class WebmailService {
       },
       USING_CONTACTS,
       account,
+      { inactive },
     );
     const ids = ((q.get("q")?.ids ?? []) as string[]).slice(0, MAX_CONTACTS);
     const total = Math.max(Number(q.get("q")?.total ?? 0), ids.length);
@@ -1039,6 +1198,7 @@ export class WebmailService {
         batches.map((b, i) => ["ContactCard/get", { accountId: x.accountId, ids: b, properties }, `g${String(i)}`]),
       USING_CONTACTS,
       accountId,
+      { inactive },
     );
     return {
       cards: batches.flatMap((_, i) => (r.get(`g${String(i)}`)?.list ?? []) as Record<string, unknown>[]),
@@ -1091,6 +1251,7 @@ export class WebmailService {
     );
     const id = (r.get("s")?.created as Record<string, { id: string }> | undefined)?.c?.id;
     if (!id) throw new WebmailRefusedError("The contact couldn't be saved.");
+    this.#afterContactsChange(sessionId, account);
     return { id };
   }
 
@@ -1104,6 +1265,7 @@ export class WebmailService {
     );
     const updated = r.get("s")?.updated as Record<string, unknown> | undefined;
     if (!updated || !(id in updated)) throw new WebmailRefusedError("That contact couldn't be changed.");
+    this.#afterContactsChange(sessionId, account);
   }
 
   async deleteContacts(sessionId: string, account: string, ids: string[]): Promise<number> {
@@ -1113,6 +1275,7 @@ export class WebmailService {
       USING_CONTACTS,
       account,
     );
+    this.#afterContactsChange(sessionId, account);
     return ((r.get("s")?.destroyed ?? []) as string[]).length;
   }
 
@@ -1191,6 +1354,7 @@ export class WebmailService {
       );
       imported += Object.keys((r.get("s")?.created as Record<string, unknown> | undefined) ?? {}).length;
     }
+    this.#afterContactsChange(sessionId, account);
     return { imported, skipped: skipped + parsed.length - imported, full };
   }
 
@@ -1205,7 +1369,14 @@ export class WebmailService {
    * Schedules auto-save for a send: after the undo hold, check the submission and save only if it wasn't undone.
    * Best effort and in this process (a restart in those few seconds skips it); errors are logged by kind only.
    */
-  #afterHold(sessionId: string, account: string, draft: StoredDraft, submissionId: string, attempt: number): void {
+  #afterHold(
+    sessionId: string,
+    account: string,
+    draft: StoredDraft,
+    submissionId: string,
+    attempt: number,
+    hold = UNDO_SECONDS,
+  ): void {
     const run = () => {
       this.#autoSaveIfSent(sessionId, account, draft, submissionId, attempt).catch((err: unknown) => {
         // The error's kind only: nothing about recipients reaches the logs (rule 24).
@@ -1215,7 +1386,7 @@ export class WebmailService {
         });
       });
     };
-    this.#d.defer(run, attempt === 0 ? (UNDO_SECONDS + 2) * 1000 : 5000);
+    this.#d.defer(run, attempt === 0 ? (hold + 2) * 1000 : 5000);
   }
 
   async #autoSaveIfSent(
@@ -1232,6 +1403,8 @@ export class WebmailService {
       ],
       USING_SUBMISSION,
       account,
+      // The person may have switched mailbox during the hold: still the account that sent.
+      { inactive: true },
     );
     const status = ((r.get("g")?.list ?? []) as { undoStatus?: string }[])[0]?.undoStatus;
     if (status === "canceled") return; // Undone: nobody was emailed.
@@ -1254,13 +1427,13 @@ export class WebmailService {
       if (!people.has(key) || (!people.get(key) && a.name)) people.set(key, a.name ?? null);
     }
     if (people.size === 0) return;
-    const books = await this.#books(sessionId, account);
+    const books = await this.#books(sessionId, account, true);
     const other = books.find((b) => b.isOther);
     if (other?.description === AUTO_SAVE_OFF) return;
     const addresses = [...people.keys()].slice(0, MAX_AUTO_SAVE);
     // Addresses already saved, read from the cards themselves: the `email` query filter goes through the search
     // index, which lags fresh writes (a contact saved a moment ago would be missed and duplicated).
-    const { cards, total } = await this.#allCards(sessionId, ["emails"], account);
+    const { cards, total } = await this.#allCards(sessionId, ["emails"], account, true);
     if (total >= MAX_CONTACTS) return;
     const known = new Set(
       (cards as { emails?: Record<string, { address?: string }> }[]).flatMap((c) =>
@@ -1270,7 +1443,7 @@ export class WebmailService {
     // Below the cap every card was read, so this check is complete; at the cap nothing more is saved.
     const fresh = addresses.filter((a) => !known.has(a)).slice(0, Math.max(0, MAX_CONTACTS - total));
     if (fresh.length === 0) return;
-    const bookId = other?.id ?? (await this.#otherBook(sessionId, account));
+    const bookId = other?.id ?? (await this.#otherBook(sessionId, account, true));
     await this.#call(
       sessionId,
       (x) => [
@@ -1309,6 +1482,151 @@ export class WebmailService {
       ],
       USING_CONTACTS,
       account,
+      { inactive: true },
     );
+    await this.#refreshContactRules(sessionId, account);
+  }
+
+  // ---- settings (docs/internal/05-webmail.md "Settings") ------------------------------------------------------
+  //
+  // Mail-flow settings live in the mail server: sender names and signatures on the mailbox's JMAP identities, and
+  // automatic replies, forwarding and junk rules in one Sieve script we manage (sieve.ts). Every change takes the
+  // account the app is showing and refuses if the session's active mailbox is another one.
+
+  /** Storage used and its limit in bytes (JMAP Quota); `limit` null when there is none. */
+  async quota(sessionId: string): Promise<{ used: number; limit: number | null }> {
+    const r = await this.#call(
+      sessionId,
+      (s) => [["Quota/get", { accountId: s.accountId, ids: null }, "q"]],
+      USING_QUOTA,
+    );
+    const list = (r.get("q")?.list ?? []) as {
+      resourceType?: string;
+      scope?: string;
+      used?: number;
+      hardLimit?: number | null;
+    }[];
+    const octets =
+      list.find((q) => q.resourceType === "octets" && q.scope === "account") ??
+      list.find((q) => q.resourceType === "octets");
+    return { used: octets?.used ?? 0, limit: typeof octets?.hardLimit === "number" ? octets.hardLimit : null };
+  }
+
+  /** Changes one of the mailbox's own identities: the sender name and/or the plain-text signature (+ its HTML twin). */
+  async updateIdentity(
+    sessionId: string,
+    account: string,
+    identityId: string,
+    change: { name?: string; signature?: string },
+  ): Promise<Identity> {
+    this.#identities.delete(account);
+    const own = (await this.identities(sessionId)).find((i) => i.id === identityId);
+    if (!own) throw new WebmailRefusedError("That address isn't one of yours.");
+    const patch: Record<string, string> = {};
+    if (change.name !== undefined) patch.name = change.name;
+    if (change.signature !== undefined) {
+      patch.textSignature = change.signature;
+      patch.htmlSignature = signatureHtml(change.signature);
+    }
+    const r = await this.#call(
+      sessionId,
+      (x) => [["Identity/set", { accountId: x.accountId, update: { [identityId]: patch } }, "u"]],
+      USING_SUBMISSION,
+      account,
+    );
+    this.#identities.delete(account);
+    const updated = r.get("u")?.updated as Record<string, unknown> | undefined;
+    if (!updated || !(identityId in updated)) throw new WebmailRefusedError("That change wasn't saved.");
+    return {
+      ...own,
+      ...(change.name !== undefined ? { name: change.name } : {}),
+      ...(change.signature !== undefined ? { signature: change.signature } : {}),
+    };
+  }
+
+  /**
+   * The automatic-reply, forwarding and junk settings, and whether they are in force. Read with management
+   * credentials (`ManagedSieve`): customer mailboxes can't manage their own Sieve, so the script is ours alone.
+   */
+  async mailRules(sessionId: string): Promise<{ accountId: string; rules: MailRules; state: RulesState }> {
+    const accountId = await this.#accountId(sessionId);
+    const script = await this.#d.sieve.read(accountId);
+    if (script === null) return { accountId, rules: DEFAULT_RULES, state: "none" };
+    return {
+      accountId,
+      rules: parseScript(script.content) ?? DEFAULT_RULES,
+      state: script.active ? "active" : "inactive",
+    };
+  }
+
+  /**
+   * Writes the managed script with management credentials and makes it the active one. The caller has already
+   * checked a forwarding target is the control-plane confirmed one.
+   */
+  async saveMailRules(
+    sessionId: string,
+    account: string,
+    rules: Omit<MailRules, "include">,
+  ): Promise<{ contactsUsed: number }> {
+    const s = await this.session(sessionId);
+    if (!s) throw new WebmailSignedOutError("signed out");
+    if (s.accountId !== account) throw new WebmailRefusedError("Your active mailbox changed. Try again.");
+    // We own the one script; there is nothing of the person's to include (they can't write Sieve).
+    // Forwarding only to the control-plane confirmed target: whoever calls (settings, the contacts refresh) can't
+    // keep or set a redirect anywhere else.
+    const confirmed = await this.#d.confirmedForward(s.username);
+    const forwarding =
+      rules.forwarding.enabled && confirmed !== null && rules.forwarding.address === confirmed
+        ? { ...rules.forwarding, address: confirmed }
+        : { enabled: false, address: null, keepCopy: rules.forwarding.keepCopy };
+    const full: MailRules = { ...rules, forwarding, include: null };
+    const identities = (await this.identities(sessionId)).map((i) => i.email.toLowerCase());
+    const base = buildScript(full, { identities, contacts: [] });
+    let contacts: string[] = [];
+    if (usesContacts(full)) {
+      const { cards } = await this.#allCards(sessionId, ["emails"], account);
+      const addresses = (cards as { emails?: Record<string, { address?: string }> }[]).flatMap((c) =>
+        Object.values(c.emails ?? {}).map((e) => e.address ?? ""),
+      );
+      // Each contact can appear twice (trusted senders and the automatic-reply test).
+      contacts = fitContacts(addresses, Math.floor((MAX_SCRIPT_BYTES - Buffer.byteLength(base)) / 2));
+    }
+    const script = buildScript(full, { identities, contacts });
+    if (new TextEncoder().encode(script).length > MAX_SCRIPT_BYTES) {
+      throw new WebmailRefusedError(MAILBOX_RULES_LIMIT_MESSAGE);
+    }
+    try {
+      await this.#d.sieve.write(account, script);
+    } catch (err) {
+      log.warn("webmail rules not saved", {
+        component: "webmail",
+        error: err instanceof Error ? err.name : "unknown",
+      });
+      throw new WebmailRefusedError("The mail server didn't accept these settings.");
+    }
+    return { contactsUsed: contacts.length };
+  }
+
+  /**
+   * After contacts change: rules that use contacts ("contacts only" replies, "trusted senders only") are rewritten
+   * so the script's copy of the addresses follows. Only while our rules are active; best effort, never throws.
+   */
+  async #refreshContactRules(sessionId: string, account: string): Promise<void> {
+    try {
+      const { accountId, rules, state } = await this.mailRules(sessionId);
+      if (accountId !== account || state !== "active" || !usesContacts(rules)) return;
+      const { include: _include, ...rest } = rules;
+      await this.saveMailRules(sessionId, account, rest);
+    } catch (err) {
+      log.warn("webmail rules refresh failed", {
+        component: "webmail",
+        error: err instanceof Error ? err.name : "unknown",
+      });
+    }
+  }
+
+  /** Starts the contacts refresh without making the caller wait for it. */
+  #afterContactsChange(sessionId: string, account: string): void {
+    void this.#refreshContactRules(sessionId, account);
   }
 }
