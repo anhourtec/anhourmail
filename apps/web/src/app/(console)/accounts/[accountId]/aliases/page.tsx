@@ -53,7 +53,7 @@ export default async function AliasesPage({ params }: { params: Promise<{ accoun
 
       {mailboxes.length === 0 ? (
         <p className="am-body rounded-xl border px-4 py-3">
-          Aliases deliver to a mailbox, and you don't have one yet.{" "}
+          Aliases deliver to a mailbox, and you don&apos;t have one to use yet.{" "}
           {can(actor, "mailbox.manage", accountId) ? (
             <Link href={`/accounts/${accountId}/mailboxes`} className="underline underline-offset-2">
               Create a mailbox
@@ -91,7 +91,7 @@ export default async function AliasesPage({ params }: { params: Promise<{ accoun
             </thead>
             <tbody className="divide-y">
               {aliases.map((a) => (
-                <tr key={a.id} className={a.enabled ? "" : "text-muted-foreground"}>
+                <tr key={a.id} className={a.enabled && !a.mailbox.deleting ? "" : "text-muted-foreground"}>
                   <td className="px-4 py-3">
                     <div className="flex flex-col gap-1">
                       <CopyValue value={a.address} label={a.address} />
@@ -101,13 +101,22 @@ export default async function AliasesPage({ params }: { params: Promise<{ accoun
                           {a.kind === "masked" ? "Masked" : "Alias"}
                         </span>
                         {!a.enabled && <span className="am-status am-status--warning">Off</span>}
+                        {a.mailbox.deleting && (
+                          <span className="am-status am-status--warning">Mailbox being deleted</span>
+                        )}
                       </span>
                     </div>
                   </td>
                   <td className="am-code hidden break-all px-4 py-3 md:table-cell">{a.mailbox.address}</td>
                   <td className="am-small hidden px-4 py-3 lg:table-cell">{a.description ?? "—"}</td>
                   <td className="px-4 py-3">
-                    <AliasActions accountId={accountId} aliasId={a.id} address={a.address} enabled={a.enabled} />
+                    <AliasActions
+                      accountId={accountId}
+                      aliasId={a.id}
+                      address={a.address}
+                      enabled={a.enabled}
+                      locked={a.mailbox.deleting}
+                    />
                   </td>
                 </tr>
               ))}

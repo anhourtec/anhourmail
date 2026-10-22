@@ -12,18 +12,21 @@ const small =
 
 /**
  * Per-row controls: an on/off switch and a two-step delete (no browser dialogs). Both apply on the mail server
- * once the worker syncs the mailbox.
+ * once the worker syncs the mailbox. `locked`: the mailbox is being deleted, so the switch is disabled (the alias is
+ * off on the mail server until the mailbox is restored); it can still be deleted.
  */
 export function AliasActions({
   accountId,
   aliasId,
   address,
   enabled,
+  locked = false,
 }: {
   accountId: string;
   aliasId: string;
   address: string;
   enabled: boolean;
+  locked?: boolean;
 }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
@@ -52,7 +55,7 @@ export function AliasActions({
           role="switch"
           aria-checked={enabled}
           aria-label={`Receive mail at ${address}`}
-          disabled={pending}
+          disabled={pending || locked}
           onClick={() => void run({ method: "PATCH", body: { enabled: !enabled } })}
           className="relative inline-flex h-6 w-10 shrink-0 items-center rounded-full border bg-muted transition-colors aria-checked:border-primary aria-checked:bg-primary disabled:opacity-60"
         >

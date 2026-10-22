@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { getMailbox, setMailboxQuota } from "@anhourmail/core/mailboxes";
+import { deleteMailbox, getMailbox, setMailboxQuota } from "@anhourmail/core/mailboxes";
 
 import { getActor } from "@/server/auth/actor";
 import { container } from "@/server/container";
@@ -26,3 +26,19 @@ export const PATCH = route(async ({ req, meta }, params) => {
     ),
   );
 });
+
+/**
+ * Delete with a grace period (`mailbox.manage`): suspended at once, mail kept, removed for good after
+ * MAILBOX_DELETE_GRACE_DAYS unless restored (`POST …/restore`).
+ */
+export const DELETE = route(async ({ req, meta }, params) =>
+  ok(
+    await deleteMailbox(
+      container().deps,
+      await getActor(req.headers),
+      str(params.accountId),
+      str(params.mailboxId),
+      meta,
+    ),
+  ),
+);

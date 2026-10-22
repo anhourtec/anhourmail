@@ -14,6 +14,8 @@ import { forPage } from "@/server/page-guard";
 
 export const metadata: Metadata = { title: "Mailboxes" };
 
+const dateFmt = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium" });
+
 export default async function MailboxesPage({ params }: { params: Promise<{ accountId: string }> }) {
   const { accountId } = await params;
   const actor = await requireUser();
@@ -90,7 +92,14 @@ export default async function MailboxesPage({ params }: { params: Promise<{ acco
                   <td className="am-small hidden px-4 py-3 md:table-cell">{m.owner?.email ?? "—"}</td>
                   <td className="am-small am-num hidden px-4 py-3 sm:table-cell">{m.quotaBytes / GB} GB</td>
                   <td className="px-4 py-3">
-                    <MailboxStatus status={m.status} />
+                    <div className="flex flex-col items-start gap-1">
+                      <MailboxStatus status={m.status} applyFailed={m.applyFailed} />
+                      {m.status === "deleting" && m.purgeAfter && (
+                        <span className="am-micro am-num">
+                          Restorable until {dateFmt.format(new Date(m.purgeAfter))}
+                        </span>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

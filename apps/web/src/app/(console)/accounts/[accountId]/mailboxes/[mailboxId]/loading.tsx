@@ -17,6 +17,16 @@ export default function Loading() {
         <Bone className="h-5 w-24" />
         <Bone className="h-10 w-48 rounded-lg" />
       </div>
+      <div className="flex flex-col gap-3">
+        <Bone className="h-5 w-20" />
+        <Bone className="h-4 w-full max-w-prose" />
+        <Bone className="h-10 w-44 rounded-lg" />
+      </div>
+      <div className="flex flex-col gap-3 border-t pt-8">
+        <Bone className="h-5 w-40" />
+        <Bone className="h-4 w-full max-w-prose" />
+        <Bone className="h-10 w-40 rounded-lg" />
+      </div>
     </SkeletonPage>
   );
 }
