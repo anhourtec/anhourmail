@@ -42,6 +42,8 @@ const nextConfig = {
   output: "standalone",
   reactCompiler: true,
   poweredByHeader: false,
+  // The dev-only indicator would sit on top of the docs sidebar footer.
+  devIndicators: { position: "bottom-right" },
   logging: { incomingRequests: false },
   turbopack: { root },
   outputFileTracingRoot: root,
