@@ -32,6 +32,7 @@ if (mode === "create") {
     ["reportsReader", { platform: "reports_reader" }],
     ["owner", { account: "owner" }],
     ["member", { account: "member" }],
+    ["userAdmin", { account: "user_admin" }],
   ];
   for (const [key, roles] of people) {
     const id = randomUUID();

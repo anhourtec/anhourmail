@@ -19,6 +19,12 @@ describe("console navigation follows the matrix", () => {
     const owner = visibleNav(actor([], [{ accountId: "a", role: "owner" }]), "a").map((n) => n.label);
     expect(owner).toEqual(NAV.filter((n) => n.scope === "account").map((n) => n.label));
     expect(visibleNav(actor([], [{ accountId: "a", role: "member" }]), "a").map((n) => n.label)).toEqual(["Aliases"]);
+    expect(visibleNav(actor([], [{ accountId: "a", role: "auditor" }]), "a").map((n) => n.label)).toContain(
+      "People and roles",
+    );
+    expect(visibleNav(actor([], [{ accountId: "a", role: "billing_admin" }]), "a").map((n) => n.label)).not.toContain(
+      "People and roles",
+    );
   });
 
   it("staff see platform sections for their role only", () => {
@@ -27,5 +33,13 @@ describe("console navigation follows the matrix", () => {
       NAV.filter((n) => n.scope === "platform").length,
     );
     expect(visibleNav({ kind: "anonymous" })).toEqual([]);
+  });
+
+  it("built pages link to their routes", () => {
+    const href = (label: string) => NAV.find((n) => n.label === label)?.href?.("acc");
+    expect(href("People and roles")).toBe("/accounts/acc/people");
+    expect(href("Audit log")).toBe("/accounts/acc/audit");
+    expect(href("Customer accounts")).toBe("/platform/accounts");
+    expect(href("Platform audit")).toBe("/platform/audit");
   });
 });

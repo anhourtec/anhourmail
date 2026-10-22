@@ -55,7 +55,14 @@ export const NAV: readonly NavItem[] = [
     phase: 3,
     href: (accountId) => `/accounts/${accountId}/aliases`,
   },
-  { label: "People and roles", icon: "users", permission: "account.admins.manage", scope: "account", phase: 3 },
+  {
+    label: "People and roles",
+    icon: "users",
+    permission: "member.read",
+    scope: "account",
+    phase: 3,
+    href: (accountId) => `/accounts/${accountId}/people`,
+  },
   { label: "Billing", icon: "credit-card", permission: "billing.read", scope: "account", phase: 5 },
   {
     label: "Audit log",
@@ -63,9 +70,16 @@ export const NAV: readonly NavItem[] = [
     permission: "audit.read",
     scope: "account",
     phase: 0,
-    href: (accountId) => `/#activity-${accountId}`,
+    href: (accountId) => `/accounts/${accountId}/audit`,
   },
-  { label: "Customer accounts", icon: "building", permission: "platform.accounts.read", scope: "platform", phase: 3 },
+  {
+    label: "Customer accounts",
+    icon: "building",
+    permission: "platform.accounts.read",
+    scope: "platform",
+    phase: 3,
+    href: () => "/platform/accounts",
+  },
   { label: "Abuse queue", icon: "shield-alert", permission: "platform.abuse.manage", scope: "platform", phase: 6 },
   { label: "Platform billing", icon: "receipt", permission: "platform.billing.manage", scope: "platform", phase: 5 },
   {
@@ -74,7 +88,7 @@ export const NAV: readonly NavItem[] = [
     permission: "platform.audit.read",
     scope: "platform",
     phase: 0,
-    href: () => "/#platform-activity",
+    href: () => "/platform/audit",
   },
   { label: "Staff roles", icon: "user-cog", permission: "platform.staff.manage", scope: "platform", phase: 3 },
 ];

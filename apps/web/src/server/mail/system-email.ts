@@ -51,3 +51,26 @@ export function passwordResetEmail(input: { to: string; name: string; url: strin
     footer: "If you didn't ask, ignore this email — your password stays the same.",
   });
 }
+
+/** An invite to join an account. The link is single-use, bound to this address, and expires after `days`. */
+export function inviteEmail(input: {
+  to: string;
+  accountName: string;
+  inviter: string;
+  role: string;
+  url: string;
+  days: number;
+}): MailMessage {
+  return systemEmail({
+    to: input.to,
+    // Generic on purpose: the subject is what spam filters and previews show, so no inviter-chosen text in it.
+    subject: "You've been invited to an AnhourMail account",
+    greeting: "Hi,",
+    lines: [
+      `${input.inviter} invited you to join ${input.accountName} on AnhourMail as ${input.role}.`,
+      `The link works once, for this address only, for ${String(input.days)} days.`,
+    ],
+    action: { label: "Accept the invite", url: input.url },
+    footer: "If you weren't expecting this, ignore this email — nothing happens unless you accept.",
+  });
+}

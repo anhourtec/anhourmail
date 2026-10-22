@@ -7,7 +7,7 @@ export type E2eUsers = {
   run: string;
   password: string;
   accountName: string;
-  users: Record<"globalAdmin" | "reportsReader" | "owner" | "member", string>;
+  users: Record<"globalAdmin" | "reportsReader" | "owner" | "member" | "userAdmin", string>;
 };
 
 export const urls = {

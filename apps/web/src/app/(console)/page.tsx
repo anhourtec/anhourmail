@@ -1,8 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { Metadata } from "next";
+import Link from "next/link";
 
 import { can, type UserActor } from "@anhourmail/core";
-import { type AuditEntry, listAccountAudit, listPlatformAudit } from "@anhourmail/core/audit";
+import {
+  actionLabel,
+  type AuditEntry,
+  describeActor,
+  listAccountAudit,
+  listPlatformAudit,
+} from "@anhourmail/core/audit";
 import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 
 import { PageHeader } from "@anhourmail/ui/page-header";
@@ -15,22 +22,12 @@ export const metadata: Metadata = { title: "Console" };
 
 const dateFmt = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium", timeStyle: "short" });
 
-const roleLabel = (role: string | null): string =>
-  role
-    ? ((ROLE_LABELS as Record<string, string>)[`platform:${role}`] ??
-      (ROLE_LABELS as Record<string, string>)[`account:${role}`] ??
-      role)
-    : "";
-
-/** Rule 49: staff actions on an account are always shown as such, with role and reason. */
-function describeActor(e: AuditEntry): string {
+/** Rule 49: staff actions on an account are always shown as such (core describeActor), with the reason if given. */
+function describe(e: AuditEntry): string {
+  const who = describeActor(e);
   const target = e.target.label ? ` · ${e.target.label}` : "";
   const reason = typeof e.meta.reason === "string" ? ` · reason: ${e.meta.reason}` : "";
-  if (e.onBehalfOf)
-    return `Anhourtec staff (${e.onBehalfOf.email}) acting as ${e.actor.email ?? "a member"}${target}${reason}`;
-  if (e.actor.type === "staff")
-    return `Anhourtec staff · ${roleLabel(e.actor.role)} · ${e.actor.email ?? ""}${target}${reason}`;
-  return `${e.actor.email ?? e.actor.type}${target}`;
+  return `${who.label}${who.detail ? ` (${who.detail})` : ""}${target}${reason}`;
 }
 
 function AuditList({ entries }: { entries: AuditEntry[] }) {
@@ -40,8 +37,8 @@ function AuditList({ entries }: { entries: AuditEntry[] }) {
       {entries.map((e) => (
         <li key={e.id} className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 flex-col">
-            <span className="am-code truncate">{e.action}</span>
-            <span className="am-micro truncate">{describeActor(e)}</span>
+            <span className="am-body truncate">{actionLabel(e.action)}</span>
+            <span className="am-micro truncate">{describe(e)}</span>
           </div>
           <div className="flex shrink-0 items-center gap-3">
             <span className={`am-status am-status--${e.result === "success" ? "success" : "danger"}`}>{e.result}</span>
@@ -68,9 +65,14 @@ async function AccountSection({ actor, accountId, name }: { actor: UserActor; ac
       </div>
       {audit && (
         <div className="flex flex-col gap-3">
-          <h3 id={`activity-${accountId}`} className="am-h3 scroll-mt-20">
-            Recent activity
-          </h3>
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 id={`activity-${accountId}`} className="am-h3 scroll-mt-20">
+              Recent activity
+            </h3>
+            <Link href={`/accounts/${accountId}/audit`} className="am-small underline-offset-2 hover:underline">
+              Open the audit log
+            </Link>
+          </div>
           <AuditList entries={audit} />
         </div>
       )}
@@ -105,9 +107,14 @@ export default async function ConsoleHome() {
           </div>
           {platformAudit && (
             <div className="flex flex-col gap-3">
-              <h3 id="platform-activity" className="am-h3 scroll-mt-20">
-                Platform activity
-              </h3>
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h3 id="platform-activity" className="am-h3 scroll-mt-20">
+                  Platform activity
+                </h3>
+                <Link href="/platform/audit" className="am-small underline-offset-2 hover:underline">
+                  Open the platform audit
+                </Link>
+              </div>
               <AuditList entries={platformAudit} />
             </div>
           )}

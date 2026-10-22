@@ -34,7 +34,7 @@ test("Owner sees account admin sections and the audit log", async ({ page }) => 
   await expect(page.getByRole("heading", { name: u.accountName })).toBeVisible();
   const nav = await openNav(page);
   await expect(nav.locator(`[data-nav="audit.read"]`)).toBeVisible();
-  await expect(nav.locator(`[data-nav="account.admins.manage"]`)).toBeVisible();
+  await expect(nav.locator(`[data-nav="member.read"]`)).toBeVisible();
 });
 
 test("Member sees only their own aliases", async ({ page }) => {

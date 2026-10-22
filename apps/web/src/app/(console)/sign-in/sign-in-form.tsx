@@ -12,8 +12,11 @@ import { PasswordInput } from "@/components/password-input";
 const inputClass =
   "h-10 w-full rounded-lg border bg-background px-3 text-[15px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring";
 
-/** Posts to the auth endpoint directly; the SDK stays server-side in packages/adapters (ADR-0008). */
-export function SignInForm() {
+/**
+ * Posts to the auth endpoint directly; the SDK stays server-side in packages/adapters (ADR-0008). `next` is where to
+ * go afterwards — the page passes only paths it has checked (an invite link), never an arbitrary URL.
+ */
+export function SignInForm({ next = "/" }: { next?: string }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -31,7 +34,7 @@ export function SignInForm() {
         body: JSON.stringify({ email: form.get("email"), password: form.get("password") }),
       });
       if (res.ok) {
-        router.replace("/");
+        router.replace(next);
         router.refresh();
         return;
       }
