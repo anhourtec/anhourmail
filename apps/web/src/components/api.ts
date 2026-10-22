@@ -2,7 +2,7 @@
 /** Same-origin JSON call to the console API; returns the error message from the `{ error }` envelope on failure. */
 export async function callApi(
   url: string,
-  init: { method: "POST" | "PATCH" | "DELETE"; body?: unknown },
+  init: { method: "POST" | "PUT" | "PATCH" | "DELETE"; body?: unknown },
 ): Promise<{ ok: true; data: unknown } | { ok: false; status: number; message: string }> {
   try {
     const res = await fetch(url, {

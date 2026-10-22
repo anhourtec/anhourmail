@@ -15,6 +15,8 @@ export const GET = route(async ({ req }) => {
     email: actor.email,
     platformRoles: actor.platformRoles,
     memberships: actor.memberships,
+    // A sign-in factor one of their accounts requires and they still have to set up (null when none).
+    mustEnrol: actor.mustEnrol ?? null,
     permissions: ALL_PERMISSIONS.filter((p) => can(actor, p)),
   });
 });
