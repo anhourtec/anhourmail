@@ -7,6 +7,8 @@
     "custom-domain",
     "mailboxes",
     "aliases",
+    "people-and-roles",
+    "audit-log",
     "folders-and-signatures",
     "sending-limits",
     "faq",

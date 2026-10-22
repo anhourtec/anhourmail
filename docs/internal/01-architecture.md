@@ -129,6 +129,15 @@ Why the host split: the origin that renders untrusted email HTML (`mail.`) is is
 - One permission matrix in `packages/shared/src/rbac` (the code is canonical; `roles.md` describes it). UI, API and the RBAC harness all derive from it.
 - Services check **permission + ownership scope**. Out-of-scope ids → **404**, missing permission → **403**, unauthenticated → **401**.
 - Staff "act as" is Global/Support Administrator only, time-limited, banner-visible, audited, and never exposes mail content.
+- People and invites (`packages/core/src/people`): an invite stores only the token hash; the route emails the link
+  after the unit of work commits (a failed send is reported, never rolled back: resend). Accepting runs in one unit
+  of work under the account row lock: conditional `invite.accept` (single use), then the membership, and — when
+  signed out — the console login (`auth_user` + credential `auth_account`, argon2id hashed before the transaction)
+  for the invited address. Role and removal guard rails: `roles.md` guard rail 9.
+- Audit views (`packages/core/src/audit/{service,labels}.ts`): filtered, cursor-paged reads (area, actor kind or
+  person, result, UTC dates); views carry only the network part of the IP and no user agent; staff and act-as are
+  always labelled "Anhourtec staff". Staff look-up of an account (`packages/core/src/platform`) is metadata only and
+  writes `staff.account_viewed` into that account's chain.
 
 ## Tenancy
 

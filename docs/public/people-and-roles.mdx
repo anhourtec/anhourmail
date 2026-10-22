@@ -1,0 +1,52 @@
+---
+title: People and roles
+description: Invite family or a small group into your account, choose what each person can do, and remove people.
+---
+
+On the Plus and Supporter plans an account can have up to <Value of="maxPeople" /> people, counting invites that are
+still waiting. The Free plan is for one person. Open **People and roles** in the console to see everyone, their role,
+when they joined, and the invites you've sent.
+
+People and mailboxes are separate. A person is someone who can sign in to the console; a mailbox is an address with
+mail in it. Give someone a mailbox on the **Mailboxes** page by choosing them under **Belongs to**.
+
+## Roles
+
+| Role                  | Can                                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------- |
+| Owner                 | Everything, including inviting, changing and removing other owners and admins.        |
+| Domain Administrator  | Add, verify and remove domains.                                                       |
+| User Administrator    | Create and manage mailboxes, manage everyone's aliases, and invite or remove Members. |
+| Billing Administrator | Change the plan and see invoices.                                                     |
+| Member                | Their own mailbox, aliases and settings.                                              |
+| Read-only (Auditor)   | See settings, people, domains, mailboxes and the audit log. Changes nothing.          |
+
+## Invite someone
+
+1. Open **People and roles**.
+2. Enter their email address and choose a role. Owners can choose any role; User Administrators invite Members.
+3. Choose **Send invite**.
+
+We email them a link. It works once, only for that address, for <Value of="inviteDays" /> days. When they open it:
+
+- if they don't have an AnhourMail login yet, they enter their name and choose a password, and they're in;
+- if they already have one, they sign in with that address and join.
+
+Pending invites are listed under **Pending invites**. **Resend** sends a new link with a fresh
+
+<Value of="inviteDays" /> days (the old link stops working). Revoking an invite stops its link at once. An account can
+send up to <Value of="inviteEmailsPerDay" /> invite emails a day, resends included.
+
+## Change a role or remove someone
+
+Owners can change anyone's role from the role menu in their row. User Administrators can remove Members.
+Removing someone takes two steps, and they lose access to the account in the console straight away. Their mailboxes
+and mail are kept; suspend or delete a mailbox from the **Mailboxes** page if you need to.
+
+Some changes are never allowed, so an account can't lock itself out:
+
+- an account always has at least one owner: the last owner can't be removed or given another role;
+- nobody can change their own role or remove themselves;
+- only an owner can invite, change or remove an owner or an admin.
+
+Every invite, role change and removal is recorded in the [audit log](/docs/audit-log).

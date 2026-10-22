@@ -35,6 +35,7 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 | #    | Migration                          | Commit      | Date       | Change                                                                                   | Rollback        |
 | ---- | ---------------------------------- | ----------- | ---------- | ---------------------------------------------------------------------------------------- | --------------- |
+| 0008 | `0008_invite_send_log`             | uncommitted | 2026-10-22 | `invite_send` table (one row per invite email sent) for the per-account daily cap        | Safe            |
 | 0006 | `0006_remove_waitlist`             | uncommitted | 2026-10-22 | Drop `waitlist_entry`; drop `invite.source`, `invite.waitlist_entry_id`                  | Not recommended |
 | 0005 | `0005_domain_claims`               | uncommitted | 2026-10-21 | Domain names unique per account; across accounts only once claimed (verified)            | Caution         |
 | 0004 | `0004_waitlist_opt_in_and_invites` | `3e75c1f`   | 2026-10-21 | Waitlist double opt-in columns; invite source/waitlist link/acceptance                   | Safe            |
@@ -55,6 +56,15 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0008_invite_send_log · uncommitted · 2026-10-22 · Safe
+
+- Added: `invite_send` (id, account_id → `customer_account` ON DELETE CASCADE, invite_id, sent_at) with index
+  `invite_send_account_at_idx` (account_id, sent_at). No email address or token is stored.
+- Changed: —
+- Removed: —
+- Data: none (the daily cap starts counting from empty).
+- Rollback: drop the table and index; the daily invite-email cap stops working (older code never reads it).
 
 ### 0007_mailbox_lifecycle · uncommitted · 2026-10-22 · Safe
 

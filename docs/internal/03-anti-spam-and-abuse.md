@@ -132,4 +132,7 @@ Each produces an `AbuseEvent` (`04-data-model.md`) and an audit entry.
 ## CASL posture (`research/market-and-legal.md` §4)
 
 - The carrier exemption covers mere transmission only. The CRTC position is that a host can be liable for **aiding** contraventions, so we keep a strict AUP, an abuse desk, documented enforcement, and records of actions.
+- Account invites are transactional mail sent at an account admin's request: generic subject, inviter text only in the
+  body, per-caller `invite` rate tier and a per-account daily cap (`INVITE_EMAILS_PER_DAY`, counting resends;
+  `07-security.md` "Invites"), so the invite form can't be used to spam arbitrary addresses at volume.
 - Our own mail (invites, product news) needs consent records (express consent with timestamp, source and IP) and a working unsubscribe that is honoured within 10 business days (we aim for immediately).

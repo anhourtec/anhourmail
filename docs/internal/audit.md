@@ -17,7 +17,7 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | Area | Actions |
 | --- | --- |
 | `auth` | `auth.sign_in`, `auth.sign_in_failed`, `auth.sign_out`, `auth.password_changed`, `auth.password_reset`, `auth.password_reset_requested`, `auth.two_factor_enabled`, `auth.two_factor_disabled`, `auth.app_password_created`, `auth.app_password_revoked`, `auth.session_revoked`, `auth.locked_out`, `auth.mail_client_sign_in`, `auth.mail_client_sign_in_failed`, `auth.two_factor_reset`, `auth.backup_code_used`, `auth.sessions_revoked_all`, `auth.new_device` |
-| `account` | `account.created`, `account.deleted`, `account.updated`, `account.invite_sent`, `account.invite_accepted`, `account.member_added`, `account.member_removed`, `account.role_changed`, `account.ownership_transferred` |
+| `account` | `account.created`, `account.deleted`, `account.updated`, `account.invite_sent`, `account.invite_accepted`, `account.invite_resent`, `account.invite_revoked`, `account.member_added`, `account.member_removed`, `account.role_changed`, `account.ownership_transferred` |
 | `domain` | `domain.added`, `domain.verified`, `domain.verify_failed`, `domain.removed`, `domain.dns_state_changed` |
 | `mailbox` | `mailbox.created`, `mailbox.suspended`, `mailbox.unsuspended`, `mailbox.deleted`, `mailbox.quota_changed`, `mailbox.deletion_scheduled`, `mailbox.restored` |
 | `alias` | `alias.created`, `alias.toggled`, `alias.deleted` |
@@ -58,6 +58,21 @@ Suspending or deleting again after the worker gave up is recorded with `retry: t
 on an Owner's or admin's mailbox is recorded as `denied` (`forbidden`). The reconciler's `platform.reconciler_drift`
 meta includes `suspensionMismatches` and `requeued`.
 `mailbox.deleted` stays reserved for an immediate deletion without a grace period (not offered today).
+
+People: `account.invite_sent`, `account.invite_resent`, `account.invite_revoked` (target label = the invited
+address, meta = role; never the token), `account.invite_accepted` (meta: role, `newLogin`, the user id; the actor is
+the signed-in person, or `system`/`invite` when the link created the login), `account.role_changed` (meta:
+`previousRole`, `newRole` — `from`/`to` are redacted keys) and `account.member_removed` (meta: role, how many of their
+mailboxes became unassigned). A User Administrator's attempt on an Owner, an admin or an admin-role invite is recorded as
+`denied` in the account. An invite opened by a different signed-in address is recorded as `denied` in the
+**platform** scope with the invited address masked, so a non-member's address and id never land in the inviting
+account's log. `staff.account_viewed` is written in the viewed account's scope each time staff open its summary;
+staff paths (`MutationSpec.staffPath`) always record the actor as staff with the platform role, even when that staff
+member also belongs to the account (rule 49).
+
+Views: the console and the audit API show the network part of the IP only (`203.0.113.x`, IPv6 `/48`) and no user
+agent; filters are area, actor (person, staff — including act-as —, system, signed out), result and UTC dates, newest
+first with a `before` cursor.
 
 Not audited here by design: personal folder create/rename/move/delete and message moves — they are mail data
 handled by Stalwart over JMAP/IMAP and never pass through the control plane (ADR-0014). Audited: folder sharing

@@ -1,6 +1,6 @@
 # 07 — Security
 
-Last updated: 2026-10-21.
+Last updated: 2026-10-22.
 
 ## Threat model
 
@@ -49,6 +49,21 @@ algorithm — argon2id**.
 
 Never: plaintext, reversible encryption, unsalted or fast hashes (MD5/SHA-x) for passwords; never log or audit
 password material (redaction list).
+
+## Invites
+
+Decision 2026-10-22 (security review of the people slice):
+
+- **Accepting an invite creates a verified console login even when `SIGNUP_MODE=closed`.** Intended: the single-use
+  link was emailed to that address, so opening it proves the address. It is bounded by the account's plan
+  (`addPeople`), `MAX_PEOPLE` per account (members + unexpired invites, re-checked under the account lock at
+  acceptance) and `INVITE_EMAILS_PER_DAY` per account (a send log that counts resends; revoking gives nothing back).
+  No personal Free account is created for such a login.
+- Invite emails have a generic subject; the account and inviter names (chosen by the inviter) appear only in the
+  body, escaped. Sending is rate-limited per caller (`invite` tier) on top of the daily cap.
+- Tokens: 256-bit, only the SHA-256 is stored, the token travels in the URL path (`/invite/<token>`) and in the
+  sign-in `next` query, never in an API response or our logs (`logPath` redacts it). Pages carrying it send no
+  referrer. **Production NGINX must not log the `/invite/<token>` path or the `next` query** (`deploy/README.md`).
 
 ## Review process
 

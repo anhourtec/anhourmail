@@ -1,6 +1,6 @@
 ---
 title: Webmail
-description: Read your mail in the browser at the webmail address — how to sign in, what you'll see, and why remote images are blocked.
+description: Read and write mail in the browser — signing in, several mailboxes, writing and undoing a send, organising, searching, shortcuts, and why remote images are blocked.
 ---
 
 The webmail is AnhourMail in your browser, at <Value of="webmailHost" />. It's a separate address from the console
@@ -25,32 +25,93 @@ everywhere.
 If you see "This mailbox can't be used right now", the mailbox has been suspended or deleted by your account's admin
 (see [Mailboxes](/docs/mailboxes)). Ask them to resume or restore it.
 
+## Several mailboxes
+
+If you use more than one mailbox, open the menu (⋮) at the top of the sidebar and choose **Add another mailbox**, then
+sign in to it with its own address and password. Each mailbox gets a square tile at the top of the sidebar; choose a
+tile to switch. You can have up to five open at once. **Sign out** signs out of all of them.
+
 ## Reading mail
 
 - On a computer you see your folders, the list of conversations and the open message side by side. On a phone you
-  see one at a time: choose a conversation to open it, and the back arrow to return to the list.
-- Messages in the same conversation are grouped. The number beside a sender shows how many messages it holds; open
-  it and choose any message in the strip at the top to read it.
-- Opening a conversation marks it read. Use the envelope button to mark a message unread again, and the flag button
-  to flag it.
-- Attachments are listed under the message headers. Choosing one downloads it; nothing an attachment contains is
-  opened in the webmail itself.
-- Folders you create, and folders inside folders, appear below the standard ones (Inbox, Drafts, Sent, Archive,
-  Junk, Trash) with their unread counts.
+  see one at a time: choose a conversation to open it, and the back arrow to return to the list. The sidebar folds
+  into a narrow rail with the button at the top of the list, and is a drawer on phones.
+- The list shows the newest first, with how long ago each arrived ("24 minutes ago", "1 day ago", then the date). A
+  blue dot after the sender means unread; the number beside a sender is how many messages the conversation holds.
+- Opening a conversation marks it read. Use the arrows at the top of the message to go to the previous or next one.
+- Plain-text messages keep their line breaks, and links and addresses in them work. Earlier messages quoted in a
+  reply are folded away behind **…** — choose it to show them; signatures are shown lighter.
+- Attachments are listed under the sender, with their size. Pictures show a small preview; choose one to see it
+  bigger. Forwarded messages open in place. Everything else downloads when you choose it; files are never opened in
+  the webmail itself.
+- Calendar invitations show as a card with the time, place and organiser. Replying to invitations is coming soon.
+- In the ⋮ menu, **View original** shows the message's source, and **Print** opens a printable copy.
+- Very long messages show the first part with **View entire message**.
+- **Priority** in the sidebar collects every message you've flagged, in any folder.
+- **Pinned** conversations stay at the top of their folder, in their own section. Use the pin button on a message.
+
+## Writing mail
+
+- Choose **New email** in the sidebar (or press `c`). Type addresses in **To**; press Enter or a comma after each
+  one, or pick from the suggestions (people you've written to recently). **Cc Bcc** adds those fields.
+- If you have aliases or masked aliases, choose which address to send from in **From**.
+- Attach files with the paperclip (up to <Value of="attachmentPerFile" /> each, <Value of="attachmentPerMessage" /> per
+  message).
+- Your message is saved to **Drafts** a couple of seconds after you stop typing. Close it and carry on later from the
+  Drafts folder; the bin button discards it.
+- To reply, use the **Reply to …** box under a message, or the reply button. **Reply all**, **Forward** and more are
+  in the ⋮ menu. Replies quote the original message and stay in the same conversation.
+- **Undo send:** after you choose **Send**, you have a few seconds to choose **Undo** — the message goes back to your
+  drafts and nothing is delivered.
+- You can send to up to <Value of="recipientsPerMessage" /> people per message, and each person counts toward your
+  [sending limits](/docs/sending-limits). Writing is plain text for now.
+
+## Organising mail
+
+- **Archive** keeps a conversation but takes it out of the Inbox. **Delete** moves it to Trash; in Trash (and Junk)
+  you can delete forever, after a confirmation. Both Trash and Junk have **Empty** in their ⋯ menu.
+- **Report junk** moves a conversation to Junk and helps the filters learn; **Not junk** moves it back.
+- **Move to** in the ⋮ menu files a conversation in any folder.
+- Archive, delete, junk and move show a notice with **Undo** for a few seconds.
+- **Select several:** hover over the square avatar and tick it (or press `x`); hold Shift to tick a range. The bar that
+  appears acts on all of them.
+
+## Search and filters
+
+Type in **Search…** above the list (or press `/`) and press Enter. Search covers every folder except Trash and Junk
+(search inside Trash or Junk while you are in them). You can narrow it with:
+
+| Write             | To find                   |
+| ----------------- | ------------------------- |
+| `from:sam`        | messages from someone     |
+| `to:jordan@…`     | messages to someone       |
+| `subject:"cabin"` | words in the subject      |
+| `has:attachment`  | messages with attachments |
+| `is:unread`       | unread messages           |
+| `is:flagged`      | messages in Priority      |
+
+The filter button beside the title shows only unread, Priority, or messages with attachments.
 
 ### Keyboard shortcuts
+
+Press `?` in the webmail (or choose **Keyboard shortcuts** in the sidebar) to see them all.
 
 | Key                       | What it does                   |
 | ------------------------- | ------------------------------ |
 | `j` / `k`                 | Next / previous conversation   |
 | `Enter` or `o`            | Open the selected conversation |
 | `u` or `Esc`              | Back to the list               |
-| `s`                       | Flag or unflag                 |
+| `c`                       | New email                      |
+| `r` / `a` / `f`           | Reply / reply all / forward    |
+| `e`                       | Archive                        |
+| `#`                       | Delete                         |
+| `!`                       | Report junk                    |
+| `s`                       | Add to or remove from Priority |
+| `p`                       | Pin or unpin                   |
+| `x`                       | Select                         |
 | `Shift`+`U` / `Shift`+`I` | Mark unread / read             |
-| `?`                       | Show the shortcuts             |
-
-Writing and replying to mail in the webmail is coming next. Until then, use a mail app
-([settings](/docs/clients/imap-smtp-settings)).
+| `/`                       | Search                         |
+| `Ctrl`/`⌘`+`Enter`        | Send (while writing)           |
 
 ## Remote images are blocked
 

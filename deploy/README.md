@@ -54,3 +54,6 @@ version. CI builds all three on every push (`.cicd/build.sh`).
   client once with exactly one redirect URI, `https://mail.anhourmail.com/oauth/callback` (`upsertOAuthClient` in
   `packages/stalwart-client`, client id `anhourmail-webmail`).
 - `SIGNUP_MODE` defaults to `closed`; set `open` only while access is limited to the IP allow-list.
+- NGINX access logs must not record invite tokens: redact the path segment after `/invite/` and the `next` query on
+  `/sign-in` (e.g. a `map` on `$request_uri` into the log format), since both carry a single-use invite token
+  (`docs/internal/07-security.md` "Invites"). Invite acceptance creates console logins even when sign-up is closed.

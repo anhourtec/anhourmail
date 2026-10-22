@@ -16,6 +16,83 @@ HourMail opened a new IMAP connection and logged in on every API call, ran one S
 
 AnhourMail: **browser → same-origin BFF (`mail.anhourmail.com`) → Stalwart JMAP.** There is no IMAP in the browser path. We sync incrementally, push changes, cache locally and fetch only what is on screen.
 
+**Status (2026-10-22): slice 2 is built** — compose / reply / reply all / forward (plain text, quoting, address
+suggestions, From = own identities, attachments up to the shared caps, autosaved drafts), **undo send held on the
+server** (FUTURERELEASE `HOLDFOR` 6 s, cancelled with `undoStatus: canceled`, verified on v0.16.27), archive /
+delete / junk / move with undo toasts, delete forever and empty Trash/Junk (with confirmation), Priority (flagged
+everywhere) and pinned conversations (`$pinned` keyword, verified), multi-select with shift ranges, search
+(`from:`, `to:`, `subject:`, `has:attachment`, `is:unread`, `is:flagged`) and filters, several mailboxes per webmail
+session ("Add another mailbox", switcher tiles), previous/next, the inline reply box, relative times, a collapsible
+sidebar, and a bottom action bar on phones.
+
+### Reading (slice 2 viewer)
+
+- **One surface.** The reader is a single scrolling pane: subject and date, sender card (To/Cc), attachments, then
+  the body, with the reply box pinned at the bottom. No message markup ever enters the page's DOM:
+  - **text/plain** → `body.ts` `textBlocks`: format=flowed decoded (RFC 3676, from the part's `header:Content-Type`),
+    line breaks kept, quoted replies (`>` runs with their "On … wrote:" line) collapsed behind a "…" toggle, the
+    signature after `-- ` dimmed. URLs and addresses are linked by the client from plain text (bounded patterns).
+  - **text/markdown** → `markdownBlocks`: a small AST (headings, lists, quotes, code, emphasis, links limited to
+    http/https/mailto); raw HTML and images become text. Rendered by React.
+  - **text/calendar** (invitations) → `calendarEvents`: event cards (title, time, place, organiser). Answering
+    invitations comes later.
+  - **message/rfc822** (forwarded or attached messages) → opened from their chip with `Email/parse` (the blob must be
+    an rfc822 attachment of that message) and shown through the same sanitiser.
+  - **Image attachments** (raster only) preview as thumbnails and in a viewer through `/api/webmail/preview/:blobId`,
+    served only as that image type with `nosniff` and a sandboxing CSP. SVG, HTML and everything else only download.
+    **PDF preview is not offered yet:** the browser's PDF viewer can't run in a sandbox and a same-origin PDF page is
+    a risk we don't take; production needs a separate attachment origin first (open item).
+  - Charsets: Stalwart returns decoded `bodyValues` (verified with ISO-8859-1). Bodies over 1 MB are cut with
+    "View entire message" (`?full=1`, up to 8 MB).
+  - **View original** (`/messages/:id/raw`, text/plain, nosniff, sandbox CSP, first 2 MB shown, .eml download) and
+    **Print** (`/messages/:id/print`: escaped headers + the sanitised body, served with `sandbox` CSP — an opaque
+    origin with no scripts — opened in a new tab for the browser's print command).
+- **text/html** stays in the sandboxed `srcdoc` frame (no `allow-scripts`, no `allow-same-origin` — unchanged).
+  Quoted replies inside it (Gmail/Yahoo quote containers, `blockquote type=cite`, Outlook's reply block) become
+  `<details>` toggles (no script needed) and signatures are dimmed. The frame has no card or border of its own.
+- **HTML frame height — open maintainer decision.** A script-less, cross-origin frame can't report its content
+  height and the parent can't read it, so the frame is sized to the reading pane: the header scrolls away and the
+  message then fills the pane, scrolling inside (the reply box stays pinned). True auto-height would need
+  `allow-same-origin` on the script-less frame (the parent could then read `scrollHeight`), or an inert twin of the
+  message in the page's DOM to measure — both change the isolation model, so neither is done without a decision.
+- **Webmail API CSP:** every `/api/webmail/*` response carries a CSP (`route()` adds `default-src 'none';
+frame-ancestors 'none'` unless the route sets its own sandboxing one). The app-wide CSP in `next.config.mjs` is
+  not applied there, because a config header of the same name replaced the routes' own CSPs (found in this slice).
+
+### Compose and send (slice 2)
+
+- **The proxy never creates or sends mail.** Drafts go through `PUT /api/webmail/drafts`: the BFF validates the input
+  (`compose.ts`: addresses, header-safe subject and names, Message-IDs, ≤ recipients per message, attachments per
+  file and per message from `WEBMAIL_ATTACHMENTS`), checks the From identity is one of the mailbox's own
+  (`Identity/get`, cached a minute), and builds the Email itself (in Drafts, `$draft`, plain text). Replacing a
+  draft checks the old one is a draft in Drafts.
+- **Send** (`POST /api/webmail/send`, `sending` tier fail-closed per webmail session and again per mailbox) re-reads
+  the draft and checks: in Drafts with `$draft`, exactly one From equal to the chosen identity, 1..max recipients,
+  size ≤ 30 MB. It submits with an explicit envelope (MAIL FROM = the identity; RCPT TO = To + Cc + Bcc) held for
+  `UNDO_SECONDS`, moving the message to Sent on success. Stalwart's sender rules (ADR-0019) also apply.
+- **Trust tiers (rule 27, security review run-15):** the tier comes from one helper, `sendingTier()` — `new` for
+  every mailbox until tiers are stored per account; `restricted` refuses sending. Sending is charged per rolling
+  hour and day, one unit per recipient (03-anti-spam-and-abuse.md), in sliding windows per mailbox and per webmail
+  session, atomically and failing closed (`SlidingQuotaStore`). The whole send runs against one mailbox: every
+  server-built call refuses if the active mailbox changes meanwhile.
+- **Only BFF drafts can be sent.** Drafts the BFF builds carry the `$am-composed` keyword; the proxy refuses setting
+  `$draft`, adding to Drafts, or touching that keyword, and `send` and draft replacement require it, so no message
+  can be promoted into a sendable draft through the proxy.
+- **Session record writes are compare-and-set** (a version prefix checked by a Lua script), so a token refresh
+  finishing late can't undo a mailbox switch or an added mailbox.
+- **Uploads:** at most 4 in flight per process (each holds up to 20 MB once; the body isn't streamed because the
+  upstream request may be retried).
+- **Undo** (`POST /api/webmail/send/undo`) cancels the held submission and moves the message back to Drafts; once it
+  is released Stalwart refuses the cancel and the person sees "It has already been sent".
+- **Uploads** (`POST /api/webmail/upload`) are capped while reading the body; the content type is reduced to a plain
+  MIME token pair. Plain text only in this slice: no HTML is ever sent from the webmail yet.
+- **Proxy allow-list changes:** `Email/set` may now update `keywords/*` and `mailboxIds` (moves) and `destroy`, and
+  the service checks every destroyed message is only in Trash or Junk before forwarding. No `create`, no
+  `EmailSubmission/*`, no `Mailbox/set`, no other properties (tests in `webmail.test.ts` cover each refusal).
+- **Several mailboxes:** the session record holds the active mailbox's tokens plus up to four others, all sealed
+  together; switching checks the target with the mailbox access gate. A blocked active mailbox still ends the whole
+  session (conservative).
+
 ### Security notes from the slice 1 review (2026-10-22)
 
 - **Account-level suspension must gate the webmail too.** Today the BFF's `MailboxAccessGate` checks the mailbox's

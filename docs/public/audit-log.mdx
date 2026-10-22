@@ -1,0 +1,30 @@
+---
+title: Audit log
+description: See every change made in your account, who made it and when, including anything Anhourtec staff did.
+---
+
+The audit log lists every change in your account: domains added, mailboxes created or suspended, aliases, invites,
+role changes, refused attempts and more. Entries can't be edited or deleted. Owners, User Administrators and
+Read-only (Auditor) people can open it from **Audit log** in the console.
+
+## What each entry shows
+
+- **When**, in UTC.
+- **Who**: the person's sign-in address and role, **System** for automatic work (for example a deleted mailbox being
+  removed for good after its grace period), or **Anhourtec staff**.
+- **What** happened, and to what (a domain, a mailbox, a person).
+- **Result**: success, denied (the person wasn't allowed) or failed.
+- **IP**: only the network part, like `203.0.113.x`.
+
+Select an entry to see its details. Passwords, links from emails, secrets and mail content are never recorded.
+
+## Anhourtec staff
+
+If anyone at Anhourtec looks at or changes your account, for example while helping you with a support request, it
+appears in your audit log as **Anhourtec staff** with their role. Staff can't read your mail: there is no way to do it
+from our tools.
+
+## Filters
+
+Narrow the list by area (for example **Domains** or **Account and people**), by who did it (a person, Anhourtec staff
+or the system), by result, and by date. **Older** shows earlier entries.
