@@ -5,6 +5,7 @@ import { Check, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { menuKeys, PanelSurface, usePopover } from "@/components/popover";
+import { Tooltip } from "@/components/tooltip";
 
 export type MenuEntry =
   | {
@@ -45,18 +46,19 @@ export function Menu({
   const { open, toggle, close, trigger: triggerRef, panel } = usePopover();
   return (
     <div className={`relative ${className}`}>
-      <button
-        ref={triggerRef}
-        type="button"
-        aria-label={label}
-        title={label}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={toggle}
-        className={trigger ? "rounded-lg focus-visible:ring-2 focus-visible:ring-ring" : iconButtonClass}
-      >
-        {trigger ?? <Icon className="size-4" aria-hidden />}
-      </button>
+      <Tooltip label={label} disabled={open}>
+        <button
+          ref={triggerRef}
+          type="button"
+          aria-label={label}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          onClick={toggle}
+          className={trigger ? "rounded-lg focus-visible:ring-2 focus-visible:ring-ring" : iconButtonClass}
+        >
+          {trigger ?? <Icon className="size-4" aria-hidden />}
+        </button>
+      </Tooltip>
       {open && (
         <div
           ref={panel}
