@@ -196,6 +196,7 @@ export function cleanCss(input: string, counter: { remote: number } = { remote: 
   return css.replace(new RegExp(`${MARK}(\\d+)${MARK}`, "g"), (_m, i: string) => `url("${kept[Number(i)] ?? ""}")`);
 }
 
+// Class names and ids other mail apps put on quote containers and signatures in the HTML they send; matched verbatim.
 const QUOTE_CLASS = /(?:^|\s)(?:gmail_quote(?:_container)?|yahoo_quoted|moz-cite-prefix)(?:\s|$)/;
 const SIG_CLASS = /(?:^|\s)(?:gmail_signature|moz-signature)(?:\s|$)/;
 

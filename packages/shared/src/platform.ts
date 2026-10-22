@@ -35,9 +35,9 @@ export const HOSTS = {
   smtp: `smtp.${PRODUCT_DOMAIN}`,
   /** Client access (IMAP, POP3, ManageSieve, JMAP for third-party clients). */
   imap: `imap.${PRODUCT_DOMAIN}`,
-  /** Thunderbird-style autoconfig; customer domains CNAME `autoconfig.<domain>` here. */
+  /** Autoconfig (`config-v1.1.xml` client-setup convention); customer domains CNAME `autoconfig.<domain>` here. */
   autoconfig: `autoconfig.${PRODUCT_DOMAIN}`,
-  /** Outlook autodiscover; customer domains CNAME `autodiscover.<domain>` here. */
+  /** Autodiscover (`autodiscover.xml` client-setup protocol); customer domains CNAME `autodiscover.<domain>` here. */
   autodiscover: `autodiscover.${PRODUCT_DOMAIN}`,
   /** MTA-STS policy host for the product domain. */
   mtaSts: `mta-sts.${PRODUCT_DOMAIN}`,
