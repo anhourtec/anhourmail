@@ -7,7 +7,7 @@ import type { CSSProperties } from "react";
 
 import { KeyRoundIcon, LockIcon, RefreshCwIcon } from "lucide-react";
 
-import { CLIENT_ENDPOINTS, DKIM_SELECTORS, dkimTarget } from "@anhourmail/shared";
+import { CLIENT_ENDPOINTS, DKIM_SELECTORS, dkimTarget, PUBLIC_PLATFORM } from "@anhourmail/shared";
 
 export function DkimRotation() {
   return (
@@ -31,7 +31,7 @@ export function DkimRotation() {
           >
             <span className="font-mono text-[12.5px]">{sel}._domainkey.yourname.com</span>
             <span className="truncate font-mono text-[11.5px] text-muted-foreground">
-              → {dkimTarget(sel, "yourname.com")}
+              → {dkimTarget(sel, "yourname.com", PUBLIC_PLATFORM)}
             </span>
           </li>
         ))}

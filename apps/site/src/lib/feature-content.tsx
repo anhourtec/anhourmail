@@ -30,7 +30,7 @@ import {
   ZapIcon,
 } from "lucide-react";
 
-import { customerDomainRecords, PLAN_ORDER, PLANS } from "@anhourmail/shared";
+import { customerDomainRecords, PLAN_ORDER, PLANS, PUBLIC_PLATFORM } from "@anhourmail/shared";
 
 import { AuditMock, ConsoleMock } from "@/components/landing/console-mock";
 import { DkimRotation, SettingsCard } from "@/components/landing/extra-art";
@@ -67,7 +67,7 @@ const paidWith = (k: "customDomains" | "catchAll") =>
   PLAN_ORDER.filter((id) => PLANS[id][k])
     .map((id) => PLANS[id].name)
     .join(" and ");
-const requiredRecords = customerDomainRecords("example.com", "x").filter((r) => r.required).length;
+const requiredRecords = customerDomainRecords("example.com", "x", PUBLIC_PLATFORM).filter((r) => r.required).length;
 const limit = (n: number | null) => (n === null ? "unlimited" : String(n));
 
 export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {

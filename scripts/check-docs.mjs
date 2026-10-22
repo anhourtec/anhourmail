@@ -64,7 +64,8 @@ function sharedFacts() {
   const company = /COMPANY_DOMAIN\s*=\s*"([^"]+)"/.exec(src)?.[1];
   if (!domain) throw new Error("check-docs: PRODUCT_DOMAIN not found in packages/shared");
   const hosts = new Set([domain, ...(company ? [company] : [])]);
-  for (const m of src.matchAll(/`([a-z0-9-]+)\.\$\{PRODUCT_DOMAIN\}`/g)) hosts.add(`${m[1]}.${domain}`);
+  // Hosts are built per platform domain (`platformHosts(domain)`); the docs publish them for PRODUCT_DOMAIN.
+  for (const m of src.matchAll(/`([a-z0-9-]+)\.\$\{(?:PRODUCT_DOMAIN|domain)\}`/g)) hosts.add(`${m[1]}.${domain}`);
 
   const ports = new Set([...src.matchAll(/\bport:\s*(\d+)/g)].map((m) => Number(m[1])));
 

@@ -15,7 +15,7 @@ import {
   TerminalIcon,
 } from "lucide-react";
 
-import { customerDomainRecords } from "@anhourmail/shared";
+import { customerDomainRecords, PUBLIC_PLATFORM } from "@anhourmail/shared";
 
 import { ALIASES } from "./console-mock";
 import { DEMO_DOMAIN, DEMO_ME, MockAvatar, MockCheckbox, MockStatus, MockSwitch, stagger } from "./mock-parts";
@@ -23,7 +23,7 @@ import { INBOX, ListHeader, MessageRow } from "./webmail-mock";
 
 /** The console's domain panel on its DNS records tab: each required record ticks to "Found" in turn. */
 export function DnsChecks() {
-  const records = customerDomainRecords(DEMO_DOMAIN, "demo").filter((r) => r.required);
+  const records = customerDomainRecords(DEMO_DOMAIN, "demo", PUBLIC_PLATFORM).filter((r) => r.required);
   return (
     <div aria-hidden="true" className="am-site-panel select-none overflow-hidden text-left">
       <div className="flex items-center gap-3.5 px-5 pt-5">

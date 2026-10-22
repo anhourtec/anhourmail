@@ -17,6 +17,7 @@ import {
   PLAN_ORDER,
   PLANS,
   PRODUCT_DOMAIN,
+  PUBLIC_PLATFORM,
   RECOVERY_CODES,
   SECOND_STEP_LIMITS,
   STEP_UP_MINUTES,
@@ -30,7 +31,8 @@ import {
 import { CopyButton } from "./copy-button";
 
 /**
- * Docs components that render facts from @anhourmail/shared — the single source of truth (CLAUDE.md rule 32).
+ * Docs components that render facts from @anhourmail/shared — the single source of truth (CLAUDE.md rule 32). The docs
+ * publish the product's own names (`PUBLIC_PLATFORM`, anhourmail.com), never a deployment's `PLATFORM_DOMAIN`.
  * docs/public never hard-codes a hostname, port, price or limit; scripts/check-docs.mjs enforces it.
  */
 
@@ -137,7 +139,7 @@ export function ClientSettingsTable() {
 
 /** The DNS records a custom domain needs, rendered for `domain`. Each value has a copy button. */
 export function DnsRecordTable({ domain = "example.com" }: { domain?: string }) {
-  const records = customerDomainRecords(domain, "your-verification-code");
+  const records = customerDomainRecords(domain, "your-verification-code", PUBLIC_PLATFORM);
   return (
     <div className="not-prose overflow-x-auto">
       <table className="w-full text-sm">
