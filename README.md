@@ -39,9 +39,23 @@ Open source and available as a hosted service at [anhourmail.com](https://anhour
 
 ## Project status
 
-**Phase 0: not usable yet.** This repository currently holds the research, architecture docs, the monorepo
-scaffold and a working local mail stack (Stalwart + Mailpit). There is no signup, no billing and no production
-deployment. Follow the [roadmap](./docs/internal/09-roadmap.md) and the [changelog](https://anhourmail.com/changelog).
+**In development — not open for sign-ups yet.** The control plane (Phase 3) and the webmail (Phase 4) are being
+built in the open; billing, abuse controls and the production deployment come next. Follow the
+[roadmap](./docs/internal/09-roadmap.md) and the [changelog](https://anhourmail.com/changelog).
+
+**Works today (local development):**
+
+- **Console** — custom domains with guided DNS and live checks; mailboxes with storage, suspend, resume and
+  delete with a 30-day restore window; aliases and masked aliases; people, invites and roles; an audit log;
+  global search; staff pages for customer accounts.
+- **Sign-in security** — two-factor sign-in with an authenticator app, recovery codes and passkeys; owners can
+  require a second factor; a Security page with sessions and recent activity.
+- **Webmail** — sign in with a mailbox, folders and threads, a safe reader (plain text, markdown, invitations,
+  forwarded mail; HTML in a sandboxed frame with remote images blocked), writing, replying and forwarding with
+  drafts and undo send, archive / delete / junk / move / pin, search, several mailboxes in one session, and
+  contacts that also sync to phones and desktop apps over CardDAV.
+- **Engineering** — role-based access checked on every route, an append-only audit trail, rate limits on every
+  endpoint, and a CI pipeline you can run locally with `npm run ci:local`.
 
 ---
 
@@ -68,13 +82,14 @@ deployment. Follow the [roadmap](./docs/internal/09-roadmap.md) and the [changel
 | ------------------ | --------------------------------------------------------------------------- |
 | **Free address**   | `you@anhourmail.com` with 10 GB                                             |
 | **Custom domains** | Bring your own domains on paid plans, with guided DNS and live verification |
-| **Aliases**        | Aliases, catch-all and masked aliases with per-alias on/off and stats       |
+| **Aliases**        | Aliases, catch-all and masked aliases you can switch off at any time        |
 | **Mail access**    | IMAP, SMTP and JMAP; app passwords; two-factor sign-in                      |
 | **Webmail**        | Open-source, keyboard-first, works on phones                                |
 | **Data export**    | mbox/EML + contacts export, account deletion                                |
 | **Trust**          | Privacy policy, acceptable use policy, status page, transparency report     |
 
-**Later:** calendar and contacts (CalDAV/CardDAV), a Sieve filter editor, per-user encryption at rest.
+**Later:** calendar (CalDAV), a filter editor, per-user encryption at rest. Contacts with CardDAV sync are
+already in the webmail.
 
 Plans, prices and limits are defined once in [`packages/shared`](./packages/shared) and rendered into the app,
 the marketing site and the docs.
@@ -135,7 +150,9 @@ npm run db:seed -- --demo   # demo accounts; writes credentials.md (gitignored, 
 | Postgres / Redis    | 127.0.0.1:43432 / 127.0.0.1:43379                                 |
 
 All ports are bound to `127.0.0.1` and can be changed in `.env`; `npm run ports:check` reports clashes.
-`npm run dev:reset` wipes the local volumes and re-seeds. To run your own instance, follow the
+`npm run dev:reset` wipes the local volumes and re-seeds. `npm run check`, `npm test`, `npm run test:int`,
+`npm run test:rbac` and `npm run test:e2e` run the checks and test suites; `npm run ci:local` runs the whole CI
+pipeline on a clean copy of your commits without touching your dev stack. To run your own instance, follow the
 [self-hosting guide](https://anhourmail.com/docs/self-hosting).
 
 ---
