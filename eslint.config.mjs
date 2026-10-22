@@ -42,6 +42,11 @@ export default tseslint.config(
       "playwright-report/**",
       "test-results/**",
       ".playwright-mcp/**",
+      // Scratch and probe files (CLAUDE.md rule 58) are outside every tsconfig, so type-aware rules can't parse them.
+      ".probe/**",
+      ".scratch/**",
+      "**/.probe*",
+      "**/.scratch*",
       "packages/shared/src/credits.generated.ts",
       "packages/adapters/drizzle/**",
     ],

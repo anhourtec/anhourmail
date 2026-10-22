@@ -28,6 +28,8 @@ const ROOTS = [
 ];
 
 const SKIP_DIRS = new Set(["node_modules", ".next", ".source", "dist", "out", "build", ".generated", "data"]);
+// Hidden files and folders (e.g. scratch probes) are local-only and never shipped (CLAUDE.md rule 58).
+const isHidden = (name) => name.startsWith(".");
 const EXTENSIONS = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs", ".css", ".sh"]);
 
 function listDirs(dir) {
@@ -52,7 +54,7 @@ function* walk(p) {
     return;
   }
   for (const name of readdirSync(p)) {
-    if (SKIP_DIRS.has(name)) continue;
+    if (SKIP_DIRS.has(name) || isHidden(name)) continue;
     // Generated shadcn/ui primitives keep their upstream form.
     if (name === "ui" && p.endsWith(`${path.sep}components`)) continue;
     yield* walk(path.join(p, name));
