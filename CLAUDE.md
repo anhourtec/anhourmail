@@ -56,6 +56,9 @@ local `.env` may set `DEV_HOST=0.0.0.0` and `DEV_BIND_ADDRESS=0.0.0.0` to reach 
 `allowedDevOrigins` includes the machine's LAN IPs). `*.localhost` hostnames resolve to 127.0.0.1 without editing
 `/etc/hosts`, so host separation and cookie scoping behave like production. On a bare IP (e.g. a phone on the LAN)
 dev serves the webmail at `/webmail`. Production publishes only NGINX 80/443 and Stalwart's mail ports (rule 18).
+Dev runs with `TRUST_PROXY=true`: the webmail port forwarder sets `X-Forwarded-For` for each visitor and the webmail
+passes it to Stalwart, so failed sign-ins are counted per client and the `mail-edge` forwarder is never banned; tests
+that fail sign-in on purpose send their own documentation-range address (198.51.100.0/24, 203.0.113.0/24).
 
 | What                                       | Local                                                                                                                                                 | Bind                                   | Production                  |
 | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | --------------------------- |
