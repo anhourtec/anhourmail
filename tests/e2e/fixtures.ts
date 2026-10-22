@@ -42,12 +42,19 @@ export const test = base.extend<{ consoleErrors: string[] }>({
 export const homeHeading = (page: Page) =>
   page.getByRole("heading", { level: 1, name: /^(Hello|Good (morning|afternoon|evening)), / });
 
+/**
+ * How long to wait for the result of a sign-in. Signing in checks a password with argon2 (and, for a mailbox,
+ * exchanges an OAuth code with the mail server and makes the first JMAP calls), deliberately slow work that a cold
+ * CI runner can take several seconds over. Every other assertion keeps the default timeout.
+ */
+export const SIGN_IN_TIMEOUT = 15_000;
+
 export async function signIn(page: Page, email: string, password: string): Promise<void> {
   await page.goto(`${urls.app}/sign-in`);
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(homeHeading(page)).toBeVisible();
+  await expect(homeHeading(page)).toBeVisible({ timeout: SIGN_IN_TIMEOUT });
 }
 
 /** The open flyout details panel (a modal dialog), by its name. */

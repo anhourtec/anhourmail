@@ -8,7 +8,7 @@
 import { demoPassword } from "../support/demo-credentials";
 import type { Page } from "@playwright/test";
 
-import { e2eUsers, expect, test, urls } from "./fixtures";
+import { e2eUsers, expect, SIGN_IN_TIMEOUT, test, urls } from "./fixtures";
 
 const OWNER = "owner@demo-family.test";
 /**
@@ -50,7 +50,7 @@ async function signInWebmail(page: Page, address: string) {
   await page.getByLabel("Mailbox address").fill(address);
   await page.getByLabel("Password", { exact: true }).fill(demoPassword(address));
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible({ timeout: SIGN_IN_TIMEOUT });
   await hideDevOverlay(page);
 }
 
@@ -86,7 +86,9 @@ test.describe("deliberate wrong passwords", () => {
     await expect(page.locator("form")).toHaveAttribute("method", "post");
     await page.getByLabel("Password", { exact: true }).fill("not-the-password");
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
-    await expect(page.getByRole("alert").filter({ hasText: "Mailbox address or password is wrong." })).toBeVisible();
+    await expect(page.getByRole("alert").filter({ hasText: "Mailbox address or password is wrong." })).toBeVisible({
+      timeout: SIGN_IN_TIMEOUT,
+    });
   });
 });
 
@@ -100,7 +102,7 @@ test("a person signs in to the webmail, reads mail with remote images blocked, a
   await page.getByLabel("Mailbox address").fill(OWNER);
   await page.getByLabel("Password", { exact: true }).fill(demoPassword(OWNER));
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible({ timeout: SIGN_IN_TIMEOUT });
   const list = page.getByRole("listbox", { name: "Inbox messages" });
   await expect(list.getByRole("option", { name: /Your holds are ready for pickup/ })).toBeVisible();
 

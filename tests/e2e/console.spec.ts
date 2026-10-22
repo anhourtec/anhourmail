@@ -8,6 +8,7 @@ import {
   openSearch,
   panel,
   panelReady,
+  SIGN_IN_TIMEOUT,
   signIn,
   signOut,
   test,
@@ -20,7 +21,7 @@ test("signed-out visitors land on sign-in; a wrong password shows an error", asy
   await page.getByLabel("Email").fill("nobody@e2e.test");
   await page.getByLabel("Password", { exact: true }).fill("wrong-password-123");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByText("Email or password is wrong.")).toBeVisible();
+  await expect(page.getByText("Email or password is wrong.")).toBeVisible({ timeout: SIGN_IN_TIMEOUT });
 });
 
 test("Global Administrator sees every staff section", async ({ page, consoleErrors }) => {
