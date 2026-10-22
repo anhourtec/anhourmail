@@ -93,7 +93,7 @@ Never claim "unhackable", "military-grade" or "immune to government requests". S
 
 ## Transactional email
 
-One plain 570 px layout: tables, inline styles, an Outlook VML button, system fonts, a hidden preheader, a `prefers-color-scheme` dark block and a plain-text part. Sent from `anhourmail.com` addresses through our own Stalwart. No tracking pixels or click tracking.
+One plain 570 px layout: tables, inline styles, a VML fallback button for desktop clients that ignore CSS buttons, system fonts, a hidden preheader, a `prefers-color-scheme` dark block and a plain-text part. Sent from `anhourmail.com` addresses through our own Stalwart. No tracking pixels or click tracking.
 
 ## Brand assets
 

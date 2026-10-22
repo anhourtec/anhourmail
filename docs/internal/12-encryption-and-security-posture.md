@@ -1,6 +1,6 @@
 # Encryption and security posture
 
-Goal (maintainer, 2026-10-21): be **more secure than Purelymail**, and honest about what each layer protects.
+Goal (maintainer, 2026-10-21): be **more secure than the low-cost providers we're priced against**, and honest about what each layer protects.
 Evidence: `research/encryption.md` (provider comparison, Stalwart Community verified on the dev server).
 Decision record: ADR-0016. Related: `07-security.md` (threat model, password storage), `02-mail-infrastructure.md`
 (TLS/MTA-STS/DANE settings), `05-webmail.md` (zero-access UX).
@@ -25,7 +25,7 @@ Decision record: ADR-0016. Related: `07-security.md` (threat model, password sto
 | Inbound server → us                                                                 | **MTA-STS `enforce`** (after `testing` + clean TLS-RPT), **TLS-RPT**, **DANE** TLSA on `mx1` with a DNSSEC-signed zone                                                                                                                                                                            | `x:MtaSts`, `x:TlsReportSettings`. DANE needs DNSSEC (open item: DNS provider with DNSSEC).                                                                                                                                                                                                     |
 | Us → other servers                                                                  | `MtaTlsStrategy`: `startTls: optional`, `dane: optional`, `mtaSts: optional` globally — which **enforces** TLS (and certificate validity) whenever the destination publishes MTA-STS or DANE; opportunistic otherwise. **REQUIRETLS** (RFC 8689) advertised so senders can demand TLS end-to-end. | Requiring TLS everywhere would bounce mail to legacy servers; `require` is used per destination policy, which is what MTA-STS/DANE express. Reported via TLS-RPT.                                                                                                                               |
 
-Better than Purelymail: its docs state only "SSL … whenever possible" and list no MTA-STS/DANE/REQUIRETLS.
+Better than the low-cost provider we compared: its docs state only "SSL … whenever possible" and list no MTA-STS/DANE/REQUIRETLS.
 
 ## 3. At rest (provider side)
 
@@ -64,8 +64,8 @@ the BFF exposes the setting (Phase 4).
   sheet. We never escrow keys.
 - Turning it off doesn't decrypt old mail; turning it on doesn't encrypt old mail (we offer a one-off
   "encrypt existing mail" job later, run with the public key only).
-- IMAP/POP clients receive the S/MIME/PGP-encrypted messages: Thunderbird, Apple Mail (S/MIME) and others decrypt
-  locally with the user's key.
+- IMAP/POP clients receive the S/MIME/PGP-encrypted messages: desktop and phone mail apps with S/MIME or OpenPGP
+  support decrypt locally with the user's key.
 
 **Product shape:**
 
@@ -81,7 +81,7 @@ the BFF exposes the setting (Phase 4).
 - Between AnhourMail users: automatic OpenPGP with keys from §4 (Phase "Later").
 - To the outside world: publish public keys via **WKD** (Web Key Directory) at `openpgpkey.<domain>` and support
   **Autocrypt** headers, so other OpenPGP users can encrypt to us; send encrypted when the recipient has a key.
-- Never claim E2EE for ordinary mail to Gmail/Outlook.
+- Never claim E2EE for ordinary mail to other providers.
 
 ## 6. Account security
 
@@ -109,17 +109,19 @@ the BFF exposes the setting (Phase 4).
 
 ## 8. Comparison and claims
 
-|                                           | AnhourMail (target)                                | Purelymail (its docs)                                                 | Proton Mail        | Gmail (personal)                      |
-| ----------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------- | ------------------ | ------------------------------------- |
-| TLS to clients                            | 1.2+ only, AEAD                                    | "SSL enabled"                                                         | Yes                | Yes                                   |
-| MTA-STS / TLS-RPT                         | Enforce / yes                                      | Not stated                                                            | Not stated         | MTA-STS honoured outbound             |
-| DANE                                      | Inbound (with DNSSEC) + outbound when published    | Not stated                                                            | Not stated         | No announcement found                 |
-| At rest                                   | Disk + encrypted off-server backups                | All data encrypted; mail encrypted with password-derived key          | Zero-access        | Google-held keys                      |
-| Zero-access option                        | Opt-in OpenPGP/S/MIME, private key never on server | "Even we can't access" when password reset disabled; S/MIME "planned" | Default            | No (CSE only on enterprise Workspace) |
-| 2FA                                       | TOTP, security keys, passkeys, recovery codes      | TOTP, security keys, backup codes                                     | TOTP, FIDO2 keys   | Yes, incl. keys                       |
-| App passwords                             | Per device, scoped, last used                      | Yes, per-protocol scopes                                              | Bridge             | Yes                                   |
-| Open source                               | Yes (AGPL/MIT; Stalwart AGPL)                      | Not stated                                                            | Clients            | No                                    |
-| User-visible audit log incl. staff access | Yes                                                | Not stated                                                            | Partial (sessions) | Activity page                         |
+|                                           | AnhourMail (target)                                | Low-cost provider (its docs)                                          | Privacy-focused provider | Large free provider (personal)                   |
+| ----------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------- | ------------------------ | ------------------------------------------------ |
+| TLS to clients                            | 1.2+ only, AEAD                                    | "SSL enabled"                                                         | Yes                      | Yes                                              |
+| MTA-STS / TLS-RPT                         | Enforce / yes                                      | Not stated                                                            | Not stated               | MTA-STS honoured outbound                        |
+| DANE                                      | Inbound (with DNSSEC) + outbound when published    | Not stated                                                            | Not stated               | No announcement found                            |
+| At rest                                   | Disk + encrypted off-server backups                | All data encrypted; mail encrypted with password-derived key          | Zero-access              | Provider-held keys                               |
+| Zero-access option                        | Opt-in OpenPGP/S/MIME, private key never on server | "Even we can't access" when password reset disabled; S/MIME "planned" | Default                  | No (customer-held keys only on enterprise tiers) |
+| 2FA                                       | TOTP, security keys, passkeys, recovery codes      | TOTP, security keys, backup codes                                     | TOTP, FIDO2 keys         | Yes, incl. keys                                  |
+| App passwords                             | Per device, scoped, last used                      | Yes, per-protocol scopes                                              | Paid local bridge        | Yes                                              |
+| Open source                               | Yes (AGPL/MIT; Stalwart AGPL)                      | Not stated                                                            | Clients                  | No                                               |
+| User-visible audit log incl. staff access | Yes                                                | Not stated                                                            | Partial (sessions)       | Activity page                                    |
+
+The providers are anonymised here (rule 57); `research/encryption.md` has the sources.
 
 **Claims we may make now (true in code today):** open source; passwords stored as salted argon2id; no tracking or
 ads in our pages; staff actions are visible to your account; mail content is never written to our logs.
