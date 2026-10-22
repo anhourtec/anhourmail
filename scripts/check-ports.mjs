@@ -11,6 +11,10 @@
  *   - a port is outside 40000–49151 (common or ephemeral ranges), or
  *   - a port is already taken on 127.0.0.1 by something other than this project's containers
  *     (pass --running when the stack is up to skip the "in use" check).
+ *
+ * `scripts/ci-local.sh` runs a second, throwaway stack next to the dev one, so it can't have the standard mail ports
+ * (the dev stack holds them). It sets CI_LOCAL_SHIFTED_MAIL_PORTS=1, and then mail ports must sit in the uncommon
+ * block like everything else instead of on the standard ports. CI and dev never set it.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -45,11 +49,14 @@ const problems = [];
 
 /** Mail protocol ports: standard on purpose (SMTP, IMAP, POP3, submission, ManageSieve). */
 const MAIL_PORTS = new Set([25, 110, 143, 465, 587, 993, 995, 4190]);
+const shiftedMail = process.env.CI_LOCAL_SHIFTED_MAIL_PORTS === "1";
 const byPort = new Map();
 for (const [key, port] of Object.entries(ports)) {
   const mailKey = /^STALWART_(SMTP|IMAP|IMAPS|POP3|POP3S|SUBMISSION|SUBMISSIONS|SIEVE)_PORT$/.test(key);
-  if (mailKey && !MAIL_PORTS.has(port)) problems.push(`${key}=${port} should be the standard mail port`);
-  if (!mailKey && (port < 40000 || port > 49151)) problems.push(`${key}=${port} is outside 40000–49151`);
+  if (mailKey && !shiftedMail && !MAIL_PORTS.has(port))
+    problems.push(`${key}=${port} should be the standard mail port`);
+  if ((!mailKey || shiftedMail) && (port < 40000 || port > 49151))
+    problems.push(`${key}=${port} is outside 40000–49151`);
   byPort.set(port, [...(byPort.get(port) ?? []), key]);
 }
 for (const [port, keys] of byPort) if (keys.length > 1) problems.push(`${port} is used by ${keys.join(", ")}`);

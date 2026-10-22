@@ -85,5 +85,6 @@ Where things live and what to change for a task. Update in the same change as an
 | `scripts/rbac-e2e.ts`                                                                | `npm run test:rbac`                                                                    |
 | `scripts/e2e-fixtures.ts` + `tests/e2e/`                                             | `npm run test:e2e` (Playwright)                                                        |
 | `scripts/check-*.mjs`                                                                | skeletons, logging, docs, spdx, audit, credentials, licences, ports, brand             |
+| `scripts/ci-local.sh`                                                                | `npm run ci:local`: the CI jobs on a clean clone, own Compose project and ports        |
 | `scripts/third-party-notices.mjs`                                                    | `THIRD_PARTY_NOTICES.md` + `packages/shared/src/credits.generated.ts`                  |
 | `infra/stalwart/dev-plan.ts`                                                         | Dev Stalwart: relay to Mailpit, Pyzor off, 587 listener, pinned WebUI bundle, dev.test |

@@ -1,6 +1,6 @@
 # 08 — Operations
 
-Last updated: 2026-10-21.
+Last updated: 2026-10-22.
 
 ## Environments
 
@@ -12,6 +12,15 @@ Last updated: 2026-10-21.
 | prod    | One VPS, provider and region chosen in the private ops repo (`01-architecture.md` deploy shape); compose, NGINX and secrets from the private ops repo; only 80/443 + 25/465/587/993/995/4190 public | Real                                                                                  | Customer data                                                                             |
 
 The public repo's `docker-compose.yml` is **dev/CI only**. Production compose files, NGINX config, server IPs, deploy secrets and tuned abuse thresholds live only in the **private ops repo** and on the server (rule 44). The public repo ships images (`deploy/Dockerfile.*`), `.env.example` placeholders and the self-hosting guide.
+
+### Running CI locally
+
+`npm run ci:local` (`scripts/ci-local.sh`) runs the CI jobs from `.github/workflows/ci.yml` (the same `.cicd/*.sh` scripts, in the same order) against a commit, next to a running dev stack:
+
+- It checks the ref (default `HEAD`) out in a throwaway local clone outside the repo (`$TMPDIR/anhourmail-ci-local/run-*`), so uncommitted work never leaks into the run. `--apply <path>` (repeatable) adds the working-tree state of those paths, to try a fix before committing it.
+- The clone's `.env` is `.env.example` with every port moved to the 435xx/436xx block (mail ports too, allowed only there via `CI_LOCAL_SHIFTED_MAIL_PORTS=1` in `ports:check`) and `COMPOSE_PROJECT_NAME=anhourmail-ci`, so its containers, volumes and ports never touch the `anhourmail` dev project.
+- `.cicd/setup.sh` (`npm ci`) runs once; before each job the clone is reset to its post-setup state and the ci stack removed, as each CI job starts fresh. `--jobs integration,e2e` runs a subset; `--verbose` streams output; `--keep` keeps the clone for debugging.
+- It always tears down (also on failure or Ctrl-C): the job's processes, anything of the clone's still listening on a ci port, `docker compose down -v` for `anhourmail-ci`, and the clone with its `.env` and `credentials.md`. Job logs, the apps log and failure screenshots (no traces or HTML report: they can hold typed demo passwords) stay in the run's `logs/` directory.
 
 ## Backups and restore
 
