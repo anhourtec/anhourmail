@@ -22,8 +22,8 @@ import { type Deps, systemClock } from "@anhourmail/core";
 import type { AuditAction, AuditEntryInput } from "@anhourmail/core/audit";
 import { enqueueProvisioning } from "@anhourmail/core/provisioning";
 import { JmapClient } from "@anhourmail/jmap-client";
-import { customerDomainRecords, MAILBOX_DELETE_GRACE_DAYS, PLANS } from "@anhourmail/shared";
-import { createAppPassword, type StalwartManagement, stalwart } from "@anhourmail/stalwart-client";
+import { APP_PASSWORD_PROTOCOLS, customerDomainRecords, MAILBOX_DELETE_GRACE_DAYS, PLANS } from "@anhourmail/shared";
+import { type StalwartManagement, stalwart } from "@anhourmail/stalwart-client";
 
 import { applyDevMailPlan, DEV_DOMAIN, DEV_MAILBOXES, devWebmailOrigins } from "../../infra/stalwart/dev-plan";
 import { type CredentialRow, writeCredentials } from "./credentials";
@@ -135,6 +135,9 @@ async function upsertMailbox(
     .onConflictDoUpdate({ target: schema.mailbox.address, set: { stalwartId, accountId: m.accountId } })
     .returning();
   if (!row) throw new Error(`mailbox ${m.address} not stored`);
+  // Setting the password replaces the account's credential list on Stalwart, which drops its app passwords
+  // (verified on v0.16.27): forget their metadata too, so the console doesn't list app passwords that no longer work.
+  await db.delete(schema.appPassword).where(eq(schema.appPassword.mailboxId, row.id));
   for (const a of aliases) {
     await db
       .insert(schema.mailAlias)
@@ -150,9 +153,55 @@ async function upsertMailbox(
   return row.id;
 }
 
+const SEED_APP_PASSWORD = "Local IMAP client (seed)";
+
+/**
+ * An app password for local mail-client testing, made the way the console makes them (management API on the
+ * mailbox's account, self-service turned off) and listed on the mailbox's Mail apps page. Each run replaces the
+ * previous one, so re-seeding never reaches the per-mailbox limit. Returns the secret (credentials.md only).
+ */
+async function seedAppPassword(database: Db, mgmt: StalwartManagement, address: string): Promise<string> {
+  const [m] = await database.select().from(schema.mailbox).where(eq(schema.mailbox.address, address));
+  if (!m?.stalwartId) throw new Error(`mailbox ${address} is not on the mail server`);
+  for (const old of await mgmt.listAppPasswords(m.stalwartId)) {
+    if (old.description === SEED_APP_PASSWORD) await mgmt.destroyAppPassword(m.stalwartId, old.id);
+  }
+  await database
+    .delete(schema.appPassword)
+    .where(and(eq(schema.appPassword.mailboxId, m.id), eq(schema.appPassword.name, SEED_APP_PASSWORD)));
+  const made = await mgmt.createAppPassword(m.stalwartId, {
+    description: SEED_APP_PASSWORD,
+    scopes: APP_PASSWORD_PROTOCOLS,
+  });
+  await database.insert(schema.appPassword).values({
+    id: randomUUID(),
+    accountId: m.accountId,
+    mailboxId: m.id,
+    name: SEED_APP_PASSWORD,
+    protocols: [...APP_PASSWORD_PROTOCOLS],
+    credentialId: made.id,
+    credentialCreatedAt: made.createdAt,
+    createdBy: m.userId,
+  });
+  return made.secret;
+}
+
 /** Masked aliases are random, per-site addresses (ADR-0009); deterministic per run key so re-runs don't pile up. */
 const masked = (seed: string, domain: string) =>
   `${createHash("sha256").update(seed).digest("hex").slice(0, 10)}@${domain}`;
+
+/**
+ * The dev admin over standard JMAP, acting on a mailbox's account by id: sample folders are made this way because
+ * customer accounts may not create or update folders over JMAP themselves (`CUSTOMER_DENIALS`).
+ */
+function adminJmap() {
+  const user = need("STALWART_DEV_ADMIN_USER");
+  const password = need("STALWART_DEV_ADMIN_PASSWORD");
+  return new JmapClient({
+    sessionUrl: `${STALWART_URL}/jmap/session`,
+    authorization: `Basic ${Buffer.from(`${user}:${password}`).toString("base64")}`,
+  });
+}
 
 function jmapFor(address: string, password: string) {
   return new JmapClient({
@@ -448,23 +497,17 @@ if (demo) {
     }
   }
   if (ownerJmap) {
-    const n = await importSampleMail(ownerJmap, { name: "Alex Rivera", email: sampleOwner }, fam);
+    const n = await importSampleMail(ownerJmap, { name: "Alex Rivera", email: sampleOwner }, fam, adminJmap());
     log(n > 0 ? `sample mail: ${n} messages imported for ${sampleOwner}` : "sample mail: already present");
     const c = await importSampleContacts(ownerJmap);
     log(c > 0 ? `sample contacts: ${c} added for ${sampleOwner}` : "sample contacts: already present");
   }
 
-  // App password for IMAP client testing
+  // App password for IMAP client testing (also listed on the member's Mail apps page)
   const appUser = `member@${fam}`;
-  const appUserPassword = passwords.get(appUser) ?? "";
   mailClient = {
     address: appUser,
-    appPassword: await createAppPassword({
-      baseUrl: STALWART_URL,
-      address: appUser,
-      password: appUserPassword,
-      description: "Local IMAP client (seed)",
-    }),
+    appPassword: await seedAppPassword(db, mgmt, appUser),
     host: "127.0.0.1",
     imapPort: Number(process.env.STALWART_IMAPS_PORT ?? "993"),
     smtpPort: Number(process.env.STALWART_SUBMISSIONS_PORT ?? "465"),
@@ -495,8 +538,31 @@ if (demo) {
     await enqueueProvisioning(deps, { kind: "mailbox.ensure", subjectId: id });
   }
 
+  // Catch-all on the group's domain (off by default everywhere else): unknown addresses go to its owner's mailbox.
+  // Written as intent and applied by the worker's domain.ensure job, like the console does.
+  const [groupDomain] = await db.select().from(schema.customerDomain).where(eq(schema.customerDomain.name, grp));
+  const [groupOwnerBox] = await db
+    .select()
+    .from(schema.mailbox)
+    .where(eq(schema.mailbox.address, `owner@${grp}`));
+  if (groupDomain && groupOwnerBox) {
+    await db
+      .update(schema.customerDomain)
+      .set({ catchAllMailboxId: groupOwnerBox.id })
+      .where(eq(schema.customerDomain.id, groupDomain.id));
+    await enqueueProvisioning(deps, { kind: "domain.ensure", subjectId: groupDomain.id });
+  }
+
   const records = customerDomainRecords(UNVERIFIED_DOMAIN.name, unverifiedToken);
   special.push(
+    {
+      label: "Catch-all",
+      detail: `\`${grp}\` on Demo Group sends mail for unknown addresses to \`owner@${grp}\` (worker applies it)`,
+    },
+    {
+      label: "App password",
+      detail: `\`${appUser}\` has one named "${SEED_APP_PASSWORD}" (Mail apps page; the secret is in section "Mail client settings")`,
+    },
     {
       label: "Suspended mailbox",
       detail: `\`paused@${fam}\` on Demo Family: no sign-in, mail refused, nothing deleted (worker applies it)`,

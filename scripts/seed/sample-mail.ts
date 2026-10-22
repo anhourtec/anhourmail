@@ -734,7 +734,13 @@ type Box = { id: string; name: string; role: string | null; parentId: string | n
  * `archive`, which new Stalwart accounts lack) and a nested Receipts › Home folder when missing.
  * Imports only samples that aren't there yet (so new samples reach existing dev mailboxes). Returns how many.
  */
-export async function importSampleMail(jmap: JmapClient, owner: Addr, domain: string): Promise<number> {
+export async function importSampleMail(
+  jmap: JmapClient,
+  owner: Addr,
+  domain: string,
+  /** Creates the sample folders: customer accounts can't create folders over JMAP themselves (no sharing). */
+  folders: JmapClient = jmap,
+): Promise<number> {
   const accountId = await jmap.accountId();
   const present = await sampleKeys(jmap, accountId);
   const missing = sampleMessages(owner, domain).filter((x) => !present.has(x.key));
@@ -755,7 +761,7 @@ export async function importSampleMail(jmap: JmapClient, owner: Addr, domain: st
     create.home = { name: "Home", parentId: receipts.id };
   }
   if (Object.keys(create).length > 0) {
-    await jmap.request([["Mailbox/set", { accountId, create }, "c"]]);
+    await folders.request([["Mailbox/set", { accountId, create }, "c"]]);
     list = await boxes();
   }
   const receiptsId = list.find((b) => b.name === "Receipts" && b.parentId === null)?.id;
