@@ -89,6 +89,27 @@ Two identities, deliberately separate:
 
 We **never store mailbox passwords** (rule 23). Stalwart hashes them.
 
+### Console sign-in factors (2026-10-22; `07-security.md` "Sign-in factors")
+
+better-auth's **two-factor** plugin (TOTP + recovery codes) and **passkey** plugin (`@better-auth/passkey`, WebAuthn via
+SimpleWebAuthn), plus our own plugin `packages/adapters/src/auth/security-plugin.ts` listed last so its after-hooks
+see the final answers. All in `packages/adapters/src/auth` (ADR-0008); the browser never loads an auth SDK — the sign-in
+form and Security page post to `/api/auth/*` directly and do the WebAuthn ceremony with `components/security/webauthn.ts`.
+
+- Storage: `auth_two_factor` (TOTP secret = the plugin's encryption sealed again by the key ring through a wrapped
+  database adapter, `sealed-adapter.ts`, AAD = user id; recovery codes as SHA-256 hashes, `recovery-codes.ts`),
+  `auth_passkey` (public keys only), trusted browsers as `trust-device-*` rows in `auth_verification`.
+- Sign-in: password → (2FA on, browser not trusted) a 10-minute challenge cookie → `verify-totp` or
+  `verify-backup-code` → session. A passkey is a full sign-in on its own (user verification required). Our plugin
+  makes codes one-time (Redis), hashes typed recovery codes, requires a current code to turn 2FA off, refuses removals
+  that break an account requirement, and reports every step for the audit log (`recordSecurityEvent`, platform scope,
+  target = the person).
+- `/api/auth/*` is allow-listed (`server/auth/endpoints.ts`); sessions and passkey rename/remove go through core
+  services (`packages/core/src/security`) so the change and its audit row share a unit of work.
+- Account requirement: `customer_account.sign_in_policy`; `getActorAndSession` computes `mustEnrol` from the strictest
+  policy of the person's accounts and their factors; `authorize` then refuses everything but `self` permissions
+  (`enrolment_required`, 403) and console pages redirect to `/security?setup=required`.
+
 ### How the webmail gets a Stalwart session (research: `research/stalwart.md` §6)
 
 Built in Phase 4 slice 1 (2026-10-22; ADR-0018):
@@ -134,6 +155,8 @@ Why the host split: the origin that renders untrusted email HTML (`mail.`) is is
 
 - One permission matrix in `packages/shared/src/rbac` (the code is canonical; `roles.md` describes it). UI, API and the RBAC harness all derive from it.
 - Services check **permission + ownership scope**. Out-of-scope ids → **404**, missing permission → **403**, unauthenticated → **401**.
+- Enrolment gate: a person missing a sign-in factor one of their accounts requires (`UserActor.mustEnrol`) passes only
+  `self` permissions; everything else is 403 `enrolment_required` (other accounts' ids are still 404).
 - Staff "act as" is Global/Support Administrator only, time-limited, banner-visible, audited, and never exposes mail content.
 - People and invites (`packages/core/src/people`): an invite stores only the token hash; the route emails the link
   after the unit of work commits (a failed send is reported, never rolled back: resend). Accepting runs in one unit

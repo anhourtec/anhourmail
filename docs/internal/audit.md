@@ -16,8 +16,8 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 
 | Area | Actions |
 | --- | --- |
-| `auth` | `auth.sign_in`, `auth.sign_in_failed`, `auth.sign_out`, `auth.password_changed`, `auth.password_reset`, `auth.password_reset_requested`, `auth.two_factor_enabled`, `auth.two_factor_disabled`, `auth.app_password_created`, `auth.app_password_revoked`, `auth.session_revoked`, `auth.locked_out`, `auth.mail_client_sign_in`, `auth.mail_client_sign_in_failed`, `auth.two_factor_reset`, `auth.backup_code_used`, `auth.sessions_revoked_all`, `auth.new_device` |
-| `account` | `account.created`, `account.deleted`, `account.updated`, `account.invite_sent`, `account.invite_accepted`, `account.invite_resent`, `account.invite_revoked`, `account.member_added`, `account.member_removed`, `account.role_changed`, `account.ownership_transferred` |
+| `auth` | `auth.sign_in`, `auth.sign_in_failed`, `auth.sign_out`, `auth.password_changed`, `auth.password_reset`, `auth.password_reset_requested`, `auth.two_factor_enabled`, `auth.two_factor_disabled`, `auth.app_password_created`, `auth.app_password_revoked`, `auth.session_revoked`, `auth.locked_out`, `auth.mail_client_sign_in`, `auth.mail_client_sign_in_failed`, `auth.two_factor_reset`, `auth.backup_code_used`, `auth.sessions_revoked_all`, `auth.new_device`, `auth.passkey_added`, `auth.passkey_renamed`, `auth.passkey_removed`, `auth.recovery_codes_regenerated`, `auth.identity_confirmed` |
+| `account` | `account.created`, `account.deleted`, `account.updated`, `account.invite_sent`, `account.invite_accepted`, `account.invite_resent`, `account.invite_revoked`, `account.member_added`, `account.member_removed`, `account.role_changed`, `account.ownership_transferred`, `account.sign_in_policy_changed`, `account.sign_in_factor_added` |
 | `domain` | `domain.added`, `domain.verified`, `domain.verify_failed`, `domain.removed`, `domain.dns_state_changed` |
 | `mailbox` | `mailbox.created`, `mailbox.suspended`, `mailbox.unsuspended`, `mailbox.deleted`, `mailbox.quota_changed`, `mailbox.deletion_scheduled`, `mailbox.restored` |
 | `alias` | `alias.created`, `alias.toggled`, `alias.deleted` |
@@ -49,6 +49,27 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `bulk` | `bulk.addon_enabled`, `bulk.addon_disabled`, `bulk.sender_domain_verified`, `bulk.list_created`, `bulk.list_imported`, `bulk.list_deleted`, `bulk.campaign_scheduled`, `bulk.campaign_held`, `bulk.campaign_approved`, `bulk.campaign_sent`, `bulk.campaign_cancelled`, `bulk.suppression_added`, `bulk.suppression_removed`, `bulk.sending_paused` |
 
 <!-- END generated: audit actions -->
+
+Sign-in security (`07-security.md` "Sign-in factors"): the identity layer reports `auth.sign_in` (meta `method`:
+`password`, `password+totp`, `password+recovery_code`, `passkey`; `trustedDevice`/`trustDevice` when relevant),
+`auth.sign_in_failed` (`denied` with the code, e.g. `invalid_code`, `code_reused`, `invalid_email_or_password`),
+`auth.locked_out`, `auth.sign_out`, `auth.two_factor_enabled` / `_disabled` (refusals `denied`), `auth.backup_code_used`
+(meta `codesLeft`), `auth.recovery_codes_regenerated` and `auth.passkey_added` (meta passkey id and name), all in the
+**platform** scope with the person as the target, so their own Security page lists them (`getSecurityOverview`). The
+person's own changes through core services — `auth.session_revoked`, `auth.sessions_revoked_all` (meta counts),
+`auth.passkey_renamed` (`previousName`/`newName`), `auth.passkey_removed` — commit with their audit row. Never codes,
+secrets, credential ids or public keys (redaction keys include `totpCode`, `publicKey`, `attestationObject`, …).
+`account.sign_in_factor_added` (identity layer, in each requiring account's scope, meta `factor`) records someone's
+first sign-in factor set up while the account requires one; they and the Owners are emailed.
+`auth.identity_confirmed` is a step-up before adding a passkey (meta `method`; refusals `denied`). A sign-in refused
+by an account requirement is `auth.sign_in_failed` denied `sign_in_requirement` (meta `method`); a session ended later
+for the same reason is `auth.session_revoked` by the identity layer (meta `reason`, `method`); so is a session signed
+out after 5 failed step-ups (reason `step_up_failures`). Removing every passkey
+with "sign out everywhere else" or a reset shows as `passkeysRemoved` in that entry's meta.
+`auth.password_reset` (identity layer) and `auth.password_changed` (the person) commit together with signing out the
+other sessions and forgetting trusted browsers (meta `otherSessionsRevoked`, `sessions`, `trustedDevices`).
+`account.sign_in_policy_changed` is written in the account's scope (meta `previousPolicy`, `newPolicy`); an attempt by
+someone else is `denied`. The Security page shows each entry's network part and a browser/system summary only.
 
 Mailbox lifecycle: `mailbox.suspended` and `mailbox.unsuspended` (resume), `mailbox.deletion_scheduled` (meta: the
 status it came from, `purgeAfter`, alias count) and `mailbox.restored` are written by the person in the console;

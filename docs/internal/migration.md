@@ -33,16 +33,18 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 ## Summary
 
-| #    | Migration                          | Commit      | Date       | Change                                                                                   | Rollback        |
-| ---- | ---------------------------------- | ----------- | ---------- | ---------------------------------------------------------------------------------------- | --------------- |
-| 0008 | `0008_invite_send_log`             | uncommitted | 2026-10-22 | `invite_send` table (one row per invite email sent) for the per-account daily cap        | Safe            |
-| 0006 | `0006_remove_waitlist`             | uncommitted | 2026-10-22 | Drop `waitlist_entry`; drop `invite.source`, `invite.waitlist_entry_id`                  | Not recommended |
-| 0005 | `0005_domain_claims`               | uncommitted | 2026-10-21 | Domain names unique per account; across accounts only once claimed (verified)            | Caution         |
-| 0004 | `0004_waitlist_opt_in_and_invites` | `3e75c1f`   | 2026-10-21 | Waitlist double opt-in columns; invite source/waitlist link/acceptance                   | Safe            |
-| 0003 | `0003_provisioning_queue`          | `843be65`   | 2026-10-21 | `provisioning_job` table; `customer_domain.stalwart_id/last_error`, `mailbox.last_error` | Safe            |
-| 0002 | `0002_user_first_last_name`        | `710e664`   | 2026-10-21 | `auth_user.first_name` (not null, default '') and `last_name`                            | Safe            |
-| 0001 | `0001_audit_append_only`           | `710e664`   | 2026-10-21 | Trigger blocking UPDATE/DELETE/TRUNCATE on `audit_log`                                   | Caution         |
-| 0000 | `0000_init`                        | `710e664`   | 2026-10-21 | Initial control-plane schema (14 tables)                                                 | Safe            |
+| #    | Migration                          | Commit      | Date       | Change                                                                                               | Rollback        |
+| ---- | ---------------------------------- | ----------- | ---------- | ---------------------------------------------------------------------------------------------------- | --------------- |
+| 0010 | `0010_session_sign_in_method`      | uncommitted | 2026-10-22 | `auth_session.sign_in_method` (how the session signed in)                                            | Safe            |
+| 0009 | `0009_sign_in_security`            | uncommitted | 2026-10-22 | `auth_two_factor`, `auth_passkey`; `auth_user.two_factor_enabled`; `customer_account.sign_in_policy` | Safe            |
+| 0008 | `0008_invite_send_log`             | uncommitted | 2026-10-22 | `invite_send` table (one row per invite email sent) for the per-account daily cap                    | Safe            |
+| 0006 | `0006_remove_waitlist`             | uncommitted | 2026-10-22 | Drop `waitlist_entry`; drop `invite.source`, `invite.waitlist_entry_id`                              | Not recommended |
+| 0005 | `0005_domain_claims`               | uncommitted | 2026-10-21 | Domain names unique per account; across accounts only once claimed (verified)                        | Caution         |
+| 0004 | `0004_waitlist_opt_in_and_invites` | `3e75c1f`   | 2026-10-21 | Waitlist double opt-in columns; invite source/waitlist link/acceptance                               | Safe            |
+| 0003 | `0003_provisioning_queue`          | `843be65`   | 2026-10-21 | `provisioning_job` table; `customer_domain.stalwart_id/last_error`, `mailbox.last_error`             | Safe            |
+| 0002 | `0002_user_first_last_name`        | `710e664`   | 2026-10-21 | `auth_user.first_name` (not null, default '') and `last_name`                                        | Safe            |
+| 0001 | `0001_audit_append_only`           | `710e664`   | 2026-10-21 | Trigger blocking UPDATE/DELETE/TRUNCATE on `audit_log`                                               | Caution         |
+| 0000 | `0000_init`                        | `710e664`   | 2026-10-21 | Initial control-plane schema (14 tables)                                                             | Safe            |
 
 ## Details
 
@@ -56,6 +58,31 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0010_session_sign_in_method · uncommitted · 2026-10-22 · Safe
+
+- Added: `auth_session.sign_in_method text` (nullable): `password`, `password+trusted_device`, `password+totp`,
+  `password+recovery_code` or `passkey`, written when better-auth creates a session (`signInMethodFor`).
+- Changed: —
+- Removed: —
+- Data: none. Existing sessions have null and count as `password`: under an account requirement they are ended on
+  their next request and the person signs in again.
+- Rollback: drop the column; requirements then can't tell how a session signed in (older code never reads it).
+
+### 0009_sign_in_security · uncommitted · 2026-10-22 · Safe
+
+- Added: `auth_two_factor` (one row per person, unique `user_id` → `auth_user` ON DELETE CASCADE; `secret` is the
+  two-factor plugin's encrypted TOTP secret sealed again with the key ring, `backup_codes` a JSON list of SHA-256
+  recovery-code hashes, `verified`, `failed_verification_count`, `locked_until`, `created_at`); `auth_passkey`
+  (WebAuthn public keys: `credential_id` unique, `public_key`, `counter` bigint, `device_type`, `backed_up`,
+  `transports`, `aaguid`, `name`, `created_at`; index on `user_id`, ON DELETE CASCADE);
+  `auth_user.two_factor_enabled boolean not null default false`; `customer_account.sign_in_policy text not null
+default 'none'` (`none` | `two_factor` | `passkey`).
+- Changed: —
+- Removed: —
+- Data: none (everyone starts with no factors and every account with no requirement).
+- Rollback: drop the two tables and two columns. Everyone loses their authenticator app and passkeys (they sign in with
+  the password alone) and account requirements are forgotten; older code never reads them.
 
 ### 0008_invite_send_log · uncommitted · 2026-10-22 · Safe
 
