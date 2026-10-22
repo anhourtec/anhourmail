@@ -28,6 +28,7 @@ const STATUS: Record<string, number> = {
   conflict: 409,
   plan_limit: 403,
   enrolment_required: 403,
+  step_up_required: 403,
 };
 
 export type RouteOptions = {

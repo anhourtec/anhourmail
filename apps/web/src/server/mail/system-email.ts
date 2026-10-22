@@ -152,3 +152,28 @@ export function firstFactorEmail(input: {
     footer: "We send this the first time someone sets up a sign-in factor while their account requires one.",
   });
 }
+
+/**
+ * Asks the owner of an address to confirm a mailbox may forward its mail there. Nothing is forwarded until they do;
+ * the mailbox owner then turns forwarding on. The link opens a page with a button (a link scanner can't confirm).
+ */
+export function forwardingConfirmEmail(input: {
+  to: string;
+  mailbox: string;
+  url: string;
+  hours: number;
+}): MailMessage {
+  return systemEmail({
+    to: input.to,
+    // Generic: no text the mailbox owner chose.
+    subject: "Confirm mail forwarding to this address",
+    greeting: hello(),
+    lines: [
+      "An AnhourMail mailbox asked to forward its mail to this address. Nothing is forwarded unless you confirm.",
+      `The link works once, for ${String(input.hours)} hours.`,
+    ],
+    facts: [{ label: "Mailbox:", value: input.mailbox }],
+    action: { label: "Review and confirm", url: input.url },
+    footer: "If you don't know this mailbox, ignore this email — no mail will be forwarded to you.",
+  });
+}

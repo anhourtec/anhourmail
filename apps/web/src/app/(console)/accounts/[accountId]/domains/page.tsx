@@ -2,7 +2,14 @@
 import type { Metadata } from "next";
 
 import { can } from "@anhourmail/core";
-import { type CheckedRecord, domainAllowance, getDomain, inspectDomain, listDomains } from "@anhourmail/core/domains";
+import {
+  type CheckedRecord,
+  domainAllowance,
+  getCatchAll,
+  getDomain,
+  inspectDomain,
+  listDomains,
+} from "@anhourmail/core/domains";
 import { checkRateLimit, LIMITS } from "@anhourmail/server/rate-limit";
 import { PageHeader } from "@anhourmail/ui/page-header";
 
@@ -55,6 +62,7 @@ export default async function DomainsPage({
     domains: await listDomains(deps, actor, accountId),
     allowance: await domainAllowance(deps, actor, accountId),
     open: openId ? await openDomain(openId) : null,
+    catchAll: openId ? await getCatchAll(deps, actor, accountId, openId) : null,
   }));
   const crumbs = [{ label: "Home", href: "/" }, { label: "Domains" }];
   if (!data) {
@@ -66,7 +74,7 @@ export default async function DomainsPage({
     );
   }
   const canManage = can(actor, "domain.manage", accountId);
-  const { domains, allowance, open } = data;
+  const { domains, allowance, open, catchAll } = data;
   const path = `/accounts/${accountId}/domains`;
   const canAdd = canManage && allowance.allowed && domains.length < allowance.max;
 
@@ -107,6 +115,7 @@ export default async function DomainsPage({
             records={open.records}
             live={open.live}
             canManage={canManage}
+            catchAll={catchAll}
             tab={param(sp, "tab")}
           />
         </UrlFlyout>

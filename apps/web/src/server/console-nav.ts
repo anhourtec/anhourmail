@@ -20,7 +20,8 @@ export type NavIcon =
   | "shield-alert"
   | "receipt"
   | "file-clock"
-  | "user-cog";
+  | "user-cog"
+  | "key-round";
 
 export type NavSection = "mail" | "people" | "billing" | "audit" | "platform";
 
@@ -54,6 +55,15 @@ export const NAV: readonly NavItem[] = [
     section: "mail",
     phase: 3,
     href: (accountId) => `/accounts/${accountId}/aliases`,
+  },
+  {
+    label: "App passwords",
+    icon: "key-round",
+    permission: "app_password.manage.own",
+    scope: "account",
+    section: "mail",
+    phase: 3,
+    href: (accountId) => `/accounts/${accountId}/app-passwords`,
   },
   {
     label: "Domains",

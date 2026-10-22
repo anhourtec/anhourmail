@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import type { MailboxAppPasswords } from "@anhourmail/core/app-passwords";
 import { GB, type MailboxView } from "@anhourmail/core/mailboxes";
 import { HardDrive, Pause, Play, RotateCcw, Trash2 } from "lucide-react";
+import Link from "next/link";
 
+import { AppPasswordList } from "../app-passwords/app-password-list";
 import { CopyValue } from "../copy-value";
 import { ActionLink, DetailHeader, DetailTabs, Field, FieldGrid, PanelSection, TabLink } from "../console/flyout";
 import { initialsOf } from "../console/initials";
@@ -24,6 +27,7 @@ export function MailboxPanel({
   canManage,
   peopleHref,
   graceDays,
+  appPasswords,
   tab,
 }: {
   m: Detail;
@@ -32,6 +36,8 @@ export function MailboxPanel({
   /** Link to the owner's person panel, when the viewer can see people. */
   peopleHref: string | null;
   graceDays: number;
+  /** Its app passwords (names and dates only), for people who can see mailboxes. */
+  appPasswords: MailboxAppPasswords | null;
   tab?: string | null;
 }) {
   const deleting = m.status === "deleting";
@@ -91,6 +97,18 @@ export function MailboxPanel({
             >
               <span className="am-num">{quotaGb} GB</span>
             </Field>
+            {appPasswords && (
+              <Field
+                label="App passwords"
+                manage={
+                  <TabLink tab="app-passwords" plain>
+                    View app passwords
+                  </TabLink>
+                }
+              >
+                <span className="am-num">{appPasswords.appPasswords.length}</span>
+              </Field>
+            )}
             <Field label="Created">
               <span className="am-num">{dateFmt.format(new Date(m.createdAt))}</span>
             </Field>
@@ -103,6 +121,47 @@ export function MailboxPanel({
         </>
       ),
     },
+    ...(appPasswords
+      ? [
+          {
+            id: "app-passwords",
+            label: "App passwords",
+            content: (
+              <div className="flex flex-col gap-4">
+                <p className="am-body max-w-prose">
+                  Mail apps sign in to this mailbox with these. Only the person it belongs to can create them, on their
+                  own App passwords page; nobody else ever sees a password.
+                  {appPasswords.canCreate && (
+                    <>
+                      {" "}
+                      <Link
+                        href={`/accounts/${accountId}/app-passwords`}
+                        className="text-primary underline-offset-2 hover:underline"
+                      >
+                        Create one on your App passwords page
+                      </Link>
+                      .
+                    </>
+                  )}
+                </p>
+                <AppPasswordList
+                  accountId={accountId}
+                  mailboxId={m.id}
+                  address={m.address}
+                  canRevoke={appPasswords.canRevoke}
+                  rows={appPasswords.appPasswords.map((p) => ({
+                    id: p.id,
+                    name: p.name,
+                    protocols: p.protocols,
+                    revoking: p.status === "revoking",
+                    created: dateFmt.format(new Date(p.createdAt)),
+                  }))}
+                />
+              </div>
+            ),
+          },
+        ]
+      : []),
     ...(canManage && !deleting
       ? [
           {

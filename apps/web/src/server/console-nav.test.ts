@@ -15,10 +15,17 @@ const actor = (platform: UserActor["platformRoles"], account: UserActor["members
 });
 
 describe("console navigation follows the matrix", () => {
-  it("owner sees every account section, member only aliases", () => {
+  it("owner sees every account section, a member only aliases and app passwords", () => {
     const owner = visibleNav(actor([], [{ accountId: "a", role: "owner" }]), "a").map((n) => n.label);
     expect(owner).toEqual(NAV.filter((n) => n.scope === "account").map((n) => n.label));
-    expect(visibleNav(actor([], [{ accountId: "a", role: "member" }]), "a").map((n) => n.label)).toEqual(["Aliases"]);
+    expect(visibleNav(actor([], [{ accountId: "a", role: "member" }]), "a").map((n) => n.label)).toEqual([
+      "Aliases",
+      "App passwords",
+    ]);
+    // The Auditor holds no write permission, so no app passwords of their own.
+    expect(visibleNav(actor([], [{ accountId: "a", role: "auditor" }]), "a").map((n) => n.label)).not.toContain(
+      "App passwords",
+    );
     expect(visibleNav(actor([], [{ accountId: "a", role: "auditor" }]), "a").map((n) => n.label)).toContain(
       "People and roles",
     );
@@ -38,6 +45,7 @@ describe("console navigation follows the matrix", () => {
   it("built pages link to their routes", () => {
     const href = (label: string) => NAV.find((n) => n.label === label)?.href?.("acc");
     expect(href("People and roles")).toBe("/accounts/acc/people");
+    expect(href("App passwords")).toBe("/accounts/acc/app-passwords");
     expect(href("Audit log")).toBe("/accounts/acc/audit");
     expect(href("Customer accounts")).toBe("/platform/accounts");
     expect(href("Platform audit")).toBe("/platform/audit");
@@ -50,15 +58,17 @@ describe("left navigation sections", () => {
 
   it("groups an owner's account pages under Mail and People, then Billing and the audit log", () => {
     expect(sections(actor([], [{ accountId: "a", role: "owner" }]), "a")).toEqual([
-      ["Mail", ["Mailboxes", "Aliases", "Domains"]],
+      ["Mail", ["Mailboxes", "Aliases", "App passwords", "Domains"]],
       ["People", ["People and roles"]],
       ["Billing", ["Billing"]],
       ["Audit log", ["Audit log"]],
     ]);
   });
 
-  it("leaves out sections with nothing visible: a member gets Mail with Aliases only", () => {
-    expect(sections(actor([], [{ accountId: "a", role: "member" }]), "a")).toEqual([["Mail", ["Aliases"]]]);
+  it("leaves out sections with nothing visible: a member gets Mail with Aliases and App passwords only", () => {
+    expect(sections(actor([], [{ accountId: "a", role: "member" }]), "a")).toEqual([
+      ["Mail", ["Aliases", "App passwords"]],
+    ]);
   });
 
   it("resolves links for the current account and leaves unbuilt pages without one", () => {

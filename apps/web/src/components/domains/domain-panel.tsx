@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import type { CheckedRecord, DomainView, RecordState } from "@anhourmail/core/domains";
+import type { CatchAllOptions, CatchAllView, CheckedRecord, DomainView, RecordState } from "@anhourmail/core/domains";
 import { ListChecks, Trash2 } from "lucide-react";
 
 import { DetailHeader, DetailTabs, Field, FieldGrid, PanelSection, TabLink } from "../console/flyout";
 import { initialsOf } from "../console/initials";
 import { StatusText, type Tone } from "../console/status-text";
 import { CopyValue } from "../copy-value";
+import { CatchAllForm } from "./catch-all-form";
 import { CheckButton } from "./check-button";
 import { DomainStatus } from "./domain-status";
 import { RemoveDomain } from "./remove-domain";
@@ -62,6 +63,7 @@ export function DomainPanel({
   records,
   live,
   canManage,
+  catchAll,
   tab,
 }: {
   accountId: string;
@@ -70,6 +72,8 @@ export function DomainPanel({
   /** False when live checks are paused by the rate limit: records show without their state. */
   live: boolean;
   canManage: boolean;
+  /** The domain's catch-all, with the mailboxes it can point at for people who manage domains. */
+  catchAll: (CatchAllView & { options: CatchAllOptions | null }) | null;
   tab?: string | null;
 }) {
   const manage = canManage && domain.status !== "removing";
@@ -110,10 +114,39 @@ export function DomainPanel({
                 "Not checked just now"
               )}
             </Field>
+            {catchAll && domain.status === "active" && (
+              <Field label="Catch-all">
+                {catchAll.mailbox ? (
+                  <span>
+                    On, to <span className="font-mono">{catchAll.mailbox.address}</span>
+                  </span>
+                ) : (
+                  "Off"
+                )}
+              </Field>
+            )}
             <Field label="Added">
               <span className="am-num">{dateFmt.format(new Date(domain.createdAt))}</span>
             </Field>
           </FieldGrid>
+          {manage && catchAll?.domainActive && (
+            <PanelSection title="Catch-all">
+              {catchAll.planAllowed && catchAll.options ? (
+                <CatchAllForm
+                  accountId={accountId}
+                  domainId={domain.id}
+                  domain={domain.name}
+                  current={catchAll.mailbox}
+                  mailboxes={catchAll.options.mailboxes}
+                />
+              ) : (
+                <p className="am-small max-w-prose">
+                  A catch-all sends mail for addresses that don&apos;t exist to one mailbox. It&apos;s part of the Plus
+                  and Supporter plans.
+                </p>
+              )}
+            </PanelSection>
+          )}
           {manage && (
             <PanelSection title="Remove this domain">
               <RemoveDomain accountId={accountId} domainId={domain.id} name={domain.name} />

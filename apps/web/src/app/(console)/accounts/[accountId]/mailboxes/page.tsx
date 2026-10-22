@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { can } from "@anhourmail/core";
+import { listMailboxAppPasswords } from "@anhourmail/core/app-passwords";
 import { GB, getMailbox, listMailboxes, mailboxOptions } from "@anhourmail/core/mailboxes";
 import { MAILBOX_DELETE_GRACE_DAYS } from "@anhourmail/shared/plans";
 import { PageHeader } from "@anhourmail/ui/page-header";
@@ -43,6 +44,7 @@ export default async function MailboxesPage({
     mailboxes: await listMailboxes(deps, actor, accountId),
     options: canManage ? await mailboxOptions(deps, actor, accountId) : null,
     open: openId ? await getMailbox(deps, actor, accountId, openId) : null,
+    appPasswords: openId ? await listMailboxAppPasswords(deps, actor, accountId, openId) : null,
   }));
   const crumbs = [{ label: "Home", href: "/" }, { label: "Mailboxes" }];
   if (!data) {
@@ -53,7 +55,7 @@ export default async function MailboxesPage({
       </>
     );
   }
-  const { mailboxes, options, open } = data;
+  const { mailboxes, options, open, appPasswords } = data;
   const path = `/accounts/${accountId}/mailboxes`;
   const canAdd = options !== null && options.domains.length > 0 && options.remaining > 0;
   const creating = canAdd && param(sp, "new") === "1" ? options : null;
@@ -110,6 +112,7 @@ export default async function MailboxesPage({
                 : null
             }
             graceDays={MAILBOX_DELETE_GRACE_DAYS}
+            appPasswords={appPasswords}
             tab={param(sp, "tab")}
           />
         </UrlFlyout>

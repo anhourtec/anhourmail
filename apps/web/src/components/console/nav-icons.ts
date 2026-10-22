@@ -6,6 +6,7 @@ import {
   FileClock,
   Globe,
   Inbox,
+  KeyRound,
   type LucideIcon,
   Mail,
   Receipt,
@@ -33,4 +34,5 @@ export const NAV_ICONS: Record<NavIcon, LucideIcon> = {
   receipt: Receipt,
   "file-clock": FileClock,
   "user-cog": UserCog,
+  "key-round": KeyRound,
 };
