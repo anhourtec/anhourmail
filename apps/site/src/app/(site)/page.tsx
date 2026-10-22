@@ -55,7 +55,7 @@ const FEATURES = [
     eyebrow: "Aliases and masked aliases",
     title: "A different address for every sign-up.",
     body: "Give each shop and newsletter its own random address. See which ones get mail, and switch one off the moment it’s sold.",
-    bullets: ["One-click off switch", "Per-alias message counts", "Unlimited on paid plans"],
+    bullets: ["One-click off switch", "A note on each, so you know where you used it", "Unlimited on paid plans"],
     bloom: "violet",
     art: <AliasToggles />,
   },

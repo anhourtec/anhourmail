@@ -8,6 +8,7 @@ import {
   BarChart3Icon,
   BellIcon,
   CodeIcon,
+  ContactRoundIcon,
   DownloadIcon,
   EyeOffIcon,
   FilterIcon,
@@ -31,9 +32,10 @@ import {
 
 import { customerDomainRecords, PLAN_ORDER, PLANS } from "@anhourmail/shared";
 
+import { AuditMock, ConsoleMock } from "@/components/landing/console-mock";
 import { DkimRotation, SettingsCard } from "@/components/landing/extra-art";
 import { AliasToggles, DnsChecks, InstantList, TrackerBlocked } from "@/components/landing/illustrations";
-import { WebmailMock } from "@/components/landing/webmail-mock";
+import { ComposerMock, ContactsMock, WebmailMock } from "@/components/landing/webmail-mock";
 
 import { type FeatureSlug, PROTOCOL_LIST } from "./ia";
 
@@ -75,7 +77,7 @@ export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
     lead: "Use the domain you already own. We show every DNS record, check each one live, and look after the signing keys.",
     description:
       "Use your own domain with AnhourMail: guided DNS setup, live per-record checks and automatic DKIM key rotation.",
-    heroArt: <DnsChecks />,
+    heroArt: <ConsoleMock view="home" />,
     rows: [
       {
         icon: GlobeIcon,
@@ -154,7 +156,7 @@ export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
     lead: "Give every shop, newsletter and app its own address. See which ones get mail, and switch any of them off the moment it’s sold.",
     description:
       "Aliases and masked aliases on AnhourMail: random per-site addresses, per-alias stats and a one-click off switch.",
-    heroArt: <AliasToggles />,
+    heroArt: <ConsoleMock view="aliases" />,
     rows: [
       {
         icon: VenetianMaskIcon,
@@ -163,16 +165,16 @@ export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
         body: "Create a masked alias for each site you sign up to. Mail arrives in your inbox as usual, and the site never learns your real address.",
         bullets: ["One click to create", "Notes so you remember what each is for", "Replies go out from the alias"],
         bloom: "violet",
-        art: <AliasToggles />,
+        art: <ComposerMock />,
       },
       {
         icon: BarChart3Icon,
         label: "Know who leaked it",
         title: "Spam on an alias? You know exactly who sold it.",
         body: "Every alias counts the mail it receives. When one starts getting junk, switch it off — nothing else changes.",
-        bullets: ["Per-alias message counts", "Turn off without deleting", "Turn back on any time"],
+        bullets: ["A note on each alias", "Turn off without deleting", "Turn back on any time"],
         bloom: "blue",
-        art: <InstantList />,
+        art: <AliasToggles />,
       },
     ],
     detailsTitle: "Every kind of address",
@@ -240,6 +242,15 @@ export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
         bloom: "green",
         art: <TrackerBlocked />,
       },
+      {
+        icon: ContactRoundIcon,
+        label: "Contacts",
+        title: "The people you write to, next to your mail.",
+        body: "An address book with search and labels sits beside your folders. People you email are saved for you, and your contacts sync to your phone and computer.",
+        bullets: ["Labels, notes and birthdays", "Import and export vCard files", "Sync over CardDAV"],
+        bloom: "violet",
+        art: <ContactsMock />,
+      },
     ],
     detailsTitle: "Made for people who live in their inbox",
     details: [
@@ -293,7 +304,7 @@ export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
         body: "Support tools never show mail content. Any staff action on your account is written to its activity log, which account admins can read.",
         bullets: ["Activity log for every change", "Staff actions labelled as staff", "Mail content never in logs"],
         bloom: "blue",
-        art: <InstantList />,
+        art: <AuditMock />,
       },
     ],
     detailsTitle: "Your mail, on your terms",
