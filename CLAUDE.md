@@ -90,7 +90,11 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
    author. This overrides any tool default.
 2. **Never commit or push without explicit permission in that message.** Staging and showing a diff is fine.
    Permission given for one commit does not carry over to the next.
-3. **Group commits by topic** (infra, schema, auth, RBAC, mail, UI, docs), one concern each — never one mega-commit.
+3. **Small, granular commits — many of them.** One concern per commit, split finely: a migration, a repository
+   method, a service, its tests, an API route, a component, a page, a docs page and a changelog entry are separate
+   commits where they can stand alone. A slice normally lands as 8–20 commits, never 3–5 large ones. Each commit
+   builds, passes the hooks and has a message that says what changed and why. Never one mega-commit; never mix
+   unrelated files.
 4. **Verify before declaring done** — real flows in the browser and integration tests, not just typecheck.
 5. **Run `/security-review` on everything you write.** Every route enforces permission **and** ownership scope;
    out-of-scope IDs return **404**, missing permission returns **403**.
@@ -298,4 +302,5 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 | 2026-10-21 | Nishchayjeet Singh (Nish) | Rule 55: checkpoint after every slice (handoff + reviews + commit) so a usage-limit stop loses nothing                             |
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Rule 56: check GitHub Dependabot, code scanning and secret scanning alerts every session; fix or record                            |
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Rule 57: no competitor names in committed files; design references only in docs/internal/private                                   |
+| 2026-10-22 | Nishchayjeet Singh (Nish) | Rule 3: small, granular commits (8–20 per slice), one concern each                                                                 |
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Waitlist removed from the product (maintainer decision); sign-up is open (firewalled) or closed                                    |
