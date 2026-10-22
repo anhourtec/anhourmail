@@ -48,7 +48,7 @@ sidebar, and a bottom action bar on phones.
     **Print** (`/messages/:id/print`: escaped headers + the sanitised body, served with `sandbox` CSP — an opaque
     origin with no scripts — opened in a new tab for the browser's print command).
 - **text/html** stays in the sandboxed `srcdoc` frame (no `allow-scripts`, no `allow-same-origin` — unchanged).
-  Quoted replies inside it (Gmail/Yahoo quote containers, `blockquote type=cite`, Outlook's reply block) become
+  Quoted replies inside it (the quote containers and reply header blocks common mail apps add, `blockquote type=cite`) become
   `<details>` toggles (no script needed) and signatures are dimmed. The frame has no card or border of its own.
 - **HTML frame height — open maintainer decision.** A script-less, cross-origin frame can't report its content
   height and the parent can't read it, so the frame is sized to the reading pane: the header scrolls away and the
@@ -93,6 +93,57 @@ frame-ancestors 'none'` unless the route sets its own sandboxing one). The app-w
   together; switching checks the target with the mailbox access gate. A blocked active mailbox still ends the whole
   session (conservative).
 
+### Contacts (slice 3)
+
+- **Stored in Stalwart, never by us.** Contacts are JSContact cards in the mailbox's own address books (JMAP
+  Contacts, RFC 9610; verified shapes and limits in `research/stalwart.md` "JMAP Contacts"), so they also sync to
+  phones and desktop apps over CardDAV. Nothing about them reaches Postgres, logs or audit (rule 24).
+- **Books:** the account's default book is shown as **My contacts**; **Other contacts** is a book the BFF creates
+  when first needed. A card is moved between them with an `addressBookIds` update.
+- **Dedicated endpoints, not the proxy.** The generic JMAP proxy refuses the contacts capability and every
+  `AddressBook/*` and `ContactCard/*` method (tests in `webmail.test.ts`). The browser sends a small validated
+  `ContactInput` (`contacts.ts`: names, ≤ 10 addresses and phones, organisation, notes ≤ 4,000 chars, birthday,
+  ≤ 10 labels; control characters stripped) and the BFF builds the card; edits replace only the fields we manage.
+  Every call is pinned to the session's account.
+
+  | Route                                    | What                                                                            | Tier              |
+  | ---------------------------------------- | ------------------------------------------------------------------------------- | ----------------- |
+  | `GET /api/webmail/contacts`              | account, books, contacts (≤ 5,000, read in 500-card batches), auto-save setting | `webmailContacts` |
+  | `POST /api/webmail/contacts`             | create in My contacts or Other contacts                                         | `write`           |
+  | `DELETE /api/webmail/contacts`           | delete ≤ 500 ids (the app confirms first)                                       | `write`           |
+  | `PATCH /api/webmail/contacts/:contactId` | edit                                                                            | `write`           |
+  | `POST /api/webmail/contacts/move`        | move ≤ 500 ids to My contacts or Other contacts                                 | `write`           |
+  | `PUT /api/webmail/contacts/settings`     | "Automatically save people I email"                                             | `write`           |
+  | `POST /api/webmail/contacts/import`      | .vcf import, ≤ 1 MB and ≤ 1,000 cards, parsed by the BFF                        | `webmailUpload`   |
+  | `GET /api/webmail/contacts/export`       | .vcf download (all or `?ids=`), `sandbox` CSP, attachment                       | `webmailDownload` |
+
+- **vCard import** (`parseVcards`): vCard 3.0/4.0, unfolded; only FN, N, EMAIL, TEL, ORG, NOTE, BDAY and
+  CATEGORIES are read. PHOTO, URLs and everything else are ignored, so an import never fetches anything. Each card
+  goes through `ContactInput`; invalid or empty cards are skipped and counted. Linear-time parsing (no
+  backtracking regexes over whole lines). **Export** (`toVcards`) escapes every value.
+- **Auto-save after the send is released** (server-side): `send` schedules a check for `UNDO_SECONDS` + 2 s later
+  (an unref'd in-process timer, so the send response never waits). The check reads the submission's `undoStatus`:
+  `canceled` (undone) saves nobody, `pending` checks again every 5 s (three times at most), anything else saves every
+  To/Cc/Bcc recipient whose address isn't on any card (matched case-insensitively against the cards' own `emails`,
+  because the `email` query filter lags fresh writes) to Other contacts with the name the message used. Existing
+  cards are never changed; at most 100 recipients per send. Best effort: a restart inside those seconds skips it;
+  errors are logged by kind only, never with addresses.
+- **5,000 contacts per mailbox**, enforced by the BFF (create, import and auto-save count the cards first; Stalwart
+  accepts a `maxContactCards` quota but didn't enforce it, `research/stalwart.md`). Below the cap the "already saved"
+  check reads every card, so it is complete; the list says "Showing the first 5,000" if cards added over CardDAV
+  push a mailbox past it.
+- **Account pinning:** the list returns the `accountId`; every change sends it back in `X-Webmail-Account` and the
+  BFF refuses (400) if it's missing, or if the session's active mailbox is another one (switched in another tab).
+- **Values from cards are cleaned** before they reach the app or a vCard (control characters removed, line breaks
+  only in notes), and labels map through `Map`s, so a label such as `constructor` is just a label.
+- **The setting** lives in Stalwart too: the Other contacts book's `description` says whether saving is on (default
+  on when the book doesn't exist yet), so no per-mailbox preference is stored in our database.
+- **Composer suggestions** merge every address on a card with recent correspondents (last 200 sent messages),
+  most emailed first. "Add to contacts" appears on the reader's sender card and on composer address chips for
+  addresses not yet on a card.
+- **CardDAV for phones and desktop apps:** `CARDDAV` in `packages/shared` (the client host, `/dav/card/`), signed in
+  with the mailbox address and an app password. Production needs the NGINX route (private ops repo).
+
 ### Security notes from the slice 1 review (2026-10-22)
 
 - **Account-level suspension must gate the webmail too.** Today the BFF's `MailboxAccessGate` checks the mailbox's
@@ -110,6 +161,16 @@ frame-ancestors 'none'` unless the route sets its own sandboxing one). The app-w
   any caller, so **Stalwart's HTTP listener must be reachable from the app network only** (it is: internal network
   in production, `127.0.0.1` in dev by default). Stalwart's 429/403 on sign-in surface as "busy", never as "wrong
   password".
+- **Dev forwards visitors' addresses too (2026-10-22).** Without a client address every dev sign-in reached Stalwart
+  from the `mail-edge` forwarder's container address, so the day's deliberate wrong passwords (tests from every
+  agent) got the forwarder banned permanently and the whole app lost Stalwart. Now dev runs `TRUST_PROXY=true`,
+  `scripts/dev-mail-proxy.mjs` sets `X-Forwarded-For` (`dev-forwarded-for.mjs`: a LAN visitor's socket address,
+  replacing anything they sent; a loopback visitor's own valid address, else loopback), and the OAuth adapter
+  forwards `127.0.0.1` in dev when a request has no address (direct hits on the app port, work outside a request).
+  Tests that fail sign-in on purpose use their own documentation-range address (RFC 5737: e2e via
+  `extraHTTPHeaders`, integration tests inside a request context), so the shared loopback identity isn't banned
+  either. No `x:AllowedIp` exemption and no change to Stalwart's thresholds. Caveat: a local `.env` with
+  `DEV_HOST=0.0.0.0` lets LAN machines reach the app port directly and claim any address there (dev only).
 - **Proxy allow-list is minimal until the next slices.** `Email/set` may only set or clear `keywords/*` on existing
   messages (no create, destroy, moves or other properties); the composer and move slices widen it deliberately.
 - **CSS scrubbing is linear and capped** (style attribute 8 KB, `<style>` block 64 KB, over-cap CSS dropped and
@@ -202,9 +263,13 @@ handoff (ADR-0003) pre-fills the address only.
 
 - Layout skeleton from `next-shadcn-admin-dashboard`'s `/mail` page (MIT): resizable 3-pane (folders · list · reader), cookie-saved split, mobile drawer. We add virtualisation (TanStack Virtual), shortcuts and the composer ourselves; Mail-0/Zero (MIT) is a pattern reference only. Nothing is copied from AGPL webmails into MIT packages (`research/ui-references.md`).
 - Design tokens and skeletons come from `packages/ui` (`branding.md`). Mail skeletons: `FolderTreeSkeleton`, `MessageListSkeleton`, `ReaderSkeleton`.
+- Icon buttons get a shared `Tooltip` (`apps/web/src/components/tooltip.tsx`, no dependency) instead of `title`:
+  shows after 150 ms on hover and at once on keyboard focus, hides on leave, blur, click or Escape, flips at the
+  viewport edge, shows the shortcut in a mono keycap, `role="tooltip"` linked with `aria-describedby` while shown
+  (the button keeps its `aria-label`).
 - Optimistic actions (archive, delete, flag, read, move) are applied instantly with rollback on failure (an idea kept from HourMail). An outbox queue handles send with undo-send (5–30 s, user setting).
 
-### Keyboard shortcuts (Gmail-compatible defaults, rebindable later)
+### Keyboard shortcuts (conventional webmail defaults, rebindable later)
 
 | Key                   | Action                      | Key                   | Action                      |
 | --------------------- | --------------------------- | --------------------- | --------------------------- |
@@ -217,7 +282,7 @@ handoff (ADR-0003) pre-fills the address only.
 | `g i` / `g s` / `g d` | go to inbox / sent / drafts | `?`                   | shortcut help               |
 | `⌘/Ctrl+Enter`        | send                        | `Esc`                 | close composer / dialog     |
 
-## Folders (Outlook parity, ADR-0014)
+## Folders (ADR-0014)
 
 | Capability                                                                           | How                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Plan                        | Phase                          |
 | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- | ------------------------------ |
@@ -238,7 +303,7 @@ handoff (ADR-0003) pre-fills the address only.
 Folder changes are mail data in Stalwart and are not written to our audit log (they never pass through the
 control plane); sharing changes and account folder policies are audited (`audit.md`).
 
-## Signatures (Outlook parity, ADR-0014)
+## Signatures (ADR-0014)
 
 | Capability                                                                                                                          | How                                                                                                                                      | Plan                    | Phase                |
 | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | -------------------- |

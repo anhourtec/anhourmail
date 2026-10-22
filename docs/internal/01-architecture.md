@@ -114,7 +114,13 @@ Built in Phase 4 slice 1 (2026-10-22; ADR-0018):
    forwards through a **per-user queue with ≤ 4 in flight**, retrying `limit` errors with jittered backoff. Message
    bodies come from `/api/webmail/messages/:id`, **sanitised on the server** (`server/webmail/sanitize.ts`) and shown in
    a sandboxed `srcdoc` frame; attachments stream from `/api/webmail/download/:blobId` as `attachment`, `nosniff`.
-   **The browser never sees a Stalwart token.** Webmail pages get a nonce-based CSP from `src/proxy.ts`.
+   **The browser never sees a Stalwart token.** Webmail pages get a nonce-based CSP from `src/proxy.ts`, which
+   also sends visits to the webmail app page without a session cookie straight to sign-in (presence only; the page
+   and the BFF still validate the session).
+   **Contacts** never pass through the proxy (it refuses the contacts capability): dedicated `/api/webmail/contacts*`
+   endpoints validate a small input and build JSContact cards in the mailbox's own Stalwart address books, and the
+   send path saves new recipients to "Other contacts" (05-webmail.md "Contacts"). Contacts are mail data: nothing
+   about them is stored in Postgres. Phones and desktop apps sync them over CardDAV on the client host.
 5. **Suspension is enforced by the BFF too.** Stalwart refuses a suspended account's existing access tokens (403) but
    still honours its refresh grant and accepts the old token again after resume (`research/stalwart.md`). So every
    sign-in and every use of a session asks the control plane (`MailboxAccessGate` in `packages/core/src/webmail`,

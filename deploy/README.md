@@ -43,7 +43,9 @@ version. CI builds all three on every push (`.cicd/build.sh`).
 ## Required production settings (the app refuses to start otherwise)
 
 - `TRUST_PROXY=true` — the app runs only behind our NGINX, which sets `X-Forwarded-For` (the right-most entry is
-  trusted). Without it every anonymous caller would share one rate-limit bucket (security audit 2026-10-21).
+  trusted). Without it every anonymous caller would share one rate-limit bucket (security audit 2026-10-21), and
+  the webmail couldn't pass each visitor's address to Stalwart, whose failed-login ban would then hit the app
+  itself. (Dev also runs with `true`: its port forwarder sets the header; see `.env.example`.)
 - `APP_URL`, `WEBMAIL_URL`, `SITE_URL` must be `https://` (session cookies are `Secure`).
 - `BETTER_AUTH_SECRET` must not be the `.env.example` placeholder.
 - `SECRETS_KEYRING` — the secrets-at-rest key ring (`id:base64(32 random bytes)`, newest first; older ids stay

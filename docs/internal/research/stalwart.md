@@ -284,6 +284,59 @@ These defaults live on the `Jmap` singleton [S38]:
 - `maxUploadSize` = 50 MB, `uploadQuota` = 50 MB per window.
 - `getMaxResults` = 500, `queryMaxResults` = 5000.
 
+### Failed-login bans (verified on the pinned v0.16.27, 2026-10-22)
+- After about nine wrong passwords from one address on `/api/auth`, Stalwart answers "throttled", then adds the
+  address to `x:BlockedIp` (`reason: "authFailure"`, `expiresAt: null` — permanent until removed). With
+  `x:Http.useXForwarded` the banned address is the forwarded one; a banned connection address has its TCP
+  connections reset.
+- In dev the app reaches Stalwart through the `mail-edge` forwarder, so when no client address was forwarded the
+  forwarder itself was banned (twice on 2026-10-22) and every sign-in failed with "unavailable". Fixed by forwarding
+  visitors' addresses in dev (05-webmail.md "Dev forwards visitors' addresses too"). Verified: 18 wrong passwords
+  from `203.0.113.x` banned only that address; the forwarder stayed reachable and other clients signed in.
+- Removing a ban: `x:BlockedIp/set { destroy }`, then `x:Action/set { "@type": "ReloadBlockedIps" }`.
+- **Default inbound throttles** (`x:MtaInboundThrottle`, unchanged): "Sender IP throttle" (`remoteIp`, 5 / s) and
+  "Sender address to recipient throttle" (`senderDomain` + `rcpt`, **25 / hour**). Over the limit, a submission's
+  recipient gets `452 4.4.5 Rate limit exceeded` (`deliveryStatus.delivered: "no"`) and a submission with no
+  accepted recipient is never held, so it is `final` at once and can't be undone. It isn't keyed on the client
+  address (so forwarding addresses doesn't affect it), and sub-addressing doesn't get round it
+  (`member+tag@` shares `member@`'s allowance). Tests that send therefore use a fresh recipient per run (integration:
+  a throwaway `dev.test` account; e2e: a run-scoped mailbox from `scripts/e2e-fixtures.ts`) instead of the demo
+  mailboxes, which repeated runs exhaust.
+
+### JMAP Contacts (verified on the pinned v0.16.27, 2026-10-22)
+Probed with a demo mailbox; the webmail's contacts (05-webmail.md "Contacts") are built on these results.
+- **Capability** `urn:ietf:params:jmap:contacts`. The session capability is `{}`; the account capability is
+  `{"maxAddressBooksPerCard": null, "mayCreateAddressBook": true}`.
+- **AddressBook:** every account has one default book (`isDefault: true`, id `b` on the demo account), named
+  "Stalwart Address Book (<address>)" — that name is what phones show over CardDAV (the webmail labels it
+  "My contacts"; renaming it is an open item). `AddressBook/set` create, update (`name`, `description`) and destroy
+  work. Books carry `myRights`.
+- **ContactCard (JSContact, RFC 9553):** create needs `"@type": "Card"`, `version: "1.0"` and `addressBookIds`.
+  Verified properties: `kind` (`individual`, `group` with `members {urn: true}`), `name` (`components`
+  given/surname, `isOrdered`; the server fills `full` when it's missing), `emails {id: {address, contexts|label}}`,
+  `phones {id: {number, features}}`, `organizations {id: {name}}`, `notes {id: {note}}`,
+  `anniversaries {id: {kind: "birth", date: {"@type": "PartialDate", year?, month, day}}}`, `keywords`. Updates
+  replace whole top-level properties (`"name/full"` patch paths also work); moving between books is an
+  `addressBookIds` update. `uid`, `created` and `updated` aren't returned as properties.
+- **Query:** filters `text`, `email` (case-insensitive) and `inAddressBook` work; `name` and `uid` match nothing.
+  Sorting is only by `created`/`updated` (`name/given`, `name/surname` → `unsupportedSort`), so the BFF sorts by
+  name itself. **The `email` filter goes through the search index and lags fresh writes:** a card created a moment
+  earlier wasn't found (a re-run of the seed duplicated two cards), so dedupe reads the cards' `emails` instead.
+- **Quota:** `x:Account.quotas` accepts `maxContactCards` and `maxAddressBooks` (`maxContacts` is an invalid key),
+  but with `maxContactCards: 2` a single `ContactCard/set` created four cards — not enforced in that case on
+  v0.16.27. The BFF enforces its own 5,000 cards per mailbox instead; provisioning sets no contacts quota.
+- **`calculateTotal`** works on `ContactCard/query` (used to count cards against the cap).
+- **Submissions after the hold:** once the `HOLDFOR` hold is over, `undoStatus` is no longer `pending` (and
+  `canceled` after an undo), which is what auto-save checks before saving recipients.
+- **Limits:** `getMaxResults` 500 applies to `ContactCard/get`, so the BFF reads ids with `ContactCard/query`
+  (`queryMaxResults` 5000) and fetches cards in 500-id batches. `ContactCard/parse` returned only `{accountId}` for
+  a vCard blob (not useful), so vCard import is parsed by the BFF.
+- **CardDAV:** `/.well-known/carddav` → 307 to `/dav/card`; `PROPFIND /dav/card/<url-encoded address>/` (Depth 1)
+  → 207 listing the books, with the mailbox password **or an app password** (Basic). Production: Stalwart HTTP is
+  internal (rule 18), so CardDAV is published through NGINX on the client host (`CARDDAV` in
+  `packages/shared/src/platform.ts`, same host as JMAP); the NGINX route for `/dav/` and `/.well-known/carddav`
+  lives in the private ops repo and must exist before the public guide's URL works.
+
 ### Recommended push approach behind a reverse proxy or BFF
 - The browser never talks to Stalwart. The BFF opens **one upstream push channel per active user**, preferably the JMAP WebSocket with `WebSocketPushEnable`, or EventSource. It fans `StateChange` events out to the browser over its own SSE or WebSocket.
 - **Set `STALWART_PUBLIC_URL`** so the session's `apiUrl`, `downloadUrl`, `uploadUrl` and `eventSourceUrl` match the URL the BFF uses [S11][S70]. The BFF should also rewrite these URLs (or never expose the session object) before anything reaches the browser.
