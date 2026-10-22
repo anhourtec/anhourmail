@@ -70,8 +70,10 @@ that fail sign-in on purpose send their own documentation-range address (198.51.
 | Mailpit UI / SMTP                          | http://localhost:43026 / 43125                                                                                                                        | `DEV_BIND_ADDRESS` (127.0.0.1 default) | — (dev and CI only)         |
 | Stalwart HTTP (JMAP, management, `/admin`) | http://localhost:43080                                                                                                                                | `DEV_BIND_ADDRESS` (127.0.0.1 default) | internal network only       |
 | Stalwart SMTP / submissions / submission   | 43025 / 43465 / 43587                                                                                                                                 | `DEV_BIND_ADDRESS` (127.0.0.1 default) | 25 / 465 / 587              |
-| Stalwart IMAPS / POP3S / ManageSieve       | 43993 / 43995 / 43190                                                                                                                                 | `DEV_BIND_ADDRESS` (127.0.0.1 default) | 993 / 4190                  |
+| Stalwart IMAPS / POP3S / ManageSieve†      | 43993 / 43995 / 43190                                                                                                                                 | `DEV_BIND_ADDRESS` (127.0.0.1 default) | 993 / 995 (no ManageSieve)  |
 | Postgres / Redis                           | 43432 / 43379                                                                                                                                         | `DEV_BIND_ADDRESS` (127.0.0.1 default) | internal network only       |
+
+† ManageSieve stays local to dev for testing only; production never publishes it.
 
 Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check a port with
 `lsof -nP -iTCP:<port> -sTCP:LISTEN`. Neighbouring projects on this machine use 474xx (iotkinect-portal) and
@@ -132,7 +134,9 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
       recovery admin); a local `.env` may set both to `0.0.0.0` to open everything on the LAN deliberately.
     - **Production:** no host ports for app, worker, Postgres, Redis or Stalwart HTTP — containers talk only over
       internal Docker networks. The only published ports are NGINX **80/443** and Stalwart's mail ports
-      **25, 465, 587, 993, 995, 4190**, which must be the standard ones.
+      **25, 465, 587, 993, 995**, which must be the standard ones. ManageSieve (4190) is not published: customers
+      can't write their own Sieve (it would be an open-relay vector); the managed script is written through the
+      management API.
 
 ### Mail-specific rules
 
