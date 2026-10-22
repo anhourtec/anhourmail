@@ -19,7 +19,7 @@ export function SiteHeader() {
     <header className="am-site-nav">
       <nav aria-label="Main" className="am-site-nav-pill">
         <Link href="/" aria-label="AnhourMail home" className="am-site-nav-tile shrink-0">
-          <Logo />
+          <Logo onDark />
         </Link>
         <ul className="hidden flex-1 items-center justify-center gap-1 lg:flex">
           <li className="am-site-nav-dd relative">

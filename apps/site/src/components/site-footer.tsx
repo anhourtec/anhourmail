@@ -75,7 +75,7 @@ export function SiteFooter() {
         <div className="grid grid-cols-[minmax(0,1fr)] gap-14 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,2fr)] lg:gap-10">
           <div className="flex flex-col items-start gap-5">
             <Link href="/" aria-label="AnhourMail home" className="inline-flex items-center gap-2.5">
-              <Logo className="[&>span:first-child]:text-[18px]" />
+              <Logo onDark logoClassName="h-5 w-auto" />
             </Link>
             <p className="max-w-[34ch] text-[15px] leading-relaxed text-white/60">
               Private, fast email on your own domain. Open source, with no ads and no tracking.
