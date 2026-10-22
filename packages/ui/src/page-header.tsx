@@ -3,8 +3,8 @@ import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
 
 /**
- * App page header (branding.md "Page header"): optional breadcrumb, title, one-line description, actions on the
- * right. No eyebrow label — the breadcrumb carries context, and only when the page is at least two levels deep.
+ * App page header (branding.md "Page header"): breadcrumb, title, one-line description. No eyebrow label — the
+ * breadcrumb carries context, and only when the page is at least two levels deep.
  */
 export type Crumb = { label: string; href?: string };
 
@@ -35,6 +35,10 @@ export function Breadcrumbs({ items }: { items: Crumb[] }) {
   );
 }
 
+/**
+ * Console page template, top part: breadcrumb, a large title (actions may sit at its right) and an optional one-line
+ * description. The command bar, filter chips and content follow it on the page.
+ */
 export function PageHeader({
   title,
   description,
@@ -47,15 +51,13 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <header className="flex flex-col gap-3">
+    <header className="flex flex-col gap-2">
       <Breadcrumbs items={breadcrumbs} />
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div className="flex min-w-0 flex-col gap-1.5">
-          <h1 className="am-h1">{title}</h1>
-          {description && <p className="am-lead max-w-[68ch]">{description}</p>}
-        </div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <h1 className="am-h1 min-w-0 break-words">{title}</h1>
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
       </div>
+      {description && <p className="am-small max-w-[80ch]">{description}</p>}
     </header>
   );
 }

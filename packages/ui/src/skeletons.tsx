@@ -23,31 +23,122 @@ export function SkeletonPage({ label, children }: { label: string; children: Rea
   );
 }
 
-/** Mirrors PageHeader: optional breadcrumb, title, lead (+ action buttons on the right). No eyebrow. */
+/** Mirrors PageHeader: breadcrumb, large title, optional one-line description (+ actions at the title's right). */
 export function PageHeaderSkeleton({
   actions = 0,
   lead = true,
-  breadcrumbs = false,
+  breadcrumbs = true,
 }: {
   actions?: number;
   lead?: boolean;
   breadcrumbs?: boolean;
 }) {
   return (
-    <div className="mb-2 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-      <div className="flex flex-col gap-3">
-        {breadcrumbs && <Bone className="h-3.5 w-48" />}
-        <Bone className="h-8 w-64 max-w-full" />
-        {lead && <Bone className="h-4 w-96 max-w-full" />}
+    <div className="flex flex-col gap-2">
+      {breadcrumbs && <Bone className="h-3.5 w-36" />}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <Bone className="h-9 w-64 max-w-full" />
+        {actions > 0 && (
+          <div className="flex gap-2">
+            {Array.from({ length: actions }, (_, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
+              <Bone key={i} className="h-9 w-28" />
+            ))}
+          </div>
+        )}
       </div>
-      {actions > 0 && (
-        <div className="flex gap-2">
-          {Array.from({ length: actions }, (_, i) => (
+      {lead && <Bone className="h-3.5 w-96 max-w-full" />}
+    </div>
+  );
+}
+
+/** Mirrors the console command bar: a hairline, icon + text actions on the left, a search box on the right. */
+export function CommandBarSkeleton({ actions = 2, search = true }: { actions?: number; search?: boolean }) {
+  return (
+    <div className="flex min-h-12 flex-wrap items-center gap-2 border-t pt-2">
+      {Array.from({ length: actions }, (_, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
+        <Bone key={i} className="h-8 w-32" />
+      ))}
+      {search && <Bone className="ml-auto h-8 w-full sm:w-60" />}
+    </div>
+  );
+}
+
+/** Mirrors the filter chips row under the command bar. */
+export function FilterChipsSkeleton({ chips = 3 }: { chips?: number }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Bone className="h-3.5 w-12" />
+      {Array.from({ length: chips }, (_, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
+        <Bone key={i} className="h-7 w-20 rounded-full" />
+      ))}
+    </div>
+  );
+}
+
+/** Mirrors the console lists: optional checkbox column, a bold primary column, secondary columns, ~46 px rows. */
+export function ListSkeleton({
+  rows = 6,
+  columns = 3,
+  checkbox = false,
+}: {
+  rows?: number;
+  columns?: number;
+  checkbox?: boolean;
+}) {
+  return (
+    <div className="overflow-hidden">
+      <div className="flex h-10 items-center gap-6 border-b px-3">
+        {checkbox && <Bone className="size-4 shrink-0 rounded" />}
+        <Bone className="h-3 w-24" />
+        {Array.from({ length: Math.max(columns - 1, 0) }, (_, c) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
+          <Bone key={c} className={cn("h-3 w-16", c > 0 && "hidden sm:block")} />
+        ))}
+      </div>
+      {Array.from({ length: rows }, (_, r) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
+        <div key={r} className="flex h-[46px] items-center gap-6 border-b px-3">
+          {checkbox && <Bone className="size-4 shrink-0 rounded" />}
+          <Bone className="h-3.5 w-44 max-w-[50%]" />
+          {Array.from({ length: Math.max(columns - 1, 0) }, (_, c) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
-            <Bone key={i} className="h-7 w-24" />
+            <Bone key={c} className={cn("h-3.5 w-24", c > 0 && "hidden sm:block")} />
           ))}
         </div>
-      )}
+      ))}
+    </div>
+  );
+}
+
+/** Mirrors the flyout details panel body: initials circle, name, status, action links, tabs, two-column fields. */
+export function DetailPanelSkeleton({ fields = 6 }: { fields?: number }) {
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="flex items-center gap-5">
+        <Bone className="size-16 shrink-0 rounded-full sm:size-24" />
+        <div className="flex flex-col gap-2.5">
+          <Bone className="h-6 w-56 max-w-full" />
+          <Bone className="h-3.5 w-24" />
+          <Bone className="h-3.5 w-64 max-w-full" />
+        </div>
+      </div>
+      <div className="flex gap-5 border-b pb-2">
+        <Bone className="h-4 w-16" />
+        <Bone className="h-4 w-20" />
+        <Bone className="h-4 w-14" />
+      </div>
+      <div className="grid gap-x-10 gap-y-6 sm:grid-cols-2">
+        {Array.from({ length: fields }, (_, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
+          <div key={i} className="flex flex-col gap-2">
+            <Bone className="h-3.5 w-24" />
+            <Bone className="h-4 w-40" />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

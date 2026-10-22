@@ -56,6 +56,11 @@
   --color-am-line: rgb(var(--am-line));
   --color-am-surface: rgb(var(--am-surface));
   --color-brand: rgb(var(--brand));
+  --color-appbar: var(--appbar);
+  --color-appbar-foreground: var(--appbar-foreground);
+  --color-appbar-muted: var(--appbar-muted);
+  --color-appbar-accent: var(--appbar-accent);
+  --color-appbar-border: var(--appbar-border);
 }
 
 /* AnhourMail tokens (light = cool white + ink, dark = navy — never black).
@@ -113,6 +118,13 @@
   --sidebar-accent-foreground: rgb(var(--am-ink));
   --sidebar-border: rgb(var(--am-line));
   --sidebar-ring: rgb(var(--brand) / 0.55);
+
+  /* console app bar: the navy brand surface in both themes (branding.md "Console app bar") */
+  --appbar: rgb(12 26 46);
+  --appbar-foreground: rgb(255 255 255);
+  --appbar-muted: rgb(255 255 255 / 0.72);
+  --appbar-accent: rgb(255 255 255 / 0.1);
+  --appbar-border: rgb(255 255 255 / 0.14);
 
   /* fonts: Geist (UI/body), Geist Mono (labels/numbers), General Sans (display) */
   --font-sans: var(--font-geist-sans);
