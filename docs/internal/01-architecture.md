@@ -152,6 +152,10 @@ scheduler ─► job:reconcile (hourly) ─► desired vs Stalwart ─► drift 
              (missing / unknown / quota mismatch). Never deletes.
 ```
 
+- Addresses are one namespace across `mailbox` and `mail_alias` (each table also has its own unique index). Creating
+  either takes a transaction-scoped advisory lock on the address before checking it, and a unique violation maps to
+  409, so concurrent creates can't share an address. Alias changes queue `mailbox.ensure`, which writes the whole
+  alias list (enabled flags included) to the Stalwart account.
 - Job kinds: `domain.ensure`, `mailbox.ensure` (account + quota + aliases, including masked aliases). Every call
   is idempotent (upsert by natural key), so retries and duplicate jobs are safe.
 - New mailboxes get a random, unusable argon2id password; mail access is via webmail sign-in and app passwords.

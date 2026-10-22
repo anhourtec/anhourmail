@@ -115,7 +115,7 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
 | Mail (webmail link)      | own   | own        | own      | own         | own    | own     | ✗                      |
 | Domains                  | ✓     | ✓          | read     | ✗           | ✗      | read    | via act-as             |
 | People & mailboxes       | ✓     | read       | ✓        | ✗           | ✗      | read    | via act-as             |
-| Aliases                  | all   | own        | all      | own         | own    | read    | via act-as             |
+| Aliases                  | all   | own        | all      | own         | own    | ✗       | via act-as             |
 | Billing                  | ✓     | ✗          | ✗        | ✓           | ✗      | read    | Billing Adm (platform) |
 | Audit log                | ✓     | ✗          | ✓        | ✗           | ✗      | ✓       | Reports Reader, Global |
 | Security activity (self) | ✓     | ✓          | ✓        | ✓           | ✓      | ✓       | —                      |

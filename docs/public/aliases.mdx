@@ -1,24 +1,45 @@
 ---
 title: Aliases and masked aliases
-description: Extra addresses that deliver to your inbox, and random ones you can switch off.
+description: Extra addresses that deliver to your mailbox, and random ones you can switch off.
 ---
 
 ## Aliases
 
-An alias is another address that delivers to the same inbox. Use one for work enquiries, another for family, and
-reply from whichever address the mail came to.
+An alias is another address that delivers to the same mailbox. Use one for work enquiries, another for family,
+and reply from whichever address the mail came to.
+
+To add one, open **Aliases** in the console, choose **Choose an address**, type the part before the `@`, pick one
+of your verified domains and the mailbox it delivers to, then select **Create alias**. It starts working within a
+few seconds. An address can only be used once: a mailbox and an alias can't share it.
 
 ## Masked aliases
 
-A masked alias is a random address you give to a shop, a newsletter or a sign-up form. If it starts getting spam,
-switch it off and the mail stops. Each masked alias shows how much mail it receives, so you can see who shares
-your address.
+A masked alias is a random address, like `k7mq2xwv9tbn@yourdomain.ca`, that you give to one shop, newsletter or
+sign-up form. If it starts getting spam, switch it off and the mail stops; you'll also know who shared it.
+
+To make one, choose **Masked**, pick the mailbox it delivers to, and optionally add a note to remind you where you
+used it. The new address is shown with a copy button. Masked aliases use the domain of the mailbox they deliver to.
+
+## Turning aliases off and deleting them
+
+Each alias has a switch. While it's off, mail sent to it is refused and you can't send from it, but the address
+stays yours, so you can switch it back on later. Deleting an alias frees the address.
+
+Owners and people who manage users can manage aliases for every mailbox in the account. Everyone else sees and
+manages the aliases of their own mailboxes. Notes are only visible inside your account.
+
+Role addresses such as `postmaster@`, `abuse@`, `admin@`, `hostmaster@` and `webmaster@` can only be added by an
+owner or someone who manages users. Whoever holds them receives the domain's abuse reports and the emails that
+certificate authorities send to prove you own the domain.
 
 ## Catch-all
 
-On paid plans with your own domain, a catch-all delivers mail sent to any address at the domain that doesn't
-exist yet. It is off by default because it also catches spam sent to made-up names.
+On paid plans with your own domain, a catch-all will deliver mail sent to any address at the domain that doesn't
+exist yet. It's coming in a later release, and will be off by default because it also catches spam sent to
+made-up names.
 
 ## How many can I have?
+
+Limits count across your whole account.
 
 <PlanTable />
