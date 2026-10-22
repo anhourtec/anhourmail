@@ -24,7 +24,9 @@ stack_up() {
   docker compose --profile ci up -d --wait
   step "migrate + seed"
   npm run --silent db:migrate
-  npm run --silent db:seed
+  # The demo world: the webmail integration and e2e journeys sign in as demo mailboxes. It writes credentials.md
+  # inside the runner's workspace only (gitignored, never uploaded).
+  npm run --silent db:seed -- --demo
 }
 
 # Waits until a URL answers 2xx/3xx (first request also compiles the page in dev mode).
