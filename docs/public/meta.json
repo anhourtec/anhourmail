@@ -3,6 +3,7 @@
   "pages": [
     "index",
     "webmail",
+    "contacts",
     "clients",
     "custom-domain",
     "mailboxes",

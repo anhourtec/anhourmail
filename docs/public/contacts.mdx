@@ -1,0 +1,90 @@
+---
+title: Contacts
+description: Keep the people you write to in the webmail — add, edit and group contacts, import and export vCard files, people saved automatically when you email them, and syncing contacts to your phone and computer.
+---
+
+Your contacts live with your mailbox, on our mail server, in standard address books. The webmail shows them, and your
+phone and computer can sync them too (see [Sync with your phone and computer](#sync-with-your-phone-and-computer)).
+Each mailbox has its own contacts.
+
+## Open your contacts
+
+Choose **Contacts** in the webmail sidebar, under your folders. On a phone, open the sidebar with the button at the
+top left first.
+
+- Contacts are listed A to Z. Type in **Search contacts** to find someone by name, address, company or phone number.
+- The buttons above the list show **All**, **My contacts**, **Other contacts**, or the people with one label.
+- Choose a contact to see their addresses, phone numbers, company, birthday, labels and notes. Choose an address
+  (or **Send email**) to write to them. On a phone the contact replaces the list; the back arrow returns to it.
+
+## Add and edit contacts
+
+1. Choose the **New contact** button (a person with a plus) above the list.
+2. Fill in what you know: first and last name, company, up to ten email addresses and phone numbers, a birthday (the
+   year is optional), labels and notes. A contact needs at least a name, an address or a phone number. Each mailbox can keep up to 5,000 contacts.
+3. Choose **Save**.
+
+To change a contact, open it and choose the pencil. To delete it, choose the bin and confirm — this removes it from
+every device that syncs your contacts, and can't be undone.
+
+You can also add someone straight from your mail: **Add to contacts** appears beside a sender's address when you
+read their message, and the small person button on an address you're writing to adds that address.
+
+**Labels** group people (for example `family` or `book club`). Type them separated by commas; each label gets its own
+button above the list.
+
+## People you email are saved automatically
+
+When you send a message, anyone you wrote to who isn't in your contacts yet is added to **Other contacts**, with the
+name the message used, a few seconds later once the message has really gone (if you choose **Undo**, nobody is
+saved). Nobody already in your contacts is changed. This keeps their addresses in the suggestions
+when you write, without filling **My contacts**.
+
+- To keep someone, open them and choose **Move to My contacts** in the ⋯ menu.
+- To remove someone, delete them as usual.
+- To stop saving people automatically, open the ⋯ menu above the contact list and turn off
+  **Automatically save people I email**. It's on unless you turn it off, and the setting is per mailbox.
+
+## Select several
+
+Pause over the initials beside a contact and tick the box (or tick several). The bar that appears can move them
+to My contacts or Other contacts, export them, or delete them (after a confirmation).
+
+## Import and export
+
+- **Import:** in the ⋯ menu above the list, choose **Import contacts (.vcf)** and pick a vCard file exported from
+  another app or service. Files can be up to 1 MB and 1,000 contacts. We read names, email addresses, phone
+  numbers, company, birthday, labels and notes; photos and links in the file are ignored. Contacts without a name,
+  address or phone number are skipped, and the notice tells you how many.
+- **Export:** choose **Export all contacts** in the same menu, or select some contacts and choose the download
+  button, to get a `.vcf` file you can import anywhere.
+
+## Sync with your phone and computer
+
+Your contacts use CardDAV, the standard most phones and desktop apps understand, so changes on one device show up on
+the others.
+
+You'll need:
+
+| Setting  | Value                                                                     |
+| -------- | ------------------------------------------------------------------------- |
+| Server   | <Value of="carddavHost" />                                                |
+| Username | Your full email address                                                   |
+| Password | An app password (create one in your account settings, as for mail apps)   |
+| URL      | <Value of="carddavUrl" /> followed by your email address, if the app asks |
+
+- **iPhone and iPad:** Settings → Contacts → Accounts → Add Account → Other → **Add CardDAV Account**. Enter the
+  server, your email address and the app password.
+- **Mac:** Contacts → Settings → Accounts → **+** → Other Contacts Account → CardDAV, with the same values.
+- **Android:** Android needs a free CardDAV sync app (for example DAVx⁵ from F-Droid or Google Play). Add an account
+  with "Login with URL and user name", using the server above as the URL.
+- **Thunderbird:** Address Book → New Address Book → **CardDAV Address Book**, and enter your email address and the
+  server; Thunderbird finds the address books itself.
+
+Your address books show up as your mailbox's address book (shown as **My contacts** in the webmail) and **Other
+contacts**.
+
+<Callout title="Use an app password">
+  Like mail apps, contact apps sign in with an app password, never your account password. If you lose a device, revoke
+  its app password and nothing else changes.
+</Callout>
