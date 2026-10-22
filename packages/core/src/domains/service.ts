@@ -34,7 +34,7 @@ const view = (d: CustomerDomain): DomainView => ({
   createdAt: d.createdAt,
 });
 
-const isId = (id: string) => /^[0-9a-f-]{36}$/i.test(id);
+const isId = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
 async function scoped(repos: Repositories, accountId: string, id: string): Promise<CustomerDomain> {
   const domain = isId(id) ? await repos.domains.get(accountId, id) : null;

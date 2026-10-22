@@ -12,7 +12,8 @@
     "./security": "./src/security/index.ts",
     "./provisioning": "./src/provisioning/index.ts",
     "./domains": "./src/domains/index.ts",
-    "./mailboxes": "./src/mailboxes/index.ts"
+    "./mailboxes": "./src/mailboxes/index.ts",
+    "./aliases": "./src/aliases/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { AccessRepository } from "./access/repository";
 import type { AccountRepository } from "./account/repository";
+import type { AliasRepository } from "./aliases/repository";
 import type { AuditRepository } from "./audit/repository";
 import type { DomainRepository } from "./domains/repository";
 import type { MailboxRepository } from "./mailboxes/repository";
@@ -15,6 +16,7 @@ export type Repositories = {
   directory: MailDirectoryRepository;
   domains: DomainRepository;
   mailboxes: MailboxRepository;
+  aliases: AliasRepository;
 };
 
 /**

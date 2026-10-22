@@ -206,7 +206,6 @@ describe("domains service", () => {
       status: "active",
       stalwartId: null,
       lastError: null,
-      aliases: [],
     });
     await expect(removeDomain(d, owner, ACCOUNT_A, active.id, req)).rejects.toThrow(ConflictError);
     d.uow.state.mailboxes = [];

@@ -80,6 +80,12 @@ export const MAX_CUSTOM_DOMAINS = 20;
  */
 export const MAX_MAILBOXES = 10;
 
+/**
+ * Aliases (and, separately, masked aliases) per account on plans listed as unlimited: an abuse ceiling, not a
+ * selling point. Plans with a number use that number.
+ */
+export const ALIAS_CEILING = 1000;
+
 export const PLAN_ORDER: readonly PlanId[] = ["free", "plus", "supporter"];
 
 export type AddOnId = "bulk";

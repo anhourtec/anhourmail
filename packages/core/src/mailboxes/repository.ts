@@ -8,6 +8,11 @@ export type MailboxRepository = {
   count(accountId: string): Promise<number>;
   /** Used by any mailbox or alias, in any account (addresses are global). */
   addressTaken(address: string): Promise<boolean>;
+  /**
+   * Holds the address until the transaction ends, so a concurrent mailbox or alias create can't pass the
+   * `addressTaken` check for the same address (mailboxes and aliases are separate tables).
+   */
+  lockAddress(address: string): Promise<void>;
   insert(mailbox: Mailbox): Promise<void>;
   setQuota(id: string, quotaBytes: number): Promise<void>;
 };

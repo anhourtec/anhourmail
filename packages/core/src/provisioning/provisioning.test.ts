@@ -65,7 +65,16 @@ function setup(clock = fixedClock("2026-10-21T12:00:00Z")) {
     status: "provisioning",
     stalwartId: null,
     lastError: null,
-    aliases: [{ address: "hello@example.test", kind: "alias", enabled: true, description: null }],
+  });
+  d.uow.state.aliases.push({
+    id: "al1",
+    accountId: "a1",
+    mailboxId: "m1",
+    address: "hello@example.test",
+    kind: "alias",
+    enabled: true,
+    description: null,
+    createdAt: new Date(0),
   });
   return { d, clock };
 }
@@ -197,7 +206,6 @@ describe("reconcile", () => {
       status: "active",
       stalwartId: null,
       lastError: null,
-      aliases: [],
     });
     const mail = fakeMailServer();
     await mail.ensureDomain("platform.test");

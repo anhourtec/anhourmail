@@ -36,15 +36,19 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
         // Used only when the account is new (resetPassword is false): a random secret nobody knows.
         password: await hashPassword(randomBytes(32).toString("base64url")),
         quotaBytes,
-        aliases: aliases.map((a) => {
-          const [name, aliasDomain] = split(a.address);
-          return {
-            name,
-            domain: aliasDomain,
-            enabled: a.enabled,
-            ...(a.description ? { description: a.description } : {}),
-          };
-        }),
+        // A turned-off alias isn't sent at all, so the server refuses it as an unknown recipient and won't accept
+        // it as a sender, without relying on how it treats a disabled alias. The address stays held in Postgres.
+        aliases: aliases
+          .filter((a) => a.enabled)
+          .map((a) => {
+            const [name, aliasDomain] = split(a.address);
+            return {
+              name,
+              domain: aliasDomain,
+              enabled: true,
+              ...(a.description ? { description: a.description } : {}),
+            };
+          }),
       });
       return { externalId };
     },

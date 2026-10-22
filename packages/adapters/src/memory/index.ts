@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { randomUUID } from "node:crypto";
 
-import type { AccessRepository, Repositories, UnitOfWork } from "@anhourmail/core";
+import { type AccessRepository, ConflictError, type Repositories, type UnitOfWork } from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
+import type { AliasRepository, MailAlias } from "@anhourmail/core/aliases";
 import type { CustomerDomain, DomainRepository } from "@anhourmail/core/domains";
 import type { Mailbox, MailboxRepository } from "@anhourmail/core/mailboxes";
 import type {
-  AliasState,
   DomainState,
   MailDirectoryRepository,
   ProvisioningJob,
@@ -36,7 +36,8 @@ export type MemoryState = {
   userStates: Record<string, string>;
   jobs: ProvisioningJob[];
   domains: CustomerDomain[];
-  mailboxes: (Mailbox & { aliases: AliasState[] })[];
+  mailboxes: Mailbox[];
+  aliases: MailAlias[];
   /** Sign-in emails by user id (memberships reference them). */
   userEmails: Record<string, string>;
 };
@@ -51,6 +52,7 @@ export const emptyState = (): MemoryState => ({
   jobs: [],
   domains: [],
   mailboxes: [],
+  aliases: [],
   userEmails: {},
 });
 
@@ -183,7 +185,10 @@ function repositories(s: MemoryState): Repositories {
         quotaBytes: m.quotaBytes,
         status: m.status,
         stalwartId: m.stalwartId,
-        aliases: m.aliases,
+        aliases: s.aliases
+          .filter((a) => a.mailboxId === m.id)
+          .sort((a, b) => a.address.localeCompare(b.address))
+          .map((a) => ({ address: a.address, kind: a.kind, enabled: a.enabled, description: a.description })),
       });
     },
     markDomain: async (id, update) => {
@@ -245,7 +250,7 @@ function repositories(s: MemoryState): Repositories {
     },
     addressCount: async (name) =>
       s.mailboxes.filter((m) => m.address.endsWith(`@${name}`)).length +
-      s.mailboxes.flatMap((m) => m.aliases).filter((a) => a.address.endsWith(`@${name}`)).length,
+      s.aliases.filter((a) => a.address.endsWith(`@${name}`)).length,
     pending: async (since, limit) =>
       clone(
         s.domains
@@ -257,24 +262,16 @@ function repositories(s: MemoryState): Repositories {
 
   const mailboxes: MailboxRepository = {
     listByAccount: async (accountId) =>
-      clone(
-        s.mailboxes
-          .filter((m) => m.accountId === accountId)
-          .sort((a, b) => a.address.localeCompare(b.address))
-          .map(({ aliases: _a, ...m }) => m),
-      ),
-    get: async (accountId, id) => {
-      const m = s.mailboxes.find((x) => x.id === id && x.accountId === accountId);
-      if (!m) return null;
-      const { aliases: _a, ...rest } = m;
-      return clone(rest);
-    },
+      clone(s.mailboxes.filter((m) => m.accountId === accountId).sort((a, b) => a.address.localeCompare(b.address))),
+    get: async (accountId, id) => clone(s.mailboxes.find((x) => x.id === id && x.accountId === accountId) ?? null),
     count: async (accountId) => s.mailboxes.filter((m) => m.accountId === accountId).length,
     addressTaken: async (address) =>
-      s.mailboxes.some((m) => m.address === address || m.aliases.some((a) => a.address === address)),
+      s.mailboxes.some((m) => m.address === address) || s.aliases.some((a) => a.address === address),
+    // Runs are serialised, so holding an address is implicit here.
+    lockAddress: async () => undefined,
     insert: async (m) => {
       if (s.mailboxes.some((x) => x.address === m.address)) throw new Error("duplicate mailbox address");
-      s.mailboxes.push({ ...clone(m), aliases: [] });
+      s.mailboxes.push(clone(m));
     },
     setQuota: async (id, quotaBytes) => {
       const m = s.mailboxes.find((x) => x.id === id);
@@ -282,7 +279,25 @@ function repositories(s: MemoryState): Repositories {
     },
   };
 
-  return { audit, access, accounts, provisioning, directory, domains, mailboxes };
+  const aliases: AliasRepository = {
+    listByAccount: async (accountId) =>
+      clone(s.aliases.filter((a) => a.accountId === accountId).sort((a, b) => a.address.localeCompare(b.address))),
+    get: async (accountId, id) => clone(s.aliases.find((a) => a.id === id && a.accountId === accountId) ?? null),
+    count: async (accountId, kind) => s.aliases.filter((a) => a.accountId === accountId && a.kind === kind).length,
+    insert: async (a) => {
+      if (s.aliases.some((x) => x.address === a.address)) throw new ConflictError("That address is already in use.");
+      s.aliases.push(clone(a));
+    },
+    setEnabled: async (id, enabled) => {
+      const a = s.aliases.find((x) => x.id === id);
+      if (a) a.enabled = enabled;
+    },
+    delete: async (id) => {
+      s.aliases = s.aliases.filter((a) => a.id !== id);
+    },
+  };
+
+  return { audit, access, accounts, provisioning, directory, domains, mailboxes, aliases };
 }
 
 export class MemoryUnitOfWork implements UnitOfWork {

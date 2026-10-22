@@ -3,8 +3,9 @@ import { randomUUID } from "node:crypto";
 
 import { and, desc, eq, gte, inArray, lt, lte, type SQL, sql } from "drizzle-orm";
 
-import type { AccessRepository, Repositories, UnitOfWork } from "@anhourmail/core";
+import { type AccessRepository, ConflictError, type Repositories, type UnitOfWork } from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
+import type { AliasKind, AliasRepository, MailAlias } from "@anhourmail/core/aliases";
 import type { CustomerDomain, DomainRepository, DomainStatus } from "@anhourmail/core/domains";
 import type { Mailbox, MailboxRepository, MailboxStatus } from "@anhourmail/core/mailboxes";
 import type {
@@ -41,6 +42,24 @@ import {
 } from "./schema";
 
 // Row <-> domain mapping happens only here (ADR-0008).
+
+/** Postgres unique violation (23505), whether or not the driver error is wrapped. */
+function isUniqueViolation(err: unknown): boolean {
+  for (let e: unknown = err, depth = 0; e instanceof Error && depth < 3; e = e.cause, depth++) {
+    if ((e as Error & { code?: unknown }).code === "23505") return true;
+  }
+  return false;
+}
+
+/** Runs an insert; a duplicate address becomes a 409 rather than a 500. */
+async function insertAddress(write: () => Promise<unknown>): Promise<void> {
+  try {
+    await write();
+  } catch (err) {
+    if (isUniqueViolation(err)) throw new ConflictError("That address is already in use.");
+    throw err;
+  }
+}
 
 class PgAuditRepository implements AuditRepository {
   constructor(private readonly x: Executor) {}
@@ -560,22 +579,91 @@ class PgMailboxRepository implements MailboxRepository {
     return a !== undefined;
   }
 
+  async lockAddress(address: string): Promise<void> {
+    await this.x.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`address:${address}`}, 0))`);
+  }
+
   async insert(m: Mailbox): Promise<void> {
-    await this.x.insert(mailbox).values({
-      id: m.id,
-      accountId: m.accountId,
-      userId: m.userId,
-      address: m.address,
-      status: m.status,
-      quotaBytes: m.quotaBytes,
-      stalwartId: m.stalwartId,
-      lastError: m.lastError,
-      createdAt: m.createdAt,
-    });
+    await insertAddress(() =>
+      this.x.insert(mailbox).values({
+        id: m.id,
+        accountId: m.accountId,
+        userId: m.userId,
+        address: m.address,
+        status: m.status,
+        quotaBytes: m.quotaBytes,
+        stalwartId: m.stalwartId,
+        lastError: m.lastError,
+        createdAt: m.createdAt,
+      }),
+    );
   }
 
   async setQuota(id: string, quotaBytes: number): Promise<void> {
     await this.x.update(mailbox).set({ quotaBytes }).where(eq(mailbox.id, id));
+  }
+}
+
+const toAlias = (r: typeof mailAlias.$inferSelect): MailAlias => ({
+  id: r.id,
+  accountId: r.accountId,
+  mailboxId: r.mailboxId,
+  address: r.address,
+  kind: r.kind === "masked" ? "masked" : "alias",
+  enabled: r.enabled,
+  description: r.description,
+  createdAt: r.createdAt,
+});
+
+class PgAliasRepository implements AliasRepository {
+  constructor(private readonly x: Executor) {}
+
+  async listByAccount(accountId: string): Promise<MailAlias[]> {
+    const rows = await this.x
+      .select()
+      .from(mailAlias)
+      .where(eq(mailAlias.accountId, accountId))
+      .orderBy(mailAlias.address);
+    return rows.map(toAlias);
+  }
+
+  async get(accountId: string, id: string): Promise<MailAlias | null> {
+    const [r] = await this.x
+      .select()
+      .from(mailAlias)
+      .where(and(eq(mailAlias.id, id), eq(mailAlias.accountId, accountId)));
+    return r ? toAlias(r) : null;
+  }
+
+  async count(accountId: string, kind: AliasKind): Promise<number> {
+    const [r] = await this.x
+      .select({ n: sql<number>`count(*)::int` })
+      .from(mailAlias)
+      .where(and(eq(mailAlias.accountId, accountId), eq(mailAlias.kind, kind)));
+    return r?.n ?? 0;
+  }
+
+  async insert(a: MailAlias): Promise<void> {
+    await insertAddress(() =>
+      this.x.insert(mailAlias).values({
+        id: a.id,
+        accountId: a.accountId,
+        mailboxId: a.mailboxId,
+        address: a.address,
+        kind: a.kind,
+        enabled: a.enabled,
+        description: a.description,
+        createdAt: a.createdAt,
+      }),
+    );
+  }
+
+  async setEnabled(id: string, enabled: boolean): Promise<void> {
+    await this.x.update(mailAlias).set({ enabled }).where(eq(mailAlias.id, id));
+  }
+
+  async delete(id: string): Promise<void> {
+    await this.x.delete(mailAlias).where(eq(mailAlias.id, id));
   }
 }
 
@@ -587,6 +675,7 @@ const repositories = (x: Executor): Repositories => ({
   directory: new PgMailDirectoryRepository(x),
   domains: new PgDomainRepository(x),
   mailboxes: new PgMailboxRepository(x),
+  aliases: new PgAliasRepository(x),
 });
 
 /** One Postgres transaction per `run` (CLAUDE.md rule 46: the audit row commits with the change). */

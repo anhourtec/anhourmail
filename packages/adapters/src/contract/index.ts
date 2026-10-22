@@ -222,6 +222,42 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         await expect(uow.run((r) => r.mailboxes.insert({ ...m, id: randomUUID() }))).rejects.toThrow();
         await uow.run((r) => r.mailboxes.setQuota(m.id, 2048));
         expect((await uow.run((r) => r.mailboxes.get(a.id, m.id)))?.quotaBytes).toBe(2048);
+
+        // Aliases: account-scoped, counted by kind, unique addresses (a duplicate is a conflict, not a crash).
+        const alias = {
+          id: randomUUID(),
+          accountId: a.id,
+          mailboxId: m.id,
+          address: `hi-${tag}@contract.example.ca`,
+          kind: "masked" as const,
+          enabled: true,
+          description: "shop",
+          createdAt: new Date(),
+        };
+        await uow.run(async (r) => {
+          await r.mailboxes.lockAddress(alias.address);
+          await r.aliases.insert(alias);
+        });
+        expect(await uow.run((r) => r.aliases.get(a.id, alias.id))).toMatchObject({
+          address: alias.address,
+          kind: "masked",
+        });
+        expect(await uow.run((r) => r.aliases.get(b.id, alias.id))).toBeNull();
+        expect(await uow.run((r) => r.aliases.count(a.id, "masked"))).toBe(1);
+        expect(await uow.run((r) => r.aliases.count(a.id, "alias"))).toBe(0);
+        expect((await uow.run((r) => r.aliases.listByAccount(a.id))).map((x) => x.id)).toEqual([alias.id]);
+        expect(await uow.run((r) => r.aliases.listByAccount(b.id))).toEqual([]);
+        expect(await uow.run((r) => r.mailboxes.addressTaken(alias.address))).toBe(true);
+        await expect(uow.run((r) => r.aliases.insert({ ...alias, id: randomUUID() }))).rejects.toThrow(
+          "already in use",
+        );
+        await uow.run((r) => r.aliases.setEnabled(alias.id, false));
+        expect((await uow.run((r) => r.aliases.get(a.id, alias.id)))?.enabled).toBe(false);
+        expect((await uow.run((r) => r.directory.getMailbox(m.id)))?.aliases).toEqual([
+          { address: alias.address, kind: "masked", enabled: false, description: "shop" },
+        ]);
+        await uow.run((r) => r.aliases.delete(alias.id));
+        expect(await uow.run((r) => r.aliases.get(a.id, alias.id))).toBeNull();
       } finally {
         await cleanup();
       }

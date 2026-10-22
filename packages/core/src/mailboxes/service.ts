@@ -20,7 +20,7 @@ export type MailboxView = {
   createdAt: Date;
 };
 
-const isId = (id: string) => /^[0-9a-f-]{36}$/i.test(id);
+const isId = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
 async function scoped(repos: Repositories, accountId: string, id: string): Promise<Mailbox> {
   const m = isId(id) ? await repos.mailboxes.get(accountId, id) : null;
@@ -38,6 +38,18 @@ async function views(repos: Repositories, accountId: string, list: Mailbox[]): P
     owner: m.userId && members.has(m.userId) ? { userId: m.userId, email: members.get(m.userId) ?? "" } : null,
     createdAt: m.createdAt,
   }));
+}
+
+/**
+ * Refuses changes to an address whose domain is no longer this account's: it must be one of the account's active
+ * domains, or a platform domain nobody has claimed.
+ */
+export async function assertDomainHeld(repos: Repositories, accountId: string, address: string): Promise<void> {
+  const domainName = address.slice(address.lastIndexOf("@") + 1);
+  const own = (await repos.domains.listByAccount(accountId)).find((d) => d.name === domainName);
+  if (own ? own.status !== "active" : await repos.domains.nameTaken(domainName)) {
+    throw new ConflictError("This mailbox's domain is no longer active in this account.");
+  }
 }
 
 /** Largest quota a mailbox can have on the account's plan (each mailbox gets up to the plan's storage). */
@@ -122,6 +134,7 @@ export async function createMailbox(
         throw new PlanLimitError(`An account can have up to ${String(MAX_MAILBOXES)} mailboxes.`);
       }
       const address = `${local}@${domain.name}`;
+      await repos.mailboxes.lockAddress(address); // mailboxes and aliases share one address space
       if (await repos.mailboxes.addressTaken(address)) throw new ConflictError("That address is already in use.");
       const mailbox: Mailbox = {
         id: randomUUID(),
@@ -163,12 +176,7 @@ export async function setMailboxQuota(
     { action: "mailbox.quota_changed", permission: "mailbox.manage", accountId, target: { type: "mailbox", id } },
     async (repos) => {
       const m = await scoped(repos, accountId, id);
-      // Only while the address's domain is still this account's (or a platform domain nobody has claimed).
-      const domainName = m.address.slice(m.address.lastIndexOf("@") + 1);
-      const own = (await repos.domains.listByAccount(accountId)).find((d) => d.name === domainName);
-      if (own ? own.status !== "active" : await repos.domains.nameTaken(domainName)) {
-        throw new ConflictError("This mailbox's domain is no longer active in this account.");
-      }
+      await assertDomainHeld(repos, accountId, m.address);
       if (input.quotaGb === undefined || input.quotaGb === null || input.quotaGb === "") {
         throw new ValidationError("Choose a quota in GB.");
       }

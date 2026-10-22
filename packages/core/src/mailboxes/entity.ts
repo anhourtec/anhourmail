@@ -30,3 +30,30 @@ export function normaliseLocalPart(input: unknown): string {
   }
   return v;
 }
+
+/**
+ * Role addresses (RFC 2142, plus the ones certificate authorities mail to prove domain control): whoever holds
+ * one can receive a domain's abuse reports or get a TLS certificate for it, so only account admins may claim them.
+ */
+const RESERVED_LOCAL_PARTS = new Set([
+  "abuse",
+  "admin",
+  "administrator",
+  "hostmaster",
+  "info",
+  "mailer-daemon",
+  "marketing",
+  "noc",
+  "no-reply",
+  "noreply",
+  "postmaster",
+  "root",
+  "sales",
+  "security",
+  "support",
+  "webmaster",
+]);
+
+export function isReservedLocalPart(local: string): boolean {
+  return RESERVED_LOCAL_PARTS.has(local);
+}

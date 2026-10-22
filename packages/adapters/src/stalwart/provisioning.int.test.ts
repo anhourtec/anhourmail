@@ -35,6 +35,7 @@ const tag = randomUUID().slice(0, 8);
 const domain = `prov-${tag}.test`;
 const address = `owner@${domain}`;
 const alias = `hello@${domain}`;
+const offAlias = `off@${domain}`;
 let accountId = "";
 
 afterAll(async () => {
@@ -63,7 +64,10 @@ describe("provisioning against Stalwart", () => {
       .values({ accountId, address, quotaBytes: 50 * 1024 * 1024, status: "provisioning" })
       .returning();
     if (!d || !m) throw new Error("rows not created");
-    await db.insert(schema.mailAlias).values({ accountId, mailboxId: m.id, address: alias, kind: "alias" });
+    await db.insert(schema.mailAlias).values([
+      { accountId, mailboxId: m.id, address: alias, kind: "alias" },
+      { accountId, mailboxId: m.id, address: offAlias, kind: "masked", enabled: false },
+    ]);
 
     await enqueueProvisioning(deps, { kind: "domain.ensure", subjectId: d.id });
     await enqueueProvisioning(deps, { kind: "mailbox.ensure", subjectId: m.id });
@@ -85,6 +89,8 @@ describe("provisioning against Stalwart", () => {
     const onServer = (await mgmt.listUsers()).find((u) => u.address === address);
     expect(onServer).toMatchObject({ quotaBytes: 50 * 1024 * 1024 });
     expect(onServer?.aliases).toContain(alias);
+    // A turned-off alias isn't on the mail server, so mail to it is refused and it can't be sent from.
+    expect(onServer?.aliases).not.toContain(offAlias);
 
     // Re-running is idempotent.
     await enqueueProvisioning(deps, { kind: "mailbox.ensure", subjectId: m.id });

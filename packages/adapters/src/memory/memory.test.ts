@@ -36,7 +36,16 @@ describeAdapterContract("memory", async () => {
         status: "active",
         stalwartId: null,
         lastError: null,
-        aliases: [{ address: alias, kind: "alias", enabled: true, description: null }],
+      });
+      uow.state.aliases.push({
+        id: randomUUID(),
+        accountId: "a1",
+        mailboxId,
+        address: alias,
+        kind: "alias",
+        enabled: true,
+        description: null,
+        createdAt: new Date(0),
       });
       return { domainId, mailboxId };
     },
