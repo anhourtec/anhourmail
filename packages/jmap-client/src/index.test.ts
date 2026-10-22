@@ -94,3 +94,32 @@ describe("JmapClient", () => {
     ).rejects.toMatchObject({ type: "notCreated" });
   });
 });
+
+describe("JmapClient.upload", () => {
+  it("posts to the rewritten upload URL and returns the blob id", async () => {
+    const seen: { url: string; type: string | null }[] = [];
+    const f = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/session")) return Response.json(SESSION);
+      seen.push({ url, type: new Headers(init?.headers).get("content-type") });
+      return Response.json({ blobId: "b1", size: 3 });
+    }) as typeof fetch;
+    const c = new JmapClient({ sessionUrl: "http://proxy.local/jmap/session", fetch: f });
+    expect(await c.upload("abc", "message/rfc822")).toBe("b1");
+    expect(await c.upload(new Uint8Array([1, 2]), "application/octet-stream")).toBe("b1");
+    expect(seen[0]).toEqual({ url: "http://proxy.local/jmap/upload/acc/", type: "message/rfc822" });
+  });
+
+  it("throws on HTTP errors and a missing blob id", async () => {
+    const make = (res: () => Response) =>
+      new JmapClient({
+        sessionUrl: "http://p/jmap/session",
+        fetch: async (input: string | URL | Request) =>
+          String(input instanceof Request ? input.url : input).endsWith("/session") ? Response.json(SESSION) : res(),
+      });
+    await expect(make(() => new Response("", { status: 413 })).upload("x", "text/plain")).rejects.toBeInstanceOf(
+      JmapError,
+    );
+    await expect(make(() => Response.json({})).upload("x", "text/plain")).rejects.toThrow(/blobId/);
+  });
+});

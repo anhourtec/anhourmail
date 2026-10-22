@@ -5,7 +5,13 @@ import { randomUUID } from "node:crypto";
 import { setLogContextProvider } from "./log";
 
 /** Per-request fields every log line carries. Never mail content. */
-export type RequestContext = { requestId: string; userId?: string; errorCode?: string };
+export type RequestContext = {
+  requestId: string;
+  userId?: string;
+  errorCode?: string;
+  /** The trusted client address (`clientIp()`), for forwarding to internal services. Never logged by this module. */
+  clientIp?: string | null;
+};
 
 const storage = new AsyncLocalStorage<RequestContext>();
 

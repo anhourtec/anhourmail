@@ -46,4 +46,11 @@ version. CI builds all three on every push (`.cicd/build.sh`).
   trusted). Without it every anonymous caller would share one rate-limit bucket (security audit 2026-10-21).
 - `APP_URL`, `WEBMAIL_URL`, `SITE_URL` must be `https://` (session cookies are `Secure`).
 - `BETTER_AUTH_SECRET` must not be the `.env.example` placeholder.
+- `SECRETS_KEYRING` — the secrets-at-rest key ring (`id:base64(32 random bytes)`, newest first; older ids stay
+  listed until nothing is sealed under them). Webmail sessions keep their mail-server tokens sealed with it.
+- `STALWART_URL` — Stalwart's internal HTTP address (webmail sign-in and JMAP). Stalwart must run with
+  `x:Http.useXForwarded: true` (the BFF forwards the end user's address so Stalwart's rate limits and login bans
+  apply per person), which is safe only because its HTTP listener is reachable from the app network alone. Register the webmail's OAuth
+  client once with exactly one redirect URI, `https://mail.anhourmail.com/oauth/callback` (`upsertOAuthClient` in
+  `packages/stalwart-client`, client id `anhourmail-webmail`).
 - `SIGNUP_MODE` defaults to `closed`; set `open` only while access is limited to the IP allow-list.

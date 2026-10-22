@@ -9,7 +9,26 @@ export {
   StalwartError,
   StalwartTransport,
 } from "./client";
-export { type DomainInput, type RelayRouteInput, StalwartManagement, type UserInput } from "./management";
+export {
+  type DomainInput,
+  type RelayRouteInput,
+  StalwartManagement,
+  SUSPENDED_PERMISSIONS,
+  type UserInput,
+} from "./management";
+export {
+  OAuthDeniedError,
+  OAuthThrottledError,
+  type OAuthClientInput,
+  type OAuthTokens,
+  OAuthUnavailableError,
+  pkcePair,
+  StalwartOAuth,
+  type StalwartOAuthOptions,
+  upsertOAuthClient,
+  WEBMAIL_OAUTH_CLIENT_ID,
+  webmailRedirectUri,
+} from "./oauth";
 export {
   applySenderIdentityPolicy,
   SENDER_IDENTITY_DATA_SCRIPT_EXPRESSION,

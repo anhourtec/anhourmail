@@ -10,7 +10,8 @@
     "./redis": "./src/redis.ts",
     "./request-context": "./src/request-context.ts",
     "./client-ip": "./src/client-ip.ts",
-    "./rate-limit": "./src/rate-limit.ts"
+    "./rate-limit": "./src/rate-limit.ts",
+    "./keyring": "./src/keyring.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

@@ -69,7 +69,8 @@ export class JmapClient {
 
   constructor(opts: JmapClientOptions) {
     this.#opts = opts;
-    this.#fetch = opts.fetch ?? fetch;
+    // Wrapped, not stored: browsers throw "Illegal invocation" when fetch is called with another `this`.
+    this.#fetch = opts.fetch ?? ((input, init) => fetch(input, init));
   }
 
   #headers(): Record<string, string> {
@@ -124,6 +125,25 @@ export class JmapClient {
       if (!out.has(id)) out.set(id, args);
     }
     return out;
+  }
+
+  /**
+   * Uploads a blob (RFC 8620 §6.1) and returns its id, e.g. for `Email/import` or an attachment. The upload URL
+   * comes from the session (rewritten like the API URL).
+   */
+  async upload(data: Uint8Array | string, type: string): Promise<string> {
+    const s = await this.session();
+    const accountId = await this.accountId();
+    const url = s.uploadUrl.replace("{accountId}", encodeURIComponent(accountId));
+    const res = await this.#fetch(url, {
+      method: "POST",
+      headers: { ...this.#headers(), "Content-Type": type },
+      body: typeof data === "string" ? data : new Blob([new Uint8Array(data)], { type }),
+    });
+    if (!res.ok) throw new JmapError(`JMAP upload HTTP ${res.status}`, "http", { status: res.status });
+    const body = (await res.json()) as { blobId?: unknown };
+    if (typeof body.blobId !== "string") throw new JmapError("Upload returned no blobId", "upload");
+    return body.blobId;
   }
 
   async mailboxes(): Promise<Mailbox[]> {

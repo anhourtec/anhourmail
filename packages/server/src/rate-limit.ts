@@ -26,6 +26,12 @@ export const LIMITS = {
   export: { limit: 5, windowSec: 3600, by: "caller", failMode: "closed" },
   sending: { limit: 60, windowSec: 3600, by: "caller", failMode: "closed" },
   webhook: { limit: 120, windowSec: 60, by: "ip", failMode: "open" },
+  // Webmail (docs/internal/05-webmail.md): sign-in guesses a mailbox password, so it fails closed; the JMAP proxy
+  // carries every list, open and flag of an active session.
+  webmailSignIn: { limit: 10, windowSec: 300, by: "ip", failMode: "closed" },
+  webmailSignInAddress: { limit: 10, windowSec: 900, by: "caller", failMode: "closed" },
+  webmail: { limit: 900, windowSec: 60, by: "caller", failMode: "open" },
+  webmailDownload: { limit: 120, windowSec: 60, by: "caller", failMode: "open" },
 } as const satisfies Record<string, RateLimit>;
 
 export type LimitName = keyof typeof LIMITS;
@@ -93,5 +99,76 @@ export function memoryCounter(): Counter {
     const n = (counts.get(key) ?? 0) + 1;
     counts.set(key, n);
     return n;
+  };
+}
+
+/**
+ * Failure-only limits (e.g. wrong passwords per address): `failuresExceeded` reads without counting, and
+ * `recordFailure` counts only when an attempt failed, so a person signing in successfully never locks themselves
+ * out and an attacker can't lock a victim out with correct-looking traffic. Same fixed windows and fail modes as
+ * `checkRateLimit`.
+ */
+export type FailureStore = {
+  get(key: string): Promise<number>;
+  incr(key: string, windowSec: number): Promise<number>;
+};
+
+const failureKey = (name: string, limit: RateLimit, subject: string, now: number) =>
+  `am:rl:${name}:${subject}:${String(limit.windowSec)}:${String(Math.floor(now / 1000 / limit.windowSec))}`;
+
+export async function failuresExceeded(
+  store: FailureStore,
+  name: string,
+  limit: RateLimit,
+  subject: string,
+  now = Date.now(),
+): Promise<boolean> {
+  try {
+    return (await store.get(failureKey(name, limit, subject, now))) >= limit.limit * multiplier();
+  } catch (err) {
+    log.warn("failure limiter unavailable", { component: "rate-limit", limit: name, failMode: limit.failMode, err });
+    return limit.failMode === "closed";
+  }
+}
+
+export async function recordFailure(
+  store: FailureStore,
+  name: string,
+  limit: RateLimit,
+  subject: string,
+  now = Date.now(),
+): Promise<void> {
+  try {
+    await store.incr(failureKey(name, limit, subject, now), limit.windowSec);
+  } catch (err) {
+    log.warn("failure limiter unavailable", { component: "rate-limit", limit: name, err });
+  }
+}
+
+export function redisFailureStore(redis: {
+  get(key: string): Promise<string | null>;
+  incr(key: string): Promise<number>;
+  expire(key: string, seconds: number): Promise<number>;
+}): FailureStore {
+  return {
+    get: async (key) => Number((await redis.get(key)) ?? "0"),
+    incr: async (key, windowSec) => {
+      const n = await redis.incr(key);
+      if (n === 1) await redis.expire(key, windowSec + 1);
+      return n;
+    },
+  };
+}
+
+/** In-process failure store for tests. */
+export function memoryFailureStore(): FailureStore {
+  const counts = new Map<string, number>();
+  return {
+    get: async (key) => counts.get(key) ?? 0,
+    incr: async (key) => {
+      const n = (counts.get(key) ?? 0) + 1;
+      counts.set(key, n);
+      return n;
+    },
   };
 }

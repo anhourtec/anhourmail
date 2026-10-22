@@ -4,7 +4,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { hashPassword } from "@anhourmail/adapters/auth";
-import { applySenderIdentityPolicy, type StalwartManagement } from "@anhourmail/stalwart-client";
+import {
+  applySenderIdentityPolicy,
+  type StalwartManagement,
+  upsertOAuthClient,
+  WEBMAIL_OAUTH_CLIENT_ID,
+  webmailRedirectUri,
+} from "@anhourmail/stalwart-client";
 
 /**
  * Dev-only Stalwart configuration (docs/internal/02-mail-infrastructure.md "Dev mail flow").
@@ -15,7 +21,17 @@ import { applySenderIdentityPolicy, type StalwartManagement } from "@anhourmail/
  * - Pyzor is a network lookup service; the isolated dev network can't reach it, and Stalwart refuses to
  *   reload while it is enabled. Dev only — production keeps it on (rule 20 is about production filtering).
  * - The admin WebUI bundle is served from a pinned local file because Stalwart can't download it.
+ * - The webmail BFF's OAuth client (`anhourmail-webmail`, ADR-0018) is registered with the local webmail origins.
+ *   Production registers exactly one redirect URI, `https://mail.anhourmail.com/oauth/callback` (the same call,
+ *   run by the deploy's bootstrap with `WEBMAIL_URL`); the URI is never visited, it only has to match.
  */
+
+/** Local webmail origins: WEBMAIL_URL plus the localhost/127.0.0.1 spellings of the dev webmail port. */
+export function devWebmailOrigins(webmailUrl: string | undefined, webmailDevPort = "43300"): string[] {
+  const origins = [`http://localhost:${webmailDevPort}`, `http://127.0.0.1:${webmailDevPort}`];
+  if (webmailUrl) origins.unshift(new URL(webmailUrl).origin);
+  return [...new Set(origins)];
+}
 
 export const DEV_DOMAIN = "dev.test";
 export const DEV_MAILBOXES = ["alice", "bob"] as const;
@@ -41,7 +57,7 @@ export async function ensureWebUiBundle(): Promise<void> {
 
 export async function applyDevMailPlan(
   mgmt: StalwartManagement,
-  opts: { mailboxPassword: string },
+  opts: { mailboxPassword: string; webmailOrigins: string[] },
 ): Promise<{ domainId: string; restartNeeded: boolean }> {
   await ensureWebUiBundle();
   let restartNeeded = await mgmt.setWebUiResource(`file:///opt/anhourmail/${WEBUI_FILE}`);
@@ -71,7 +87,19 @@ export async function applyDevMailPlan(
       else: "false",
     },
   });
+  // The webmail BFF forwards the end user's address on OAuth calls, so Stalwart's anonymous rate limit and its
+  // failed-login ban apply per person instead of to the app (verified 2026-10-22: limits follow X-Forwarded-For).
+  // `useXForwarded` trusts the header from any caller, so it is only safe because Stalwart's HTTP listener is
+  // reachable from the app's network alone (production: internal network; dev: 127.0.0.1 by default). Also a
+  // production setting.
+  await mgmt.updateSingleton("x:Http", { useXForwarded: true });
   await mgmt.reloadSettings();
+
+  await upsertOAuthClient(mgmt, {
+    clientId: WEBMAIL_OAUTH_CLIENT_ID,
+    description: "AnhourMail webmail (dev)",
+    redirectUris: opts.webmailOrigins.map(webmailRedirectUri),
+  });
 
   const domainId = await mgmt.upsertDomain({ name: DEV_DOMAIN });
   for (const name of DEV_MAILBOXES) {

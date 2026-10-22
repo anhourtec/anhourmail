@@ -97,6 +97,14 @@ export const REDACT_KEYS: readonly string[] = [
   "imappassword",
   "stripesecretkey",
   "stripewebhooksecret",
+  // Webmail OAuth (headless code flow) and the secrets key ring. `access_token` / `refresh_token` normalise to the
+  // token keys above.
+  "accountsecret",
+  "codeverifier",
+  "codechallenge",
+  "clientcode",
+  "secretskeyring",
+  "keyring",
   // AnhourMail: mail content never reaches logs
   "subject",
   "body",

@@ -177,3 +177,64 @@ describe("health", () => {
     expect((await probe("slow", 10, () => new Promise((r) => setTimeout(r, 200)))).ok).toBe(false);
   });
 });
+
+describe("failure-only limits", async () => {
+  const { failuresExceeded, LIMITS, memoryFailureStore, recordFailure, redisFailureStore } =
+    await import("./rate-limit");
+  it("counts only failures, blocks at the limit, and resets with the window", async () => {
+    vi.stubEnv("RATE_LIMIT_MULTIPLIER", "1");
+    const store = memoryFailureStore();
+    const lim = LIMITS.webmailSignInAddress;
+    const now = 1_000_000_000_000;
+    // Successes never count: checking alone is free.
+    for (let i = 0; i < 50; i++) expect(await failuresExceeded(store, "x", lim, "a", now)).toBe(false);
+    for (let i = 0; i < lim.limit - 1; i++) await recordFailure(store, "x", lim, "a", now);
+    expect(await failuresExceeded(store, "x", lim, "a", now)).toBe(false);
+    await recordFailure(store, "x", lim, "a", now);
+    expect(await failuresExceeded(store, "x", lim, "a", now)).toBe(true);
+    expect(await failuresExceeded(store, "x", lim, "b", now)).toBe(false);
+    expect(await failuresExceeded(store, "x", lim, "a", now + lim.windowSec * 1000)).toBe(false);
+    vi.unstubAllEnvs();
+  });
+
+  it("fails closed for closed tiers when the store is down, and never throws on record", async () => {
+    setLogSinkForTests(() => undefined);
+    const broken = { get: () => Promise.reject(new Error("down")), incr: () => Promise.reject(new Error("down")) };
+    expect(await failuresExceeded(broken, "x", LIMITS.webmailSignInAddress, "a")).toBe(true);
+    expect(await failuresExceeded(broken, "x", LIMITS.read, "a")).toBe(false);
+    await expect(recordFailure(broken, "x", LIMITS.webmailSignInAddress, "a")).resolves.toBeUndefined();
+    setLogSinkForTests(null);
+  });
+
+  it("uses INCR + EXPIRE on Redis", async () => {
+    const calls: string[] = [];
+    const store = redisFailureStore({
+      get: async () => null,
+      incr: async (k) => (calls.push(`incr ${k}`), 1),
+      expire: async (k, s) => (calls.push(`expire ${k} ${String(s)}`), 1),
+    });
+    expect(await store.get("k")).toBe(0);
+    await store.incr("k", 900);
+    expect(calls).toEqual(["incr k", "expire k 901"]);
+  });
+});
+
+describe("redaction of webmail OAuth secrets", () => {
+  it("redacts the OAuth flow's secrets in any spelling", () => {
+    const out = redact({
+      accountSecret: "pw",
+      code_verifier: "v",
+      codeVerifier: "v",
+      client_code: "c",
+      clientCode: "c",
+      refresh_token: "r",
+      access_token: "a",
+      SECRETS_KEYRING: "k1:abc",
+      secretsKeyring: "k1:abc",
+      codeChallenge: "x",
+      ok: "fine",
+    }) as Record<string, unknown>;
+    const expected = Object.fromEntries(Object.keys(out).map((k) => [k, k === "ok" ? "fine" : "[redacted]"]));
+    expect(out).toEqual(expected);
+  });
+});
