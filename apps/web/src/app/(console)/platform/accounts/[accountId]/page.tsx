@@ -11,7 +11,8 @@ import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 import { requestIdFrom } from "@anhourmail/server/request-context";
 import { PageHeader } from "@anhourmail/ui/page-header";
 
-import { ListEmpty, listClass } from "@/components/console/data-list";
+import { ListEmpty } from "@/components/console/data-list";
+import { listClass } from "@/components/console/list-classes";
 import { DetailTabs, Field, FieldGrid } from "@/components/console/flyout";
 import { StatusText, type Tone } from "@/components/console/status-text";
 import { CopyValue } from "@/components/copy-value";

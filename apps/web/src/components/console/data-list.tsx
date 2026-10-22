@@ -6,20 +6,14 @@ import Link from "next/link";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { menuKeys, PanelSurface } from "../popover";
+import { listClass } from "./list-classes";
+
+export { listClass };
 
 /**
  * Console list primitives (page template, "Lists"): sortable headers, a checkbox column with a bulk bar, a ⋮ menu
  * per row, filter chips. Rows are ~46 px with hairline separators; the primary column is medium weight.
  */
-
-export const listClass = {
-  wrap: "-mx-1 overflow-x-auto px-1",
-  table: "w-full border-collapse text-left text-[14px]",
-  th: "h-10 border-b px-3 text-[13px] font-medium whitespace-nowrap text-muted-foreground",
-  row: "border-b transition-colors hover:bg-accent/40 data-[open=true]:bg-accent data-[selected=true]:bg-accent/60",
-  td: "h-[46px] px-3 py-2 align-middle",
-  check: "w-10 pr-0 pl-3",
-} as const;
 
 export type SortDir = "asc" | "desc";
 export type Sort<K extends string> = { key: K; dir: SortDir };
