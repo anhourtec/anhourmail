@@ -102,4 +102,9 @@ describe("permission matrix invariants", () => {
     expect(isCritical("bulk.campaign.send")).toBe(true);
     expect(accountRoleCan("auditor", "bulk.read")).toBe(true);
   });
+
+  it("only Owners can require two-factor sign-in or a passkey for the account (critical)", () => {
+    for (const r of ACCOUNT_ROLES) expect(accountRoleCan(r, "account.security.manage")).toBe(r === "owner");
+    expect(isCritical("account.security.manage")).toBe(true);
+  });
 });

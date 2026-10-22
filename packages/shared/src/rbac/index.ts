@@ -91,6 +91,11 @@ export const PERMISSIONS = {
   "billing.read": { scope: "account", description: "See plan and invoices" },
   "billing.manage": { scope: "account", description: "Change plan and payment method", critical: true },
   "audit.read": { scope: "account", description: "Read the account audit log" },
+  "account.security.manage": {
+    scope: "account",
+    description: "Require two-factor sign-in or a passkey for everyone in the account",
+    critical: true,
+  },
 
   // --- account: collaboration (docs/internal/10-collaboration.md)
   "shared_mailbox.read": { scope: "account", description: "See shared mailboxes and who can use them" },
@@ -215,6 +220,7 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
     "billing.read",
     "billing.manage",
     "audit.read",
+    "account.security.manage",
     "shared_mailbox.read",
     "shared_mailbox.manage",
     "distribution_list.read",

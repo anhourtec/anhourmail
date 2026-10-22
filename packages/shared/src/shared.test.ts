@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { customerDomainRecords, DKIM_SELECTORS, dkimTarget, VERIFY_PREFIX } from "./dns";
 import { ADDONS, BILLING, formatPrice, PLAN_ORDER, PLANS } from "./plans";
 import { CLIENT_ENDPOINTS, HOSTS, PRODUCT_DOMAIN } from "./platform";
+import { isSignInPolicy, RECOVERY_CODES, SIGN_IN_POLICIES, SIGN_IN_POLICY_LABELS } from "./security";
 import { BULK_MAIL, TRUST_TIERS } from "./sending";
 
 describe("plans", () => {
@@ -63,5 +64,16 @@ describe("sending tiers", () => {
     expect(TRUST_TIERS.restricted.limits.messagesPerDay).toBe(0);
     expect(TRUST_TIERS.new.limits.messagesPerDay).toBeLessThan(TRUST_TIERS.standard.limits.messagesPerDay);
     expect(TRUST_TIERS.standard.limits.messagesPerDay).toBeLessThan(TRUST_TIERS.trusted.limits.messagesPerDay);
+  });
+});
+
+describe("sign-in security", () => {
+  it("lists the policies with labels, and recognises only them", () => {
+    expect(SIGN_IN_POLICIES).toEqual(["none", "two_factor", "passkey"]);
+    for (const p of SIGN_IN_POLICIES) expect(SIGN_IN_POLICY_LABELS[p]).toBeTruthy();
+    expect(isSignInPolicy("passkey")).toBe(true);
+    expect(isSignInPolicy("sms")).toBe(false);
+    expect(isSignInPolicy(1)).toBe(false);
+    expect(RECOVERY_CODES.warnAtOrBelow).toBeLessThan(RECOVERY_CODES.count);
   });
 });

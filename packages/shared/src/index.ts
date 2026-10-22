@@ -4,3 +4,4 @@ export * from "./plans";
 export * from "./platform";
 export * from "./sending";
 export * from "./rbac";
+export * from "./security";

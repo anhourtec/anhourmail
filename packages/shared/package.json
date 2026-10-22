@@ -12,7 +12,8 @@
     "./sending": "./src/sending.ts",
     "./dns": "./src/dns.ts",
     "./credits": "./src/credits.generated.ts",
-    "./rbac": "./src/rbac/index.ts"
+    "./rbac": "./src/rbac/index.ts",
+    "./security": "./src/security.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
