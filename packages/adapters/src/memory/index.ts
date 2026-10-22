@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import { type AccessRepository, ConflictError, type Repositories, type UnitOfWork } from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
 import type { AliasRepository, MailAlias } from "@anhourmail/core/aliases";
+import type { Invite, InviteRepository, PeopleRepository } from "@anhourmail/core/people";
+import type { AccountSummary, PlatformAccountRepository } from "@anhourmail/core/platform";
 import type { CustomerDomain, DomainRepository } from "@anhourmail/core/domains";
 import { type Mailbox, type MailboxRepository, MAILBOX_STATUSES } from "@anhourmail/core/mailboxes";
 import type {
@@ -30,9 +32,9 @@ import type { AccountRole, PlatformRole } from "@anhourmail/shared/rbac";
 export type MemoryState = {
   audit: AuditEntry[];
   platformRoles: { userId: string; role: PlatformRole }[];
-  memberships: { userId: string; accountId: string; role: AccountRole }[];
+  memberships: { userId: string; accountId: string; role: AccountRole; joinedAt?: Date }[];
   suspended: string[];
-  accounts: { id: string; name: string; plan: PlanId; status?: string }[];
+  accounts: { id: string; name: string; plan: PlanId; status?: string; createdAt?: Date }[];
   userStates: Record<string, string>;
   jobs: ProvisioningJob[];
   domains: CustomerDomain[];
@@ -40,6 +42,12 @@ export type MemoryState = {
   aliases: MailAlias[];
   /** Sign-in emails by user id (memberships reference them). */
   userEmails: Record<string, string>;
+  /** Display names by user id (defaults to the email). */
+  userNames: Record<string, string>;
+  /** Console logins created from invites (password hashes; never read back). */
+  logins: { userId: string; passwordHash: string }[];
+  invites: (Invite & { tokenHash: string; acceptedUserId: string | null; acceptedAt: Date | null })[];
+  inviteSends: { accountId: string; inviteId: string; at: Date }[];
 };
 
 export const emptyState = (): MemoryState => ({
@@ -54,9 +62,19 @@ export const emptyState = (): MemoryState => ({
   mailboxes: [],
   aliases: [],
   userEmails: {},
+  userNames: {},
+  logins: [],
+  invites: [],
+  inviteSends: [],
 });
 
+const EPOCH = new Date(0);
+
 const clone = <T>(v: T): T => structuredClone(v);
+
+/** Mirrors the Postgres filter: act-as entries count as staff. */
+const actorKindOf = (e: AuditEntry) =>
+  e.onBehalfOf !== null || e.actor.type === "staff" ? "staff" : e.actor.type === "api_token" ? "user" : e.actor.type;
 
 function repositories(s: MemoryState): Repositories {
   const audit: AuditRepository = {
@@ -80,7 +98,10 @@ function repositories(s: MemoryState): Repositories {
             (e) =>
               e.scope === q.scope &&
               (!q.action || e.action === q.action) &&
+              (!q.area || e.action.startsWith(`${q.area}.`)) &&
               (!q.actorUserId || e.actor.userId === q.actorUserId) &&
+              (!q.actorKind || actorKindOf(e) === q.actorKind) &&
+              (!q.result || e.result === q.result) &&
               (!q.targetId || e.target.id === q.targetId) &&
               (!q.from || new Date(e.at) >= q.from) &&
               (!q.to || new Date(e.at) <= q.to) &&
@@ -109,14 +130,14 @@ function repositories(s: MemoryState): Repositories {
   const accounts: AccountRepository = {
     create: async ({ name, plan }) => {
       const id = randomUUID();
-      s.accounts.push({ id, name, plan });
+      s.accounts.push({ id, name, plan, createdAt: new Date() });
       return { id };
     },
     addMember: async ({ accountId, userId, role }) => {
       if (s.memberships.some((m) => m.accountId === accountId && m.userId === userId)) {
         throw new Error("duplicate membership");
       }
-      s.memberships.push({ accountId, userId, role });
+      s.memberships.push({ accountId, userId, role, joinedAt: new Date() });
     },
     setUserState: async ({ userId, state }) => {
       s.userStates[userId] = state;
@@ -326,7 +347,152 @@ function repositories(s: MemoryState): Repositories {
     },
   };
 
-  return { audit, access, accounts, provisioning, directory, domains, mailboxes, aliases };
+  const people: PeopleRepository = {
+    list: async (accountId) =>
+      s.memberships
+        .filter((m) => m.accountId === accountId)
+        .map((m) => {
+          const email = s.userEmails[m.userId] ?? m.userId;
+          return {
+            userId: m.userId,
+            name: s.userNames[m.userId] ?? email,
+            email,
+            role: m.role,
+            joinedAt: clone(m.joinedAt ?? EPOCH),
+            suspended: s.suspended.includes(m.userId),
+          };
+        })
+        .sort((a, b) => a.email.localeCompare(b.email)),
+    setRole: async (accountId, userId, role) => {
+      const m = s.memberships.find((x) => x.accountId === accountId && x.userId === userId);
+      if (!m) return false;
+      m.role = role;
+      return true;
+    },
+    remove: async (accountId, userId) => {
+      const before = s.memberships.length;
+      s.memberships = s.memberships.filter((x) => !(x.accountId === accountId && x.userId === userId));
+      return s.memberships.length < before;
+    },
+    userByEmail: async (email) => {
+      const id = Object.keys(s.userEmails).find((k) => s.userEmails[k]?.toLowerCase() === email.toLowerCase());
+      return id ? { id, name: s.userNames[id] ?? s.userEmails[id] ?? id } : null;
+    },
+    createLogin: async ({ email, name, passwordHash }) => {
+      if (Object.values(s.userEmails).some((e) => e.toLowerCase() === email.toLowerCase())) {
+        throw new ConflictError("That address already has a login.");
+      }
+      const id = randomUUID();
+      s.userEmails[id] = email;
+      s.userNames[id] = name;
+      s.logins.push({ userId: id, passwordHash });
+      return { id };
+    },
+  };
+
+  const toInvite = ({
+    tokenHash: _t,
+    acceptedUserId: _u,
+    acceptedAt: _a,
+    ...i
+  }: MemoryState["invites"][number]): Invite => clone(i);
+
+  const invites: InviteRepository = {
+    listPending: async (accountId) =>
+      s.invites
+        .filter((i) => i.accountId === accountId && i.status === "pending")
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .map(toInvite),
+    get: async (accountId, id) => {
+      const i = s.invites.find((x) => x.id === id && x.accountId === accountId);
+      return i ? toInvite(i) : null;
+    },
+    findByToken: async (tokenHash) => {
+      const i = s.invites.find((x) => x.tokenHash === tokenHash);
+      return i ? toInvite(i) : null;
+    },
+    create: async (input) => {
+      if (s.invites.some((x) => x.tokenHash === input.tokenHash)) throw new Error("duplicate invite token");
+      const row = {
+        ...clone(input),
+        id: randomUUID(),
+        status: "pending" as const,
+        acceptedUserId: null,
+        acceptedAt: null,
+      };
+      s.invites.push(row);
+      return toInvite(row);
+    },
+    reissue: async (id, tokenHash, expiresAt) => {
+      const i = s.invites.find((x) => x.id === id && x.status === "pending");
+      if (!i) return false;
+      Object.assign(i, { tokenHash, expiresAt: clone(expiresAt) });
+      return true;
+    },
+    revoke: async (id) => {
+      const i = s.invites.find((x) => x.id === id && x.status === "pending");
+      if (!i) return false;
+      i.status = "revoked";
+      return true;
+    },
+    accept: async (id, userId, at) => {
+      const i = s.invites.find((x) => x.id === id && x.status === "pending" && x.expiresAt > at);
+      if (!i) return false;
+      Object.assign(i, { status: "accepted", acceptedUserId: userId, acceptedAt: clone(at) });
+      return true;
+    },
+    recordSend: async (accountId, inviteId, at) => {
+      s.inviteSends.push({ accountId, inviteId, at: clone(at) });
+    },
+    sendsSince: async (accountId, since) =>
+      s.inviteSends.filter((x) => x.accountId === accountId && x.at >= since).length,
+  };
+
+  const summaryOf = (a: MemoryState["accounts"][number]): AccountSummary => ({
+    id: a.id,
+    name: a.name,
+    plan: a.plan,
+    status: a.status ?? "active",
+    members: s.memberships.filter((m) => m.accountId === a.id).length,
+    mailboxes: s.mailboxes.filter((m) => m.accountId === a.id).length,
+    domains: s.domains.filter((d) => d.accountId === a.id).length,
+    createdAt: clone(a.createdAt ?? EPOCH),
+  });
+
+  const platformAccounts: PlatformAccountRepository = {
+    search: async ({ query, limit, offset }) => {
+      const q = query?.toLowerCase() ?? null;
+      const matches = s.accounts.filter(
+        (a) =>
+          q === null ||
+          a.name.toLowerCase().includes(q) ||
+          a.id === q ||
+          s.memberships.some((m) => m.accountId === a.id && (s.userEmails[m.userId] ?? "").toLowerCase().includes(q)),
+      );
+      const sorted = [...matches].sort(
+        (a, b) => (b.createdAt ?? EPOCH).getTime() - (a.createdAt ?? EPOCH).getTime() || a.id.localeCompare(b.id),
+      );
+      return { total: matches.length, rows: sorted.slice(offset, offset + limit).map(summaryOf) };
+    },
+    summary: async (id) => {
+      const a = s.accounts.find((x) => x.id === id);
+      return a ? summaryOf(a) : null;
+    },
+  };
+
+  return {
+    audit,
+    access,
+    accounts,
+    provisioning,
+    directory,
+    domains,
+    mailboxes,
+    aliases,
+    people,
+    invites,
+    platformAccounts,
+  };
 }
 
 export class MemoryUnitOfWork implements UnitOfWork {

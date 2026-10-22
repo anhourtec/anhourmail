@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { randomUUID } from "node:crypto";
 
-import { and, desc, eq, gte, inArray, lt, lte, type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, lte, or, type SQL, sql } from "drizzle-orm";
 
 import { type AccessRepository, ConflictError, type Repositories, type UnitOfWork } from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
 import type { AliasKind, AliasRepository, MailAlias } from "@anhourmail/core/aliases";
+import type { Invite, InviteRepository, InviteStatus, MemberRecord, PeopleRepository } from "@anhourmail/core/people";
+import type { AccountSummary, PlatformAccountRepository } from "@anhourmail/core/platform";
 import type { CustomerDomain, DomainRepository, DomainStatus } from "@anhourmail/core/domains";
 import { type Mailbox, type MailboxRepository, MAILBOX_STATUSES, type MailboxStatus } from "@anhourmail/core/mailboxes";
 import type {
@@ -32,9 +34,12 @@ import type { Db, Executor } from "./client";
 import {
   accountMembership,
   auditLog,
+  authAccount,
   authUser,
   customerAccount,
   customerDomain,
+  invite,
+  inviteSend,
   mailAlias,
   mailbox,
   platformRoleAssignment,
@@ -112,7 +117,10 @@ class PgAuditRepository implements AuditRepository {
   async list(q: AuditQuery): Promise<AuditEntry[]> {
     const where: SQL[] = [eq(auditLog.scope, q.scope)];
     if (q.action) where.push(eq(auditLog.action, q.action));
+    if (q.area) where.push(sql`starts_with(${auditLog.action}, ${`${q.area}.`})`);
     if (q.actorUserId) where.push(eq(auditLog.actorUserId, q.actorUserId));
+    if (q.actorKind) where.push(actorKindWhere(q.actorKind));
+    if (q.result) where.push(eq(auditLog.result, q.result));
     if (q.targetId) where.push(eq(auditLog.targetId, q.targetId));
     if (q.from) where.push(gte(auditLog.at, q.from));
     if (q.to) where.push(lte(auditLog.at, q.to));
@@ -129,6 +137,19 @@ class PgAuditRepository implements AuditRepository {
   async chain(scope: AuditEntry["scope"]): Promise<AuditEntry[]> {
     const rows = await this.x.select().from(auditLog).where(eq(auditLog.scope, scope)).orderBy(auditLog.seq);
     return rows.map(toAudit);
+  }
+}
+
+/** Act-as entries count as staff (`on_behalf_of` set), whatever the actor type. */
+function actorKindWhere(kind: NonNullable<AuditQuery["actorKind"]>): SQL {
+  const noAgent = sql`(${auditLog.onBehalfOf} is null or ${auditLog.onBehalfOf} = 'null'::jsonb)`;
+  switch (kind) {
+    case "staff":
+      return sql`(${auditLog.actorType} = 'staff' or not ${noAgent})`;
+    case "user":
+      return sql`(${auditLog.actorType} in ('user', 'api_token') and ${noAgent})`;
+    default:
+      return sql`(${auditLog.actorType} = ${kind} and ${noAgent})`;
   }
 }
 
@@ -726,6 +747,271 @@ class PgAliasRepository implements AliasRepository {
   }
 }
 
+const isId = (id: string) => /^[0-9a-f-]{36}$/i.test(id);
+
+class PgPeopleRepository implements PeopleRepository {
+  constructor(private readonly x: Executor) {}
+
+  async list(accountId: string): Promise<MemberRecord[]> {
+    if (!isId(accountId)) return [];
+    const rows = await this.x
+      .select({
+        userId: accountMembership.userId,
+        name: authUser.name,
+        email: authUser.email,
+        role: accountMembership.role,
+        joinedAt: accountMembership.createdAt,
+        suspended: userProfile.suspended,
+      })
+      .from(accountMembership)
+      .innerJoin(authUser, eq(authUser.id, accountMembership.userId))
+      .leftJoin(userProfile, eq(userProfile.userId, accountMembership.userId))
+      .where(eq(accountMembership.accountId, accountId))
+      .orderBy(authUser.email);
+    return rows.flatMap((r) =>
+      isAccountRole(r.role)
+        ? [
+            {
+              userId: r.userId,
+              name: r.name,
+              email: r.email,
+              role: r.role,
+              joinedAt: r.joinedAt,
+              suspended: r.suspended ?? false,
+            },
+          ]
+        : [],
+    );
+  }
+
+  async setRole(accountId: string, userId: string, role: AccountRole): Promise<boolean> {
+    if (!isId(accountId)) return false;
+    const rows = await this.x
+      .update(accountMembership)
+      .set({ role })
+      .where(and(eq(accountMembership.accountId, accountId), eq(accountMembership.userId, userId)))
+      .returning({ userId: accountMembership.userId });
+    return rows.length > 0;
+  }
+
+  async remove(accountId: string, userId: string): Promise<boolean> {
+    if (!isId(accountId)) return false;
+    const rows = await this.x
+      .delete(accountMembership)
+      .where(and(eq(accountMembership.accountId, accountId), eq(accountMembership.userId, userId)))
+      .returning({ userId: accountMembership.userId });
+    return rows.length > 0;
+  }
+
+  async userByEmail(email: string): Promise<{ id: string; name: string } | null> {
+    const [r] = await this.x
+      .select({ id: authUser.id, name: authUser.name })
+      .from(authUser)
+      .where(sql`lower(${authUser.email}) = ${email.toLowerCase()}`)
+      .limit(1);
+    return r ?? null;
+  }
+
+  async createLogin(input: {
+    email: string;
+    name: string;
+    firstName: string;
+    lastName: string | null;
+    passwordHash: string;
+  }): Promise<{ id: string }> {
+    const id = randomUUID();
+    try {
+      // The same rows better-auth writes for an email + password sign-up (provider "credential").
+      await this.x.insert(authUser).values({
+        id,
+        name: input.name,
+        firstName: input.firstName,
+        lastName: input.lastName,
+        email: input.email,
+        emailVerified: true,
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new ConflictError("That address already has a login.");
+      throw err;
+    }
+    await this.x.insert(authAccount).values({
+      id: randomUUID(),
+      accountId: id,
+      providerId: "credential",
+      userId: id,
+      password: input.passwordHash,
+    });
+    return { id };
+  }
+}
+
+const INVITE_STATUSES: readonly InviteStatus[] = ["pending", "accepted", "revoked"];
+
+function toInvite(r: typeof invite.$inferSelect): Invite | null {
+  if (r.accountId === null || r.role === null || !isAccountRole(r.role)) return null;
+  return {
+    id: r.id,
+    accountId: r.accountId,
+    email: r.email,
+    role: r.role,
+    status: INVITE_STATUSES.includes(r.status as InviteStatus) ? (r.status as InviteStatus) : "revoked",
+    expiresAt: r.expiresAt,
+    createdBy: r.createdBy,
+    createdAt: r.createdAt,
+  };
+}
+
+class PgInviteRepository implements InviteRepository {
+  constructor(private readonly x: Executor) {}
+
+  async listPending(accountId: string): Promise<Invite[]> {
+    if (!isId(accountId)) return [];
+    const rows = await this.x
+      .select()
+      .from(invite)
+      .where(and(eq(invite.accountId, accountId), eq(invite.status, "pending")))
+      .orderBy(desc(invite.createdAt), invite.id);
+    return rows.flatMap((r) => toInvite(r) ?? []);
+  }
+
+  async get(accountId: string, id: string): Promise<Invite | null> {
+    if (!isId(accountId) || !isId(id)) return null;
+    const [r] = await this.x
+      .select()
+      .from(invite)
+      .where(and(eq(invite.id, id), eq(invite.accountId, accountId)));
+    return r ? toInvite(r) : null;
+  }
+
+  async findByToken(tokenHash: string): Promise<Invite | null> {
+    const [r] = await this.x.select().from(invite).where(eq(invite.tokenHash, tokenHash));
+    return r ? toInvite(r) : null;
+  }
+
+  async create(input: Omit<Invite, "id" | "status"> & { tokenHash: string }): Promise<Invite> {
+    const [r] = await this.x
+      .insert(invite)
+      .values({
+        email: input.email,
+        accountId: input.accountId,
+        role: input.role,
+        tokenHash: input.tokenHash,
+        status: "pending",
+        expiresAt: input.expiresAt,
+        createdBy: input.createdBy,
+        createdAt: input.createdAt,
+      })
+      .returning();
+    const created = r ? toInvite(r) : null;
+    if (!created) throw new Error("invite not created");
+    return created;
+  }
+
+  async reissue(id: string, tokenHash: string, expiresAt: Date): Promise<boolean> {
+    const rows = await this.x
+      .update(invite)
+      .set({ tokenHash, expiresAt })
+      .where(and(eq(invite.id, id), eq(invite.status, "pending")))
+      .returning({ id: invite.id });
+    return rows.length > 0;
+  }
+
+  async revoke(id: string): Promise<boolean> {
+    const rows = await this.x
+      .update(invite)
+      .set({ status: "revoked" })
+      .where(and(eq(invite.id, id), eq(invite.status, "pending")))
+      .returning({ id: invite.id });
+    return rows.length > 0;
+  }
+
+  async accept(id: string, userId: string, at: Date): Promise<boolean> {
+    const rows = await this.x
+      .update(invite)
+      .set({ status: "accepted", acceptedUserId: userId, acceptedAt: at })
+      .where(and(eq(invite.id, id), eq(invite.status, "pending"), sql`${invite.expiresAt} > ${at}`))
+      .returning({ id: invite.id });
+    return rows.length > 0;
+  }
+
+  async recordSend(accountId: string, inviteId: string, at: Date): Promise<void> {
+    await this.x.insert(inviteSend).values({ accountId, inviteId, sentAt: at });
+  }
+
+  async sendsSince(accountId: string, since: Date): Promise<number> {
+    if (!isId(accountId)) return 0;
+    const [r] = await this.x
+      .select({ n: sql<number>`count(*)::int` })
+      .from(inviteSend)
+      .where(and(eq(inviteSend.accountId, accountId), gte(inviteSend.sentAt, since)));
+    return r?.n ?? 0;
+  }
+}
+
+/** `like` pattern for a literal substring (escapes %, _ and the escape character). */
+const contains = (q: string) => `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
+class PgPlatformAccountRepository implements PlatformAccountRepository {
+  constructor(private readonly x: Executor) {}
+
+  private readonly columns = {
+    id: customerAccount.id,
+    name: customerAccount.name,
+    plan: customerAccount.plan,
+    status: customerAccount.status,
+    createdAt: customerAccount.createdAt,
+    members: sql<number>`(select count(*)::int from ${accountMembership} where ${accountMembership.accountId} = ${customerAccount.id})`,
+    mailboxes: sql<number>`(select count(*)::int from ${mailbox} where ${mailbox.accountId} = ${customerAccount.id})`,
+    domains: sql<number>`(select count(*)::int from ${customerDomain} where ${customerDomain.accountId} = ${customerAccount.id})`,
+  };
+
+  private static toSummary(r: {
+    id: string;
+    name: string;
+    plan: string;
+    status: string;
+    createdAt: Date;
+    members: number;
+    mailboxes: number;
+    domains: number;
+  }): AccountSummary {
+    const plan = (PLAN_ORDER as readonly string[]).includes(r.plan) ? (r.plan as PlanId) : "free";
+    return { ...r, plan };
+  }
+
+  async search(q: { query: string | null; limit: number; offset: number }) {
+    let where: SQL | undefined;
+    if (q.query !== null) {
+      const pattern = contains(q.query.toLowerCase());
+      const matchesMember = sql`exists (select 1 from ${accountMembership} m join ${authUser} u on u.id = m.user_id
+        where m.account_id = ${customerAccount.id} and lower(u.email) like ${pattern})`;
+      where = or(
+        sql`lower(${customerAccount.name}) like ${pattern}`,
+        ...(isId(q.query) ? [eq(customerAccount.id, q.query)] : []),
+        matchesMember,
+      );
+    }
+    const [count] = await this.x
+      .select({ n: sql<number>`count(*)::int` })
+      .from(customerAccount)
+      .where(where);
+    const rows = await this.x
+      .select(this.columns)
+      .from(customerAccount)
+      .where(where)
+      .orderBy(desc(customerAccount.createdAt), customerAccount.id)
+      .limit(q.limit)
+      .offset(q.offset);
+    return { total: count?.n ?? 0, rows: rows.map((r) => PgPlatformAccountRepository.toSummary(r)) };
+  }
+
+  async summary(id: string): Promise<AccountSummary | null> {
+    if (!isId(id)) return null;
+    const [r] = await this.x.select(this.columns).from(customerAccount).where(eq(customerAccount.id, id));
+    return r ? PgPlatformAccountRepository.toSummary(r) : null;
+  }
+}
+
 const repositories = (x: Executor): Repositories => ({
   audit: new PgAuditRepository(x),
   access: new PgAccessRepository(x),
@@ -735,6 +1021,9 @@ const repositories = (x: Executor): Repositories => ({
   domains: new PgDomainRepository(x),
   mailboxes: new PgMailboxRepository(x),
   aliases: new PgAliasRepository(x),
+  people: new PgPeopleRepository(x),
+  invites: new PgInviteRepository(x),
+  platformAccounts: new PgPlatformAccountRepository(x),
 });
 
 /** One Postgres transaction per `run` (CLAUDE.md rule 46: the audit row commits with the change). */

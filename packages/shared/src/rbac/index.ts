@@ -68,7 +68,16 @@ export const PERMISSIONS = {
   // --- account (inside one customer account)
   "account.read": { scope: "account", description: "See account settings, people, domains" },
   "account.delete": { scope: "account", description: "Delete the account", critical: true },
-  "account.admins.manage": { scope: "account", description: "Add/remove people and change roles", critical: true },
+  "account.admins.manage": {
+    scope: "account",
+    description: "Invite people with any role, change roles and remove anyone (never the last Owner)",
+    critical: true,
+  },
+  "member.read": { scope: "account", description: "See the people in the account, their roles and pending invites" },
+  "member.manage": {
+    scope: "account",
+    description: "Invite people as Members, resend and revoke those invites, remove Members",
+  },
   "domain.read": { scope: "account", description: "See domains and DNS status" },
   "domain.manage": { scope: "account", description: "Add, verify, remove domains; catch-all" },
   "mailbox.read": { scope: "account", description: "See mailboxes and quotas" },
@@ -194,6 +203,8 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
     "account.read",
     "account.delete",
     "account.admins.manage",
+    "member.read",
+    "member.manage",
     "domain.read",
     "domain.manage",
     "mailbox.read",
@@ -231,6 +242,7 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
   ],
   domain_admin: [
     "account.read",
+    "member.read",
     "domain.read",
     "domain.manage",
     "mailbox.read",
@@ -246,6 +258,8 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
   ],
   user_admin: [
     "account.read",
+    "member.read",
+    "member.manage",
     "domain.read",
     "mailbox.read",
     "mailbox.manage",
@@ -292,6 +306,7 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
   ],
   auditor: [
     "account.read",
+    "member.read",
     "domain.read",
     "mailbox.read",
     "billing.read",

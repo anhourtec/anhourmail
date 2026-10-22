@@ -29,6 +29,8 @@ export const AUDIT_ACTIONS = [
   "account.updated",
   "account.invite_sent",
   "account.invite_accepted",
+  "account.invite_resent",
+  "account.invite_revoked",
   "account.member_added",
   "account.member_removed",
   "account.role_changed",

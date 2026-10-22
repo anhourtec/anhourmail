@@ -48,6 +48,14 @@ describe("permission matrix invariants", () => {
     expect(holders).toEqual([...ACT_AS_ROLES].sort());
   });
 
+  it("people: Owner and User Admin invite and remove Members; Members and Billing Admins don't see people", () => {
+    const manage = ACCOUNT_ROLES.filter((r) => accountRoleCan(r, "member.manage"));
+    expect(manage.sort()).toEqual(["owner", "user_admin"]);
+    const read = ACCOUNT_ROLES.filter((r) => accountRoleCan(r, "member.read"));
+    expect(read.sort()).toEqual(["auditor", "domain_admin", "owner", "user_admin"]);
+    for (const r of manage) expect(accountRoleCan(r, "member.read")).toBe(true);
+  });
+
   it("only Owner can manage admins or delete the account", () => {
     for (const r of ACCOUNT_ROLES) {
       expect(accountRoleCan(r, "account.admins.manage")).toBe(r === "owner");

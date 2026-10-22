@@ -5,6 +5,8 @@ import type { AliasRepository } from "./aliases/repository";
 import type { AuditRepository } from "./audit/repository";
 import type { DomainRepository } from "./domains/repository";
 import type { MailboxRepository } from "./mailboxes/repository";
+import type { InviteRepository, PeopleRepository } from "./people/repository";
+import type { PlatformAccountRepository } from "./platform/repository";
 import type { MailDirectoryRepository, ProvisioningRepository } from "./provisioning/ports";
 
 /** Everything a service can touch inside one transaction. Adapters implement it (memory, postgres). */
@@ -17,6 +19,9 @@ export type Repositories = {
   domains: DomainRepository;
   mailboxes: MailboxRepository;
   aliases: AliasRepository;
+  people: PeopleRepository;
+  invites: InviteRepository;
+  platformAccounts: PlatformAccountRepository;
 };
 
 /**

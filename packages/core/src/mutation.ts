@@ -14,6 +14,8 @@ export type MutationSpec = {
   /** Account the mutation belongs to; null for platform/public mutations. */
   accountId: string | null;
   target: { type: string; id?: string | null; label?: string | null };
+  /** Taken through a staff (platform) path: staff are recorded as staff even if they belong to the account. */
+  staffPath?: true;
 };
 
 export type MutationOutcome<T> = {
@@ -41,7 +43,7 @@ const auditBase = (
 ): AuditEntryInput => ({
   scope,
   action: spec.action,
-  ...auditActor(actor, spec.accountId),
+  ...auditActor(actor, spec.accountId, spec.staffPath === true),
   target: { type: spec.target.type, id: spec.target.id ?? null, label: spec.target.label ?? null },
   result,
   errorCode,

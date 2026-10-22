@@ -20,6 +20,8 @@ export type Plan = {
   payWhatYouWant: boolean;
   storageGb: number;
   customDomains: boolean;
+  /** Other people can be invited into the account (family, a small group). Free accounts have one person. */
+  addPeople: boolean;
   /** `null` = unlimited. */
   aliases: number | null;
   maskedAliases: number | null;
@@ -38,6 +40,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     payWhatYouWant: false,
     storageGb: 10 * GB,
     customDomains: false,
+    addPeople: false,
     aliases: 5,
     maskedAliases: 10,
     catchAll: false,
@@ -51,6 +54,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     payWhatYouWant: false,
     storageGb: 30 * GB,
     customDomains: true,
+    addPeople: true,
     aliases: null,
     maskedAliases: null,
     catchAll: true,
@@ -64,6 +68,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     payWhatYouWant: true,
     storageGb: 30 * GB,
     customDomains: true,
+    addPeople: true,
     aliases: null,
     maskedAliases: null,
     catchAll: true,
@@ -85,6 +90,21 @@ export const MAX_MAILBOXES = 10;
  * be restored until then. The docs render this number (`<Value of="mailboxDeleteGraceDays" />`).
  */
 export const MAILBOX_DELETE_GRACE_DAYS = 30;
+
+/**
+ * People per account on plans that can add them, counting pending invites (placeholder ceiling until pricing is
+ * decided, like MAX_MAILBOXES). The docs render it (`<Value of="maxPeople" />`).
+ */
+export const MAX_PEOPLE = 10;
+
+/** Days an invite link works. Resending it issues a new link with a fresh period (`<Value of="inviteDays" />`). */
+export const INVITE_TTL_DAYS = 7;
+
+/**
+ * Invite emails (first sends and resends) one account may send in 24 hours. Counted from a send log, not from live
+ * invites, so revoking and re-inviting doesn't reset it (anti-abuse ceiling; fails closed).
+ */
+export const INVITE_EMAILS_PER_DAY = 50;
 
 /**
  * Aliases (and, separately, masked aliases) per account on plans listed as unlimited: an abuse ceiling, not a

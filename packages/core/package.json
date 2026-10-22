@@ -14,7 +14,9 @@
     "./domains": "./src/domains/index.ts",
     "./mailboxes": "./src/mailboxes/index.ts",
     "./aliases": "./src/aliases/index.ts",
-    "./webmail": "./src/webmail/index.ts"
+    "./webmail": "./src/webmail/index.ts",
+    "./people": "./src/people/index.ts",
+    "./platform": "./src/platform/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

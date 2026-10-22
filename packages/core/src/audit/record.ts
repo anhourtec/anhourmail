@@ -6,7 +6,15 @@ import type { RequestMeta } from "../ports";
 import type { AuditEntryInput } from "./types";
 
 /** Actor fields for an audit entry, including act-as attribution. */
-export function auditActor(actor: Actor, accountId: string | null): Pick<AuditEntryInput, "actor" | "onBehalfOf"> {
+/**
+ * `staffPath`: the action was taken through a staff (platform) path, e.g. opening an account from the staff console.
+ * Staff are then recorded as staff even when they also belong to the account (rule 49).
+ */
+export function auditActor(
+  actor: Actor,
+  accountId: string | null,
+  staffPath = false,
+): Pick<AuditEntryInput, "actor" | "onBehalfOf"> {
   switch (actor.kind) {
     case "anonymous":
       return { actor: { type: "anonymous", userId: null, email: null, role: null, accountId: null }, onBehalfOf: null };
@@ -16,7 +24,9 @@ export function auditActor(actor: Actor, accountId: string | null): Pick<AuditEn
         onBehalfOf: null,
       };
     case "user": {
-      const membership = accountId === null ? undefined : actor.memberships.find((m) => m.accountId === accountId);
+      const asStaff = staffPath && actor.actingAs === undefined && actor.platformRoles.length > 0;
+      const membership =
+        accountId === null || asStaff ? undefined : actor.memberships.find((m) => m.accountId === accountId);
       const isStaffAction = actor.actingAs === undefined && membership === undefined && actor.platformRoles.length > 0;
       return {
         actor: {

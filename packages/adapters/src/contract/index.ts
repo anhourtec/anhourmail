@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import type { UnitOfWork } from "@anhourmail/core";
-import { type AuditEntryInput, verifyChain } from "@anhourmail/core/audit";
+import { type AuditEntryInput, type AuditQuery, verifyChain } from "@anhourmail/core/audit";
 
 /** `createUser` makes a console user the adapter can reference (memberships need one in Postgres). */
 export type AdapterFactory = () => Promise<{
@@ -464,6 +464,201 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         expect(await uow.run((r) => r.mailboxes.addressTaken(address))).toBe(false);
         expect(await uow.run((r) => r.mailboxes.addressTaken(alias))).toBe(false);
         expect(await uow.run((r) => r.mailboxes.deleteIfDue(mailboxId, new Date()))).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("people: account-scoped list with names and join dates, conditional role change and removal", async () => {
+      const { uow, cleanup, createUser } = await factory();
+      try {
+        const a = await uow.run((r) => r.accounts.create({ name: "Contract people A", plan: "plus" }));
+        const b = await uow.run((r) => r.accounts.create({ name: "Contract people B", plan: "plus" }));
+        const tag = randomUUID().slice(0, 8);
+        const owner = await createUser(`aa-${tag}@example.com`);
+        const kid = await createUser(`bb-${tag}@example.com`);
+        await uow.run(async (r) => {
+          await r.accounts.addMember({ accountId: a.id, userId: owner, role: "owner" });
+          await r.accounts.addMember({ accountId: a.id, userId: kid, role: "member" });
+        });
+        const list = await uow.run((r) => r.people.list(a.id));
+        expect(list.map((m) => [m.userId, m.email, m.role, m.suspended])).toEqual([
+          [owner, `aa-${tag}@example.com`, "owner", false],
+          [kid, `bb-${tag}@example.com`, "member", false],
+        ]);
+        expect(list[0]?.name).toBeTruthy();
+        expect(list[0]?.joinedAt).toBeInstanceOf(Date);
+        expect(await uow.run((r) => r.people.list(b.id))).toEqual([]);
+
+        // Scoped writes: another account's id changes nothing.
+        expect(await uow.run((r) => r.people.setRole(b.id, kid, "user_admin"))).toBe(false);
+        expect(await uow.run((r) => r.people.setRole(a.id, kid, "user_admin"))).toBe(true);
+        expect((await uow.run((r) => r.people.list(a.id)))[1]?.role).toBe("user_admin");
+        expect(await uow.run((r) => r.people.remove(b.id, kid))).toBe(false);
+        expect(await uow.run((r) => r.people.remove(a.id, kid))).toBe(true);
+        expect(await uow.run((r) => r.people.remove(a.id, kid))).toBe(false);
+        expect((await uow.run((r) => r.people.list(a.id))).map((m) => m.userId)).toEqual([owner]);
+
+        // Logins by email (case-insensitive); creating one for a taken address is a conflict.
+        expect((await uow.run((r) => r.people.userByEmail(`AA-${tag}@example.com`)))?.id).toBe(owner);
+        expect(await uow.run((r) => r.people.userByEmail(`nobody-${tag}@example.com`))).toBeNull();
+        const login = {
+          email: `cc-${tag}@example.com`,
+          name: "Cee Example",
+          firstName: "Cee",
+          lastName: "Example",
+          passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA",
+        };
+        const { id } = await uow.run((r) => r.people.createLogin(login));
+        expect(await uow.run((r) => r.people.userByEmail(login.email))).toEqual({ id, name: "Cee Example" });
+        await expect(uow.run((r) => r.people.createLogin(login))).rejects.toThrow("already has a login");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("invites: scoped reads, pending list, token look-up, conditional reissue, revoke and single-use accept", async () => {
+      const { uow, cleanup, createUser } = await factory();
+      try {
+        const a = await uow.run((r) => r.accounts.create({ name: "Contract invites A", plan: "plus" }));
+        const b = await uow.run((r) => r.accounts.create({ name: "Contract invites B", plan: "plus" }));
+        const tag = randomUUID().slice(0, 8);
+        const now = new Date();
+        const later = new Date(now.getTime() + 3600_000);
+        const make = (email: string, tokenHash: string, createdAt: Date) =>
+          uow.run((r) =>
+            r.invites.create({
+              accountId: a.id,
+              email,
+              role: "member",
+              expiresAt: later,
+              createdBy: null,
+              createdAt,
+              tokenHash,
+            }),
+          );
+        const first = await make(`one-${tag}@example.com`, `h1-${tag}`, new Date(now.getTime() - 1000));
+        const second = await make(`two-${tag}@example.com`, `h2-${tag}`, now);
+        expect(first).toMatchObject({ accountId: a.id, status: "pending", role: "member" });
+        expect((await uow.run((r) => r.invites.listPending(a.id))).map((i) => i.id)).toEqual([second.id, first.id]);
+        expect(await uow.run((r) => r.invites.listPending(b.id))).toEqual([]);
+        expect(await uow.run((r) => r.invites.get(b.id, first.id))).toBeNull();
+        expect((await uow.run((r) => r.invites.get(a.id, first.id)))?.email).toBe(`one-${tag}@example.com`);
+        expect((await uow.run((r) => r.invites.findByToken(`h1-${tag}`)))?.id).toBe(first.id);
+        expect(await uow.run((r) => r.invites.findByToken(`nope-${tag}`))).toBeNull();
+
+        // Reissue swaps the token: the old link stops matching.
+        const fresh = new Date(now.getTime() + 7200_000);
+        expect(await uow.run((r) => r.invites.reissue(first.id, `h1b-${tag}`, fresh))).toBe(true);
+        expect(await uow.run((r) => r.invites.findByToken(`h1-${tag}`))).toBeNull();
+        expect((await uow.run((r) => r.invites.findByToken(`h1b-${tag}`)))?.expiresAt).toEqual(fresh);
+
+        // Accept is single-use and refused after expiry.
+        const user = await createUser(`acc-${tag}@example.com`);
+        expect(await uow.run((r) => r.invites.accept(first.id, user, new Date(fresh.getTime() + 1)))).toBe(false);
+        expect(await uow.run((r) => r.invites.accept(first.id, user, now))).toBe(true);
+        expect(await uow.run((r) => r.invites.accept(first.id, user, now))).toBe(false);
+        expect((await uow.run((r) => r.invites.get(a.id, first.id)))?.status).toBe("accepted");
+        expect(await uow.run((r) => r.invites.reissue(first.id, `h1c-${tag}`, fresh))).toBe(false);
+
+        expect(await uow.run((r) => r.invites.revoke(second.id))).toBe(true);
+        expect(await uow.run((r) => r.invites.revoke(second.id))).toBe(false);
+        expect(await uow.run((r) => r.invites.accept(second.id, user, now))).toBe(false);
+        expect(await uow.run((r) => r.invites.listPending(a.id))).toEqual([]);
+
+        // The send log counts every send per account in a window, whatever happened to the invites since.
+        const t0 = new Date(Date.UTC(2100, 0, 1));
+        await uow.run(async (r) => {
+          await r.invites.recordSend(a.id, first.id, t0);
+          await r.invites.recordSend(a.id, first.id, new Date(t0.getTime() + 60_000));
+          await r.invites.recordSend(b.id, second.id, new Date(t0.getTime() + 60_000));
+        });
+        expect(await uow.run((r) => r.invites.sendsSince(a.id, t0))).toBe(2);
+        expect(await uow.run((r) => r.invites.sendsSince(a.id, new Date(t0.getTime() + 1)))).toBe(1);
+        expect(await uow.run((r) => r.invites.sendsSince(b.id, t0))).toBe(1);
+        expect(await uow.run((r) => r.invites.sendsSince("not-a-uuid", t0))).toBe(0);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("audit: filters by area, actor kind (act-as counts as staff) and result", async () => {
+      const { uow, cleanup } = await factory();
+      try {
+        const scope = `account:${randomUUID()}` as const;
+        const entry = (over: Partial<AuditEntryInput>): AuditEntryInput => ({ ...auditInput(scope), ...over });
+        const staff = { type: "staff" as const, userId: "s", email: "s@anhourtec.test", role: null, accountId: null };
+        const member = { type: "user" as const, userId: "u", email: "u@example.test", role: null, accountId: null };
+        const system = { type: "system" as const, userId: null, email: "worker", role: null, accountId: null };
+        await uow.run(async (r) => {
+          await r.audit.append(entry({ action: "mailbox.created", actor: member }), new Date());
+          await r.audit.append(entry({ action: "mailbox.suspended", actor: staff, result: "denied" }), new Date());
+          await r.audit.append(
+            entry({ action: "alias.created", actor: member, onBehalfOf: { userId: "s", email: "s@anhourtec.test" } }),
+            new Date(),
+          );
+          await r.audit.append(
+            entry({ action: "platform.mailbox_purged", actor: system, result: "failed" }),
+            new Date(),
+          );
+        });
+        const actions = async (q: Omit<AuditQuery, "scope" | "limit">) =>
+          (await uow.run((r) => r.audit.list({ scope, limit: 10, ...q }))).map((e) => e.action);
+        expect(await actions({ area: "mailbox" })).toEqual(["mailbox.suspended", "mailbox.created"]);
+        expect(await actions({ area: "mail" })).toEqual([]);
+        expect(await actions({ actorKind: "staff" })).toEqual(["alias.created", "mailbox.suspended"]);
+        expect(await actions({ actorKind: "user" })).toEqual(["mailbox.created"]);
+        expect(await actions({ actorKind: "system" })).toEqual(["platform.mailbox_purged"]);
+        expect(await actions({ actorKind: "anonymous" })).toEqual([]);
+        expect(await actions({ result: "denied" })).toEqual(["mailbox.suspended"]);
+        expect(await actions({ actorUserId: "u", area: "alias" })).toEqual(["alias.created"]);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("platform accounts: search by name, id or member email, with counts, newest first and paged", async () => {
+      const { uow, cleanup, createUser } = await factory();
+      try {
+        const tag = randomUUID().slice(0, 8);
+        const older = await uow.run((r) => r.accounts.create({ name: `Platform ${tag} older_%`, plan: "plus" }));
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        const newer = await uow.run((r) => r.accounts.create({ name: `Platform ${tag} newer`, plan: "free" }));
+        const person = await createUser(`find-${tag}@example.com`);
+        await uow.run((r) => r.accounts.addMember({ accountId: older.id, userId: person, role: "owner" }));
+
+        const byName = await uow.run((r) =>
+          r.platformAccounts.search({ query: `platform ${tag}`, limit: 10, offset: 0 }),
+        );
+        expect(byName.total).toBe(2);
+        expect(byName.rows.map((x) => x.id)).toEqual([newer.id, older.id]);
+        expect(byName.rows[1]).toMatchObject({
+          name: `Platform ${tag} older_%`,
+          plan: "plus",
+          members: 1,
+          mailboxes: 0,
+          domains: 0,
+        });
+        const paged = await uow.run((r) =>
+          r.platformAccounts.search({ query: `platform ${tag}`, limit: 1, offset: 1 }),
+        );
+        expect(paged).toMatchObject({ total: 2, rows: [{ id: older.id }] });
+        // `%` and `_` are literal, not wildcards.
+        expect(
+          (await uow.run((r) => r.platformAccounts.search({ query: `${tag} older_%`, limit: 10, offset: 0 }))).total,
+        ).toBe(1);
+        expect(
+          (await uow.run((r) => r.platformAccounts.search({ query: `${tag} o%`, limit: 10, offset: 0 }))).total,
+        ).toBe(0);
+        const byEmail = await uow.run((r) => r.platformAccounts.search({ query: `FIND-${tag}`, limit: 10, offset: 0 }));
+        expect(byEmail.rows.map((x) => x.id)).toEqual([older.id]);
+        const byId = await uow.run((r) => r.platformAccounts.search({ query: newer.id, limit: 10, offset: 0 }));
+        expect(byId.rows.map((x) => x.id)).toEqual([newer.id]);
+        const all = await uow.run((r) => r.platformAccounts.search({ query: null, limit: 1, offset: 0 }));
+        expect(all.total).toBeGreaterThanOrEqual(2);
+        expect(await uow.run((r) => r.platformAccounts.summary(older.id))).toMatchObject({ id: older.id, members: 1 });
+        expect(await uow.run((r) => r.platformAccounts.summary(randomUUID()))).toBeNull();
+        expect(await uow.run((r) => r.platformAccounts.summary("not-a-uuid"))).toBeNull();
       } finally {
         await cleanup();
       }

@@ -11,8 +11,12 @@ describe("provisionSignUp", () => {
     const d = deps();
     const out = await provisionSignUp(d, system, { userId: "u1", email: "sam@example.com", name: "Sam" }, req);
     expect(out.accountId).toBeTruthy();
-    expect(d.uow.state.accounts).toEqual([{ id: out.accountId, name: "Sam", plan: "free" }]);
-    expect(d.uow.state.memberships).toEqual([{ accountId: out.accountId, userId: "u1", role: "owner" }]);
+    expect(d.uow.state.accounts).toEqual([
+      { id: out.accountId, name: "Sam", plan: "free", createdAt: expect.any(Date) as Date },
+    ]);
+    expect(d.uow.state.memberships).toEqual([
+      { accountId: out.accountId, userId: "u1", role: "owner", joinedAt: expect.any(Date) as Date },
+    ]);
     expect(d.uow.state.userStates.u1).toBe("free");
     const [entry] = d.uow.state.audit;
     expect(entry).toMatchObject({ action: "account.created", result: "success", target: { label: "Sam" } });

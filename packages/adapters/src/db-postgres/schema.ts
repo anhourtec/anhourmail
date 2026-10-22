@@ -155,6 +155,23 @@ export const invite = pgTable(
   (t) => [index("invite_email_idx").on(t.email)],
 );
 
+/**
+ * One row per invite email sent (first send and every resend): the per-account daily cap counts these, not live
+ * invites, so invite → revoke loops can't send unlimited mail. No email address or token is stored here.
+ */
+export const inviteSend = pgTable(
+  "invite_send",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    inviteId: uuid("invite_id"),
+    sentAt: timestamp("sent_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [index("invite_send_account_at_idx").on(t.accountId, t.sentAt)],
+);
+
 // --- mail configuration (desired state; the worker applies it to Stalwart) --------------------------------
 
 export const customerDomain = pgTable(
