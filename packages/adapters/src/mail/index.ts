@@ -6,12 +6,62 @@
  * Never logs bodies or recipients (rule 24).
  */
 import nodemailer, { type Transporter } from "nodemailer";
+import type SMTPTransport from "nodemailer/lib/smtp-transport";
 
 export type MailMessage = { to: string; subject: string; text: string; html: string };
 export type Mailer = { send(message: MailMessage): Promise<void> };
 
+/** The only query keys a transport URL may carry. Anything else (e.g. `logger`, `debug`) is refused. */
+const BOOL_KEYS = ["secure", "requireTLS", "tls.rejectUnauthorized"] as const;
+const QUERY_KEYS = new Set<string>([...BOOL_KEYS, "tls.servername"]);
+
+const bool = (key: string, v: string): boolean => {
+  if (v === "true") return true;
+  if (v === "false") return false;
+  throw new Error(`MAIL_TRANSPORT_URL: ${key} must be true or false`);
+};
+
+/**
+ * Explicit SMTP options from MAIL_TRANSPORT_URL (`smtp://` or `smtps://`, optional `user:password@`, and only the
+ * query keys above). Built by hand rather than handing the URL to nodemailer, whose URL parser also accepts `logger`
+ * and `debug` and would then write SMTP transcripts — credentials and message content — to stdout. Logging is
+ * always off. Error messages name the problem, never the URL (it holds the password).
+ */
+export function mailTransportOptions(url: string): SMTPTransport.Options {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new Error("MAIL_TRANSPORT_URL is not a valid URL");
+  }
+  if (u.protocol !== "smtp:" && u.protocol !== "smtps:") {
+    throw new Error("MAIL_TRANSPORT_URL must start with smtp:// or smtps://");
+  }
+  if (u.hostname === "") throw new Error("MAIL_TRANSPORT_URL has no host");
+  const opts: SMTPTransport.Options = {
+    host: u.hostname.replace(/^\[(.*)\]$/, "$1"),
+    port: u.port === "" ? (u.protocol === "smtps:" ? 465 : 587) : Number(u.port),
+    secure: u.protocol === "smtps:",
+    logger: false,
+    debug: false,
+  };
+  if (u.username !== "" || u.password !== "") {
+    opts.auth = { user: decodeURIComponent(u.username), pass: decodeURIComponent(u.password) };
+  }
+  const tls: { servername?: string; rejectUnauthorized?: boolean } = {};
+  for (const [key, value] of u.searchParams) {
+    if (!QUERY_KEYS.has(key)) throw new Error(`MAIL_TRANSPORT_URL: query option "${key}" is not supported`);
+    if (key === "secure") opts.secure = bool(key, value);
+    else if (key === "requireTLS") opts.requireTLS = bool(key, value);
+    else if (key === "tls.rejectUnauthorized") tls.rejectUnauthorized = bool(key, value);
+    else tls.servername = value;
+  }
+  if (Object.keys(tls).length > 0) opts.tls = tls;
+  return opts;
+}
+
 export function createMailer(opts: { url: string; from: string }): Mailer {
-  const transport: Transporter = nodemailer.createTransport(opts.url);
+  const transport: Transporter = nodemailer.createTransport(mailTransportOptions(opts.url));
   return {
     async send(message) {
       await transport.sendMail({ from: opts.from, ...message });
