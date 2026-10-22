@@ -69,5 +69,16 @@ export const CLIENT_ENDPOINTS: readonly ClientEndpoint[] = [
   { protocol: "JMAP", host: HOSTS.imap, port: 443, security: "SSL/TLS", recommended: false },
 ] as const;
 
+/**
+ * Contacts sync (CardDAV, RFC 6352) for phones and desktop apps: served by the mail server on the same host as JMAP.
+ * Apps that find the address book themselves only need the server name; others take the full address-book URL.
+ */
+export const CARDDAV = {
+  host: HOSTS.imap,
+  port: 443,
+  /** The address-book home; the app appends the mailbox address. */
+  url: `https://${HOSTS.imap}/dav/card/`,
+} as const;
+
 /** Mail clients sign in with the full email address and an app password, never the account password. */
 export const CLIENT_USERNAME_HINT = "Your full email address";

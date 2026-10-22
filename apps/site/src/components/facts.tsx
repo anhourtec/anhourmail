@@ -2,6 +2,7 @@
 import {
   ADDONS,
   BILLING,
+  CARDDAV,
   BULK_MAIL,
   CLIENT_ENDPOINTS,
   CLIENT_USERNAME_HINT,
@@ -48,6 +49,8 @@ const VALUES = {
   newDailyLimit: String(TRUST_TIERS.new.limits.messagesPerDay),
   // Webmail recipients per message: every mailbox sends on the `new` tier until trust tiers are stored per account.
   recipientsPerMessage: String(TRUST_TIERS.new.limits.recipientsPerMessage),
+  carddavHost: CARDDAV.host,
+  carddavUrl: CARDDAV.url,
   attachmentPerFile: `${String(WEBMAIL_ATTACHMENTS.perFileMb)} MB`,
   attachmentPerMessage: `${String(WEBMAIL_ATTACHMENTS.perMessageMb)} MB`,
   bulkAddOnName: ADDONS[BULK_MAIL.addOnId].name,
@@ -60,7 +63,7 @@ export type FactKey = keyof typeof VALUES;
 /** Inline fact, e.g. `<Value of="imapHost" />`. Hostnames render in mono. */
 export function Value({ of, copy = false }: { of: FactKey; copy?: boolean }) {
   const v = VALUES[of];
-  const mono = of.endsWith("Host") || of === "productDomain";
+  const mono = of.endsWith("Host") || of.endsWith("Url") || of === "productDomain";
   return (
     <span className="inline-flex items-center gap-0.5 align-baseline">
       {mono ? <code>{v}</code> : <span>{v}</span>}
