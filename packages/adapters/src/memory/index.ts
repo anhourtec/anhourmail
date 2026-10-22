@@ -4,9 +4,10 @@ import { randomUUID } from "node:crypto";
 import { type AccessRepository, ConflictError, type Repositories, type UnitOfWork } from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
 import type { AliasRepository, MailAlias } from "@anhourmail/core/aliases";
+import type { AppPassword, AppPasswordRepository } from "@anhourmail/core/app-passwords";
 import type { Invite, InviteRepository, PeopleRepository } from "@anhourmail/core/people";
 import type { AccountSummary, PlatformAccountRepository } from "@anhourmail/core/platform";
-import type { CustomerDomain, DomainRepository } from "@anhourmail/core/domains";
+import type { CatchAllRepository, CustomerDomain, DomainRepository } from "@anhourmail/core/domains";
 import { type Mailbox, type MailboxRepository, MAILBOX_STATUSES } from "@anhourmail/core/mailboxes";
 import type {
   DomainState,
@@ -23,6 +24,7 @@ import {
   hashEntry,
 } from "@anhourmail/core/audit";
 import type { PasskeyRecord, SecurityRepository, SessionRecord } from "@anhourmail/core/security";
+import type { ForwardingTarget, WebmailSettingsRepository } from "@anhourmail/core/webmail";
 import type { PlanId } from "@anhourmail/shared/plans";
 import type { SignInPolicy } from "@anhourmail/shared/security";
 import type { AccountRole, PlatformRole } from "@anhourmail/shared/rbac";
@@ -62,6 +64,13 @@ export type MemoryState = {
   passkeys: (PasskeyRecord & { userId: string })[];
   twoFactor: { userId: string; verified: boolean; recoveryCodesLeft: number }[];
   trustedDevices: { userId: string; id: string }[];
+  webmailPreferences: { mailboxId: string; prefs: Record<string, unknown>; updatedAt: Date }[];
+  forwardingTargets: ForwardingTarget[];
+  appPasswords: AppPassword[];
+  /** Catch-all per domain (Postgres: `customer_domain.catch_all_mailbox_id`). */
+  catchAll: { domainId: string; mailboxId: string }[];
+  /** Step-up markers by console session (Postgres: better-auth verification rows `step-up-<session id>`). */
+  stepUps: { userId: string; sessionId: string; expiresAt: Date }[];
 };
 
 export const emptyState = (): MemoryState => ({
@@ -84,6 +93,11 @@ export const emptyState = (): MemoryState => ({
   passkeys: [],
   twoFactor: [],
   trustedDevices: [],
+  webmailPreferences: [],
+  forwardingTargets: [],
+  appPasswords: [],
+  catchAll: [],
+  stepUps: [],
 });
 
 const EPOCH = new Date(0);
@@ -245,6 +259,7 @@ function repositories(s: MemoryState): Repositories {
       s.domains.find((d) => d.name === name && d.status !== "pending_dns")?.accountId ?? null,
     deleteDomain: async (id) => {
       s.domains = s.domains.filter((d) => !(d.id === id && d.status === "removing"));
+      s.catchAll = s.catchAll.filter((c) => s.domains.some((d) => d.id === c.domainId));
     },
     markMailbox: async (id, update) => {
       const m = s.mailboxes.find((x) => x.id === id);
@@ -292,6 +307,7 @@ function repositories(s: MemoryState): Repositories {
     deletePending: async (id) => {
       const before = s.domains.length;
       s.domains = s.domains.filter((d) => !(d.id === id && d.status === "pending_dns"));
+      s.catchAll = s.catchAll.filter((c) => c.domainId !== id || s.domains.some((d) => d.id === id));
       return s.domains.length < before;
     },
     addressCount: async (name) =>
@@ -343,6 +359,10 @@ function repositories(s: MemoryState): Repositories {
       if (!m) return false;
       s.mailboxes = s.mailboxes.filter((x) => x.id !== id);
       s.aliases = s.aliases.filter((a) => a.mailboxId !== id); // mirrors ON DELETE CASCADE in Postgres
+      s.webmailPreferences = s.webmailPreferences.filter((p) => p.mailboxId !== id);
+      s.forwardingTargets = s.forwardingTargets.filter((t) => t.mailboxId !== id);
+      s.appPasswords = s.appPasswords.filter((p) => p.mailboxId !== id); // ON DELETE CASCADE
+      s.catchAll = s.catchAll.filter((c) => c.mailboxId !== id); // ON DELETE SET NULL
       return true;
     },
   };
@@ -563,9 +583,112 @@ function repositories(s: MemoryState): Repositories {
       const a = s.accounts.find((x) => x.id === accountId);
       if (a) a.signInPolicy = policy;
     },
+    stepUpFresh: async (userId, sessionId, now) =>
+      s.stepUps.some((x) => x.userId === userId && x.sessionId === sessionId && x.expiresAt > now),
+  };
+
+  const appPasswords: AppPasswordRepository = {
+    listByMailbox: async (mailboxId) =>
+      clone(
+        s.appPasswords
+          .filter((p) => p.mailboxId === mailboxId)
+          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || a.id.localeCompare(b.id)),
+      ),
+    get: async (mailboxId, id) => clone(s.appPasswords.find((p) => p.mailboxId === mailboxId && p.id === id) ?? null),
+    insert: async (p) => {
+      if (!s.mailboxes.some((m) => m.id === p.mailboxId)) throw new Error("unknown mailbox"); // foreign key
+      s.appPasswords.push(clone(p));
+    },
+    markRevoking: async (mailboxId, id) => {
+      const moved = s.appPasswords.filter(
+        (p) => p.mailboxId === mailboxId && p.status === "active" && (id === null || p.id === id),
+      );
+      for (const p of moved) p.status = "revoking";
+      return clone(moved);
+    },
+    revoking: async (mailboxId) =>
+      clone(
+        s.appPasswords
+          .filter((p) => p.mailboxId === mailboxId && p.status === "revoking")
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()),
+      ),
+    deleteRevoked: async (id) => {
+      s.appPasswords = s.appPasswords.filter((p) => !(p.id === id && p.status === "revoking"));
+    },
+    mailboxesWithRevoking: async () =>
+      [...new Set(s.appPasswords.filter((p) => p.status === "revoking").map((p) => p.mailboxId))].map((mailboxId) => ({
+        mailboxId,
+        jobOpen: s.jobs.some(
+          (j) =>
+            j.kind === "app_password.revoke" &&
+            j.subjectId === mailboxId &&
+            (j.status === "queued" || j.status === "running"),
+        ),
+      })),
+    mailboxesOnServer: async () =>
+      s.mailboxes.flatMap((m) =>
+        m.stalwartId === null
+          ? []
+          : [{ id: m.id, accountId: m.accountId, address: m.address, stalwartId: m.stalwartId, status: m.status }],
+      ),
+  };
+
+  const catchAll: CatchAllRepository = {
+    get: async (domainId) => s.catchAll.find((c) => c.domainId === domainId)?.mailboxId ?? null,
+    set: async (domainId, mailboxId) => {
+      s.catchAll = s.catchAll.filter((c) => c.domainId !== domainId);
+      if (mailboxId !== null) s.catchAll.push({ domainId, mailboxId });
+    },
+    clearForMailbox: async (mailboxId) => {
+      const off = s.catchAll.filter((c) => c.mailboxId === mailboxId).map((c) => c.domainId);
+      s.catchAll = s.catchAll.filter((c) => c.mailboxId !== mailboxId);
+      return s.domains
+        .filter((d) => off.includes(d.id))
+        .map((d) => ({ id: d.id, name: d.name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    },
+    targetAddress: async (domainId) => {
+      const c = s.catchAll.find((x) => x.domainId === domainId);
+      const d = s.domains.find((x) => x.id === domainId);
+      const m = c ? s.mailboxes.find((x) => x.id === c.mailboxId && x.accountId === d?.accountId) : undefined;
+      return m?.status === "active" ? m.address : null;
+    },
+  };
+
+  const webmailSettings: WebmailSettingsRepository = {
+    mailboxByAddress: async (address) => {
+      const m = s.mailboxes.find((x) => x.address === address.trim().toLowerCase());
+      return m ? { id: m.id, accountId: m.accountId, address: m.address } : null;
+    },
+    preferences: async (mailboxId) => clone(s.webmailPreferences.find((p) => p.mailboxId === mailboxId)?.prefs ?? null),
+    savePreferences: async (mailboxId, prefs, at) => {
+      s.webmailPreferences = s.webmailPreferences.filter((p) => p.mailboxId !== mailboxId);
+      s.webmailPreferences.push({ mailboxId, prefs: clone(prefs), updatedAt: at });
+    },
+    forwarding: async (mailboxId) => clone(s.forwardingTargets.find((t) => t.mailboxId === mailboxId) ?? null),
+    // The memory unit of work serialises runs, so a plain read is already exclusive.
+    forwardingForUpdate: async (mailboxId, _accountId) =>
+      clone(s.forwardingTargets.find((t) => t.mailboxId === mailboxId) ?? null),
+    saveForwarding: async (t) => {
+      if (
+        t.tokenHash !== null &&
+        s.forwardingTargets.some((x) => x.tokenHash === t.tokenHash && x.mailboxId !== t.mailboxId)
+      ) {
+        throw new ConflictError("token already used");
+      }
+      s.forwardingTargets = s.forwardingTargets.filter((x) => x.mailboxId !== t.mailboxId);
+      s.forwardingTargets.push(clone(t));
+    },
+    forwardingByToken: async (tokenHash) => clone(s.forwardingTargets.find((t) => t.tokenHash === tokenHash) ?? null),
+    clearForwarding: async (mailboxId) => {
+      s.forwardingTargets = s.forwardingTargets.filter((t) => t.mailboxId !== mailboxId);
+    },
   };
 
   return {
+    webmailSettings,
+    appPasswords,
+    catchAll,
     audit,
     access,
     accounts,

@@ -138,4 +138,21 @@ export class PgSecurityRepository implements SecurityRepository {
     if (!isId(accountId)) return;
     await this.x.update(customerAccount).set({ signInPolicy: policy }).where(eq(customerAccount.id, accountId));
   }
+
+  async stepUpFresh(userId: string, sessionId: string, now: Date): Promise<boolean> {
+    // Written by our better-auth plugin (`auth/security-plugin.ts` markStepUp): identifier `step-up-<session id>`,
+    // value = user id, expiring STEP_UP_MINUTES after the sign-in or step-up.
+    const [row] = await this.x
+      .select({ id: authVerification.id })
+      .from(authVerification)
+      .where(
+        and(
+          eq(authVerification.identifier, `step-up-${sessionId}`),
+          eq(authVerification.value, userId),
+          gt(authVerification.expiresAt, now),
+        ),
+      )
+      .limit(1);
+    return row !== undefined;
+  }
 }

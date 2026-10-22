@@ -88,6 +88,15 @@ describeAdapterContract("postgres", async () => {
           expiresAt: new Date(Date.now() + 86_400_000),
         });
       }
+      for (const x of input.stepUps ?? []) {
+        // As our better-auth plugin writes them (auth/security-plugin.ts markStepUp).
+        await db.insert(schema.authVerification).values({
+          id: randomUUID(),
+          identifier: `step-up-${x.sessionId}`,
+          value: userId,
+          expiresAt: x.expiresAt,
+        });
+      }
     },
   };
 });

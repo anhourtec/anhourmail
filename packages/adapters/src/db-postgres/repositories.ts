@@ -31,7 +31,9 @@ import { PLAN_ORDER, type PlanId } from "@anhourmail/shared/plans";
 import { ACCOUNT_ROLES, type AccountRole, PLATFORM_ROLES, type PlatformRole } from "@anhourmail/shared/rbac";
 
 import type { Db, Executor } from "./client";
+import { PgAppPasswordRepository, PgCatchAllRepository } from "./app-passwords";
 import { PgSecurityRepository } from "./security";
+import { PgWebmailSettingsRepository } from "./webmail-settings";
 import {
   accountMembership,
   auditLog,
@@ -1028,6 +1030,9 @@ const repositories = (x: Executor): Repositories => ({
   invites: new PgInviteRepository(x),
   platformAccounts: new PgPlatformAccountRepository(x),
   security: new PgSecurityRepository(x),
+  webmailSettings: new PgWebmailSettingsRepository(x),
+  appPasswords: new PgAppPasswordRepository(x),
+  catchAll: new PgCatchAllRepository(x),
 });
 
 /** One Postgres transaction per `run` (CLAUDE.md rule 46: the audit row commits with the change). */

@@ -16,9 +16,10 @@ describeAdapterContract("memory", async () => {
     seedMail: async ({ domain, address, alias, quotaBytes }) => {
       const domainId = randomUUID();
       const mailboxId = randomUUID();
+      const accountId = randomUUID(); // one account for the domain, the mailbox and its alias (as in Postgres)
       uow.state.domains.push({
         id: domainId,
-        accountId: randomUUID(),
+        accountId,
         name: domain,
         status: "active",
         verifyToken: "t",
@@ -28,7 +29,7 @@ describeAdapterContract("memory", async () => {
       });
       uow.state.mailboxes.push({
         id: mailboxId,
-        accountId: "a1",
+        accountId,
         userId: null,
         createdAt: new Date(0),
         address,
@@ -40,7 +41,7 @@ describeAdapterContract("memory", async () => {
       });
       uow.state.aliases.push({
         id: randomUUID(),
-        accountId: "a1",
+        accountId,
         mailboxId,
         address: alias,
         kind: "alias",
@@ -70,6 +71,7 @@ describeAdapterContract("memory", async () => {
         s.twoFactor.push({ userId, verified: true, recoveryCodesLeft: input.recoveryCodes });
       }
       for (let i = 0; i < (input.trustedDevices ?? 0); i++) s.trustedDevices.push({ userId, id: randomUUID() });
+      for (const x of input.stepUps ?? []) s.stepUps.push({ userId, ...x });
     },
   };
 });

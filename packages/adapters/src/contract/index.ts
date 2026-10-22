@@ -30,6 +30,8 @@ export type SeedAuth = {
   /** Two-factor on, with this many unused recovery codes. */
   recoveryCodes?: number;
   trustedDevices?: number;
+  /** Step-up markers ("confirmed it's you") for console sessions. */
+  stepUps?: { sessionId: string; expiresAt: Date }[];
 };
 
 const auditInput = (
@@ -773,6 +775,245 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         expect(await uow.run((r) => r.security.accountPolicy(randomUUID()))).toBeNull();
         expect(await uow.run((r) => r.security.accountPolicy("not-a-uuid"))).toBeNull();
         expect(await uow.run((r) => r.security.policies(`missing-${randomUUID()}`))).toEqual([]);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("webmail settings: preferences per mailbox, one forwarding target, token look-up", async () => {
+      const { uow, cleanup, seedMail } = await factory();
+      try {
+        const tag = randomUUID().slice(0, 8);
+        const domain = `wm-${tag}.test`;
+        const address = `owner@${domain}`;
+        const { mailboxId } = await seedMail({ domain, address, alias: `hi@${domain}`, quotaBytes: 1024 });
+        const found = await uow.run((r) => r.webmailSettings.mailboxByAddress(address.toUpperCase()));
+        expect(found).toMatchObject({ id: mailboxId, address });
+        expect(await uow.run((r) => r.webmailSettings.mailboxByAddress(`nobody@${domain}`))).toBeNull();
+
+        expect(await uow.run((r) => r.webmailSettings.preferences(mailboxId))).toBeNull();
+        expect(await uow.run((r) => r.webmailSettings.preferences("not-a-uuid"))).toBeNull();
+        await uow.run((r) => r.webmailSettings.savePreferences(mailboxId, { density: "compact" }, new Date()));
+        await uow.run((r) =>
+          r.webmailSettings.savePreferences(mailboxId, { density: "roomy", previewLines: 1 }, new Date()),
+        );
+        expect(await uow.run((r) => r.webmailSettings.preferences(mailboxId))).toEqual({
+          density: "roomy",
+          previewLines: 1,
+        });
+
+        const now = new Date();
+        const target = {
+          mailboxId,
+          accountId: found?.accountId ?? "",
+          address: `copy-${tag}@example.org`,
+          status: "pending" as const,
+          tokenHash: `hash-${tag}`,
+          expiresAt: new Date(now.getTime() + 3_600_000),
+          confirmedAt: null,
+          requestedAt: now,
+          sendsInWindow: 1,
+          windowStartedAt: now,
+        };
+        expect(await uow.run((r) => r.webmailSettings.forwarding(mailboxId))).toBeNull();
+        await uow.run((r) => r.webmailSettings.saveForwarding(target));
+        expect(await uow.run((r) => r.webmailSettings.forwardingByToken(`hash-${tag}`))).toMatchObject({
+          mailboxId,
+          status: "pending",
+          sendsInWindow: 1,
+        });
+        await uow.run((r) =>
+          r.webmailSettings.saveForwarding({ ...target, status: "confirmed", tokenHash: null, confirmedAt: now }),
+        );
+        expect(await uow.run((r) => r.webmailSettings.forwardingByToken(`hash-${tag}`))).toBeNull();
+        expect(await uow.run((r) => r.webmailSettings.forwarding(mailboxId))).toMatchObject({
+          status: "confirmed",
+          tokenHash: null,
+          address: `copy-${tag}@example.org`,
+        });
+        await uow.run((r) => r.webmailSettings.clearForwarding(mailboxId));
+        expect(await uow.run((r) => r.webmailSettings.forwarding(mailboxId))).toBeNull();
+
+        // The counter lock: nothing to read on a first request, and a refused request leaves nothing behind.
+        const accountId = found?.accountId ?? "";
+        await expect(
+          uow.run(async (r) => {
+            expect(await r.webmailSettings.forwardingForUpdate(mailboxId, accountId)).toBeNull();
+            throw new Error("refused");
+          }),
+        ).rejects.toThrow("refused");
+        expect(await uow.run((r) => r.webmailSettings.forwarding(mailboxId))).toBeNull();
+        // Even a placeholder that was committed never reads as a target.
+        await uow.run((r) => r.webmailSettings.forwardingForUpdate(mailboxId, accountId));
+        expect(await uow.run((r) => r.webmailSettings.forwarding(mailboxId))).toBeNull();
+        await uow.run((r) => r.webmailSettings.saveForwarding(target));
+        expect(await uow.run((r) => r.webmailSettings.forwardingForUpdate(mailboxId, accountId))).toMatchObject({
+          address: target.address,
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("app passwords: metadata per mailbox, newest first, conditional revoke, rows go with their mailbox", async () => {
+      const { uow, cleanup, seedMail } = await factory();
+      try {
+        const tag = randomUUID().slice(0, 8);
+        const domain = `ap-${tag}.test`;
+        const address = `owner@${domain}`;
+        const { mailboxId } = await seedMail({ domain, address, alias: `hi@${domain}`, quotaBytes: 1024 });
+        const other = await seedMail({
+          domain: `ap2-${tag}.test`,
+          address: `x@ap2-${tag}.test`,
+          alias: `y@ap2-${tag}.test`,
+          quotaBytes: 1,
+        });
+        const accountId = (await uow.run((r) => r.directory.getMailbox(mailboxId)))?.accountId ?? "";
+        const row = (name: string, at: number) => ({
+          id: randomUUID(),
+          accountId,
+          mailboxId,
+          name,
+          protocols: ["imap" as const, "smtp" as const],
+          credentialId: `c-${name}`,
+          credentialCreatedAt: new Date(Date.UTC(2026, 9, 22, 11, 40, 37)),
+          createdAt: new Date(Date.UTC(2026, 9, 22, 12, at)),
+          createdBy: null,
+          status: "active" as const,
+        });
+        const phone = row("Phone", 1);
+        const laptop = row("Laptop", 2);
+        const printer = row("Printer", 3);
+        await uow.run(async (r) => {
+          for (const p of [phone, laptop, printer]) await r.appPasswords.insert(p);
+        });
+        const listed = await uow.run((r) => r.appPasswords.listByMailbox(mailboxId));
+        expect(listed.map((p) => p.name)).toEqual(["Printer", "Laptop", "Phone"]);
+        expect(listed[2]).toEqual(phone);
+        expect(await uow.run((r) => r.appPasswords.listByMailbox(other.mailboxId))).toEqual([]);
+        expect(await uow.run((r) => r.appPasswords.get(other.mailboxId, phone.id))).toBeNull();
+        expect(await uow.run((r) => r.appPasswords.get(mailboxId, "not-a-uuid"))).toBeNull();
+        expect(await uow.run((r) => r.appPasswords.listByMailbox("not-a-uuid"))).toEqual([]);
+
+        // Revoke one: only active ones move, and only once.
+        expect((await uow.run((r) => r.appPasswords.markRevoking(mailboxId, phone.id))).map((p) => p.id)).toEqual([
+          phone.id,
+        ]);
+        expect(await uow.run((r) => r.appPasswords.markRevoking(mailboxId, phone.id))).toEqual([]);
+        expect(await uow.run((r) => r.appPasswords.markRevoking(other.mailboxId, laptop.id))).toEqual([]);
+        // Revoke all: the rest.
+        const all = await uow.run((r) => r.appPasswords.markRevoking(mailboxId, null));
+        expect(all.map((p) => p.name).sort()).toEqual(["Laptop", "Printer"]);
+        expect((await uow.run((r) => r.appPasswords.revoking(mailboxId))).map((p) => p.name)).toEqual([
+          "Phone",
+          "Laptop",
+          "Printer",
+        ]);
+        // The reconciler's views: mailboxes with pending revocations (and whether a job is open), mailboxes on the server.
+        expect(
+          (await uow.run((r) => r.appPasswords.mailboxesWithRevoking())).find((x) => x.mailboxId === mailboxId),
+        ).toEqual({ mailboxId, jobOpen: false });
+        await uow.run((r) =>
+          r.provisioning.enqueue({ kind: "app_password.revoke", subjectId: mailboxId, runAfter: new Date() }),
+        );
+        expect(
+          (await uow.run((r) => r.appPasswords.mailboxesWithRevoking())).find((x) => x.mailboxId === mailboxId),
+        ).toEqual({ mailboxId, jobOpen: true });
+        expect((await uow.run((r) => r.appPasswords.mailboxesOnServer())).map((x) => x.id)).not.toContain(mailboxId);
+        await uow.run((r) =>
+          r.directory.markMailbox(mailboxId, { status: "active", stalwartId: `s-${tag}`, lastError: null }),
+        );
+        expect((await uow.run((r) => r.appPasswords.mailboxesOnServer())).find((x) => x.id === mailboxId)).toEqual({
+          id: mailboxId,
+          accountId,
+          address,
+          stalwartId: `s-${tag}`,
+          status: "active",
+        });
+        await uow.run((r) => r.appPasswords.deleteRevoked(phone.id));
+        expect((await uow.run((r) => r.appPasswords.listByMailbox(mailboxId))).map((p) => p.name)).toEqual([
+          "Printer",
+          "Laptop",
+        ]);
+
+        // An active row is never deleted as revoked; every row goes with its mailbox.
+        const keep = row("Keep", 4);
+        await uow.run((r) => r.appPasswords.insert(keep));
+        await uow.run((r) => r.appPasswords.deleteRevoked(keep.id));
+        expect(await uow.run((r) => r.appPasswords.get(mailboxId, keep.id))).toMatchObject({ status: "active" });
+        const purgeAfter = new Date(Date.UTC(1990, 0, 1));
+        await uow.run((r) => r.mailboxes.transition(mailboxId, ["active"], "deleting", purgeAfter));
+        expect(await uow.run((r) => r.mailboxes.deleteIfDue(mailboxId, new Date()))).toBe(true);
+        expect(await uow.run((r) => r.appPasswords.listByMailbox(mailboxId))).toEqual([]);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("catch-all: per domain, cleared for a mailbox, applied only while its mailbox is active", async () => {
+      const { uow, cleanup, seedMail } = await factory();
+      try {
+        const tag = randomUUID().slice(0, 8);
+        const domain = `ca-${tag}.test`;
+        const address = `owner@${domain}`;
+        const { domainId, mailboxId } = await seedMail({ domain, address, alias: `hi@${domain}`, quotaBytes: 1 });
+        const other = await seedMail({
+          domain: `ca2-${tag}.test`,
+          address: `x@ca2-${tag}.test`,
+          alias: `y@ca2-${tag}.test`,
+          quotaBytes: 1,
+        });
+        expect(await uow.run((r) => r.catchAll.get(domainId))).toBeNull();
+        expect(await uow.run((r) => r.catchAll.targetAddress(domainId))).toBeNull();
+        await uow.run((r) => r.catchAll.set(domainId, mailboxId));
+        await uow.run((r) => r.catchAll.set(other.domainId, mailboxId));
+        expect(await uow.run((r) => r.catchAll.get(domainId))).toBe(mailboxId);
+        expect(await uow.run((r) => r.catchAll.targetAddress(domainId))).toBe(address);
+        expect(await uow.run((r) => r.catchAll.get("not-a-uuid"))).toBeNull();
+        // Another account's mailbox is never applied as a domain's catch-all, whatever the row says.
+        expect(await uow.run((r) => r.catchAll.targetAddress(other.domainId))).toBeNull();
+
+        // Not applied while the mailbox isn't active (the setting itself stays until cleared).
+        await uow.run((r) => r.mailboxes.transition(mailboxId, ["active"], "suspended", null));
+        expect(await uow.run((r) => r.catchAll.targetAddress(domainId))).toBeNull();
+        await uow.run((r) => r.mailboxes.transition(mailboxId, ["suspended"], "active", null));
+
+        const off = await uow.run((r) => r.catchAll.clearForMailbox(mailboxId));
+        expect(off).toEqual([
+          { id: domainId, name: domain },
+          { id: other.domainId, name: `ca2-${tag}.test` },
+        ]);
+        expect(await uow.run((r) => r.catchAll.get(domainId))).toBeNull();
+        expect(await uow.run((r) => r.catchAll.clearForMailbox(mailboxId))).toEqual([]);
+
+        // Set, then the mailbox is purged: the catch-all is off (Postgres: ON DELETE SET NULL).
+        await uow.run((r) => r.catchAll.set(other.domainId, mailboxId));
+        await uow.run((r) => r.mailboxes.transition(mailboxId, ["active"], "deleting", new Date(Date.UTC(1990, 0, 1))));
+        await uow.run((r) => r.mailboxes.deleteIfDue(mailboxId, new Date()));
+        expect(await uow.run((r) => r.catchAll.get(other.domainId))).toBeNull();
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("security: a step-up is fresh only for its own session and person, until it expires", async () => {
+      const { uow, cleanup, createUser, seedAuth } = await factory();
+      try {
+        const now = new Date();
+        const sam = await createUser(`stepup-sam-${randomUUID()}@example.com`);
+        const lee = await createUser(`stepup-lee-${randomUUID()}@example.com`);
+        const [s1, s2] = [randomUUID(), randomUUID()];
+        await seedAuth(sam, {
+          stepUps: [
+            { sessionId: s1, expiresAt: new Date(now.getTime() + 60_000) },
+            { sessionId: s2, expiresAt: new Date(now.getTime() - 1) },
+          ],
+        });
+        expect(await uow.run((r) => r.security.stepUpFresh(sam, s1, now))).toBe(true);
+        expect(await uow.run((r) => r.security.stepUpFresh(sam, s2, now))).toBe(false);
+        expect(await uow.run((r) => r.security.stepUpFresh(lee, s1, now))).toBe(false);
+        expect(await uow.run((r) => r.security.stepUpFresh(sam, randomUUID(), now))).toBe(false);
+        expect(await uow.run((r) => r.security.stepUpFresh(sam, s1, new Date(now.getTime() + 61_000)))).toBe(false);
       } finally {
         await cleanup();
       }

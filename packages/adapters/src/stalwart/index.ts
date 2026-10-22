@@ -6,8 +6,11 @@
  */
 import { randomBytes } from "node:crypto";
 
+import type { AppPasswordIssuer } from "@anhourmail/core/app-passwords";
 import type { MailServer } from "@anhourmail/core/provisioning";
-import type { StalwartManagement } from "@anhourmail/stalwart-client";
+import type { ManagedScriptReader } from "@anhourmail/core/webmail";
+import { MANAGED_SIEVE_SCRIPT } from "@anhourmail/shared/webmail";
+import { scopesOf, type StalwartManagement } from "@anhourmail/stalwart-client";
 
 import { hashPassword } from "../auth/password";
 
@@ -17,11 +20,63 @@ const split = (address: string): [string, string] => {
   return [address.slice(0, at), address.slice(at + 1).toLowerCase()];
 };
 
+/**
+ * Revokes one app password if the account still has it with this creation time. Stalwart reuses credential ids after
+ * a revocation, so an id alone could name a newer app password the person still uses.
+ */
+async function revokeMatching(
+  mgmt: StalwartManagement,
+  input: { externalId: string; credentialId: string; createdAt: Date },
+): Promise<void> {
+  const current = await mgmt.appPassword(input.externalId, input.credentialId);
+  if (!current) return; // already gone
+  if (Math.abs(current.createdAt.getTime() - input.createdAt.getTime()) >= 1000) return; // a newer one reusing the id
+  await mgmt.destroyAppPassword(input.externalId, input.credentialId);
+}
+
+/** App passwords on Stalwart (`x:AppPassword` on the mailbox's account; research/stalwart.md "App passwords"). */
+export function stalwartAppPasswords(mgmt: StalwartManagement): AppPasswordIssuer {
+  return {
+    async create({ externalId, name, protocols }) {
+      const made = await mgmt.createAppPassword(externalId, { description: name, scopes: protocols });
+      return { credentialId: made.id, createdAt: made.createdAt, secret: made.secret };
+    },
+    revoke: (input) => revokeMatching(mgmt, input),
+    async list(externalId) {
+      const inv = await mgmt.credentialInventory(externalId);
+      return {
+        appPasswords: inv.appPasswords.map((a) => ({
+          credentialId: a.id,
+          createdAt: a.createdAt,
+          protocols: scopesOf(a.permissions),
+        })),
+        apiKeys: inv.apiKeys,
+      };
+    },
+  };
+}
+
+/** Reads a mailbox's managed Sieve script with the management key (for the reconciler). */
+export function stalwartManagedScripts(mgmt: StalwartManagement): ManagedScriptReader {
+  return {
+    async read(externalId) {
+      return (await mgmt.getSieveScript(externalId, MANAGED_SIEVE_SCRIPT))?.content ?? null;
+    },
+  };
+}
+
 export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
   return {
-    async ensureDomain(name) {
-      return { externalId: await mgmt.upsertDomain({ name: name.toLowerCase() }) };
+    async ensureDomain(name, catchAllAddress) {
+      return {
+        externalId: await mgmt.upsertDomain({
+          name: name.toLowerCase(),
+          ...(catchAllAddress ? { catchAllAddress: catchAllAddress.toLowerCase() } : {}),
+        }),
+      };
     },
+
+    revokeAppPassword: (input) => revokeMatching(mgmt, input),
 
     async ensureMailbox({ externalId: known, address, quotaBytes, suspended, aliases }) {
       const [local, domain] = split(address);
@@ -52,6 +107,10 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
             };
           }),
       });
+      // Our managed Sieve script stays the active one: users can't switch it off (`jmapSieveScriptDestroy` denied also
+      // refuses a bare deactivate), but an account changed by hand or locked late is put right by every ensure (and the
+      // backfill). Nothing is deleted; a mailbox without one is left alone.
+      if (!suspended) await mgmt.activateSieveScript(externalId, MANAGED_SIEVE_SCRIPT);
       return { externalId };
     },
 
@@ -87,6 +146,7 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
         address: u.address,
         quotaBytes: u.quotaBytes ?? 0,
         suspended: u.suspended,
+        sieveLocked: u.sieveLocked,
       }));
     },
   };
