@@ -3,6 +3,7 @@
 
 import { EllipsisVertical, House, type LucideIcon, Mail, X } from "lucide-react";
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 
 import type { NavTreeSection } from "@/server/console-nav";
@@ -31,6 +32,9 @@ export type NavCounts = Partial<Record<string, { count: number; emphasis?: boole
 /** The most common create action for the person's role, shown as the sidebar's prominent button. */
 export type PrimaryAction = { label: string; href: string; icon: "mailbox" | "person" | "alias" | "account" };
 
+/** The account menu's width (w-72) plus the panel surface's padding and border. */
+const MENU_WIDTH = 302;
+
 /** The ⋮ menu (and the tile in the rail): the person's menu — accounts, docs, webmail, sign out. */
 function PersonMenu({
   user,
@@ -44,6 +48,25 @@ function PersonMenu({
   trigger?: React.ReactNode;
 }) {
   const { open, toggle, close, trigger: ref, panel } = usePopover();
+  // Placed against the viewport, not the narrow sidebar: anchored under the trigger and clamped so the whole menu
+  // stays on screen (the ⋮ sits near the sidebar's right edge, closer to the screen edge than the menu is wide).
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const place = () => {
+    const r = ref.current?.getBoundingClientRect();
+    if (!r) return;
+    const want = trigger ? r.left : r.right - MENU_WIDTH;
+    setPos({ top: r.bottom + 6, left: Math.max(8, Math.min(want, window.innerWidth - MENU_WIDTH - 8)) });
+  };
+  useEffect(() => {
+    if (!open) return;
+    const onResize = () => {
+      close(false);
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+    };
+  }, [open, close]);
   return (
     <div className="relative">
       <Tooltip label="Accounts and you" disabled={open}>
@@ -53,7 +76,10 @@ function PersonMenu({
           aria-label="Accounts and you"
           aria-haspopup="menu"
           aria-expanded={open}
-          onClick={toggle}
+          onClick={() => {
+            place();
+            toggle();
+          }}
           className={
             trigger
               ? "rounded-lg focus-visible:ring-2 focus-visible:ring-ring"
@@ -64,7 +90,7 @@ function PersonMenu({
         </button>
       </Tooltip>
       {open && (
-        <div ref={panel} className={`absolute top-10 z-50 ${trigger ? "left-0" : "right-0"}`}>
+        <div ref={panel} className="fixed z-50" style={pos ?? undefined}>
           <PanelSurface>
             <AccountMenu
               user={user}
