@@ -30,7 +30,8 @@ credentials.md
 /playwright-report/
 /test-results/
 
-# local-only session log (kept on the working machine)
+# local-only session log and the private deployment guide (kept on the working machine)
+deploy.md
 docs/internal/handoff.md
 
 # dev-stack generated state (Stalwart data, generated secrets)
