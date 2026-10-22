@@ -154,6 +154,16 @@ describe("security hardening (audit 2026-10-21)", () => {
     }
     expect(statuses.slice(0, 120).every((s) => s === 200)).toBe(true);
     expect(statuses[120]).toBe(429);
+    // A route's own CSP is kept; otherwise API responses get a strict one.
+    const own = await route(
+      async () => new Response("x", { headers: { "Content-Security-Policy": "default-src 'none'; sandbox" } }),
+    )(new Request("http://localhost:43200/api/webmail/x"), {});
+    expect(own.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox");
+    expect(
+      (await route(async () => ok(1))(new Request("http://localhost:43200/api/x"), {})).headers.get(
+        "content-security-policy",
+      ),
+    ).toBe("default-src 'none'; frame-ancestors 'none'");
     // Static routes get no params from Next.
     const plain = await route(async () => ok(true))(new Request("http://localhost:43200/api/me"), {});
     expect(plain.status).toBe(200);

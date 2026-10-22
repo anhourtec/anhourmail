@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { type CalendarEvent, markdownBlocks, type MdBlock, type TextBlock, textBlocks } from "./body";
+
 /**
  * The webmail's message view: what `GET /api/webmail/messages/:id` returns. Types are shared with the client
  * (type-only imports); `buildMessageView` is pure so it can be tested without Stalwart.
@@ -15,6 +17,8 @@ export type BodyPart = {
   charset?: string | null;
   disposition: string | null;
   cid: string | null;
+  /** The part's raw Content-Type header (for `format=flowed`). */
+  "header:Content-Type"?: string | null;
 };
 
 /** The JMAP Email properties the reader asks for. */
@@ -26,17 +30,36 @@ export type JmapEmail = {
   from: Address[] | null;
   to: Address[] | null;
   cc: Address[] | null;
+  bcc?: Address[] | null;
   replyTo: Address[] | null;
   subject: string | null;
   sentAt: string | null;
   receivedAt: string;
+  messageId?: string[] | null;
+  references?: string[] | null;
+  blobId?: string | null;
   htmlBody: BodyPart[] | null;
   textBody: BodyPart[] | null;
   attachments: BodyPart[] | null;
   bodyValues: Record<string, { value: string; isTruncated?: boolean; isEncodingProblem?: boolean }> | null;
 };
 
-export type AttachmentView = { blobId: string; name: string; type: string; size: number };
+/** What the reader can do with an attachment beyond downloading it. */
+export type AttachmentKind = "image" | "message" | "calendar" | "file";
+export type AttachmentView = { blobId: string; name: string; type: string; size: number; kind: AttachmentKind };
+
+const RASTER = /^image\/(?:png|jpe?g|gif|webp|bmp)$/i;
+const CALENDAR = /^(?:text\/calendar|application\/ics)$/i;
+
+export function attachmentKind(type: string): AttachmentKind {
+  if (RASTER.test(type)) return "image";
+  if (/^message\/rfc822$/i.test(type)) return "message";
+  if (CALENDAR.test(type)) return "calendar";
+  return "file";
+}
+
+/** Raster images previewable inline through `/api/webmail/preview` (never SVG or anything that can carry code). */
+export const isPreviewableImage = (type: string): boolean => RASTER.test(type);
 
 export type MessageView = {
   id: string;
@@ -45,6 +68,8 @@ export type MessageView = {
   from: Address[];
   to: Address[];
   cc: Address[];
+  /** Only your own drafts and sent mail carry Bcc. */
+  bcc: Address[];
   replyTo: Address[];
   sentAt: string | null;
   receivedAt: string;
@@ -54,6 +79,19 @@ export type MessageView = {
   html: string | null;
   /** Plain-text body, used when there is no HTML part. */
   text: string | null;
+  /** The plain-text body as blocks (message, quoted replies, signature) for the native reader, or null. */
+  textBlocks: TextBlock[] | null;
+  /** A text/markdown body as a safe AST (rendered natively), or null. */
+  markdown: MdBlock[] | null;
+  /** Calendar invitations found in the message (text/calendar parts). */
+  events: CalendarEvent[];
+  /** The whole message's blob (for "View original" and downloading it as .eml). */
+  blobId: string | null;
+  /** The body as plain text for quoting in a reply or forward (capped). */
+  quote: string;
+  /** This message's Message-ID and References (for In-Reply-To / References on a reply). */
+  messageId: string[];
+  references: string[];
   truncated: boolean;
   blockedImages: number;
   blockedTrackers: number;
@@ -68,17 +106,44 @@ export const EMAIL_PROPERTIES = [
   "from",
   "to",
   "cc",
+  "bcc",
   "replyTo",
   "subject",
   "sentAt",
   "receivedAt",
+  "messageId",
+  "references",
+  "blobId",
   "htmlBody",
   "textBody",
   "attachments",
   "bodyValues",
 ] as const;
 
-export const BODY_PROPERTIES = ["partId", "blobId", "size", "name", "type", "charset", "disposition", "cid"] as const;
+export const BODY_PROPERTIES = [
+  "partId",
+  "blobId",
+  "size",
+  "name",
+  "type",
+  "charset",
+  "disposition",
+  "cid",
+  "header:Content-Type",
+] as const;
+
+/** Parts the service fetches to show natively: a markdown body and calendar invitations. */
+export function markdownPart(email: JmapEmail): BodyPart | null {
+  const parts = [...(email.textBody ?? []), ...(email.attachments ?? [])];
+  return parts.find((p) => /^text\/(?:markdown|x-markdown)$/i.test(p.type) && p.blobId !== null) ?? null;
+}
+export function calendarParts(email: JmapEmail): BodyPart[] {
+  const parts = [...(email.textBody ?? []), ...(email.htmlBody ?? []), ...(email.attachments ?? [])];
+  const seen = new Set<string>();
+  return parts
+    .filter((p) => CALENDAR.test(p.type) && p.blobId !== null && !seen.has(p.blobId) && seen.add(p.blobId))
+    .slice(0, 3);
+}
 
 /** Largest body value we fetch and render (bytes); longer bodies are truncated with a note. */
 export const MAX_BODY_BYTES = 1_000_000;
@@ -118,9 +183,17 @@ export function inlineImageParts(email: JmapEmail): BodyPart[] {
   return out;
 }
 
+/** Longest quote carried into a reply or forward. */
+export const MAX_QUOTE_CHARS = 100_000;
+
+/** Content the service fetched separately: the markdown body and calendar events. */
+export type BodyExtras = { markdown?: string; events?: CalendarEvent[] };
+
 export function buildMessageView(
   email: JmapEmail,
   sanitize: (html: string) => { html: string; blockedImages: number; blockedTrackers: number },
+  toText: (html: string) => string = (h) => h,
+  extras: BodyExtras = {},
 ): MessageView {
   const values = email.bodyValues ?? {};
   const read = (parts: BodyPart[] | null, type: string) =>
@@ -138,11 +211,28 @@ export function buildMessageView(
     blockedImages = r.blockedImages;
     blockedTrackers = r.blockedTrackers;
   }
-  const text = html === null ? textParts.map((p) => values[p.partId ?? ""]?.value ?? "").join("\n\n") : null;
+  const plain = textParts.map((p) => values[p.partId ?? ""]?.value ?? "").join("\n\n");
+  const markdown = html === null && plain.trim() === "" && extras.markdown ? markdownBlocks(extras.markdown) : null;
+  const text = html === null ? (markdown ? (extras.markdown ?? "") : plain) : null;
+  const ctype = (textParts[0]?.["header:Content-Type"] ?? "").toLowerCase();
+  const blocks =
+    html === null && markdown === null
+      ? textBlocks(plain, { flowed: /format\s*=\s*"?flowed/.test(ctype), delsp: /delsp\s*=\s*"?yes/.test(ctype) })
+      : null;
+  const quote = (
+    plain.trim() !== ""
+      ? plain
+      : markdown
+        ? (extras.markdown ?? "")
+        : toText(htmlParts.map((p) => values[p.partId ?? ""]?.value ?? "").join("\n"))
+  ).slice(0, MAX_QUOTE_CHARS);
 
   const inlineCids = referencedCids(email);
+  const shownMarkdown = markdown ? markdownPart(email) : null;
   const attachments: AttachmentView[] = (email.attachments ?? [])
     .filter((p) => p.blobId !== null)
+    // A markdown body shown in the reader isn't listed again as an attachment (unless it has a file name).
+    .filter((p) => shownMarkdown?.blobId !== p.blobId || Boolean(p.name))
     .filter((p) => !(p.disposition === "inline" && p.cid !== null && inlineCids.has(stripCid(p.cid))))
     .map((p) => ({
       blobId: p.blobId ?? "",
@@ -150,6 +240,7 @@ export function buildMessageView(
       name: safeFilename(p.name ?? "attachment"),
       type: p.type,
       size: p.size,
+      kind: attachmentKind(p.type),
     }));
 
   return {
@@ -159,6 +250,7 @@ export function buildMessageView(
     from: email.from ?? [],
     to: email.to ?? [],
     cc: email.cc ?? [],
+    bcc: email.bcc ?? [],
     replyTo: email.replyTo ?? [],
     sentAt: email.sentAt,
     receivedAt: email.receivedAt,
@@ -166,6 +258,13 @@ export function buildMessageView(
     mailboxIds: email.mailboxIds,
     html,
     text,
+    textBlocks: blocks,
+    markdown,
+    events: extras.events ?? [],
+    blobId: email.blobId ?? null,
+    quote,
+    messageId: email.messageId ?? [],
+    references: email.references ?? [],
     truncated,
     blockedImages,
     blockedTrackers,

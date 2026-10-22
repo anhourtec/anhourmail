@@ -8,6 +8,7 @@
  * is skipped.
  */
 import { randomBytes } from "node:crypto";
+import { crc32, deflateSync } from "node:zlib";
 
 import type { JmapClient } from "@anhourmail/jmap-client";
 
@@ -31,6 +32,8 @@ type Sample = {
   flagged?: boolean;
   /** Key of the message this replies to (threads by In-Reply-To / References). */
   replyTo?: string;
+  /** A ready-made body (Content-Type + encoded body) for the special shapes: markdown, calendar, rfc822, charsets. */
+  mime?: { type: string; body: string; encoding?: string };
 };
 
 const SAMPLE_HEADER = "X-AnhourMail-Sample";
@@ -391,6 +394,231 @@ export function sampleMessages(owner: Addr, domain: string): Sample[] {
       text: "You have been selected to receive a prize. Reply with your bank details to claim it today.",
       unread: true,
     },
+    ...richSamples(owner, domain, { sam, jordan, priya, club }),
+  ];
+}
+
+/** A small gradient PNG built at run time (no binary in the repo). */
+function tinyPng(w = 48, h = 32): Buffer {
+  const rows: Buffer[] = [];
+  for (let y = 0; y < h; y++) {
+    const row = Buffer.alloc(1 + w * 3);
+    for (let x = 0; x < w; x++) {
+      row[1 + x * 3] = 40 + Math.round((x / w) * 120);
+      row[2 + x * 3] = 110 + Math.round((y / h) * 100);
+      row[3 + x * 3] = 200;
+    }
+    rows.push(row);
+  }
+  const chunk = (type: string, data: Buffer) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const td = Buffer.concat([Buffer.from(type, "latin1"), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(td));
+    return Buffer.concat([len, td, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", deflateSync(Buffer.concat(rows))),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+/** One message per body shape the reader handles (plain + quotes + signature, markdown, invite, forward, …). */
+function richSamples(owner: Addr, domain: string, p: Record<"sam" | "jordan" | "priya" | "club", Addr>): Sample[] {
+  const ics = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Elm Street Neighbours//Events//EN",
+    "METHOD:REQUEST",
+    "BEGIN:VEVENT",
+    `UID:block-party-2026@${domain}`,
+    "DTSTAMP:20261020T120000Z",
+    "DTSTART:20261031T180000Z",
+    "DTEND:20261031T210000Z",
+    "SUMMARY:Elm Street block party",
+    "LOCATION:Community hall\\, 12 Elm Street",
+    `ORGANIZER;CN=Priya Shah:mailto:${p.priya.email}`,
+    "DESCRIPTION:Bring a dish to share. Tables and chairs are provided.\\nMusic from 7.",
+    "END:VEVENT",
+    "END:VCALENDAR",
+    "",
+  ].join("\r\n");
+  const invite = multipart("mixed", [
+    part(
+      "text/plain; charset=utf-8",
+      Buffer.from("You're invited to the Elm Street block party. Details below.\n\nPriya"),
+    ),
+    part('text/calendar; charset=utf-8; method=REQUEST; name="invite.ics"', Buffer.from(ics), [
+      'Content-Disposition: attachment; filename="invite.ics"',
+    ]),
+  ]);
+
+  const innerDate = new Date(Date.now() - 9 * 86_400_000).toUTCString().replace("GMT", "+0000");
+  const inner = [
+    `From: "Harbour Reading Club" <${p.club.email}>`,
+    `To: "Sam Rivera" <${p.sam.email}>`,
+    "Subject: Members' evening moved to Friday",
+    `Date: ${innerDate}`,
+    `Message-ID: <inner-evening@harbour-reading.example>`,
+    "MIME-Version: 1.0",
+    "Content-Type: text/html; charset=utf-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    b64(
+      Buffer.from(
+        '<h2 style="font-weight:normal">Members\' evening moves to Friday</h2><p>Same time, same room. The swap shelf comes too.</p><p><img src="https://cdn.harbour-reading.example/img/shelf.jpg" width="400" height="200" alt="The swap shelf"></p>',
+      ),
+    ),
+  ].join("\r\n");
+  const forwarded = multipart("mixed", [
+    part("text/plain; charset=utf-8", Buffer.from("Forwarding this from Sam — looks like Friday now.\n\nJordan")),
+    [
+      'Content-Type: message/rfc822; name="Members evening moved to Friday.eml"',
+      'Content-Disposition: attachment; filename="Members evening moved to Friday.eml"',
+      "Content-Transfer-Encoding: 7bit",
+      "",
+      inner,
+    ].join("\r\n"),
+  ]);
+
+  const flowed = [
+    "Sounds good to me. I'll bring the folding chairs and a big salad, and I can ",
+    "pick up ice on the way if someone reminds me on Saturday morning.",
+    "",
+    "The route is on https://coastal-trail.example/routes/bluffs and questions go ",
+    "to hello@coastal-trail.example.",
+    "",
+    `On Mon, Oct 19, 2026 at 9:14 AM Jordan Lee <${p.jordan.email}> wrote:`,
+    "> Are we still doing the potluck after the run? I can bring bread and the ",
+    "> good cheese.",
+    ">",
+    ">> Who's bringing chairs? We need at least ten.",
+    "",
+    "-- ",
+    "Sam Rivera",
+    "Coastal Trail Runners · Sundays at 8",
+    "",
+  ].join("\r\n");
+
+  const markdown = [
+    "# Cabin weekend checklist",
+    "",
+    "Here's the **final list**. Tick things off in the group chat when they're packed.",
+    "",
+    "## Food",
+    "",
+    "- Pancake mix and *real* maple syrup",
+    "- Coffee (the good one)",
+    "- Snacks for the hike",
+    "",
+    "## Gear",
+    "",
+    "1. Camp stove and fuel",
+    "2. Headlamps",
+    "3. First-aid kit",
+    "",
+    "> Leave by 4 on Friday so we beat the ferry traffic.",
+    "",
+    "Wood stand hours: `8:00–18:00`. Map: [bluffs loop](https://coastal-trail.example/routes/bluffs).",
+    "",
+    "```",
+    "Cabin code: 4471",
+    "Wi-Fi: lakeside / ask Jordan",
+    "```",
+    "",
+    "<script>alert('markdown can carry HTML; it must never run')</script>",
+    "",
+  ].join("\n");
+
+  const latin1 = Buffer.from(
+    "Bonjour Alex,\n\nLe café du marché ouvre à 7 h. Crème brûlée à la carte, et la pâtisserie de Zoë est déjà célèbre.\nÀ samedi !\n\nAnaïs",
+    "latin1",
+  );
+
+  const paragraph =
+    "This is a deliberately long message to show how the webmail handles very large bodies. It repeats so it is " +
+    "large enough to be cut short in the reader, with a button to see all of it.\n\n";
+  const long = paragraph.repeat(Math.ceil(1_100_000 / paragraph.length));
+
+  return [
+    {
+      key: "plain-quote",
+      folder: "inbox",
+      ago: [0, 9, 5],
+      from: p.sam,
+      to: [owner, p.jordan],
+      subject: "Re: Potluck after the run",
+      text: flowed,
+      mime: { type: "text/plain; charset=utf-8; format=flowed", body: b64(Buffer.from(flowed)), encoding: "base64" },
+      unread: true,
+    },
+    {
+      key: "markdown",
+      folder: "inbox",
+      ago: [2, 8, 30],
+      from: p.jordan,
+      to: [owner],
+      subject: "Cabin weekend checklist",
+      text: markdown,
+      mime: { type: "text/markdown; charset=utf-8", body: b64(Buffer.from(markdown)), encoding: "base64" },
+    },
+    {
+      key: "invite",
+      folder: "inbox",
+      ago: [1, 11, 20],
+      from: p.priya,
+      to: [owner],
+      subject: "Invitation: Elm Street block party",
+      text: "You're invited to the Elm Street block party.",
+      mime: invite,
+    },
+    {
+      key: "forwarded",
+      folder: "inbox",
+      ago: [3, 16, 40],
+      from: p.jordan,
+      to: [owner],
+      subject: "Fwd: Members' evening moved to Friday",
+      text: "Forwarding this from Sam.",
+      mime: forwarded,
+    },
+    {
+      key: "photo",
+      folder: "inbox",
+      ago: [4, 13, 10],
+      from: p.sam,
+      to: [owner],
+      subject: "Sunset from the dock",
+      text: "Took this last night from the dock. The colours were unreal.\n\nSam",
+      attachments: [{ name: "dock-sunset.png", type: "image/png", content: tinyPng() }],
+    },
+    {
+      key: "latin1",
+      folder: "inbox",
+      ago: [5, 7, 45],
+      from: { name: "Anaïs Martin", email: "anais@marche-local.example" },
+      to: [owner],
+      subject: "Le marché de samedi",
+      text: "",
+      mime: { type: "text/plain; charset=iso-8859-1", body: b64(latin1), encoding: "base64" },
+    },
+    {
+      key: "long",
+      folder: "archive",
+      ago: [16, 9, 0],
+      from: p.club,
+      to: [owner],
+      subject: "The complete reading list (very long)",
+      text: long,
+    },
   ];
 }
 
@@ -420,11 +648,19 @@ export function toRfc822(s: Sample, domain: string, now: number): { raw: string;
   if (d.getTime() > now) d.setTime(now - 60_000 * (days + 5));
   const id = (key: string) => `<sample-${key}@${domain}>`;
   const textPart = part("text/plain; charset=utf-8", Buffer.from(s.text));
-  let content: { type: string; body: string } = s.html
-    ? multipart("alternative", [textPart, part("text/html; charset=utf-8", Buffer.from(s.html))])
-    : { type: "text/plain; charset=utf-8", body: b64(Buffer.from(s.text)) };
-  const plainHeaders = s.html ? [] : ["Content-Transfer-Encoding: base64"];
-  if (s.attachments?.length) {
+  let content: { type: string; body: string } = s.mime
+    ? { type: s.mime.type, body: s.mime.body }
+    : s.html
+      ? multipart("alternative", [textPart, part("text/html; charset=utf-8", Buffer.from(s.html))])
+      : { type: "text/plain; charset=utf-8", body: b64(Buffer.from(s.text)) };
+  const plainHeaders = s.mime
+    ? s.mime.encoding
+      ? [`Content-Transfer-Encoding: ${s.mime.encoding}`]
+      : []
+    : s.html
+      ? []
+      : ["Content-Transfer-Encoding: base64"];
+  if (s.attachments?.length && !s.mime) {
     const inner = s.html ? `Content-Type: ${content.type}\r\n\r\n${content.body}` : textPart;
     content = multipart("mixed", [
       inner,
@@ -473,16 +709,36 @@ export async function sampleIds(jmap: JmapClient, accountId: string): Promise<st
   return list.filter((e) => typeof e[`header:${SAMPLE_HEADER}:asText`] === "string").map((e) => String(e.id));
 }
 
+/** Keys of the samples already in the mailbox (from their `<sample-KEY@domain>` Message-IDs). */
+export async function sampleKeys(jmap: JmapClient, accountId: string): Promise<Set<string>> {
+  const res = await jmap.request([
+    ["Email/query", { accountId, sort: [{ property: "receivedAt", isAscending: false }], limit: 1000 }, "q"],
+    [
+      "Email/get",
+      { accountId, "#ids": { resultOf: "q", name: "Email/query", path: "/ids" }, properties: ["messageId"] },
+      "g",
+    ],
+  ]);
+  const keys = new Set<string>();
+  for (const e of (res.get("g")?.list ?? []) as { messageId: string[] | null }[]) {
+    const m = /^sample-([a-z0-9-]+)@/.exec(e.messageId?.[0] ?? "");
+    if (m?.[1]) keys.add(m[1]);
+  }
+  return keys;
+}
+
 type Box = { id: string; name: string; role: string | null; parentId: string | null };
 
 /**
  * Imports the samples into `owner`'s mailbox (signing in as the owner, never as an admin). Creates Archive (role
  * `archive`, which new Stalwart accounts lack) and a nested Receipts › Home folder when missing.
- * Returns the number imported (0 when already present).
+ * Imports only samples that aren't there yet (so new samples reach existing dev mailboxes). Returns how many.
  */
 export async function importSampleMail(jmap: JmapClient, owner: Addr, domain: string): Promise<number> {
   const accountId = await jmap.accountId();
-  if ((await sampleIds(jmap, accountId)).length > 0) return 0;
+  const present = await sampleKeys(jmap, accountId);
+  const missing = sampleMessages(owner, domain).filter((x) => !present.has(x.key));
+  if (missing.length === 0) return 0;
 
   const boxes = async () =>
     ((
@@ -513,7 +769,7 @@ export async function importSampleMail(jmap: JmapClient, owner: Addr, domain: st
   };
 
   const now = Date.now();
-  const samples = sampleMessages(owner, domain);
+  const samples = missing;
   const answered = new Set(samples.filter((s) => s.folder === "sent" && s.replyTo).map((s) => s.replyTo));
   const emails: Record<string, Record<string, unknown>> = {};
   for (const s of samples) {
@@ -527,6 +783,7 @@ export async function importSampleMail(jmap: JmapClient, owner: Addr, domain: st
     if (answered.has(s.key)) keywords.$answered = true;
     emails[s.key] = { blobId, mailboxIds: { [mailbox]: true }, keywords, receivedAt };
   }
+  if (Object.keys(emails).length === 0) return 0;
   const res = await jmap.request([["Email/import", { accountId, emails }, "i"]]);
   const notCreated = res.get("i")?.notCreated as Record<string, unknown> | undefined;
   if (notCreated && Object.keys(notCreated).length > 0) {

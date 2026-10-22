@@ -253,19 +253,23 @@ export function FolderTreeSkeleton({ folders = 7 }: { folders?: number }) {
   );
 }
 
-/** Message list rows: sender, subject line, preview, date — same height as a real row. */
+/** Message list rows: square avatar, sender + time, subject, two preview lines — same 104px height as a real row. */
 export function MessageListSkeleton({ rows = 12 }: { rows?: number }) {
   return (
-    <div className="flex flex-col divide-y">
+    <div className="flex flex-col">
       {Array.from({ length: rows }, (_, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
-        <div key={i} className="flex h-[76px] flex-col justify-center gap-2 px-4">
-          <div className="flex items-center justify-between gap-4">
-            <Bone className="h-3.5 w-36" />
-            <Bone className="h-3 w-12" />
+        <div key={i} className="flex h-[104px] gap-3 border-b px-3 py-3">
+          <Bone className="size-9 shrink-0 rounded-md" />
+          <div className="flex flex-1 flex-col gap-2 pt-0.5">
+            <div className="flex items-center justify-between gap-4">
+              <Bone className="h-3.5 w-32" />
+              <Bone className="h-3 w-16" />
+            </div>
+            <Bone className="h-3.5 w-3/4" />
+            <Bone className="h-3 w-11/12" />
+            <Bone className="h-3 w-2/3" />
           </div>
-          <Bone className="h-3.5 w-3/4" />
-          <Bone className="h-3 w-11/12" />
         </div>
       ))}
     </div>

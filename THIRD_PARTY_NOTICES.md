@@ -17,7 +17,7 @@ their licences and copyright notices. Listing a project here does not imply its 
 | [Mailpit (container image, development only)](https://github.com/axllent/mailpit)            | v1.31.6                                             | MIT                | Local mail sink; never deployed to production.                                                              |
 | [socat (alpine/socat container image, development only)](http://www.dest-unreach.org/socat/) | 1.8.0.3                                             | GPL-2.0-only       | Local port forwarder for the isolated dev mail network; never deployed to production.                       |
 
-## npm packages (398)
+## npm packages (399)
 
 Production dependencies of all workspaces, from `package-lock.json`.
 
@@ -272,6 +272,7 @@ Production dependencies of all workspaces, from `package-lock.json`.
 | [magic-string](https://github.com/Rich-Harris/magic-string)                                                                                                      | 1.4.3        | MIT                                      | Copyright 2018 Rich Harris                                                                             |
 | [markdown-extensions](sindresorhus/markdown-extensions)                                                                                                          | 2.0.0        | MIT                                      | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com)                        |
 | [markdown-table](wooorm/markdown-table)                                                                                                                          | 3.0.4        | MIT                                      | Copyright (c) Titus Wormer <tituswormer@gmail.com>                                                     |
+| [marked](https://marked.js.org)                                                                                                                                  | 18.1.1       | MIT                                      | Copyright (c) 2018+, MarkedJS (https://github.com/markedjs/)                                           |
 | [mdast-util-find-and-replace](syntax-tree/mdast-util-find-and-replace)                                                                                           | 3.0.3        | MIT                                      | Copyright (c) Titus Wormer <tituswormer@gmail.com>                                                     |
 | [mdast-util-from-markdown](syntax-tree/mdast-util-from-markdown)                                                                                                 | 2.1.0        | MIT                                      | Copyright (c) Titus Wormer <tituswormer@gmail.com>                                                     |
 | [mdast-util-gfm](syntax-tree/mdast-util-gfm)                                                                                                                     | 3.1.0        | MIT                                      | Copyright (c) Titus Wormer <tituswormer@gmail.com>                                                     |

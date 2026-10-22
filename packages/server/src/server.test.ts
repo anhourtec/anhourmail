@@ -238,3 +238,43 @@ describe("redaction of webmail OAuth secrets", () => {
     expect(out).toEqual(expected);
   });
 });
+
+describe("sliding send quotas", async () => {
+  const { memorySlidingQuota, redisSlidingQuota } = await import("./rate-limit");
+  it("charges every window together or none, and frees units as the window slides", async () => {
+    vi.stubEnv("RATE_LIMIT_MULTIPLIER", "1");
+    const q = memorySlidingQuota();
+    const hour = { key: "h", limit: 10, windowSec: 3600 };
+    const day = { key: "d", limit: 12, windowSec: 86_400 };
+    const t = 1_000_000_000_000;
+    expect(await q.take([hour, day], 8, t, "a")).toBe(true);
+    expect(await q.take([hour, day], 3, t, "b")).toBe(false); // the hour would overflow
+    expect(await q.take([hour, day], 2, t, "c")).toBe(true);
+    // The hour has slid, the day hasn't: 2 more fit the day (12), not 3.
+    expect(await q.take([hour, day], 3, t + 3_601_000, "d")).toBe(false);
+    expect(await q.take([hour, day], 2, t + 3_601_000, "e")).toBe(true);
+    vi.unstubAllEnvs();
+  });
+
+  it("runs one atomic script over all windows in Redis", async () => {
+    const calls: unknown[][] = [];
+    const store = redisSlidingQuota({
+      eval: async (...a: unknown[]) => {
+        calls.push(a);
+        return 1;
+      },
+    });
+    expect(
+      await store.take(
+        [
+          { key: "k1", limit: 5, windowSec: 60 },
+          { key: "k2", limit: 9, windowSec: 600 },
+        ],
+        2,
+        7,
+        "x",
+      ),
+    ).toBe(true);
+    expect(calls[0]?.slice(1)).toEqual([2, "k1", "k2", 7, 2, "x", 60, 5, 600, 9]);
+  });
+});

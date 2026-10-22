@@ -59,3 +59,12 @@ export const BULK_MAIL = {
   allowedOnBasePlans: false,
   addOnId: "bulk",
 } as const;
+
+/**
+ * Attachments in the webmail (published in the docs, enforced by the webmail BFF): per file and per message, in MB
+ * (1 MB = 1024 × 1024 bytes). The mail server's own ceiling is higher.
+ */
+export const WEBMAIL_ATTACHMENTS = {
+  perFileMb: 20,
+  perMessageMb: 25,
+} as const;

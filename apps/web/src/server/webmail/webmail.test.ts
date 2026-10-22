@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createKeyRing } from "@anhourmail/server/keyring";
+import { memorySlidingQuota } from "@anhourmail/server/rate-limit";
 import { setLogSinkForTests } from "@anhourmail/server/log";
 
 import { ALLOWED_METHODS, checkJmapRequest, isLimitError, MAX_CALLS } from "./jmap-policy";
@@ -54,7 +55,7 @@ describe("WebmailSessionStore", () => {
     expect(key).not.toContain(id);
     expect(value).not.toContain("at-1");
     expect(value).not.toContain("rt-1");
-    expect(await store.read(id)).toEqual(session());
+    expect(await store.read(id)).toEqual({ ...session(), version: 1 });
     expect(store.cookieMaxAgeSec).toBe(30 * 86_400);
   });
 
@@ -130,20 +131,92 @@ describe("JMAP allow-list", () => {
     expect(ok(many).ok).toBe(false);
   });
 
-  it("lets Email/set only set or clear keywords on existing messages", () => {
-    const set = (args: Record<string, unknown>) => ok([["Email/set", { accountId: "acc1", ...args }, "s"]]).ok;
-    expect(set({ update: { e1: { "keywords/$seen": true, "keywords/$flagged": null } } })).toBe(true);
-    expect(set({ update: { e1: { "keywords/$seen": true } }, ifInState: "s1" })).toBe(true);
-    expect(set({ create: { x: { mailboxIds: { a: true } } } })).toBe(false);
-    expect(set({ destroy: ["e1"] })).toBe(false);
-    expect(set({ update: { e1: { "keywords/$seen": true } }, destroy: [] })).toBe(false);
-    expect(set({ update: { e1: { "mailboxIds/trash": true } } })).toBe(false);
-    expect(set({ update: { e1: { keywords: { $seen: true } } } })).toBe(false);
-    expect(set({ update: { e1: { "keywords/$seen": "yes" } } })).toBe(false);
-    expect(set({ update: { e1: {} } })).toBe(false);
-    expect(set({ update: {} })).toBe(false);
-    expect(set({ "#update": { resultOf: "q", name: "Email/query", path: "/ids" } })).toBe(false);
-    expect(set({})).toBe(false);
+  it("lets Email/set change keywords and folders, and destroy (checked later), but never create", () => {
+    const set = (args: Record<string, unknown>) =>
+      checkJmapRequest(
+        { using: [CORE, MAIL], methodCalls: [["Email/set", { accountId: "acc1", ...args }, "s"]] },
+        "acc1",
+      );
+    const allowed = (args: Record<string, unknown>) => set(args).ok;
+    // Keywords: read, flag, pin, junk.
+    expect(
+      allowed({ update: { e1: { "keywords/$seen": true, "keywords/$flagged": null, "keywords/$pinned": true } } }),
+    ).toBe(true);
+    // Moves: archive, trash, junk, any folder.
+    expect(allowed({ update: { e1: { "mailboxIds/in": null, "mailboxIds/arch": true } } })).toBe(true);
+    expect(allowed({ update: { e1: { mailboxIds: { trash: true } } }, ifInState: "s1" })).toBe(true);
+    // Destroy is allowed here; the service checks the ids are in Trash or Junk.
+    const d = set({ destroy: ["e1", "e2"] });
+    expect(d.ok && d.destroyIds).toEqual(["e1", "e2"]);
+    // Refusals.
+    for (const bad of [
+      { create: { x: { mailboxIds: { a: true } } } },
+      { update: { e1: { "keywords/$seen": true } }, create: {} },
+      { update: { e1: { subject: "x" } } },
+      { update: { e1: { "bodyValues/1": { value: "x" } } } },
+      { update: { e1: { keywords: { $seen: true } } } },
+      { update: { e1: { "keywords/$seen": "yes" } } },
+      { update: { e1: { "mailboxIds/a b": true } } },
+      { update: { e1: { mailboxIds: {} } } },
+      { update: { e1: { mailboxIds: { trash: false } } } },
+      { update: { e1: {} } },
+      { update: {} },
+      { update: { "bad id": { "keywords/$seen": true } } },
+      { update: [] },
+      { destroy: [] },
+      { destroy: ["ok", "../x"] },
+      { destroy: "e1" },
+      { destroy: Array.from({ length: 501 }, (_, i) => `e${String(i)}`) },
+      { "#update": { resultOf: "q", name: "Email/query", path: "/ids" } },
+      { "#destroy": { resultOf: "q", name: "Email/query", path: "/ids" } },
+      {},
+    ]) {
+      expect(allowed(bad)).toBe(false);
+    }
+  });
+
+  it("never lets the proxy turn a message into a draft or touch the BFF's draft marker", () => {
+    const set = (update: Record<string, unknown>) =>
+      checkJmapRequest(
+        { using: [CORE, MAIL], methodCalls: [["Email/set", { accountId: "acc1", update: { e1: update } }, "s"]] },
+        "acc1",
+        { draftsId: "dr" },
+      ).ok;
+    expect(set({ "keywords/$draft": true })).toBe(false);
+    expect(set({ "keywords/$am-composed": true })).toBe(false);
+    expect(set({ "keywords/$am-composed": null })).toBe(false);
+    expect(set({ "mailboxIds/dr": true })).toBe(false);
+    expect(set({ mailboxIds: { dr: true } })).toBe(false);
+    expect(set({ mailboxIds: { in: true, dr: true } })).toBe(false);
+    // Taking things out of Drafts or clearing $draft is fine (discard, undo of a move).
+    expect(set({ "mailboxIds/dr": null, "mailboxIds/tr": true })).toBe(true);
+    expect(set({ "keywords/$draft": null })).toBe(true);
+    // Without knowing the Drafts id, $draft and the marker are still refused.
+    expect(
+      checkJmapRequest(
+        {
+          using: [CORE, MAIL],
+          methodCalls: [["Email/set", { accountId: "acc1", update: { e1: { "keywords/$draft": true } } }, "s"]],
+        },
+        "acc1",
+      ).ok,
+    ).toBe(false);
+  });
+
+  it("never lets the proxy send mail, upload or manage identities", () => {
+    for (const name of [
+      "EmailSubmission/set",
+      "EmailSubmission/get",
+      "Identity/set",
+      "Mailbox/set",
+      "Email/import",
+      "Email/copy",
+    ]) {
+      expect(ok([[name, { accountId: "acc1" }, "x"]]).ok).toBe(false);
+    }
+    expect(ok([["Identity/get", { accountId: "acc1" }, "x"]], [CORE, "urn:ietf:params:jmap:submission"]).ok).toBe(
+      false,
+    );
   });
 
   it("recognises Stalwart's concurrency limit error", () => {
@@ -255,7 +328,7 @@ describe("message view", () => {
     expect(v.text).toBeNull();
     expect(v.blockedImages).toBe(1);
     expect(v.truncated).toBe(true);
-    expect(v.attachments).toEqual([{ blobId: "b3", name: "a.pdf", type: "application/pdf", size: 99 }]);
+    expect(v.attachments).toEqual([{ blobId: "b3", name: "a.pdf", type: "application/pdf", size: 99, kind: "file" }]);
     const spoof = buildMessageView(
       email({
         attachments: [
@@ -337,6 +410,7 @@ function setup(opts: { upstream?: Upstream; allowed?: (a: string) => boolean; oa
     oauth,
     stalwartUrl: "http://stalwart:8080/",
     access: { allowed: async (a) => allowed(a) },
+    quota: memorySlidingQuota(),
     fetch: fetchImpl,
     now: () => now,
     sleep: async () => undefined,

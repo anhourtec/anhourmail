@@ -20,7 +20,10 @@ export const LIMITS = {
   write: { limit: 120, windowSec: 60, by: "caller", failMode: "open" },
   auth: { limit: 30, windowSec: 60, by: "ip", failMode: "closed" },
   publicForm: { limit: 10, windowSec: 900, by: "ip", failMode: "closed" },
-  invite: { limit: 20, windowSec: 900, by: "ip", failMode: "closed" },
+  // Per signed-in caller: each invite or resend sends an email (plus a per-account daily cap in the service).
+  invite: { limit: 20, windowSec: 900, by: "caller", failMode: "closed" },
+  // Role changes and removals of people (per caller, fail closed).
+  sensitive: { limit: 30, windowSec: 3600, by: "caller", failMode: "closed" },
   dnsVerify: { limit: 30, windowSec: 3600, by: "caller", failMode: "open" },
   aliasCreate: { limit: 60, windowSec: 3600, by: "caller", failMode: "closed" },
   export: { limit: 5, windowSec: 3600, by: "caller", failMode: "closed" },
@@ -32,6 +35,7 @@ export const LIMITS = {
   webmailSignInAddress: { limit: 10, windowSec: 900, by: "caller", failMode: "closed" },
   webmail: { limit: 900, windowSec: 60, by: "caller", failMode: "open" },
   webmailDownload: { limit: 120, windowSec: 60, by: "caller", failMode: "open" },
+  webmailUpload: { limit: 60, windowSec: 600, by: "caller", failMode: "closed" },
 } as const satisfies Record<string, RateLimit>;
 
 export type LimitName = keyof typeof LIMITS;
@@ -169,6 +173,68 @@ export function memoryFailureStore(): FailureStore {
       const n = (counts.get(key) ?? 0) + 1;
       counts.set(key, n);
       return n;
+    },
+  };
+}
+
+/**
+ * Sliding-window quotas for sending (rate-limits.md "sending"; CLAUDE.md rule 27): several windows (e.g. per hour
+ * and per day, per mailbox and per session) are checked and charged together, atomically, by `units` (recipients).
+ * Either every window has room and all are charged, or nothing is charged. Callers treat a store error as "refuse"
+ * (fail closed).
+ */
+export type QuotaWindow = { key: string; limit: number; windowSec: number };
+
+export type SlidingQuotaStore = {
+  /** Charges `units` to every window if all have room; returns false (charging nothing) otherwise. */
+  take(windows: QuotaWindow[], units: number, now: number, id: string): Promise<boolean>;
+};
+
+/** Lua: drop expired entries, check every window, then add `units` members to each. Atomic in Redis. */
+const TAKE_SCRIPT = `
+local now = tonumber(ARGV[1])
+local units = tonumber(ARGV[2])
+local id = ARGV[3]
+for i = 1, #KEYS do
+  local win = tonumber(ARGV[2 + 2 * i]) * 1000
+  local lim = tonumber(ARGV[3 + 2 * i])
+  redis.call('ZREMRANGEBYSCORE', KEYS[i], '-inf', now - win)
+  if redis.call('ZCARD', KEYS[i]) + units > lim then return 0 end
+end
+for i = 1, #KEYS do
+  local win = tonumber(ARGV[2 + 2 * i]) * 1000
+  for u = 1, units do redis.call('ZADD', KEYS[i], now, id .. ':' .. u) end
+  redis.call('PEXPIRE', KEYS[i], win + 1000)
+end
+return 1
+`;
+
+export function redisSlidingQuota(redis: {
+  eval(script: string, numKeys: number, ...args: (string | number)[]): Promise<unknown>;
+}): SlidingQuotaStore {
+  return {
+    take: async (windows, units, now, id) => {
+      const args: (string | number)[] = [now, units, id];
+      for (const w of windows) args.push(w.windowSec, w.limit * multiplier());
+      const res = await redis.eval(TAKE_SCRIPT, windows.length, ...windows.map((w) => w.key), ...args);
+      return Number(res) === 1;
+    },
+  };
+}
+
+/** In-process sliding quotas for tests (same semantics as the Redis script). */
+export function memorySlidingQuota(): SlidingQuotaStore {
+  const entries = new Map<string, number[]>();
+  return {
+    take: async (windows, units, now) => {
+      for (const w of windows) {
+        const live = (entries.get(w.key) ?? []).filter((t) => t > now - w.windowSec * 1000);
+        entries.set(w.key, live);
+        if (live.length + units > w.limit * multiplier()) return false;
+      }
+      for (const w of windows)
+        entries.set(w.key, [...(entries.get(w.key) ?? []), ...Array.from({ length: units }, () => now)]);
+      return true;
     },
   };
 }

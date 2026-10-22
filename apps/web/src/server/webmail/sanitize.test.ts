@@ -205,3 +205,30 @@ describe("sanitiser limits and adversarial input", () => {
     );
   });
 });
+
+describe("quoted replies and signatures in HTML mail", () => {
+  it("turns quote containers into a collapsed details toggle and dims signatures", () => {
+    const out = sanitizeMessageHtml(
+      '<p>Reply</p><div class="gmail_quote"><div>On Mon, Sam wrote:</div><blockquote type="cite">old</blockquote></div><div class="gmail_signature">Sam</div><blockquote>plain quote stays</blockquote>',
+    ).html;
+    expect(out).toContain(
+      '<details class="gmail_quote" data-am-quote="1"><summary title="Show quoted text" aria-label="Show quoted text">&#8226;&#8226;&#8226;</summary>',
+    );
+    // The cited blockquote inside it collapses too.
+    expect(out.match(/data-am-quote="1"/g)).toHaveLength(2);
+    expect(out).toContain('<div class="gmail_signature" data-am-sig="1">Sam</div>');
+    expect(out).toContain("<blockquote>plain quote stays</blockquote>");
+    expect(out).toMatch(/old<\/details><\/details>/);
+  });
+
+  it("ignores look-alike marker attributes sent by the message", () => {
+    const out = sanitizeMessageHtml('<details data-am-quote="1"><p>x</p></details><p data-am-sig="1">y</p>').html;
+    expect(out).not.toContain("data-am-quote");
+    expect(out).not.toContain("data-am-sig");
+    expect(out).not.toContain("<summary");
+  });
+
+  it("recognises Outlook's reply header block", () => {
+    expect(sanitizeMessageHtml('<div id="divRplyFwdMsg">From: x</div>').html).toContain('data-am-quote="1"');
+  });
+});

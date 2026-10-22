@@ -10,7 +10,8 @@ import type { KeyRing } from "@anhourmail/server/keyring";
  * Sessions expire after `idleTtlSec` without use and `maxAgeMs` after sign-in, whichever comes first.
  */
 
-export type WebmailSession = {
+/** One signed-in mailbox: its address, JMAP account and Stalwart tokens. */
+export type MailboxTokens = {
   /** The mailbox address (JMAP `username`). */
   username: string;
   /** The JMAP mail account id. */
@@ -19,18 +20,37 @@ export type WebmailSession = {
   refreshToken: string | null;
   /** Access token expiry, epoch ms. */
   expiresAt: number;
+};
+
+/**
+ * A webmail session: the active mailbox at the top level (what every request uses) plus any other mailboxes
+ * signed in to the same session ("Add another mailbox"), each with its own tokens, all sealed together.
+ */
+export type WebmailSession = MailboxTokens & {
   /** Sign-in time, epoch ms. */
   createdAt: number;
+  /** Other signed-in mailboxes (not active). At most `MAX_MAILBOXES - 1`. */
+  others?: MailboxTokens[];
+  /**
+   * Write version (compare-and-set): a write succeeds only if the stored version is still the one this copy was
+   * read at, so a refresh finishing late can't undo a mailbox switch made meanwhile. Set by the store.
+   */
+  version?: number | undefined;
 };
+
+/** Mailboxes one webmail session may hold. */
+export const MAX_MAILBOXES = 5;
 
 /** Minimal key-value port (Redis in the app, a Map in tests). */
 export type SessionKv = {
   get(key: string): Promise<string | null>;
-  /**
-   * Stores `value`. `"update"` writes only if the key still exists (Redis `SET … XX`) and reports whether it did, so
-   * a refresh that finishes after sign-out can't bring the session back.
-   */
+  /** Stores a new value (a new session). */
   set(key: string, value: string, ttlSec: number, mode: "create" | "update"): Promise<boolean>;
+  /**
+   * Compare-and-set: writes `value` only if the key exists and its stored version (the digits before the first
+   * ".") is `expected` — atomically (a Lua script in Redis). A signed-out session or a concurrent write → false.
+   */
+  cas(key: string, expected: string, value: string, ttlSec: number): Promise<boolean>;
   del(key: string): Promise<void>;
 };
 
@@ -65,35 +85,48 @@ export class WebmailSessionStore {
 
   async create(data: WebmailSession): Promise<string> {
     const sessionId = randomBytes(32).toString("base64url");
-    await this.#put(sessionId, data, "create");
+    const key = this.#key(sessionId);
+    const ttl = this.#ttl(data);
+    if (ttl > 0) await this.#kv.set(key, this.#seal(key, { ...data, version: 1 }), ttl, "create");
     return sessionId;
   }
 
-  /** Updates an existing session; false (and nothing written) when it was signed out or expired meanwhile. */
+  /**
+   * Updates a session read earlier: only if nobody wrote it since (`data.version`), and only while it exists — a
+   * refresh finishing after sign-out or after a mailbox switch writes nothing and gets false.
+   */
   async write(sessionId: string, data: WebmailSession): Promise<boolean> {
-    return this.#put(sessionId, data, "update");
-  }
-
-  async #put(sessionId: string, data: WebmailSession, mode: "create" | "update"): Promise<boolean> {
     const key = this.#key(sessionId);
-    const remainingSec = Math.floor((data.createdAt + this.#maxAgeMs - this.#now()) / 1000);
-    const ttl = Math.min(this.#idleTtlSec, remainingSec);
+    const ttl = this.#ttl(data);
     if (ttl <= 0) {
       await this.#kv.del(key);
       return false;
     }
-    return this.#kv.set(key, this.#ring.encrypt(PURPOSE, JSON.stringify(data), key), ttl, mode);
+    const current = data.version ?? 0;
+    return this.#kv.cas(key, String(current), this.#seal(key, { ...data, version: current + 1 }), ttl);
+  }
+
+  #ttl(data: WebmailSession): number {
+    const remainingSec = Math.floor((data.createdAt + this.#maxAgeMs - this.#now()) / 1000);
+    return Math.min(this.#idleTtlSec, remainingSec);
+  }
+
+  /** `<version>.<sealed JSON>`: the version is readable for compare-and-set; everything else is sealed. */
+  #seal(key: string, data: WebmailSession): string {
+    return `${String(data.version ?? 0)}.${this.#ring.encrypt(PURPOSE, JSON.stringify(data), key)}`;
   }
 
   /** The session, or null when unknown, expired, tampered with or sealed under a retired key. */
   async read(sessionId: string): Promise<WebmailSession | null> {
     if (!isSessionId(sessionId)) return null;
     const key = this.#key(sessionId);
-    const sealed = await this.#kv.get(key);
-    if (sealed === null) return null;
+    const stored = await this.#kv.get(key);
+    if (stored === null) return null;
+    const m = /^(\d{1,15})\.(.*)$/s.exec(stored);
     let data: WebmailSession;
     try {
-      data = JSON.parse(this.#ring.decrypt(PURPOSE, sealed, key)) as WebmailSession;
+      data = JSON.parse(this.#ring.decrypt(PURPOSE, m?.[2] ?? stored, key)) as WebmailSession;
+      data.version = m ? Number(m[1]) : 0;
     } catch {
       await this.#kv.del(key);
       return null;
@@ -126,6 +159,13 @@ export function memoryKv(now: () => number = Date.now): SessionKv & { size(): nu
     async set(k, v, ttl, mode) {
       const live = m.get(k);
       if (mode === "update" && (!live || live.exp <= now())) return false;
+      m.set(k, { v, exp: now() + ttl * 1000 });
+      return true;
+    },
+    async cas(k, expected, v, ttl) {
+      const live = m.get(k);
+      if (!live || live.exp <= now()) return false;
+      if ((/^(\d{1,15})\./.exec(live.v)?.[1] ?? "0") !== expected) return false;
       m.set(k, { v, exp: now() + ttl * 1000 });
       return true;
     },

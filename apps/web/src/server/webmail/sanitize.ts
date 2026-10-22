@@ -35,7 +35,19 @@ const ALLOWED_TAGS = [
   "u", "ul", "var", "wbr",
 ]; // prettier-ignore
 
-const COMMON_ATTRS = ["style", "class", "id", "dir", "lang", "title", "align", "valign", "width", "height"];
+const COMMON_ATTRS = [
+  "style",
+  "class",
+  "id",
+  "dir",
+  "lang",
+  "title",
+  "align",
+  "valign",
+  "width",
+  "height",
+  "data-am-sig",
+];
 
 const ALLOWED_ATTRS: Record<string, string[]> = {
   "*": COMMON_ATTRS,
@@ -57,7 +69,7 @@ const ALLOWED_ATTRS: Record<string, string[]> = {
   q: ["cite"],
   del: ["cite", "datetime"],
   ins: ["cite", "datetime"],
-  details: ["open"],
+  details: ["open", "data-am-quote"],
 };
 
 /** Inline image data we render: raster only (no SVG, which can carry script in other contexts). */
@@ -184,6 +196,30 @@ export function cleanCss(input: string, counter: { remote: number } = { remote: 
   return css.replace(new RegExp(`${MARK}(\\d+)${MARK}`, "g"), (_m, i: string) => `url("${kept[Number(i)] ?? ""}")`);
 }
 
+const QUOTE_CLASS = /(?:^|\s)(?:gmail_quote(?:_container)?|yahoo_quoted|moz-cite-prefix)(?:\s|$)/;
+const SIG_CLASS = /(?:^|\s)(?:gmail_signature|moz-signature)(?:\s|$)/;
+
+/**
+ * Quoted replies (`blockquote type=cite`, Gmail/Yahoo quote containers, Outlook's reply header block) become a
+ * `<details>` toggle, collapsed; signatures (Gmail, Thunderbird) are marked to be dimmed. Only our own marker
+ * attributes are added (the input's look-alikes were renamed before parsing).
+ */
+function quoteOrSig(
+  tagName: string,
+  attribs: Record<string, string>,
+): { tagName: string; attribs: Record<string, string> } {
+  const cls = attribs.class ?? "";
+  const quote =
+    (tagName === "blockquote" && (attribs.type ?? "").toLowerCase() === "cite") ||
+    QUOTE_CLASS.test(cls) ||
+    attribs.id === "divRplyFwdMsg";
+  if (quote) return { tagName: "details", attribs: { ...attribs, "data-am-quote": "1" } };
+  if (SIG_CLASS.test(cls) || attribs["data-smartmail"] === "gmail_signature") {
+    return { tagName, attribs: { ...attribs, "data-am-sig": "1" } };
+  }
+  return { tagName, attribs };
+}
+
 /**
  * Sanitises message HTML. `inlineImages` maps a Content-ID (without `<>`) to a `data:` URI the caller fetched for
  * that part; unresolved `cid:` references become placeholders like remote images.
@@ -211,7 +247,7 @@ export function sanitizeMessageHtml(
     return out;
   };
 
-  const html = sanitizeHtml(input, {
+  const html = sanitizeHtml(input.replace(/data-am-(?:quote|sig|blocked|drop)/gi, "data-x"), {
     allowedTags: ALLOWED_TAGS,
     allowedAttributes: ALLOWED_ATTRS,
     allowVulnerableTags: true, // <style> only: its contents are scrubbed below
@@ -251,6 +287,8 @@ export function sanitizeMessageHtml(
       },
       // <style> keeps no attributes, so the post-pass below always recognises it.
       style: (tagName) => ({ tagName, attribs: {} }),
+      blockquote: (tagName, attribs) => quoteOrSig(tagName, withCleanStyle(attribs)),
+      div: (tagName, attribs) => quoteOrSig(tagName, withCleanStyle(attribs)),
       "*": (tagName, attribs) => ({ tagName, attribs: withCleanStyle(attribs) }),
     },
     exclusiveFilter: (frame) => {
@@ -272,5 +310,33 @@ export function sanitizeMessageHtml(
     }
     return `<style>${cleanCss(body, css)}</style>`;
   });
-  return { html: cleaned, blockedImages: blockedImages + css.remote, blockedTrackers };
+  // Quoted replies become native toggles: the frame runs no script, and <details> needs none.
+  const toggled = cleaned.replace(
+    /<details\b([^>]*\sdata-am-quote="1"[^>]*)>/g,
+    '<details$1><summary title="Show quoted text" aria-label="Show quoted text">&#8226;&#8226;&#8226;</summary>',
+  );
+  return { html: toggled, blockedImages: blockedImages + css.remote, blockedTrackers };
+}
+
+/**
+ * Message HTML as plain text, for quoting in replies and forwards: tags dropped (block ends become line breaks),
+ * entities decoded once, runs of blank lines collapsed. Linear; the input is already capped by the caller.
+ */
+export function htmlToText(input: string): string {
+  const withBreaks = input.replace(/<\/(?:p|div|li|tr|h[1-6]|blockquote|table)>|<br\s*\/?>/gi, "$&\n");
+  const text = sanitizeHtml(withBreaks, {
+    allowedTags: [],
+    allowedAttributes: {},
+    nonTextTags: ["script", "style", "title", "head", "textarea", "noscript", "template"],
+  });
+  return text
+    .replace(/&nbsp;/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }

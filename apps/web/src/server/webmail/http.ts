@@ -7,6 +7,8 @@ import { webmailCookie } from "./instance";
 import {
   WebmailBlockedError,
   WebmailBusyError,
+  WebmailQuotaError,
+  WebmailRefusedError,
   WebmailSignedOutError,
   WebmailSignInError,
   WebmailUnavailableError,
@@ -31,7 +33,11 @@ export function webmailErrorResponse(err: unknown): Response | null {
     res.headers.append("Set-Cookie", `${NOTICE_COOKIE}=unavailable; Path=/; HttpOnly; SameSite=Lax; Max-Age=60`);
     return res;
   }
-  if (err instanceof WebmailSignInError) return body("unauthorized", "Mailbox address or password is wrong.", 401);
+  if (err instanceof WebmailRefusedError) return body("refused", err.message, 400);
+  if (err instanceof WebmailQuotaError) return body("rate_limited", err.message, 429);
+  if (err instanceof WebmailSignInError) {
+    return body("invalid_credentials", "Mailbox address or password is wrong.", 401);
+  }
   if (err instanceof WebmailBusyError) return body("rate_limited", "Too many requests. Wait a moment.", 429);
   if (err instanceof WebmailUnavailableError) {
     return body("unavailable", "The mail server isn't answering. Try again in a moment.", 503);
@@ -56,9 +62,14 @@ export class BodyTooLargeError extends Error {
 
 /** Reads a request body as text, refusing more than `max` bytes without buffering the excess. */
 export async function readCappedText(req: Request, max: number): Promise<string> {
+  return Buffer.from(await readCappedBytes(req, max)).toString("utf8");
+}
+
+/** Reads a request body as bytes, refusing more than `max` bytes without buffering the excess. */
+export async function readCappedBytes(req: Request, max: number): Promise<Uint8Array<ArrayBuffer>> {
   const declared = Number(req.headers.get("content-length") ?? "0");
   if (declared > max) throw new BodyTooLargeError("body too large");
-  if (!req.body) return "";
+  if (!req.body) return new Uint8Array(0);
   const reader = req.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -72,7 +83,13 @@ export async function readCappedText(req: Request, max: number): Promise<string>
     }
     chunks.push(value);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const c of chunks) {
+    out.set(c, at);
+    at += c.byteLength;
+  }
+  return out;
 }
 
 export const unauthorized = () =>
@@ -83,3 +100,26 @@ export const badRequest = (message: string) =>
 
 export const notFound = () =>
   NextResponse.json({ error: { code: "not_found", message: "Not found." } }, { status: 404 });
+
+/**
+ * Uploads in flight in this process. Each holds up to 20 MB in memory (read, capped, then sent to the mail server
+ * once — the body can't be streamed because the request may be retried), so at most `MAX_UPLOADS` run at once and
+ * the rest are told to retry.
+ */
+export const MAX_UPLOADS = 4;
+let uploads = 0;
+
+export async function withUploadSlot(fn: () => Promise<Response>): Promise<Response> {
+  if (uploads >= MAX_UPLOADS) {
+    return NextResponse.json(
+      { error: { code: "rate_limited", message: "Several files are uploading already. Try again in a moment." } },
+      { status: 429, headers: { "Retry-After": "2" } },
+    );
+  }
+  uploads += 1;
+  try {
+    return await fn();
+  } finally {
+    uploads -= 1;
+  }
+}

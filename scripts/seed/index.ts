@@ -336,8 +336,8 @@ if (demo) {
     })
     .onConflictDoNothing();
 
-  // Invited, not yet accepted (the accept flow lands in phase 3)
-  const inviteToken = randomBytes(24).toString("base64url");
+  // Invited, not yet accepted: opening the link creates the login and joins (32 bytes, like core `newToken`).
+  const inviteToken = randomBytes(32).toString("base64url");
   await db
     .delete(schema.invite)
     .where(and(eq(schema.invite.email, INVITED.email), eq(schema.invite.status, "pending")));
@@ -506,7 +506,7 @@ if (demo) {
     { label: "Supporter", detail: `\`supporter@${FREE_DOMAIN}\` (see the Customer: Supporter table)` },
     {
       label: "Invited, not accepted",
-      detail: `\`${INVITED.email}\` invited to Demo Family as member — link (accept flow lands in phase 3): ${APP_URL}/invite/${inviteToken}`,
+      detail: `\`${INVITED.email}\` invited to Demo Family as member — open the link signed out to create the login and join: ${APP_URL}/invite/${inviteToken}`,
     },
     { label: "Suspended", detail: `\`suspended@${ACCOUNTS.group.domain}\` (see the Demo Group table)` },
     {

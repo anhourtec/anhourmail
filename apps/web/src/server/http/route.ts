@@ -150,6 +150,10 @@ export function route(handler: Handler, opts: RouteOptions = {}) {
         }
       }
       res.headers.set("X-Request-Id", requestId);
+      // API responses are data, never pages: a strict CSP unless the route set its own (e.g. a sandboxed print view).
+      if (!res.headers.has("Content-Security-Policy")) {
+        res.headers.set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+      }
       res.headers.set("Cache-Control", "no-store");
       const status = res.status;
       log.at(status >= 500 ? "error" : status >= 400 && status !== 401 && status !== 404 ? "warn" : "info", "request", {

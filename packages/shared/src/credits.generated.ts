@@ -1662,6 +1662,13 @@ export const CREDITS: readonly Credit[] = [
     url: "wooorm/markdown-table",
   },
   {
+    name: "marked",
+    version: "18.1.1",
+    license: "MIT",
+    url: "https://marked.js.org",
+    repository: "https://github.com/markedjs/marked",
+  },
+  {
     name: "mdast-util-find-and-replace",
     version: "3.0.3",
     license: "MIT",

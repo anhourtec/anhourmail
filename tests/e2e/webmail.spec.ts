@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * Webmail (Phase 4, slice 1): sign in with a mailbox address and password on the webmail origin, read the seeded
- * demo mail (`npm run db:seed -- --demo`), check that remote images stay blocked inside the sandboxed frame, and
- * sign out. The demo password is read from the local credentials.md and never printed.
+ * Webmail (Phase 4): sign in with a mailbox address and password on the webmail origin, read the seeded demo mail
+ * (`npm run db:seed -- --demo`) with remote images blocked inside the sandboxed frame, write and send mail between
+ * two demo mailboxes (local delivery only; rule 19), reply, search, pin, archive with undo, delete, and add and
+ * switch mailboxes. Demo passwords are read from the local credentials.md and never printed.
  */
 import { demoPassword } from "../support/demo-credentials";
 import type { Page } from "@playwright/test";
@@ -10,6 +11,7 @@ import type { Page } from "@playwright/test";
 import { expect, test, urls } from "./fixtures";
 
 const OWNER = "owner@demo-family.test";
+const MEMBER = "member@demo-family.test";
 
 // Playwright's trace recorder snapshots every frame by injecting script; the message frame's sandbox blocks that and
 // Chrome logs "Blocked script execution in 'about:srcdoc'", which would fail the console-error check. That message
@@ -18,14 +20,43 @@ test.use({ trace: "off" });
 
 /** On phones the reader replaces the list: go back to it. On wide screens the list is always there. */
 async function showList(page: Page) {
-  const back = page.getByRole("button", { name: "Back to list" });
-  if (await back.isVisible()) await back.click();
+  const list = page.getByRole("listbox").first();
+  if (!(await list.isVisible())) await page.getByRole("button", { name: "Close message" }).click();
 }
 
-/** The folder sidebar is a drawer on small screens. */
+/** The folder sidebar is a drawer below 1024px. */
 async function showFolders(page: Page) {
-  const open = page.getByRole("button", { name: "Open folders" });
-  if (await open.isVisible()) await open.click();
+  const nav = page.getByRole("navigation", { name: "Folders" });
+  if (!(await nav.isVisible())) await page.getByRole("button", { name: "Toggle folders" }).click();
+}
+
+/** The Next.js dev indicator (dev builds only) sits over the phone action bar's corner: hide it in tests. */
+async function hideDevOverlay(page: Page) {
+  await page.addStyleTag({ content: "nextjs-portal { display: none !important; }" });
+}
+
+async function signInWebmail(page: Page, address: string) {
+  await page.goto(`${urls.webmail}/sign-in`);
+  await page.getByLabel("Mailbox address").fill(address);
+  await page.getByLabel("Password", { exact: true }).fill(demoPassword(address));
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible();
+  await hideDevOverlay(page);
+}
+
+/** Searches (from the search box) until a conversation with `text` shows up; mail takes a few seconds to arrive. */
+async function findBySearch(page: Page, query: string, text: string) {
+  const box = page.getByRole("searchbox", { name: "Search mail" });
+  await expect(async () => {
+    await box.fill(query);
+    await box.press("Enter");
+    await expect(
+      page
+        .getByRole("listbox", { name: "Search results messages" })
+        .getByRole("option", { name: new RegExp(text) })
+        .first(),
+    ).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 40_000 });
 }
 
 test("a wrong mailbox password gets the generic error", async ({ page }) => {
@@ -120,4 +151,223 @@ test("keyboard: j and k move through the list, u goes back @desktop-only", async
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByRole("heading", { name: "Sign in to your mailbox" })).toBeVisible();
   expect(consoleErrors).toEqual([]);
+});
+
+test("write, send, receive in a second mailbox, reply, search and switch back @desktop-only", async ({
+  page,
+  consoleErrors,
+}) => {
+  test.setTimeout(120_000);
+  const tag = `e2e-${Date.now().toString(36)}`;
+  await signInWebmail(page, OWNER);
+
+  // Compose to another demo mailbox (local delivery only).
+  await page.getByRole("button", { name: "New email" }).click();
+  const composer = page.getByRole("dialog", { name: "New message" });
+  await composer.getByLabel("To", { exact: true }).fill(MEMBER);
+  await composer.getByLabel("To", { exact: true }).press("Enter");
+  await expect(composer.getByRole("button", { name: `Remove ${MEMBER}` })).toBeVisible();
+  await composer.getByLabel("Subject").fill(`Plans ${tag}`);
+  await composer.getByLabel("Message").fill("Are we still on for Saturday?");
+  await composer.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Message sent." })).toBeVisible();
+  await expect(composer).toBeHidden();
+
+  // Add the second mailbox to the same session and read it there.
+  await page.getByRole("button", { name: "Mailboxes and account" }).click();
+  await page.getByRole("menuitem", { name: "Add another mailbox" }).click();
+  const add = page.getByRole("dialog", { name: "Add another mailbox" });
+  await add.getByLabel("Mailbox address").fill(MEMBER);
+  await add.getByLabel("Password", { exact: true }).fill(demoPassword(MEMBER));
+  await add.getByRole("button", { name: "Add mailbox" }).click();
+  await expect(page.getByRole("radio", { name: MEMBER })).toHaveAttribute("aria-checked", "true");
+  await findBySearch(page, `subject:${tag}`, `Plans ${tag}`);
+  await page
+    .getByRole("listbox", { name: "Search results messages" })
+    .getByRole("option", { name: new RegExp(`Plans ${tag}`) })
+    .click();
+  const reader = page.getByRole("region", { name: "Message" });
+  await expect(reader.getByRole("heading", { name: `Plans ${tag}` })).toBeVisible();
+
+  // Reply from the inline box.
+  await reader.getByRole("button", { name: /Reply to/ }).click();
+  const reply = page.getByRole("dialog", { name: "Reply" });
+  await expect(reply.getByRole("button", { name: `Remove ${OWNER}` })).toBeVisible();
+  await expect(reply.getByLabel("Subject")).toHaveValue(`Re: Plans ${tag}`);
+  await reply.getByLabel("Message").press("Home");
+  await reply.getByLabel("Message").pressSequentially("Yes, see you at 10.");
+  await reply.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Message sent." })).toBeVisible();
+
+  // Back to the first mailbox: the reply arrives in the same conversation.
+  await page.getByRole("radio", { name: OWNER }).click();
+  await expect(page.getByRole("radio", { name: OWNER })).toHaveAttribute("aria-checked", "true");
+  await findBySearch(page, `subject:${tag}`, `Re: Plans ${tag}`);
+  await page
+    .getByRole("listbox", { name: "Search results messages" })
+    .getByRole("option", { name: new RegExp(`Re: Plans ${tag}`) })
+    .click();
+  await expect(reader.getByRole("list", { name: "Conversation" }).getByRole("listitem")).toHaveCount(2);
+
+  // Pin it, see it in Inbox's Pinned section, archive with undo, then delete it for good from Trash.
+  await page.keyboard.press("p");
+  await expect(reader.getByRole("button", { name: "Unpin" })).toBeVisible();
+  await page.getByRole("searchbox", { name: "Search mail" }).fill("");
+  await page.getByRole("searchbox", { name: "Search mail" }).press("Escape");
+  const inbox = page.getByRole("listbox", { name: "Inbox messages" });
+  await expect(inbox.getByText(/^Pinned \(\d+\)$/)).toBeVisible();
+  const row = inbox.getByRole("option", { name: new RegExp(`Pinned\\..*Re: Plans ${tag}`) });
+  await row.click();
+  await reader.getByRole("button", { name: "Unpin" }).click();
+  await reader.getByRole("button", { name: "Archive" }).click();
+  await expect(inbox.getByRole("option", { name: new RegExp(`Re: Plans ${tag}`) })).toHaveCount(0);
+  await page.getByRole("status").filter({ hasText: "Archived." }).getByRole("button", { name: "Undo" }).click();
+  await expect(inbox.getByRole("option", { name: new RegExp(`Re: Plans ${tag}`) })).toBeVisible({ timeout: 15_000 });
+  await inbox.getByRole("option", { name: new RegExp(`Re: Plans ${tag}`) }).click();
+  await reader.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Moved to Trash." })).toBeVisible();
+
+  await page
+    .getByRole("navigation", { name: "Folders" })
+    .getByRole("button", { name: /^Trash/ })
+    .click();
+  const trash = page.getByRole("listbox", { name: "Trash messages" });
+  await trash
+    .getByRole("option", { name: new RegExp(`Plans ${tag}`) })
+    .first()
+    .click();
+  await reader.getByRole("button", { name: "Delete forever" }).click();
+  const confirm = page.getByRole("dialog", { name: /Delete this conversation forever/ });
+  await confirm.getByRole("button", { name: "Delete forever" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Deleted forever." })).toBeVisible();
+
+  // The new shortcuts are listed in the help dialog.
+  await page.keyboard.press("?");
+  const help = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+  await expect(help.getByText("Reply / reply all / forward")).toBeVisible();
+  await page.keyboard.press("Escape");
+  expect(consoleErrors).toEqual([]);
+});
+
+/** On a phone the composer covers the screen; on a computer it is a panel beside the mail. */
+async function expectComposerLayout(page: Page, composer: ReturnType<Page["getByRole"]>) {
+  const box = await composer.boundingBox();
+  const viewport = page.viewportSize();
+  if (viewport && viewport.width < 768) expect(box?.width).toBe(viewport.width);
+  else expect(box?.width).toBeLessThan(viewport?.width ?? 0);
+}
+
+test("the composer fits the screen (full screen on phones) and sends", async ({ page, consoleErrors }) => {
+  const tag = `m-${Date.now().toString(36)}`;
+  await signInWebmail(page, OWNER);
+  await showFolders(page);
+  await page.getByRole("button", { name: "New email" }).click();
+  const composer = page.getByRole("dialog", { name: "New message" });
+  await expectComposerLayout(page, composer);
+  await composer.getByLabel("To", { exact: true }).fill(`${MEMBER},`);
+  await composer.getByLabel("Subject").fill(`Phone ${tag}`);
+  await composer.getByLabel("Message").fill("Sent from the composer test.");
+  await composer.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Message sent." })).toBeVisible();
+  expect(consoleErrors).toEqual([]);
+});
+
+/** Opens a message found by search (search results are always in view, unlike rows of a long list). */
+async function openBySearch(page: Page, query: string, subject: RegExp) {
+  await findBySearch(page, query, subject.source);
+  await page
+    .getByRole("listbox", { name: "Search results messages" })
+    .getByRole("option", { name: subject })
+    .first()
+    .click();
+  return page.getByRole("region", { name: "Message" });
+}
+
+test("every common body type reads natively in the reader's flow", async ({ page, consoleErrors }) => {
+  test.setTimeout(90_000);
+  await signInWebmail(page, OWNER);
+
+  // Plain text (format=flowed): joined lines, live links, a collapsed quote, a dimmed signature.
+  let reader = await openBySearch(page, 'subject:"Potluck after the run"', /Potluck after the run/);
+  await expect(reader.getByText(/I'll bring the folding chairs and a big salad, and I can pick up ice/)).toBeVisible();
+  const link = reader.getByRole("link", { name: "https://coastal-trail.example/routes/bluffs" });
+  await expect(link).toHaveAttribute("target", "_blank");
+  await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  await expect(reader.getByText("Who's bringing chairs?")).toBeHidden();
+  await reader.getByRole("button", { name: "Show quoted text" }).click();
+  await expect(reader.getByText(/Who's bringing chairs\?/)).toBeVisible();
+  await expect(reader.getByText("Coastal Trail Runners · Sundays at 8")).toBeVisible();
+
+  // Markdown: structure, and HTML in it shown as text, never run.
+  await showList(page);
+  reader = await openBySearch(page, 'subject:"Cabin weekend checklist"', /Cabin weekend checklist/);
+  await expect(reader.getByRole("heading", { name: "Gear" })).toBeVisible();
+  await expect(reader.getByRole("listitem").filter({ hasText: "Camp stove and fuel" })).toBeVisible();
+  await expect(reader.getByText("<script>alert('markdown can carry HTML; it must never run')</script>")).toBeVisible();
+
+  // A calendar invitation as an event card.
+  await showList(page);
+  reader = await openBySearch(page, 'subject:"Elm Street block party"', /Invitation: Elm Street block party/);
+  const event = reader.getByRole("region", { name: "Event: Elm Street block party" });
+  await expect(event.getByText("Community hall, 12 Elm Street")).toBeVisible();
+
+  // A forwarded message opens as a nested, sanitised message.
+  await showList(page);
+  reader = await openBySearch(
+    page,
+    'subject:"Members evening moved to Friday"',
+    /Fwd: Members' evening moved to Friday/,
+  );
+  await reader.getByRole("button", { name: "Open Members evening moved to Friday.eml" }).click();
+  const nested = page.getByRole("dialog", { name: "Members evening moved to Friday.eml" });
+  await expect(nested.getByText("Members' evening moved to Friday")).toBeVisible();
+  await expect(nested.getByRole("status").filter({ hasText: "1 remote image blocked" })).toBeVisible();
+  await expect(nested.locator("iframe")).toHaveAttribute("sandbox", "allow-popups allow-popups-to-escape-sandbox");
+  await nested.getByRole("button", { name: "Close" }).last().click();
+
+  // An image attachment previews inline; a non-UTF-8 message decodes.
+  await showList(page);
+  reader = await openBySearch(page, 'subject:"Sunset from the dock"', /Sunset from the dock/);
+  await reader.getByRole("button", { name: "Preview dock-sunset.png" }).click();
+  const viewer = page.getByRole("dialog", { name: "dock-sunset.png" });
+  await expect(viewer.getByRole("img", { name: "dock-sunset.png" })).toBeVisible();
+  await viewer.getByRole("button", { name: "Close" }).last().click();
+  await showList(page);
+  reader = await openBySearch(page, "subject:samedi", /Le marché de samedi/);
+  await expect(reader.getByText(/Le café du marché ouvre à 7 h/)).toBeVisible();
+
+  // View original shows the source as text.
+  await reader.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "View original" }).click();
+  const original = page.getByRole("dialog", { name: "Original message" });
+  await expect(original.getByText(/Message-ID: <sample-latin1@demo-family\.test>/)).toBeVisible();
+  await expect(original.getByRole("link", { name: "Download .eml" })).toBeVisible();
+  expect(consoleErrors).toEqual([]);
+});
+
+test("ticking a row selects it with a visible checkbox; the print view is sandboxed", async ({ page }) => {
+  await signInWebmail(page, OWNER);
+  const row = page.getByRole("listbox", { name: "Inbox messages" }).getByRole("option").first();
+  await row.hover();
+  const box = row.getByRole("checkbox");
+  await box.click();
+  await expect(box).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("toolbar", { name: "Selected conversations" }).getByText("1 selected")).toBeVisible();
+  // Like Gmail: the avatar square shows a real checkbox (ticked) while the row is selected, not a blank tile.
+  await expect(box.locator("svg")).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // Print opens a printable page served with a sandboxing CSP (an opaque origin, no scripts).
+  const reader = await openBySearch(page, "subject:samedi", /Le marché de samedi/);
+  await reader.getByRole("button", { name: "More actions" }).click();
+  const [popup] = await Promise.all([
+    page.waitForEvent("popup"),
+    page.getByRole("menuitem", { name: "Print" }).click(),
+  ]);
+  await popup.waitForLoadState();
+  await expect(popup.getByRole("heading", { name: "Le marché de samedi" })).toBeVisible();
+  const res = await page.request.get(popup.url());
+  expect(res.headers()["content-security-policy"]).toContain("sandbox");
+  expect(res.headers()["content-security-policy"]).toContain("default-src 'none'");
+  await popup.close();
 });

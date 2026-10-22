@@ -4,7 +4,7 @@ import "server-only";
 import { db, pgMailboxStatusLookup } from "@anhourmail/adapters/postgres";
 import { MailboxAccessGate } from "@anhourmail/core/webmail";
 import { keyRingFromEnv } from "@anhourmail/server/keyring";
-import { type FailureStore, redisFailureStore } from "@anhourmail/server/rate-limit";
+import { type FailureStore, redisFailureStore, redisSlidingQuota } from "@anhourmail/server/rate-limit";
 import { redis } from "@anhourmail/server/redis";
 
 import { stalwartOAuthPort } from "../adapters/stalwart-oauth";
@@ -40,6 +40,16 @@ export function webmailSessionId(cookieHeader: string | null): string | null {
   return m?.[1] ?? null;
 }
 
+/** Compare-and-set for session records (see `SessionKv.cas`): atomic in Redis. */
+const CAS_SCRIPT = `
+local cur = redis.call('GET', KEYS[1])
+if not cur then return 0 end
+local v = string.match(cur, '^(%d+)%.') or '0'
+if v ~= ARGV[1] then return 0 end
+redis.call('SET', KEYS[1], ARGV[2], 'EX', tonumber(ARGV[3]))
+return 1
+`;
+
 const redisKv = (): SessionKv => ({
   get: (k) => redis().get(k),
   set: async (k, v, ttl, mode) => {
@@ -47,6 +57,7 @@ const redisKv = (): SessionKv => ({
     await redis().set(k, v, "EX", ttl);
     return true;
   },
+  cas: async (k, expected, v, ttl) => Number(await redis().eval(CAS_SCRIPT, 1, k, expected, v, ttl)) === 1,
   del: async (k) => {
     await redis().del(k);
   },
@@ -78,6 +89,7 @@ export function webmail(): WebmailService {
       oauth: stalwartOAuthPort({ stalwartUrl, webmailUrl: e.WEBMAIL_URL }),
       stalwartUrl,
       access: new MailboxAccessGate(pgMailboxStatusLookup(db())),
+      quota: redisSlidingQuota(redis()),
     });
   }
   return instance;

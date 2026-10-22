@@ -58,7 +58,16 @@ const nextConfig = {
   ],
   allowedDevOrigins: ["127.0.0.1", "localhost", "*.localhost", ...lanHosts()],
   compiler: { removeConsole: process.env.NODE_ENV === "production" ? { exclude: ["error", "warn"] } : false },
-  headers: async () => [{ source: "/:path*", headers: securityHeaders }],
+  // The webmail API sets its own Content-Security-Policy per response (a sandbox for print views, previews and raw
+  // sources); a config header of the same name would replace it, so that path gets every header but the CSP.
+  headers: async () => [
+    { source: "/:path((?!api/webmail/).*)", headers: securityHeaders },
+    {
+      // route() adds a strict CSP to any webmail API response that doesn't set its own.
+      source: "/api/webmail/:path*",
+      headers: securityHeaders.filter((h) => h.key !== "Content-Security-Policy"),
+    },
+  ],
 };
 
 export default nextConfig;

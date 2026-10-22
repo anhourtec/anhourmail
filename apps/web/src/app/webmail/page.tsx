@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { WebmailApp } from "@/components/webmail/webmail-app";
+import { SIDEBAR_COOKIE, WebmailApp } from "@/components/webmail/webmail-app";
 import { env } from "@/server/env";
 import { webmail, webmailCookieName } from "@/server/webmail/instance";
 import { webmailBasePath } from "@/server/webmail/paths";
@@ -21,7 +21,8 @@ export default async function WebmailPage() {
     env().NODE_ENV === "production",
     process.env.WEBMAIL_DEV_PORT,
   );
-  const id = (await cookies()).get(webmailCookieName())?.value;
+  const jar = await cookies();
+  const id = jar.get(webmailCookieName())?.value;
   let session = null;
   let blocked = false;
   try {
@@ -31,5 +32,12 @@ export default async function WebmailPage() {
     blocked = err instanceof WebmailBlockedError;
   }
   if (!session) redirect(`${base}/sign-in${blocked ? "?reason=unavailable" : ""}`);
-  return <WebmailApp username={session.username} signInHref={`${base}/sign-in`} />;
+  return (
+    <WebmailApp
+      username={session.username}
+      signInHref={`${base}/sign-in`}
+      helpHref={`${env().SITE_URL.replace(/\/$/, "")}/docs/webmail`}
+      initialCollapsed={jar.get(SIDEBAR_COOKIE)?.value === "collapsed"}
+    />
+  );
 }
