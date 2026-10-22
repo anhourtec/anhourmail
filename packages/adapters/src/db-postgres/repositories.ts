@@ -393,7 +393,9 @@ class PgMailDirectoryRepository implements MailDirectoryRepository {
 
   async getMailbox(id: string): Promise<MailboxState | null> {
     if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
-    const [m] = await this.x.select().from(mailbox).where(eq(mailbox.id, id));
+    // Locked for the rest of the unit of work: the worker reads the status and writes it back, so a plain read could
+    // see a lifecycle change that is still uncommitted as not there and then overwrite it (a resume undone).
+    const [m] = await this.x.select().from(mailbox).where(eq(mailbox.id, id)).for("update");
     if (!m) return null;
     const aliases = await this.x.select().from(mailAlias).where(eq(mailAlias.mailboxId, id)).orderBy(mailAlias.address);
     return {

@@ -16,6 +16,7 @@ export type ProvisioningRepository = {
 /** Desired mail configuration in the control plane (domains, mailboxes, aliases). */
 export type MailDirectoryRepository = {
   getDomain(id: string): Promise<DomainState | null>;
+  /** Locks the mailbox for the rest of the unit of work, so a status read here and written back can't undo a change. */
   getMailbox(id: string): Promise<MailboxState | null>;
   markDomain(id: string, update: { stalwartId?: string; lastError: string | null }): Promise<void>;
   /** Account holding a verified claim (active or removing) on this domain name, or null if none does. */
