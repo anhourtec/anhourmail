@@ -254,6 +254,15 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
     stop starting new work: finish or revert the current slice, checkpoint it, then stop the stack (rule 51).
     Pushing still needs the maintainer's go-ahead (rule 2).
 
+56. **Check GitHub security alerts every session** (start and end), so the repo stays current: Dependabot alerts,
+    code scanning and secret scanning for `anhourtec/anhourmail` (repo → Security, or
+    `gh api repos/anhourtec/anhourmail/dependabot/alerts`, `…/code-scanning/alerts`, `…/secret-scanning/alerts`),
+    plus `npm audit`. Fix every open alert in the session (bump or pin the patched version — `overrides` in the root
+    `package.json` for transitive dependencies — then re-run the full suite); if no patched version exists, record it
+    in `docs/internal/handoff.md` open items with the advisory id, the dependency path and why it is acceptable
+    (e.g. dev-only, input we control). Never dismiss an alert without that note. A leaked-secret alert is an incident:
+    rotate first, then record it.
+
 ## Project conventions
 
 - **Services hold the logic; route handlers only parse, call and map errors.** Services take the actor and check
@@ -276,4 +285,5 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 | 2026-10-21 | Nishchayjeet Singh (Nish) | Rule 54: /security-review + Cloudflare security-audit skill (quick, scoped) at the end of every session                            |
 | 2026-10-21 | Nishchayjeet Singh (Nish) | Rule 23: passwords stored only as salted argon2id hashes (console + mailbox)                                                       |
 | 2026-10-21 | Nishchayjeet Singh (Nish) | Rule 55: checkpoint after every slice (handoff + reviews + commit) so a usage-limit stop loses nothing                             |
+| 2026-10-22 | Nishchayjeet Singh (Nish) | Rule 56: check GitHub Dependabot, code scanning and secret scanning alerts every session; fix or record                            |
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Waitlist removed from the product (maintainer decision); sign-up is open (firewalled) or closed                                    |
