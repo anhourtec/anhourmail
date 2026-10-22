@@ -1,0 +1,37 @@
+---
+title: Catch-all
+description: Send mail for addresses that don't exist at your domain to one mailbox, and when not to.
+---
+
+Normally, mail sent to an address that doesn't exist at your domain is refused, and the sender is told. With a
+**catch-all**, it goes to one mailbox you choose instead: `anything@your-domain` reaches you even if you never created
+that address.
+
+Catch-all is part of the Plus and Supporter plans, on your own domains. It's off until you turn it on.
+
+<Callout title="Expect more spam">
+  Spammers send to made-up names to find domains that accept everything, so a catch-all mailbox gets far more spam. If
+  you give out different addresses to different sites, [aliases and masked aliases](/docs/aliases) are usually the
+  better choice: you can turn each one off on its own.
+</Callout>
+
+## Turn it on
+
+1. Open **Domains** and choose the domain. It must be verified (shown as **Active**).
+2. On the **Overview** tab, under **Catch-all**, pick the mailbox that should receive the mail.
+3. Choose **Turn on catch-all**. It takes effect within a minute.
+
+Owners and Domain Administrators can change it. The chosen mailbox must be active and in the same account.
+
+## Turn it off
+
+Under **Catch-all**, choose **Turn off**. Mail to addresses that don't exist is refused again.
+
+The catch-all also turns itself off when its mailbox is suspended or deleted, so mail isn't accepted for a mailbox that
+can't receive it. Resuming or restoring the mailbox doesn't turn it back on: choose it again if you still want it.
+
+## Good to know
+
+- Real addresses and aliases at the domain always win: the catch-all only gets mail for addresses that don't exist.
+- Replies from the catch-all mailbox are sent from its own address, not the made-up one the mail was sent to.
+- Every change is recorded in your account's [audit log](/docs/audit-log).

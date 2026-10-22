@@ -1,4 +1,4 @@
 {
   "title": "Mail apps",
-  "pages": ["imap-smtp-settings"]
+  "pages": ["app-passwords", "imap-smtp-settings"]
 }
