@@ -2,6 +2,7 @@
 import type { CSSProperties, ReactNode } from "react";
 
 import { DocsLayout } from "fumadocs-ui/layouts/docs";
+import { Code } from "lucide-react";
 import { RootProvider } from "fumadocs-ui/provider/next";
 
 import { SiteFooter } from "@/components/site-footer";
@@ -20,7 +21,15 @@ export default function Layout({ children }: { children: ReactNode }) {
           tree={source.getPageTree()}
           nav={{ title: <Logo suffix="Docs" />, url: "/docs" }}
           themeSwitch={{ enabled: false }}
-          githubUrl="https://github.com/anhourtec/anhourmail"
+          // A labelled link in the sidebar list: with the theme switch off, the bare icon sat alone in an empty bar.
+          links={[
+            {
+              text: "Source on GitHub",
+              url: "https://github.com/anhourtec/anhourmail",
+              external: true,
+              icon: <Code aria-hidden />,
+            },
+          ]}
         >
           {children}
         </DocsLayout>
