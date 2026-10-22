@@ -200,8 +200,8 @@ const QUOTE_CLASS = /(?:^|\s)(?:gmail_quote(?:_container)?|yahoo_quoted|moz-cite
 const SIG_CLASS = /(?:^|\s)(?:gmail_signature|moz-signature)(?:\s|$)/;
 
 /**
- * Quoted replies (`blockquote type=cite`, Gmail/Yahoo quote containers, Outlook's reply header block) become a
- * `<details>` toggle, collapsed; signatures (Gmail, Thunderbird) are marked to be dimmed. Only our own marker
+ * Quoted replies (`blockquote type=cite`, the quote containers and reply header blocks common mail apps add) become a
+ * `<details>` toggle, collapsed; signatures (by their common class names) are marked to be dimmed. Only our own marker
  * attributes are added (the input's look-alikes were renamed before parsing).
  */
 function quoteOrSig(

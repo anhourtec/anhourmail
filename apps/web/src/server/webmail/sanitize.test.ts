@@ -228,7 +228,7 @@ describe("quoted replies and signatures in HTML mail", () => {
     expect(out).not.toContain("<summary");
   });
 
-  it("recognises Outlook's reply header block", () => {
+  it("recognises a reply header block (border-top divider)", () => {
     expect(sanitizeMessageHtml('<div id="divRplyFwdMsg">From: x</div>').html).toContain('data-am-quote="1"');
   });
 });
