@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 
-import { hostKind, routeHost } from "./host-routing";
+import { hostKind, routeHost, WEBMAIL_COOKIE_NAMES, webmailSignedOutRedirect } from "./host-routing";
 
 describe("host routing", () => {
   it("classifies hosts, including the dev webmail port", () => {
@@ -20,7 +20,16 @@ describe("host routing", () => {
   });
 
   it("serves the brand files (icons, manifest, logos) on every host", () => {
-    for (const path of ["/site.webmanifest", "/favicon-96x96.png", "/apple-touch-icon.png", "/icon-512.png"]) {
+    for (const path of [
+      "/site.webmanifest",
+      "/favicon.svg",
+      "/favicon-32x32.png",
+      "/apple-touch-icon.png",
+      "/icon-512.png",
+      "/icon-maskable-512.png",
+      "/og-image.png",
+      "/anhourmail-logo-dark.svg",
+    ]) {
       expect(routeHost("mail.anhourmail.com", path, true)).toEqual({ action: "next" });
       expect(routeHost("localhost:43300", path, false, "43300")).toEqual({ action: "next" });
     }
@@ -55,6 +64,22 @@ describe("host routing", () => {
     expect(routeHost("localhost:43200", "/webmail", false, "43300")).toEqual({ action: "next" });
     expect(routeHost("localhost:43200", "/webmail", true)).toEqual({ action: "not_found" });
     expect(routeHost("localhost:43300", "/", true, "43300")).toEqual({ action: "next" });
+  });
+});
+
+describe("signed-out webmail visits", () => {
+  it("go to sign-in before the page renders, on the webmail origin and on dev bare hosts", () => {
+    expect(webmailSignedOutRedirect("/webmail", false, "")).toBe("/sign-in");
+    expect(webmailSignedOutRedirect("/webmail/", false, "")).toBe("/sign-in");
+    expect(webmailSignedOutRedirect("/webmail", false, "/webmail")).toBe("/webmail/sign-in");
+  });
+
+  it("leave everything else alone: a session cookie, the sign-in page itself, the API", () => {
+    expect(webmailSignedOutRedirect("/webmail", true, "")).toBeNull();
+    expect(webmailSignedOutRedirect("/webmail/sign-in", false, "")).toBeNull();
+    expect(webmailSignedOutRedirect("/api/webmail/session", false, "")).toBeNull();
+    expect(webmailSignedOutRedirect("/", false, "")).toBeNull();
+    expect(WEBMAIL_COOKIE_NAMES).toEqual(["__Host-am.webmail", "am.webmail"]);
   });
 });
 

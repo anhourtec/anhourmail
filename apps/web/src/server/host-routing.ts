@@ -17,8 +17,8 @@ export type HostDecision = { action: "next" } | { action: "rewrite"; path: strin
 const ANY_HOST = [
   /^\/api\/health(\/|$)/,
   /^\/_next\//,
-  /^\/(?:favicon\.ico|favicon-\d+x\d+\.png|apple-touch-icon\.png|icon-\d+\.png|site\.webmanifest)$/,
-  /^\/anhourtec-logo-[a-z-]+\.svg$/,
+  /^\/(?:favicon\.(?:ico|svg)|favicon-\d+x\d+\.png|apple-touch-icon\.png|icon-(?:maskable-)?\d+\.png|site\.webmanifest|og-image\.png)$/,
+  /^\/(?:anhourtec|anhourmail)-[a-z0-9-]+\.svg$/,
 ];
 
 export function hostKind(host: string, webmailDevPort?: string): "mail" | "app" | "bare" {
@@ -45,4 +45,17 @@ export function routeHost(host: string, pathname: string, production: boolean, w
     return production || kind === "app" ? { action: "not_found" } : { action: "next" };
   }
   return { action: "next" };
+}
+
+/** The webmail session cookie's names (https and dev); `server/webmail/instance.ts` sets one of them. */
+export const WEBMAIL_COOKIE_NAMES = ["__Host-am.webmail", "am.webmail"] as const;
+
+/**
+ * Signed-out visitors to the webmail app page go straight to sign-in, before any page rendering (a cheap cookie
+ * presence check; the real session check stays in the page and the BFF). `target` is the path after host
+ * rewriting; `base` is "" on the webmail origin and "/webmail" on dev bare hosts. Returns where to redirect, or null.
+ */
+export function webmailSignedOutRedirect(target: string, hasSessionCookie: boolean, base: string): string | null {
+  if (hasSessionCookie) return null;
+  return target === "/webmail" || target === "/webmail/" ? `${base}/sign-in` : null;
 }
