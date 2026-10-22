@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import { StalwartError, StalwartTransport } from "./client";
-import { StalwartManagement, SUSPENDED_PERMISSIONS } from "./management";
+import { CUSTOMER_PERMISSIONS, StalwartManagement, SUSPENDED_PERMISSIONS } from "./management";
 
 type Call = { url: string; body: unknown; auth: string | null };
 
@@ -133,14 +133,25 @@ describe("StalwartManagement", () => {
     await m.upsertUser({ ...base, suspended: true });
     await m.upsertUser({ ...base, suspended: false });
     await m.upsertUser(base);
-    expect(updates.map((u) => u.u1?.permissions)).toEqual([SUSPENDED_PERMISSIONS, { "@type": "Inherit" }, undefined]);
+    expect(updates.map((u) => u.u1?.permissions)).toEqual([SUSPENDED_PERMISSIONS, CUSTOMER_PERMISSIONS, undefined]);
     // Credentials are never touched by a suspension (app passwords and the password survive it).
     expect(updates.every((u) => u.u1?.credentials === undefined)).toBe(true);
     expect(SUSPENDED_PERMISSIONS.disabledPermissions).toMatchObject({ authenticate: true, emailReceive: true });
+    // A normal customer mailbox keeps sign-in and delivery, but can't write its own Sieve (closes the relay vector).
+    expect(CUSTOMER_PERMISSIONS.disabledPermissions).toMatchObject({
+      sieveAuthenticate: true,
+      jmapSieveScriptCreate: true,
+      jmapSieveScriptUpdate: true,
+    });
+    expect("authenticate" in CUSTOMER_PERMISSIONS.disabledPermissions).toBe(false);
+    // …nor VacationResponse (it would activate the server's own script and switch ours off).
+    expect(CUSTOMER_PERMISSIONS.disabledPermissions).toMatchObject({ jmapVacationResponseUpdate: true });
+    // Suspension is a superset: resuming never briefly unlocks Sieve.
+    expect(SUSPENDED_PERMISSIONS.disabledPermissions).toMatchObject(CUSTOMER_PERMISSIONS.disabledPermissions);
     expect(await m.getUser("u1")).toEqual({ id: "u1", address: "alice@a.test", suspended: true });
     expect(await m.getUser("gone")).toBeUndefined();
     expect(await m.listUsers()).toEqual([
-      { id: "u1", address: "alice@a.test", quotaBytes: null, aliases: [], suspended: false },
+      { id: "u1", address: "alice@a.test", quotaBytes: null, aliases: [], suspended: false, sieveLocked: false },
     ]);
   });
 
@@ -170,5 +181,117 @@ describe("StalwartManagement", () => {
     await m.reloadSettings();
     expect(await m.domainZoneFile("d1")).toBe("zone");
     expect(sets.map(([k]) => k)).toEqual(["route", "strategy", "listener", "pyzor", "app", "action"]);
+  });
+});
+
+describe("managed Sieve script (management credentials)", () => {
+  /** A mail server with Sieve scripts, blobs and accounts, enough for the managed-script calls. */
+  function sieveServer() {
+    const scripts: { id: string; name: string; blobId: string; isActive: boolean }[] = [];
+    const blobs = new Map<string, string>();
+    const usings: string[][] = [];
+    let seq = 0;
+    let created: Record<string, unknown> | null = null;
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("/jmap/upload/")) {
+        const blobId = `blob${String(++seq)}`;
+        blobs.set(blobId, typeof init?.body === "string" ? init.body : "");
+        return Response.json({ blobId });
+      }
+      if (url.includes("/jmap/download/")) {
+        const blobId = decodeURIComponent(url.split("/")[6] ?? "");
+        const text = blobs.get(blobId);
+        return text === undefined ? new Response(null, { status: 404 }) : new Response(text);
+      }
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+        using: string[];
+        methodCalls: [string, Record<string, unknown>, string][];
+      };
+      usings.push(body.using);
+      const methodResponses = body.methodCalls.map(([name, a, id]) => {
+        if (name === "SieveScript/get") return [name, { list: scripts.map((s) => ({ ...s })) }, id];
+        if (name === "x:Domain/get") return [name, { list: [{ id: "d1", name: "a.test" }] }, id];
+        if (name === "x:Account/get") return [name, { list: [] }, id];
+        if (name === "x:Account/set") {
+          created = (a.create as Record<string, Record<string, unknown>>).u ?? null;
+          return [name, { created: { u: { id: "u9" } } }, id];
+        }
+        // SieveScript/set
+        const c = (a.create ?? {}) as Record<string, { name: string; blobId: string }>;
+        const made: Record<string, { id: string }> = {};
+        for (const [k, v] of Object.entries(c)) {
+          const sid = `s${String(++seq)}`;
+          scripts.push({ id: sid, name: v.name, blobId: v.blobId, isActive: false });
+          made[k] = { id: sid };
+        }
+        for (const [sid, p] of Object.entries((a.update ?? {}) as Record<string, { blobId: string }>)) {
+          const s = scripts.find((x) => x.id === sid);
+          if (s) s.blobId = p.blobId;
+        }
+        const act = typeof a.onSuccessActivateScript === "string" ? a.onSuccessActivateScript : null;
+        if (act) {
+          const target = act.startsWith("#") ? made[act.slice(1)]?.id : act;
+          for (const s of scripts) s.isActive = s.id === target;
+        }
+        return [name, { created: made }, id];
+      });
+      return Response.json({ methodResponses });
+    }) as typeof fetch;
+    return { scripts, blobs, usings, fetchImpl, created: () => created };
+  }
+
+  it("writes, reads back with its active flag, and re-activates the script after a user switched it off", async () => {
+    const s = sieveServer();
+    const m = new StalwartManagement(transport(s.fetchImpl));
+    expect(await m.getSieveScript("acc1", "anhourmail")).toBeNull();
+    expect(await m.activateSieveScript("acc1", "anhourmail")).toBe(false);
+    await m.putSieveScript("acc1", "anhourmail", "keep;\n");
+    expect(await m.getSieveScript("acc1", "anhourmail")).toEqual({ content: "keep;\n", active: true });
+    await m.putSieveScript("acc1", "anhourmail", "discard;\n");
+    expect(s.scripts).toHaveLength(1);
+    expect(await m.getSieveScript("acc1", "anhourmail")).toEqual({ content: "discard;\n", active: true });
+    // A user's bare deactivate: reported, then turned back on (nothing else is deleted).
+    for (const x of s.scripts) x.isActive = false;
+    expect((await m.getSieveScript("acc1", "anhourmail"))?.active).toBe(false);
+    expect(await m.activateSieveScript("acc1", "anhourmail")).toBe(true);
+    expect(s.scripts[0]?.isActive).toBe(true);
+    // Standard JMAP Sieve calls, not only the management capability.
+    expect(s.usings.some((u) => u.includes("urn:ietf:params:jmap:sieve"))).toBe(true);
+  });
+
+  it("creates new accounts locked even when the caller doesn't say", async () => {
+    const s = sieveServer();
+    const m = new StalwartManagement(transport(s.fetchImpl));
+    await m.upsertUser({ name: "bob", domain: "a.test", password: "pw", quotaBytes: 1 });
+    expect(s.created()?.permissions).toEqual(CUSTOMER_PERMISSIONS);
+  });
+});
+
+describe("reporting the customer lock", () => {
+  it("is locked with the customer or suspended permissions, open otherwise", async () => {
+    const s = fakeServer({
+      "x:Domain/get": () => ({ list: [{ id: "d1", name: "a.test" }] }),
+      "x:Account/get": () => ({
+        list: [
+          { id: "1", name: "locked", domainId: "d1", permissions: CUSTOMER_PERMISSIONS },
+          { id: "2", name: "suspended", domainId: "d1", permissions: SUSPENDED_PERMISSIONS },
+          { id: "3", name: "open", domainId: "d1", permissions: { "@type": "Inherit" } },
+          {
+            id: "4",
+            name: "partial",
+            domainId: "d1",
+            permissions: { "@type": "Merge", disabledPermissions: { sieveAuthenticate: true } },
+          },
+        ],
+      }),
+    });
+    const users = await new StalwartManagement(transport(s.fetchImpl)).listUsers();
+    expect(users.map((u) => [u.address.split("@")[0], u.sieveLocked])).toEqual([
+      ["locked", true],
+      ["suspended", true],
+      ["open", false],
+      ["partial", false],
+    ]);
   });
 });

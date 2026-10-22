@@ -10,9 +10,21 @@ export {
   StalwartTransport,
 } from "./client";
 export {
+  appPasswordPermissions,
+  type AppPasswordScope,
+  isAppPasswordSecret,
+  KNOWN_PERMISSIONS,
+  PRINCIPAL_READ_PERMISSIONS,
+  SCOPE_ALLOW,
+  scopesOf,
+  SELF_SERVICE_PERMISSIONS,
+} from "./app-passwords";
+export {
+  type AppPasswordRecord,
   type DomainInput,
   type RelayRouteInput,
   StalwartManagement,
+  CUSTOMER_PERMISSIONS,
   SUSPENDED_PERMISSIONS,
   type UserInput,
 } from "./management";
@@ -59,24 +71,4 @@ export function stalwart(): StalwartManagement {
     globalForStalwart.amStalwart = new StalwartManagement(new StalwartTransport({ baseUrl, auth }));
   }
   return globalForStalwart.amStalwart;
-}
-
-/**
- * Creates an app password as the mailbox user (Stalwart doesn't let admins mint them). Returns the secret,
- * which Stalwart shows once — the caller hands it to the user and never stores it (CLAUDE.md rule 23).
- */
-export async function createAppPassword(input: {
-  baseUrl: string;
-  address: string;
-  password: string;
-  description: string;
-}): Promise<string> {
-  const t = new StalwartTransport({
-    baseUrl: input.baseUrl,
-    auth: { type: "basic", username: input.address, password: input.password },
-  });
-  const { created } = await t.set("x:AppPassword", { create: { a: { description: input.description } } });
-  const secret = created.a?.secret;
-  if (typeof secret !== "string") throw new Error("App password was not returned");
-  return secret;
 }

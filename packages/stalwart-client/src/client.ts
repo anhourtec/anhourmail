@@ -55,12 +55,20 @@ export class StalwartTransport {
 
   /** Runs method calls in one request and returns responses keyed by call id. Method-level errors throw. */
   async call(calls: MethodCall[]): Promise<Map<string, Record<string, unknown>>> {
+    return this.rawCall(USING, calls);
+  }
+
+  /**
+   * Like `call`, but with the capabilities the calls need (standard JMAP objects such as `SieveScript` and `Blob`
+   * aren't under `urn:stalwart:jmap`). Management credentials can act on another account by passing its id.
+   */
+  async rawCall(using: readonly string[], calls: MethodCall[]): Promise<Map<string, Record<string, unknown>>> {
     let res: Response;
     try {
       res = await this.#fetch(`${this.#baseUrl}/jmap`, {
         method: "POST",
         headers: { Authorization: this.#authHeader, "Content-Type": "application/json" },
-        body: JSON.stringify({ using: USING, methodCalls: calls }),
+        body: JSON.stringify({ using, methodCalls: calls }),
         signal: AbortSignal.timeout(this.#timeoutMs),
       });
     } catch (err) {
@@ -79,10 +87,14 @@ export class StalwartTransport {
     return out;
   }
 
-  /** One `x:<Object>/set` call; throws on notCreated / notUpdated / notDestroyed. */
+  /**
+   * One `x:<Object>/set` call; throws on notCreated / notUpdated / notDestroyed. `accountId` targets another
+   * account's objects (e.g. its app passwords); omitted, the server uses the caller's own.
+   */
   async set(
     object: string,
     args: {
+      accountId?: string;
       create?: Record<string, Record<string, unknown>>;
       update?: Record<string, Record<string, unknown>>;
       destroy?: string[];
@@ -98,13 +110,40 @@ export class StalwartTransport {
     return { created: (res.created ?? {}) as Record<string, { id: string } & Record<string, unknown>> };
   }
 
-  /** `x:<Object>/get` for all ids (or a list), selected properties only. */
+  /** Uploads a blob to `accountId` and returns its blob id (`POST /jmap/upload/<account>/`). */
+  async uploadBlob(accountId: string, contentType: string, body: Uint8Array<ArrayBuffer> | string): Promise<string> {
+    const res = await this.#fetch(`${this.#baseUrl}/jmap/upload/${encodeURIComponent(accountId)}/`, {
+      method: "POST",
+      headers: { Authorization: this.#authHeader, "Content-Type": contentType },
+      body,
+      signal: AbortSignal.timeout(this.#timeoutMs),
+    });
+    if (!res.ok) throw new StalwartError(`Stalwart upload HTTP ${res.status}`, "http", { status: res.status });
+    const json = (await res.json()) as { blobId?: unknown };
+    if (typeof json.blobId !== "string") throw new StalwartError("Stalwart upload returned no blob id", "http");
+    return json.blobId;
+  }
+
+  /** Downloads a blob of `accountId` as text (`GET /jmap/download/<account>/<blob>/`). */
+  async downloadBlob(accountId: string, blobId: string): Promise<string> {
+    const url = `${this.#baseUrl}/jmap/download/${encodeURIComponent(accountId)}/${encodeURIComponent(blobId)}/blob`;
+    const res = await this.#fetch(url, {
+      headers: { Authorization: this.#authHeader },
+      signal: AbortSignal.timeout(this.#timeoutMs),
+    });
+    if (!res.ok) throw new StalwartError(`Stalwart download HTTP ${res.status}`, "http", { status: res.status });
+    return res.text();
+  }
+
+  /** `x:<Object>/get` for all ids (or a list), selected properties only; `accountId` as for `set`. */
   async getAll<T extends { id: string }>(
     object: string,
     properties: string[],
     ids: string[] | null = null,
+    accountId?: string,
   ): Promise<T[]> {
-    const res = (await this.call([[`${object}/get`, { ids, properties }, "g"]])).get("g") ?? {};
+    const args = { ids, properties, ...(accountId === undefined ? {} : { accountId }) };
+    const res = (await this.call([[`${object}/get`, args, "g"]])).get("g") ?? {};
     return (res.list ?? []) as T[];
   }
 }

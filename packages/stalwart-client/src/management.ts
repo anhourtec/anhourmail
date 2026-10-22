@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: MIT
-import { type StalwartTransport } from "./client";
+import {
+  appPasswordPermissions,
+  type AppPasswordScope,
+  PRINCIPAL_READ_PERMISSIONS,
+  SELF_SERVICE_PERMISSIONS,
+} from "./app-passwords";
+import { StalwartError, type StalwartTransport } from "./client";
 
 /**
  * Typed management operations used by the control plane, worker and dev seeding. Every write is idempotent:
@@ -36,33 +42,93 @@ export type UserInput = {
 };
 
 /**
+ * What no customer mailbox may do on the mail server (verified on v0.16.27, 2026-10-22; security reviews run-20/21).
+ * We own the mailbox's one Sieve script (automatic replies, forwarding, junk rules; written with management
+ * credentials — 05-webmail.md "Settings"), so end users may not change mail flow themselves: a user Sieve `redirect`
+ * or `enotify` is an open relay from our IPs that skips forwarding confirmation, quotas and audit, and a user
+ * `VacationResponse/set` installs and activates Stalwart's own `vacation` script, switching ours off.
+ * `sieveAuthenticate` closes ManageSieve (port 4190); `jmapSieveScript{Create,Update,Destroy}` close `SieveScript/set`
+ * (with `Destroy` denied, a bare `SieveScript/set { onSuccessDeactivateScript }` is refused too — verified run-22; with
+ * only create/update denied a user could deactivate our script and then delete it); `jmapVacationResponse{Create,
+ * Update,Destroy}` close `VacationResponse/set`. (`jmapSieveScriptSet/Delete/Activate/Rename` and
+ * `jmapVacationResponseSet` don't exist on the pinned server.) Reading scripts, blob upload (attachments), sign-in,
+ * sending and delivery are untouched. The rest of the list (ADR-0020, run-21/22 reviews) is below.
+ */
+const CUSTOMER_DENIALS = {
+  sieveAuthenticate: true,
+  jmapSieveScriptCreate: true,
+  jmapSieveScriptUpdate: true,
+  jmapSieveScriptDestroy: true,
+  jmapVacationResponseCreate: true,
+  jmapVacationResponseUpdate: true,
+  jmapVacationResponseDestroy: true,
+  // No directory search over DAV: `principal-property-search` found accounts on every domain (verified). CardDAV and
+  // CalDAV discovery (well-known, current-user-principal, home sets, PROPFIND, PUT) still work without these.
+  davPrincipalSearch: true,
+  davPrincipalSearchPropSet: true,
+  davPrincipalList: true,
+  davPrincipalMatch: true,
+  // No sharing (not a product feature; delegation is a console action, rule 49). There is no share permission of its
+  // own: `shareWith` rides on `/set` create and update, so mailbox and calendar create/update are off (the webmail
+  // never sends them; IMAP CREATE/RENAME still work), and every ACL method is off. Address books stay writable: the
+  // webmail creates and updates them (contacts auto-save) — `AddressBook/set { shareWith }` is a known gap
+  // (research/stalwart.md "Sharing").
+  jmapMailboxCreate: true,
+  jmapMailboxUpdate: true,
+  jmapCalendarCreate: true,
+  jmapCalendarUpdate: true,
+  imapAclSet: true,
+  davCardAcl: true,
+  davCalAcl: true,
+  davFileAcl: true,
+  davPrincipalAcl: true,
+  // ADR-0020: no self-service credentials or password change (app passwords and API keys are made by the console with
+  // the management key, which these don't limit — verified), and no principal look-ups (`Principal/query` otherwise
+  // lists every account on the server). The webmail never needs them on a user's token.
+  ...Object.fromEntries([...SELF_SERVICE_PERMISSIONS, ...PRINCIPAL_READ_PERMISSIONS].map((p) => [p, true] as const)),
+} as const;
+
+/**
  * How a suspended account looks on Stalwart v0.16 (verified against the pinned server; research/stalwart.md
  * "Suspending an account"). `x:Account` has no enabled flag, so suspension disables permissions on top of the
  * account's role (`Merge` + `disabledPermissions`, which win over anything the role grants): no sign-in over any
  * protocol (`authenticate` covers JMAP, SMTP AUTH and app passwords; the protocol ones close IMAP, POP3 and
  * ManageSieve logins), no sending, and no delivery (`emailReceive`: mail to it or its aliases is bounced to the
- * sender). Credentials, app passwords and stored mail are untouched, so resuming (`Inherit`) restores everything.
+ * sender). Credentials, app passwords and stored mail are untouched. A superset of `CUSTOMER_PERMISSIONS`, so
+ * resuming (back to `CUSTOMER_PERMISSIONS`) never briefly unlocks Sieve.
  */
 export const SUSPENDED_PERMISSIONS = {
   "@type": "Merge",
   enabledPermissions: {},
   disabledPermissions: {
+    ...CUSTOMER_DENIALS,
     authenticate: true,
     imapAuthenticate: true,
     pop3Authenticate: true,
-    sieveAuthenticate: true,
     emailSend: true,
     emailReceive: true,
   },
 } as const;
 
-const ROLE_PERMISSIONS = { "@type": "Inherit" } as const;
+/** A normal (non-suspended) customer mailbox: the role's permissions minus `CUSTOMER_DENIALS`. */
+export const CUSTOMER_PERMISSIONS = {
+  "@type": "Merge",
+  enabledPermissions: {},
+  disabledPermissions: { ...CUSTOMER_DENIALS },
+} as const;
 
 /** Sign-in turned off by our suspension (what the reconciler compares). */
 const isSuspended = (p: { disabledPermissions?: Record<string, boolean> } | undefined): boolean =>
   p?.disabledPermissions?.authenticate === true;
 
+/** Every customer denial present (suspension includes them): the user can't change mail flow (reconciler check). */
+const isSieveLocked = (p: { disabledPermissions?: Record<string, boolean> } | undefined): boolean =>
+  Object.keys(CUSTOMER_DENIALS).every((k) => p?.disabledPermissions?.[k] === true);
+
 export type RelayRouteInput = { name: string; description: string; host: string; port: number };
+
+/** An app password as Stalwart lists it: never the secret (it answers `****`). */
+export type AppPasswordRecord = { id: string; description: string; createdAt: Date };
 
 type Named = { id: string; name: string };
 
@@ -134,9 +200,11 @@ export class StalwartManagement {
     };
     const fields = {
       quotas: { maxDiskQuota: input.quotaBytes },
+      // A customer mailbox never gets to write its own Sieve (CUSTOMER_PERMISSIONS); a suspended one is turned off
+      // entirely (SUSPENDED_PERMISSIONS). `undefined` leaves permissions as they are.
       ...(input.suspended === undefined
         ? {}
-        : { permissions: input.suspended ? SUSPENDED_PERMISSIONS : ROLE_PERMISSIONS }),
+        : { permissions: input.suspended ? SUSPENDED_PERMISSIONS : CUSTOMER_PERMISSIONS }),
       aliases: list(
         (input.aliases ?? []).map((a) => ({
           name: a.name,
@@ -163,7 +231,8 @@ export class StalwartManagement {
           domainId: domainId(input.domain),
           credentials: list([{ "@type": "Password", secret: input.password }]),
           roles: { "@type": "User" },
-          permissions: ROLE_PERMISSIONS,
+          // New accounts are always locked down, even when the caller didn't say (dev seed, e2e fixtures).
+          permissions: CUSTOMER_PERMISSIONS,
           ...fields,
         },
       },
@@ -249,7 +318,15 @@ export class StalwartManagement {
 
   /** Individual accounts as full addresses with their disk quota, aliases and whether they are suspended. */
   async listUsers(): Promise<
-    { id: string; address: string; quotaBytes: number | null; aliases: string[]; suspended: boolean }[]
+    {
+      id: string;
+      address: string;
+      quotaBytes: number | null;
+      aliases: string[];
+      suspended: boolean;
+      /** Every customer denial is in place (the user can't change mail flow). */
+      sieveLocked: boolean;
+    }[]
   > {
     const [domains, accounts] = await Promise.all([
       this.listDomains(),
@@ -272,6 +349,7 @@ export class StalwartManagement {
         quotaBytes: a.quotas?.maxDiskQuota ?? null,
         aliases: Object.values(a.aliases ?? {}).map((x) => `${x.name}@${domainName.get(x.domainId) ?? "?"}`),
         suspended: isSuspended(a.permissions),
+        sieveLocked: isSieveLocked(a.permissions),
       }));
   }
 
@@ -326,8 +404,137 @@ export class StalwartManagement {
     return true;
   }
 
+  /**
+   * Creates an app password on `accountId` (the account's Stalwart id) limited to `scopes`, with the self-service
+   * permissions always off (`appPasswordPermissions`). The management credential needs `sysAppPassword*` and
+   * `impersonate` (owner access to other accounts; no mail read without the `jmap*` permissions — verified). Returns
+   * the secret, which Stalwart shows only this once: the caller hands it to the person and never stores it.
+   */
+  async createAppPassword(
+    accountId: string,
+    input: { description: string; scopes: readonly AppPasswordScope[] },
+  ): Promise<AppPasswordRecord & { secret: string }> {
+    const { created } = await this.transport.set("x:AppPassword", {
+      accountId,
+      create: { a: { description: input.description, permissions: appPasswordPermissions(input.scopes) } },
+    });
+    const id = created.a?.id;
+    const secret = created.a?.secret;
+    if (typeof id !== "string" || typeof secret !== "string") {
+      throw new StalwartError("App password was not returned", "set");
+    }
+    const record = await this.appPassword(accountId, id);
+    if (!record) throw new StalwartError("App password vanished after creation", "set");
+    return { ...record, secret };
+  }
+
+  /** One app password of an account (no secret); undefined if there is none with that id. */
+  async appPassword(accountId: string, id: string): Promise<AppPasswordRecord | undefined> {
+    return (await this.listAppPasswords(accountId, [id]))[0];
+  }
+
+  /** The account's app passwords (no secrets), or only `ids`. */
+  async listAppPasswords(accountId: string, ids: string[] | null = null): Promise<AppPasswordRecord[]> {
+    const list = await this.transport.getAll<{ id: string; description?: string; createdAt?: string }>(
+      "x:AppPassword",
+      ["description", "createdAt"],
+      ids,
+      accountId,
+    );
+    return list.map((a) => ({ id: a.id, description: a.description ?? "", createdAt: new Date(a.createdAt ?? 0) }));
+  }
+
+  /** Revokes one app password. Ids are reused after a revocation, so callers match `createdAt` first. */
+  async destroyAppPassword(accountId: string, id: string): Promise<void> {
+    await this.transport.set("x:AppPassword", { accountId, destroy: [id] });
+  }
+
+  /**
+   * Every app password of an account with its `permissions` value, and how many API keys it has (for the
+   * reconciler; never secrets). Needs `sysAppPasswordGet` and `sysApiKeyGet` on the management key.
+   */
+  async credentialInventory(accountId: string): Promise<{
+    appPasswords: { id: string; createdAt: Date; permissions: unknown }[];
+    apiKeys: number;
+  }> {
+    const [apps, keys] = await Promise.all([
+      this.transport.getAll<{ id: string; createdAt?: string; permissions?: unknown }>(
+        "x:AppPassword",
+        ["createdAt", "permissions"],
+        null,
+        accountId,
+      ),
+      this.transport.getAll<{ id: string }>("x:ApiKey", ["description"], null, accountId),
+    ]);
+    return {
+      appPasswords: apps.map((a) => ({ id: a.id, createdAt: new Date(a.createdAt ?? 0), permissions: a.permissions })),
+      apiKeys: keys.length,
+    };
+  }
+
   /** Recompiles listeners, MTA routing and expressions. Directory changes apply without it. */
   async reloadSettings(): Promise<void> {
     await this.transport.set("x:Action", { create: { a: { "@type": "ReloadSettings" } } });
   }
+
+  // ---- managed Sieve script (the webmail's automatic replies, forwarding and junk rules) ---------------------
+  //
+  // Customer mailboxes can't write their own Sieve (CUSTOMER_PERMISSIONS), so the one script we own is written and
+  // read here with management credentials, standard JMAP (`urn:ietf:params:jmap:sieve`). `accountId` is the
+  // mailbox's JMAP account id (equal to its x:Account id, verified on v0.16.27).
+
+  /** The mailbox's managed script `name` (its text and whether it's the active one), or null when it has none. */
+  async getSieveScript(accountId: string, name: string): Promise<{ content: string; active: boolean } | null> {
+    const res = await this.transport.rawCall(SIEVE_USING, [
+      ["SieveScript/get", { accountId, properties: ["name", "blobId", "isActive"] }, "g"],
+    ]);
+    const list = (res.get("g")?.list ?? []) as { name: string; blobId: string; isActive?: boolean }[];
+    const script = list.find((s) => s.name === name);
+    if (!script) return null;
+    return { content: await this.transport.downloadBlob(accountId, script.blobId), active: script.isActive === true };
+  }
+
+  /**
+   * Makes the managed script `name` the active one again if something switched it off (a user can deactivate
+   * scripts; `mailbox.ensure` and the backfill call this). No-op when it doesn't exist or is already active; no
+   * other script is deleted.
+   */
+  async activateSieveScript(accountId: string, name: string): Promise<boolean> {
+    const res = await this.transport.rawCall(SIEVE_USING, [
+      ["SieveScript/get", { accountId, properties: ["name", "isActive"] }, "g"],
+    ]);
+    const ours = ((res.get("g")?.list ?? []) as { id: string; name: string; isActive?: boolean }[]).find(
+      (s) => s.name === name,
+    );
+    if (!ours || ours.isActive === true) return false;
+    await this.transport.rawCall(SIEVE_USING, [
+      ["SieveScript/set", { accountId, onSuccessActivateScript: ours.id }, "s"],
+    ]);
+    return true;
+  }
+
+  /**
+   * Writes the mailbox's managed script `name` with `content` and makes it the active one (creating or updating the
+   * one script with that name). Returns nothing; throws on refusal.
+   */
+  async putSieveScript(accountId: string, name: string, content: string): Promise<void> {
+    const blobId = await this.transport.uploadBlob(accountId, "application/sieve", content);
+    const got = await this.transport.rawCall(SIEVE_USING, [
+      ["SieveScript/get", { accountId, properties: ["name"] }, "g"],
+    ]);
+    const existing = (got.get("g")?.list ?? []) as { id: string; name: string }[];
+    const ours = existing.find((s) => s.name === name);
+    const call = ours
+      ? { accountId, update: { [ours.id]: { blobId } }, onSuccessActivateScript: ours.id }
+      : { accountId, create: { s: { name, blobId } }, onSuccessActivateScript: "#s" };
+    const res = (await this.transport.rawCall(SIEVE_USING, [["SieveScript/set", call, "s"]])).get("s") ?? {};
+    const failed = (
+      ours
+        ? (res.notUpdated as Record<string, { type?: string }> | undefined)?.[ours.id]
+        : (res.notCreated as Record<string, { type?: string }> | undefined)?.s
+    ) as { type?: string } | undefined;
+    if (failed) throw new StalwartError(`SieveScript/set ${failed.type ?? "failed"}`, "set", failed);
+  }
 }
+
+const SIEVE_USING = ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:sieve"] as const;
