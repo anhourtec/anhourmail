@@ -289,6 +289,12 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
       product to act — e.g. a mail-app setup guide, importing mail from another provider, or a mailbox provider's
       published sender requirements. Name the product plainly there, never as a comparison or endorsement.
 
+58. **No scratch files in the repository.** Probes, one-off scripts, debug dumps and test captures go in the
+    session scratchpad or the OS temp directory, never in the repo tree (not even untracked). Repo checks and the
+    editor's type-aware ESLint would pick them up ("was not found by the project service"). As a backstop `.probe/`,
+    `.scratch/` and `.probe*` / `.scratch*` files are gitignored and ESLint-ignored, and `check:spdx` skips hidden
+    files; delete any such file when done.
+
 ## Project conventions
 
 - **Services hold the logic; route handlers only parse, call and map errors.** Services take the actor and check
@@ -315,4 +321,5 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Rule 57: no competitor names in committed files; design references only in docs/internal/private                                   |
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Rule 3: small, granular commits (8–20 per slice), one concern each                                                                 |
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Rules 6 and 41: Playwright MCP is local-only, never in CI; run the CI pipeline locally (`npm run ci:local`) before every push      |
+| 2026-10-22 | Nishchayjeet Singh (Nish) | Rule 58: no scratch or probe files in the repository                                                                               |
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Waitlist removed from the product (maintainer decision); sign-up is open (firewalled) or closed                                    |
