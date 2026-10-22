@@ -18,7 +18,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
   const [pending, setPending] = useState(false);
   const hydrated = useHydrated();
 
-  async function submit(newPassword: string, confirm: string) {
+  async function submit(newPassword: string, confirm: string, removePasskeys: boolean) {
     if (newPassword.length < MIN_PASSWORD) {
       setError(`Use at least ${String(MIN_PASSWORD)} characters for your password.`);
       return;
@@ -33,10 +33,12 @@ export function ResetPasswordForm({ token }: { token: string }) {
       const res = await fetch("/api/auth/reset-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ newPassword, token }),
+        body: JSON.stringify({ newPassword, token, ...(removePasskeys ? { removePasskeys: true } : {}) }),
       });
+      const json = (await res.json().catch(() => null)) as { code?: string; message?: string } | null;
       if (res.ok) setDone(true);
       else if (res.status === 429) setError("Too many attempts. Wait a minute and try again.");
+      else if (json?.code === "FACTOR_REQUIRED" && json.message) setError(json.message);
       else setError("This reset link is invalid or has expired. Ask for a new one.");
     } catch {
       setError("Couldn't reach the server. Check your connection and try again.");
@@ -52,7 +54,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
       const v = form.get(k);
       return typeof v === "string" ? v : "";
     };
-    void submit(get("password"), get("confirm"));
+    void submit(get("password"), get("confirm"), form.get("removePasskeys") === "on");
   }
 
   if (done) {
@@ -89,6 +91,13 @@ export function ResetPasswordForm({ token }: { token: string }) {
           required
           className={inputClass}
         />
+      </label>
+      <label className="flex items-start gap-2.5">
+        <input type="checkbox" name="removePasskeys" className="mt-1 size-4 accent-primary" />
+        <span className="am-small text-foreground">
+          Also remove all passkeys from my login (choose this if you think someone else got in). Every session is signed
+          out either way.
+        </span>
       </label>
       {error && (
         <p role="alert" className="am-small text-destructive">
