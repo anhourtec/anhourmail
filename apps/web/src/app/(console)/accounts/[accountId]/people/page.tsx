@@ -1,38 +1,50 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
 
 import { can } from "@anhourmail/core";
+import { listMailboxes } from "@anhourmail/core/mailboxes";
 import { listPeople } from "@anhourmail/core/people";
 import { INVITE_TTL_DAYS } from "@anhourmail/shared/plans";
 import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 import { PageHeader } from "@anhourmail/ui/page-header";
 
+import { UrlFlyout } from "@/components/console/flyout";
 import { InviteForm } from "@/components/people/invite-form";
-import { InviteActions, MemberActions } from "@/components/people/row-actions";
+import { PeopleList } from "@/components/people/people-list";
+import { PersonPanel } from "@/components/people/person-panel";
+import { ROLE_HELP, RoleHelp } from "@/components/people/role-help";
 import { requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
+import { env } from "@/server/env";
 import { forPage } from "@/server/page-guard";
+import { param } from "@/server/search-params";
 
 export const metadata: Metadata = { title: "People and roles" };
 
 const dateFmt = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium", timeZone: "UTC" });
 
-const ROLE_HELP: [string, string][] = [
-  ["Owner", "Everything, including other owners and admins. An account always has at least one."],
-  ["Domain Administrator", "Domains and DNS."],
-  ["User Administrator", "Mailboxes, everyone's aliases, and inviting or removing Members."],
-  ["Billing Administrator", "The plan and invoices."],
-  ["Member", "Their own mailbox and aliases."],
-  ["Read-only (Auditor)", "Sees settings, people, domains and the audit log; changes nothing."],
-];
-
-const th = "am-mono px-4 py-2.5 font-normal";
-
-export default async function PeoplePage({ params }: { params: Promise<{ accountId: string }> }) {
+/**
+ * People and roles (console page template). `?person=<userId>` opens a person's panel (`&tab=role` for the role),
+ * `?new=1` the "Invite someone" panel. Ids that aren't a member of this account are a 404.
+ */
+export default async function PeoplePage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ accountId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { accountId } = await params;
+  const sp = await searchParams;
   const actor = await requireUser();
-  const data = await forPage(() => listPeople(container().deps, actor, accountId));
-  const crumbs = [{ label: "Overview", href: "/" }, { label: "People and roles" }];
+  const deps = container().deps;
+  const openId = param(sp, "person");
+  const data = await forPage(async () => ({
+    overview: await listPeople(deps, actor, accountId),
+    mailboxes: openId && can(actor, "mailbox.read", accountId) ? await listMailboxes(deps, actor, accountId) : null,
+  }));
+  const crumbs = [{ label: "Home", href: "/" }, { label: "People and roles" }];
   if (!data) {
     return (
       <>
@@ -43,8 +55,12 @@ export default async function PeoplePage({ params }: { params: Promise<{ account
       </>
     );
   }
-  const { members, invites, grantableRoles, limits } = data;
+  const { members, invites, grantableRoles, limits } = data.overview;
+  const open = openId ? members.find((m) => m.userId === openId) : undefined;
+  if (openId && !open) notFound();
   const canInvite = can(actor, "member.manage", accountId);
+  const room = limits.addPeople && limits.used < limits.max;
+  const path = `/accounts/${accountId}/people`;
 
   return (
     <>
@@ -54,150 +70,85 @@ export default async function PeoplePage({ params }: { params: Promise<{ account
         breadcrumbs={crumbs}
       />
       {limits.addPeople && (
-        <p className="am-small am-num">
+        <p className="am-small am-num -mt-2">
           {limits.used} of {limits.max} people, counting pending invites
         </p>
       )}
+      {canInvite && !limits.addPeople && (
+        <p className="am-body rounded-lg border px-4 py-3">
+          The {limits.planName} plan is for one person. Upgrade to Plus to invite family or a small group.
+        </p>
+      )}
+      {canInvite && limits.addPeople && !room && (
+        <p className="am-small">
+          This account has as many people as it can have. Revoke an invite or remove someone first.
+        </p>
+      )}
 
-      {canInvite &&
-        (!limits.addPeople ? (
-          <p className="am-body rounded-xl border px-4 py-3">
-            The {limits.planName} plan is for one person. Upgrade to Plus to invite family or a small group.
-          </p>
-        ) : limits.used >= limits.max ? (
-          <p className="am-small">
-            This account has as many people as it can have. Revoke an invite or remove someone first.
-          </p>
-        ) : (
-          <InviteForm accountId={accountId} roles={grantableRoles} inviteDays={INVITE_TTL_DAYS} />
-        ))}
+      <PeopleList
+        accountId={accountId}
+        people={members.map((m) => ({
+          userId: m.userId,
+          name: m.name,
+          email: m.email,
+          role: m.role,
+          roleLabel: ROLE_LABELS[`account:${m.role}`],
+          active: m.status === "active",
+          isYou: m.isYou,
+          joined: dateFmt.format(m.joinedAt),
+          joinedAt: m.joinedAt.getTime(),
+          canChangeRole: m.canChangeRole,
+          canRemove: m.canRemove,
+        }))}
+        invites={invites.map((i) => ({
+          id: i.id,
+          email: i.email,
+          roleLabel: ROLE_LABELS[`account:${i.role}`],
+          expired: i.expired,
+          until: dateFmt.format(i.expiresAt),
+          canManage: i.canManage,
+        }))}
+        openId={open?.userId ?? null}
+        inviteHref={canInvite && room ? `${path}?new=1` : null}
+        docsHref={`${env().SITE_URL.replace(/\/$/, "")}/docs/people-and-roles`}
+      />
 
-      <section aria-labelledby="people" className="flex flex-col gap-3">
-        <h2 id="people" className="am-h3">
-          People
-        </h2>
-        <div className="overflow-x-auto rounded-xl border">
-          <table className="w-full text-left">
-            <thead className="border-b bg-muted/50">
-              <tr>
-                <th scope="col" className={th}>
-                  Person
-                </th>
-                <th scope="col" className={th}>
-                  Role
-                </th>
-                <th scope="col" className={`${th} hidden sm:table-cell`}>
-                  Status
-                </th>
-                <th scope="col" className={`${th} hidden lg:table-cell`}>
-                  Joined
-                </th>
-                <th scope="col" className={`${th} text-right`}>
-                  <span className="sr-only">Change role or remove</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {members.map((m) => (
-                <tr key={m.userId}>
-                  <td className="px-4 py-3">
-                    <div className="flex min-w-0 flex-col gap-0.5">
-                      <span className="am-body flex flex-wrap items-center gap-2">
-                        {m.name}
-                        {m.isYou && <span className="am-status am-status--info">You</span>}
-                      </span>
-                      <span className="am-code break-all text-muted-foreground">{m.email}</span>
-                    </div>
-                  </td>
-                  <td className="am-small px-4 py-3">{ROLE_LABELS[`account:${m.role}`]}</td>
-                  <td className="hidden px-4 py-3 sm:table-cell">
-                    <span className={`am-status am-status--${m.status === "active" ? "success" : "neutral"}`}>
-                      {m.status === "active" ? "Active" : "Suspended"}
-                    </span>
-                  </td>
-                  <td className="am-small am-num hidden px-4 py-3 lg:table-cell">{dateFmt.format(m.joinedAt)}</td>
-                  <td className="px-4 py-3">
-                    {(m.canChangeRole || m.canRemove) && (
-                      <MemberActions
-                        accountId={accountId}
-                        userId={m.userId}
-                        label={m.email}
-                        role={m.role}
-                        canChangeRole={m.canChangeRole}
-                        canRemove={m.canRemove}
-                      />
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section aria-labelledby="invites" className="flex flex-col gap-3">
-        <h2 id="invites" className="am-h3">
-          Pending invites
-        </h2>
-        {invites.length === 0 ? (
-          <p className="am-small">No pending invites.</p>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border">
-            <table className="w-full text-left">
-              <thead className="border-b bg-muted/50">
-                <tr>
-                  <th scope="col" className={th}>
-                    Email
-                  </th>
-                  <th scope="col" className={`${th} hidden sm:table-cell`}>
-                    Role
-                  </th>
-                  <th scope="col" className={`${th} hidden md:table-cell`}>
-                    Link works until
-                  </th>
-                  <th scope="col" className={`${th} text-right`}>
-                    <span className="sr-only">Resend or revoke</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {invites.map((i) => (
-                  <tr key={i.id} className={i.expired ? "text-muted-foreground" : ""}>
-                    <td className="px-4 py-3">
-                      <div className="flex flex-col gap-1">
-                        <span className="am-code break-all">{i.email}</span>
-                        <span className="flex flex-wrap gap-1.5">
-                          <span className={`am-status am-status--${i.expired ? "warning" : "info"}`}>
-                            {i.expired ? "Expired" : "Pending"}
-                          </span>
-                          <span className="am-micro sm:hidden">{ROLE_LABELS[`account:${i.role}`]}</span>
-                        </span>
-                      </div>
-                    </td>
-                    <td className="am-small hidden px-4 py-3 sm:table-cell">{ROLE_LABELS[`account:${i.role}`]}</td>
-                    <td className="am-small am-num hidden px-4 py-3 md:table-cell">{dateFmt.format(i.expiresAt)}</td>
-                    <td className="px-4 py-3">
-                      {i.canManage && <InviteActions accountId={accountId} inviteId={i.id} email={i.email} />}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <details className="rounded-xl border px-4 py-3">
+      <details id="roles" className="mt-2 rounded-lg border px-4 py-3">
         <summary className="am-h4 cursor-pointer">What each role can do</summary>
-        <dl className="mt-3 grid gap-x-6 gap-y-2 sm:grid-cols-[max-content_minmax(0,1fr)]">
-          {ROLE_HELP.map(([role, text]) => (
-            <div key={role} className="contents">
-              <dt className="am-small font-medium text-foreground">{role}</dt>
-              <dd className="am-small">{text}</dd>
-            </div>
-          ))}
-        </dl>
+        <div className="mt-3">
+          <RoleHelp items={ROLE_HELP} />
+        </div>
       </details>
+
+      {open && (
+        <UrlFlyout label={open.name || open.email} closeHref={path}>
+          <PersonPanel
+            accountId={accountId}
+            person={open}
+            mailboxes={
+              data.mailboxes
+                ?.filter((m) => m.owner?.userId === open.userId)
+                .map((m) => ({ id: m.id, address: m.address })) ?? null
+            }
+            mailboxesHref={`/accounts/${accountId}/mailboxes`}
+            closeHref={path}
+            tab={param(sp, "tab")}
+          />
+        </UrlFlyout>
+      )}
+      {canInvite && room && param(sp, "new") === "1" && (
+        <UrlFlyout label="Invite someone" closeHref={path} size="md">
+          <div className="flex flex-col gap-6">
+            <div className="flex flex-col gap-1.5">
+              <h2 className="am-h2">Invite someone</h2>
+              <p className="am-small">
+                We email them a link that works for {INVITE_TTL_DAYS} days. The link never appears here.
+              </p>
+            </div>
+            <InviteForm accountId={accountId} roles={grantableRoles} inviteDays={INVITE_TTL_DAYS} />
+          </div>
+        </UrlFlyout>
+      )}
     </>
   );
 }

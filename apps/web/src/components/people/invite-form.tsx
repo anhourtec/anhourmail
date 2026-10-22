@@ -42,7 +42,7 @@ export function InviteForm({
     setNotice(
       emailSent
         ? `Invite sent to ${body.email.trim().toLowerCase()}. The link works for ${String(inviteDays)} days.`
-        : "The invite is saved, but the email couldn't be sent. Use Resend below to try again.",
+        : "The invite is saved, but the email couldn't be sent. Use Resend in the invite's menu to try again.",
     );
     form.reset();
     router.refresh();
@@ -59,8 +59,7 @@ export function InviteForm({
   }
 
   return (
-    <form onSubmit={onSubmit} className="flex flex-col gap-4 rounded-xl border p-4 sm:p-5" noValidate>
-      <h2 className="am-h3">Invite someone</h2>
+    <form onSubmit={onSubmit} className="flex max-w-2xl flex-col gap-5" noValidate>
       <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,16rem)]">
         <label className="flex flex-col gap-1.5">
           <span className="am-h4">Email</span>
