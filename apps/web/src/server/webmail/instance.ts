@@ -11,6 +11,7 @@ import { stalwartOAuthPort } from "../adapters/stalwart-oauth";
 import { env } from "../env";
 import { type SessionKv, WebmailSessionStore } from "./session-store";
 import { WebmailService } from "./service";
+import { WEBMAIL_COOKIE_NAMES } from "../host-routing";
 
 /**
  * The webmail session cookie (ADR-0003): opaque id only, HttpOnly, SameSite=Lax, host-only. On https it is
@@ -18,7 +19,8 @@ import { WebmailService } from "./service";
  * the console's `am.session_token`.
  */
 export function webmailCookieName(): string {
-  return env().WEBMAIL_URL.startsWith("https://") ? "__Host-am.webmail" : "am.webmail";
+  const [secure, dev] = WEBMAIL_COOKIE_NAMES;
+  return env().WEBMAIL_URL.startsWith("https://") ? secure : dev;
 }
 
 export function webmailCookie(value: string, maxAgeSec: number): string {
@@ -86,7 +88,12 @@ export function webmail(): WebmailService {
     });
     instance = new WebmailService({
       store: new WebmailSessionStore(redisKv(), ring),
-      oauth: stalwartOAuthPort({ stalwartUrl, webmailUrl: e.WEBMAIL_URL }),
+      oauth: stalwartOAuthPort({
+        stalwartUrl,
+        webmailUrl: e.WEBMAIL_URL,
+        // Dev: a visitor without a forwarded address is this machine (servers bind to loopback by default).
+        fallbackIp: e.NODE_ENV === "production" ? null : "127.0.0.1",
+      }),
       stalwartUrl,
       access: new MailboxAccessGate(pgMailboxStatusLookup(db())),
       quota: redisSlidingQuota(redis()),

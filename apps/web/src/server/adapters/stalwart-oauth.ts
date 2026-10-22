@@ -17,7 +17,16 @@ import { GrantRefusedError, type OAuthPort, WebmailBusyError } from "../webmail/
  * client's "denied" error to the service's `GrantRefusedError` and throttling/bans to `WebmailBusyError` (429, never
  * "wrong password"); anything else is an outage.
  */
-export function stalwartOAuthPort(opts: { stalwartUrl: string; webmailUrl: string }): OAuthPort {
+export function stalwartOAuthPort(opts: {
+  stalwartUrl: string;
+  webmailUrl: string;
+  /**
+   * Dev only: the address to forward when the request has none (a direct hit without a proxy, or work outside a
+   * request), so Stalwart counts failures against that client and never against the app's own connection — which
+   * in dev is the shared `mail-edge` forwarder. Production leaves it unset (NGINX always supplies the address).
+   */
+  fallbackIp?: string | null;
+}): OAuthPort {
   const oauth = new StalwartOAuth({
     baseUrl: opts.stalwartUrl,
     clientId: WEBMAIL_OAUTH_CLIENT_ID,
@@ -35,7 +44,7 @@ export function stalwartOAuthPort(opts: { stalwartUrl: string; webmailUrl: strin
       }
     };
   // The trusted client address of the current request (set by route()), forwarded as X-Forwarded-For.
-  const ip = () => requestContext()?.clientIp ?? null;
+  const ip = () => requestContext()?.clientIp ?? opts.fallbackIp ?? null;
   return {
     signIn: mapped((name: string, secret: string) => oauth.signIn(name, secret, ip())),
     refresh: mapped((token: string) => oauth.refresh(token, ip())),
