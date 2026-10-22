@@ -60,9 +60,8 @@ export function CreateAliasForm({ accountId, options }: { accountId: string; opt
   }
 
   return (
-    <form onSubmit={onSubmit} className="flex flex-col gap-4 rounded-xl border p-4 sm:p-5" noValidate>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="am-h3">New alias</h2>
+    <form onSubmit={onSubmit} className="flex max-w-2xl flex-col gap-5" noValidate>
+      <div className="flex flex-wrap items-center gap-3">
         <div role="radiogroup" aria-label="Kind of alias" className="flex rounded-lg border p-0.5">
           <button
             type="button"
