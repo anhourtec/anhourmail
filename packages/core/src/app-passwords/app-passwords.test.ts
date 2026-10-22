@@ -277,7 +277,7 @@ describe("creating app passwords", () => {
           fn({ ...r, appPasswords: { ...r.appPasswords, insert: () => Promise.reject(new Error("database down")) } }),
         ),
     };
-    await expect(create({ uow, clock: d.clock }, issuer, member)).rejects.toThrow("database down");
+    await expect(create({ ...d, uow }, issuer, member)).rejects.toThrow("database down");
     expect(issuer.revoked).toEqual(["c1"]);
     expect(d.uow.state.appPasswords).toEqual([]);
     expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "auth.app_password_created", result: "failed" });

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { platformFacts } from "@anhourmail/shared/platform";
 import type { AccountRole, PlatformRole } from "@anhourmail/shared/rbac";
 
 import { MemoryUnitOfWork } from "../../../adapters/src/memory";
@@ -15,8 +16,11 @@ export function fixedClock(iso = "2026-10-21T12:00:00Z"): Clock & { set(d: Date)
   return { now: () => now, set: (d) => (now = d) };
 }
 
+/** A deployment on its own domain (not the product's), so tests prove hostnames come from configuration. */
+export const TEST_PLATFORM = platformFacts("platform-mail.test");
+
 export function deps(clock: Clock = fixedClock()): Deps & { uow: MemoryUnitOfWork } {
-  return { uow: new MemoryUnitOfWork(), clock };
+  return { uow: new MemoryUnitOfWork(), clock, platform: TEST_PLATFORM };
 }
 
 export function user(

@@ -24,7 +24,7 @@ export type CustomerDomain = {
   createdAt: Date;
 };
 
-/** Names we never accept as customer domains: ours, and their subdomains. */
+/** Names we never accept as customer domains: ours (plus the deployment's platform domain), and their subdomains. */
 const RESERVED = [PRODUCT_DOMAIN, COMPANY_DOMAIN, "localhost", "example.com", "example.net", "example.org"];
 
 /**
@@ -50,9 +50,10 @@ const LABEL = /^(?!-)[a-z0-9-]{1,63}(?<!-)$/;
 
 /**
  * Normalises and validates a domain a customer typed: trims, lowercases, drops a trailing dot, converts
- * internationalised names to punycode. Refuses IPs, single-label names, our own domains and their subdomains.
+ * internationalised names to punycode. Refuses IPs, single-label names, our own domains (including `platformDomain`,
+ * the deployment's configured one) and their subdomains.
  */
-export function normaliseDomain(input: unknown): string {
+export function normaliseDomain(input: unknown, platformDomain: string): string {
   if (typeof input !== "string") throw new ValidationError("Enter a domain name, like example.org.");
   const trimmed = input.trim().toLowerCase().replace(/\.$/, "");
   const ascii = domainToASCII(trimmed);
@@ -61,7 +62,10 @@ export function normaliseDomain(input: unknown): string {
   if (labels.length < 2 || !labels.every((l) => LABEL.test(l)) || /^\d+$/.test(labels.at(-1) ?? "")) {
     throw new ValidationError("Enter a domain name, like example.org.");
   }
-  if (RESERVED_TLDS.has(labels.at(-1) ?? "") || RESERVED.some((r) => ascii === r || ascii.endsWith(`.${r}`))) {
+  if (
+    RESERVED_TLDS.has(labels.at(-1) ?? "") ||
+    [...RESERVED, platformDomain].some((r) => ascii === r || ascii.endsWith(`.${r}`))
+  ) {
     throw new ValidationError("That domain can't be added.");
   }
   return ascii;

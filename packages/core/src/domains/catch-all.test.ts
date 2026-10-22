@@ -142,6 +142,12 @@ describe("catch-all", () => {
     await expect(setCatchAll(d, owner, ACCOUNT_A, DOMAIN, { mailboxId: MBX }, req)).rejects.toThrow(/isn't available/);
   });
 
+  it("is never set on the deployment's configured platform domain either", async () => {
+    const d = setup();
+    d.uow.state.domains[0]!.name = `free.${d.platform.domain}`;
+    await expect(setCatchAll(d, owner, ACCOUNT_A, DOMAIN, { mailboxId: MBX }, req)).rejects.toThrow(/isn't available/);
+  });
+
   it("is refused to people who can't manage domains, and other accounts' ids are not found", async () => {
     const d = setup();
     await expect(setCatchAll(d, userAdmin, ACCOUNT_A, DOMAIN, { mailboxId: MBX }, req)).rejects.toBeInstanceOf(

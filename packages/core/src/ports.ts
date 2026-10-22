@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import type { Platform } from "@anhourmail/shared/platform";
+
 import type { AccessRepository } from "./access/repository";
 import type { AccountRepository } from "./account/repository";
 import type { AliasRepository } from "./aliases/repository";
@@ -7,7 +9,7 @@ import type { AuditRepository } from "./audit/repository";
 import type { CatchAllRepository, DomainRepository } from "./domains/repository";
 import type { MailboxRepository } from "./mailboxes/repository";
 import type { InviteRepository, PeopleRepository } from "./people/repository";
-import type { PlatformAccountRepository } from "./platform/repository";
+import type { PlatformAccountRepository, StaffRepository } from "./platform/repository";
 import type { MailDirectoryRepository, ProvisioningRepository } from "./provisioning/ports";
 import type { SecurityRepository } from "./security/repository";
 import type { WebmailSettingsRepository } from "./webmail/settings-repository";
@@ -25,6 +27,7 @@ export type Repositories = {
   people: PeopleRepository;
   invites: InviteRepository;
   platformAccounts: PlatformAccountRepository;
+  staff: StaffRepository;
   security: SecurityRepository;
   webmailSettings: WebmailSettingsRepository;
   appPasswords: AppPasswordRepository;
@@ -47,4 +50,8 @@ export const systemClock: Clock = { now: () => new Date() };
 /** Request metadata recorded in audit entries. */
 export type RequestMeta = { requestId: string; ip: string | null; userAgent: string | null };
 
-export type Deps = { uow: UnitOfWork; clock: Clock };
+/**
+ * What every service gets. `platform` is the deployment's own hostnames (from `PLATFORM_DOMAIN`): DNS templates,
+ * domain verification and client settings use it, never the product's published names.
+ */
+export type Deps = { uow: UnitOfWork; clock: Clock; platform: Platform };

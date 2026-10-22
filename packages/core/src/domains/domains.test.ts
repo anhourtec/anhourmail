@@ -1,9 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 
-import { customerDomainRecords, SPF_INCLUDE } from "@anhourmail/shared/dns";
+import { customerDomainRecords } from "@anhourmail/shared/dns";
 
-import { ACCOUNT_A, ACCOUNT_B, anonymous, deps as makeDeps, fixedClock, req, user } from "../__tests__/helpers";
+import {
+  ACCOUNT_A,
+  ACCOUNT_B,
+  anonymous,
+  deps as makeDeps,
+  fixedClock,
+  req,
+  TEST_PLATFORM,
+  user,
+} from "../__tests__/helpers";
 import {
   ConflictError,
   ForbiddenError,
@@ -47,7 +56,7 @@ function zone(): DnsResolver & { publish(type: LookupType, fqdn: string, ...valu
 
 /** Publishes every required record for `domain`, exactly as the template says. */
 function publishAll(z: ReturnType<typeof zone>, domain: string, token: string) {
-  for (const r of customerDomainRecords(domain, token).filter((x) => x.required)) {
+  for (const r of customerDomainRecords(domain, token, TEST_PLATFORM).filter((x) => x.required)) {
     const fqdn = r.name === "@" ? domain : `${r.name}.${domain}`;
     z.publish(r.type, fqdn, r.type === "MX" ? `${String(r.priority)} ${r.value}` : r.value);
   }
@@ -61,8 +70,8 @@ function setup() {
 
 describe("normaliseDomain", () => {
   it("lowercases, trims, drops the trailing dot and converts IDNs", () => {
-    expect(normaliseDomain("  Family.CA. ")).toBe("family.ca");
-    expect(normaliseDomain("bücher.example.ca")).toBe("xn--bcher-kva.example.ca");
+    expect(normaliseDomain("  Family.CA. ", TEST_PLATFORM.domain)).toBe("family.ca");
+    expect(normaliseDomain("bücher.example.ca", TEST_PLATFORM.domain)).toBe("xn--bcher-kva.example.ca");
   });
 
   it("refuses junk, IPs, single labels and our own domains", () => {
@@ -77,21 +86,32 @@ describe("normaliseDomain", () => {
       "anhourmail.com",
       "x.anhourtec.com",
     ]) {
-      expect(() => normaliseDomain(bad)).toThrow(ValidationError);
+      expect(() => normaliseDomain(bad, TEST_PLATFORM.domain)).toThrow(ValidationError);
     }
+  });
+
+  it("refuses the deployment's own platform domain and its subdomains", () => {
+    expect(normaliseDomain(TEST_PLATFORM.domain, "other-platform.test")).toBe("platform-mail.test");
+    expect(() => normaliseDomain(TEST_PLATFORM.domain, TEST_PLATFORM.domain)).toThrow(ValidationError);
+    expect(() => normaliseDomain(`mx1.${TEST_PLATFORM.domain}`, TEST_PLATFORM.domain)).toThrow(ValidationError);
+    expect(normaliseDomain("other-mail.test", TEST_PLATFORM.domain)).toBe("other-mail.test");
   });
 });
 
 describe("record matching", () => {
   it("accepts our SPF include merged into the customer's own record, and any DMARC policy", () => {
-    const [spf, dmarc] = ["spf", "dmarc"].map((p) => customerDomainRecords("x.org", "t").find((r) => r.purpose === p)!);
-    expect(matches(spf!, `v=spf1 include:_spf.google.com include:${SPF_INCLUDE} -all`)).toBe(true);
+    const [spf, dmarc] = ["spf", "dmarc"].map((p) =>
+      customerDomainRecords("x.org", "t", TEST_PLATFORM).find((r) => r.purpose === p)!,
+    );
+    expect(matches(spf!, `v=spf1 include:_spf.google.com include:${TEST_PLATFORM.spfInclude} -all`)).toBe(true);
+    // The product's include doesn't count for a deployment on its own domain.
+    expect(matches(spf!, "v=spf1 include:_spf.anhourmail.com -all")).toBe(false);
     expect(matches(spf!, "v=spf1 include:_spf.google.com -all")).toBe(false);
     expect(matches(dmarc!, "v=DMARC1; p=reject")).toBe(true);
   });
 
   it("ignores MX priority and SRV weight but not hosts or ports", () => {
-    const records = customerDomainRecords("x.org", "t");
+    const records = customerDomainRecords("x.org", "t", TEST_PLATFORM);
     const mx = records.find((r) => r.purpose === "inbound")!;
     const srv = records.find((r) => r.name === "_imaps._tcp")!;
     expect(matches(mx, `20 ${mx.value.toUpperCase()}`)).toBe(true);
@@ -104,11 +124,11 @@ describe("record matching", () => {
   it("grades missing, wrong and failed lookups", async () => {
     const z = zone();
     z.publish("MX", "x.org", "10 mx.elsewhere.example.");
-    const graded = await checkRecords(z, "x.org", "t");
+    const graded = await checkRecords(z, "x.org", "t", TEST_PLATFORM);
     expect(graded.find((r) => r.purpose === "inbound")?.state).toBe("wrong");
     expect(graded.find((r) => r.purpose === "ownership")?.state).toBe("missing");
     z.fail = true;
-    expect((await checkRecords(z, "x.org", "t")).every((r) => r.state === "error")).toBe(true);
+    expect((await checkRecords(z, "x.org", "t", TEST_PLATFORM)).every((r) => r.state === "error")).toBe(true);
   });
 });
 

@@ -602,6 +602,7 @@ describe("one job per subject at a time", () => {
     let reads = 0;
     const deps = {
       clock: d.clock,
+      platform: d.platform,
       uow: {
         run: <T>(fn: (r: Parameters<Parameters<typeof d.uow.run>[0]>[0]) => Promise<T>) =>
           d.uow.run((r) =>

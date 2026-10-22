@@ -36,8 +36,8 @@ async function scopedDomain(repos: Repositories, accountId: string, id: string):
   return d;
 }
 
-const platformDomain = (name: string): boolean =>
-  [PRODUCT_DOMAIN, COMPANY_DOMAIN].some((p) => name === p || name.endsWith(`.${p}`));
+const platformDomain = (name: string, configured: string): boolean =>
+  [PRODUCT_DOMAIN, COMPANY_DOMAIN, configured].some((p) => name === p || name.endsWith(`.${p}`));
 
 async function viewOf(repos: Repositories, accountId: string, d: CustomerDomain): Promise<CatchAllView> {
   const account = await repos.accounts.get(accountId);
@@ -107,7 +107,8 @@ export async function setCatchAll(
           meta: { enabled: false, changed: before !== null },
         };
       }
-      if (platformDomain(d.name)) throw new ConflictError("Catch-all isn't available on this domain.");
+      if (platformDomain(d.name, deps.platform.domain))
+        throw new ConflictError("Catch-all isn't available on this domain.");
       const account = await repos.accounts.get(accountId);
       if (!account) throw new NotFoundError();
       if (!PLANS[account.plan].catchAll) {

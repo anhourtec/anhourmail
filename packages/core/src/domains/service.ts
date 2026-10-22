@@ -51,7 +51,7 @@ export async function listDomains(deps: Deps, actor: Actor, accountId: string): 
 export async function getDomain(deps: Deps, actor: Actor, accountId: string, id: string): Promise<DomainDetail> {
   authorize(actor, "domain.read", accountId);
   const d = await deps.uow.run((r) => scoped(r, accountId, id));
-  return { ...view(d), records: customerDomainRecords(d.name, d.verifyToken) };
+  return { ...view(d), records: customerDomainRecords(d.name, d.verifyToken, deps.platform) };
 }
 
 /**
@@ -71,7 +71,7 @@ export async function addDomain(
     req,
     { action: "domain.added", permission: "domain.manage", accountId, target: { type: "domain" } },
     async (repos) => {
-      const name = normaliseDomain(input.name);
+      const name = normaliseDomain(input.name, deps.platform.domain);
       await repos.accounts.lock(accountId); // the domain ceiling holds under concurrent adds
       const account = await repos.accounts.get(accountId);
       if (!account) throw new NotFoundError();
@@ -98,7 +98,7 @@ export async function addDomain(
       };
       await repos.domains.insert(domain);
       return {
-        result: { ...view(domain), records: customerDomainRecords(domain.name, domain.verifyToken) },
+        result: { ...view(domain), records: customerDomainRecords(domain.name, domain.verifyToken, deps.platform) },
         target: { id: domain.id, label: name },
       };
     },
@@ -122,7 +122,7 @@ export async function checkDomain(
   const spec = { permission: "domain.manage", accountId, target: { type: "domain", id } } as const;
   await authorizeAudited(deps, actor, req, { ...spec, action: "domain.verified" });
   const before = await deps.uow.run((r) => scoped(r, accountId, id));
-  const records = await checkRecords(dns, before.name, before.verifyToken);
+  const records = await checkRecords(dns, before.name, before.verifyToken, deps.platform);
   const pass = requiredPass(records);
   const failing = records.filter((r) => r.required && r.state !== "ok").map((r) => r.purpose);
 
@@ -228,7 +228,7 @@ export async function inspectDomain(
 ): Promise<{ domain: DomainView; records: CheckedRecord[] }> {
   authorize(actor, "domain.read", accountId);
   const d = await deps.uow.run((r) => scoped(r, accountId, id));
-  return { domain: view(d), records: await checkRecords(dns, d.name, d.verifyToken) };
+  return { domain: view(d), records: await checkRecords(dns, d.name, d.verifyToken, deps.platform) };
 }
 
 /** Whether the account's plan includes custom domains, and the per-account ceiling (`domain.read`). */

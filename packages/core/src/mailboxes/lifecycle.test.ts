@@ -122,7 +122,7 @@ function racing(d: Deps): Deps {
         }),
       ),
   };
-  return { uow, clock: d.clock };
+  return { uow, clock: d.clock, platform: d.platform };
 }
 
 describe("suspend and resume", () => {
@@ -312,6 +312,7 @@ describe("scheduled purge", () => {
     // Restored after the purge listed it: the purge re-reads inside its unit of work and stops.
     const listed: Deps = {
       clock: d.clock,
+      platform: d.platform,
       uow: {
         run: (fn) =>
           d.uow.run((r) =>
