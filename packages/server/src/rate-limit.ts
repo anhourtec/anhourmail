@@ -19,6 +19,9 @@ export const LIMITS = {
   read: { limit: 600, windowSec: 60, by: "caller", failMode: "open" },
   write: { limit: 120, windowSec: 60, by: "caller", failMode: "open" },
   auth: { limit: 30, windowSec: 60, by: "ip", failMode: "closed" },
+  // Second sign-in steps (authenticator code, recovery code, passkey): tighter than `auth`, on top of the identity
+  // layer's per-challenge and per-account lockout.
+  authFactor: { limit: 10, windowSec: 300, by: "ip", failMode: "closed" },
   publicForm: { limit: 10, windowSec: 900, by: "ip", failMode: "closed" },
   // Per signed-in caller: each invite or resend sends an email (plus a per-account daily cap in the service).
   invite: { limit: 20, windowSec: 900, by: "caller", failMode: "closed" },
