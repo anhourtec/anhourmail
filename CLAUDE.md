@@ -295,6 +295,12 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
     `.scratch/` and `.probe*` / `.scratch*` files are gitignored and ESLint-ignored, and `check:spdx` skips hidden
     files; delete any such file when done.
 
+59. **Keep the README current with every push.** Before pushing, update `README.md` for what the pushed commits
+    change for a reader: the project status and "Works today" list, features (never promise what isn't built),
+    commands and local URLs. Commit it as its own small commit in the same push; if nothing reader-facing changed,
+    say so in the session summary. Same rules as everything public: no secrets or private details (rule 44), no
+    competitor names (rule 57).
+
 ## Project conventions
 
 - **Services hold the logic; route handlers only parse, call and map errors.** Services take the actor and check
@@ -322,4 +328,5 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Rule 3: small, granular commits (8–20 per slice), one concern each                                                                 |
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Rules 6 and 41: Playwright MCP is local-only, never in CI; run the CI pipeline locally (`npm run ci:local`) before every push      |
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Rule 58: no scratch or probe files in the repository                                                                               |
+| 2026-10-22 | Nishchayjeet Singh (Nish) | Rule 59: update the README with every push                                                                                         |
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Waitlist removed from the product (maintainer decision); sign-up is open (firewalled) or closed                                    |
