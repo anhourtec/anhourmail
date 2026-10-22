@@ -24,17 +24,61 @@ export function initials(name: string, email: string): string {
   return ((words[0]?.[0] ?? "") + (words[1]?.[0] ?? words[0]?.[1] ?? "")).toUpperCase() || "?";
 }
 
-/** Initials avatar (no remote images: privacy rule, branding.md). */
-export function Avatar({ name, email, size = "md" }: { name: string; email: string; size?: "sm" | "md" | "lg" }) {
-  const s = size === "lg" ? "size-10 text-[14px]" : size === "sm" ? "size-7 text-[11px]" : "size-8 text-[12px]";
+/** Initials avatar, round (no remote images: privacy rule, branding.md). `inverse` sits on the navy app bar. */
+export function Avatar({
+  name,
+  email,
+  size = "md",
+  tone = "default",
+}: {
+  name: string;
+  email: string;
+  size?: "sm" | "md" | "lg" | "xl";
+  tone?: "default" | "inverse";
+}) {
+  const s =
+    size === "xl"
+      ? "size-16 text-[22px] sm:size-24 sm:text-[30px]"
+      : size === "lg"
+        ? "size-10 text-[14px]"
+        : size === "sm"
+          ? "size-7 text-[11px]"
+          : "size-8 text-[12px]";
+  const t =
+    tone === "inverse"
+      ? "bg-appbar-accent text-appbar-foreground ring-1 ring-appbar-foreground/45"
+      : "bg-primary/12 text-primary";
   return (
     <span
       aria-hidden
-      className={`flex shrink-0 items-center justify-center rounded-lg bg-primary/12 font-medium text-primary ${s}`}
+      className={`flex shrink-0 items-center justify-center rounded-full font-display font-medium ${t} ${s}`}
     >
       {initials(name, email)}
     </span>
   );
+}
+
+/**
+ * Console sign-out: leave only once the server has ended the session; otherwise `failed` is set (the session would
+ * still be valid), so the caller can say so.
+ */
+export function useSignOut() {
+  const router = useRouter();
+  const [failed, setFailed] = useState(false);
+  const signOut = () => {
+    setFailed(false);
+    void fetch("/api/auth/sign-out", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
+      .then((res) => {
+        if (!res.ok) throw new Error(String(res.status));
+        clearSidebarCookies();
+        router.replace("/sign-in");
+        router.refresh();
+      })
+      .catch(() => {
+        setFailed(true);
+      });
+  };
+  return { signOut, failed };
 }
 
 const itemClass =
@@ -56,24 +100,8 @@ export function AccountMenu({
   onNavigate: () => void;
 }) {
   const pathname = usePathname();
-  const router = useRouter();
   const currentId = /^\/accounts\/([^/]+)/.exec(pathname)?.[1] ?? null;
-  const [signOutError, setSignOutError] = useState(false);
-
-  // Leave only once the server has ended the session; otherwise say so (the session would still be valid).
-  const signOut = () => {
-    setSignOutError(false);
-    void fetch("/api/auth/sign-out", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
-      .then((res) => {
-        if (!res.ok) throw new Error(String(res.status));
-        clearSidebarCookies();
-        router.replace("/sign-in");
-        router.refresh();
-      })
-      .catch(() => {
-        setSignOutError(true);
-      });
-  };
+  const { signOut, failed: signOutError } = useSignOut();
 
   const soon = (label: string, Icon: typeof CircleUser) => (
     <span role="menuitem" aria-disabled="true" className={`${itemClass} cursor-default text-muted-foreground`}>

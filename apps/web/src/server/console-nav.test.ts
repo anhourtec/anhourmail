@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { UserActor } from "@anhourmail/core";
 
-import { NAV, visibleNav } from "./console-nav";
+import { NAV, navTree, SECTIONS, visibleNav } from "./console-nav";
 
 const actor = (platform: UserActor["platformRoles"], account: UserActor["memberships"] = []): UserActor => ({
   kind: "user",
@@ -41,5 +41,52 @@ describe("console navigation follows the matrix", () => {
     expect(href("Audit log")).toBe("/accounts/acc/audit");
     expect(href("Customer accounts")).toBe("/platform/accounts");
     expect(href("Platform audit")).toBe("/platform/audit");
+  });
+});
+
+describe("left navigation sections", () => {
+  const sections = (a: UserActor, accountId?: string) =>
+    navTree(a, accountId).map((s) => [s.label, s.items.map((i) => i.label)]);
+
+  it("groups an owner's account pages under Mail and People, then Billing and the audit log", () => {
+    expect(sections(actor([], [{ accountId: "a", role: "owner" }]), "a")).toEqual([
+      ["Mail", ["Mailboxes", "Aliases", "Domains"]],
+      ["People", ["People and roles"]],
+      ["Billing", ["Billing"]],
+      ["Audit log", ["Audit log"]],
+    ]);
+  });
+
+  it("leaves out sections with nothing visible: a member gets Mail with Aliases only", () => {
+    expect(sections(actor([], [{ accountId: "a", role: "member" }]), "a")).toEqual([["Mail", ["Aliases"]]]);
+  });
+
+  it("resolves links for the current account and leaves unbuilt pages without one", () => {
+    const tree = navTree(actor([], [{ accountId: "a", role: "owner" }]), "a");
+    const links = tree.flatMap((s) => s.items);
+    expect(links.find((l) => l.label === "Mailboxes")?.href).toBe("/accounts/a/mailboxes");
+    expect(links.find((l) => l.label === "Billing")?.href).toBeUndefined();
+  });
+
+  it("gives staff a Platform section for their role, and no account sections without an account", () => {
+    expect(sections(actor(["reports_reader"]))).toEqual([["Platform", ["Platform audit"]]]);
+    const admin = navTree(actor(["global_admin"]));
+    expect(admin.map((s) => s.id)).toEqual(["platform"]);
+    expect(admin[0]?.items.map((i) => i.href)).toContain("/platform/accounts");
+  });
+
+  it("never shows another account's pages: memberships elsewhere grant nothing here", () => {
+    expect(navTree(actor([], [{ accountId: "a", role: "owner" }]), "b")).toEqual([]);
+    expect(navTree({ kind: "anonymous" }, "a")).toEqual([]);
+  });
+
+  it("keeps every section's group flag and order stable", () => {
+    expect(SECTIONS.map((s) => [s.id, s.group])).toEqual([
+      ["mail", true],
+      ["people", true],
+      ["billing", false],
+      ["audit", false],
+      ["platform", true],
+    ]);
   });
 });
