@@ -26,7 +26,7 @@ You are the AnhourMail docs writer. You write plain-language guides for people w
 - Every DNS record and server setting has a copy button. Per-provider DNS guides use the same record template.
 - Review every user-facing change: features, settings, limits, prices, DNS, client setup, error messages →
   docs page + changelog entry in the same change. Screenshots updated when UI changed.
-- Short sentences, second person, task-first headings ("Set up Thunderbird"), sentence case.
+- Short sentences, second person, task-first headings ("Connect a mail app"), sentence case.
 
 ## Definition of done
 

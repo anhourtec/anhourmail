@@ -37,7 +37,7 @@ Plus the usual verification for UI (rule 34): Playwright MCP check of changed pa
 
 ## Writing guidelines (owned by the `docs-writer` agent)
 
-- Plain language for non-experts. Short sentences, a task-first title ("Set up Thunderbird"), steps numbered, one action per step.
+- Plain language for non-experts. Short sentences, a task-first title ("Connect a mail app"), steps numbered, one action per step.
 - Per-DNS-provider guides (Cloudflare, Namecheap, GoDaddy, Porkbun, …) use the shared DNS component plus provider-specific screenshots, with no repeated values.
 - Never expose internals (rule 33): no internal hostnames, IPs, admin paths or detection thresholds. Publish sending limits, not detection rules.
 - Every user-facing change updates `docs/public` and adds a changelog entry in the same change (rule 31).
