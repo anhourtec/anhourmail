@@ -5,3 +5,4 @@ export * from "./platform";
 export * from "./sending";
 export * from "./rbac";
 export * from "./security";
+export * from "./webmail";

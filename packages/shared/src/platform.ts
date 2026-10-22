@@ -33,7 +33,7 @@ export const HOSTS = {
   mx: [`mx1.${PRODUCT_DOMAIN}`] as const,
   /** Client submission (SMTP AUTH). */
   smtp: `smtp.${PRODUCT_DOMAIN}`,
-  /** Client access (IMAP, POP3, ManageSieve, JMAP for third-party clients). */
+  /** Client access (IMAP, POP3, JMAP for third-party clients). */
   imap: `imap.${PRODUCT_DOMAIN}`,
   /** Autoconfig (`config-v1.1.xml` client-setup convention); customer domains CNAME `autoconfig.<domain>` here. */
   autoconfig: `autoconfig.${PRODUCT_DOMAIN}`,
@@ -46,7 +46,7 @@ export const HOSTS = {
 export type Security = "SSL/TLS" | "STARTTLS";
 
 export type ClientEndpoint = {
-  protocol: "IMAP" | "POP3" | "SMTP" | "ManageSieve" | "JMAP";
+  protocol: "IMAP" | "POP3" | "SMTP" | "JMAP";
   host: string;
   port: number;
   security: Security;
@@ -55,8 +55,10 @@ export type ClientEndpoint = {
 };
 
 /**
- * What a mail client connects to: IMAP, POP3, SMTP submission, ManageSieve and JMAP. Production ports are the
- * standard ones (CLAUDE.md rule 18 exception). IMAP is recommended over POP3 (POP3 downloads, no folders sync).
+ * What a mail client connects to: IMAP, POP3, SMTP submission and JMAP. Production ports are the standard ones
+ * (CLAUDE.md rule 18 exception). IMAP is recommended over POP3 (POP3 downloads, no folders sync). ManageSieve (4190)
+ * isn't offered: customer mailboxes can't write their own Sieve (server rules are managed in webmail settings), so the
+ * mail server refuses customer ManageSieve sign-ins.
  */
 export const CLIENT_ENDPOINTS: readonly ClientEndpoint[] = [
   { protocol: "IMAP", host: HOSTS.imap, port: 993, security: "SSL/TLS", recommended: true },
@@ -65,7 +67,6 @@ export const CLIENT_ENDPOINTS: readonly ClientEndpoint[] = [
   { protocol: "POP3", host: HOSTS.imap, port: 110, security: "STARTTLS", recommended: false },
   { protocol: "SMTP", host: HOSTS.smtp, port: 465, security: "SSL/TLS", recommended: true },
   { protocol: "SMTP", host: HOSTS.smtp, port: 587, security: "STARTTLS", recommended: false },
-  { protocol: "ManageSieve", host: HOSTS.imap, port: 4190, security: "STARTTLS", recommended: false },
   { protocol: "JMAP", host: HOSTS.imap, port: 443, security: "SSL/TLS", recommended: false },
 ] as const;
 

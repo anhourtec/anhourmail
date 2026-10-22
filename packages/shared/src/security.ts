@@ -46,3 +46,36 @@ export const isSignInMethod = (v: unknown): v is SignInMethod =>
 
 /** Adding a passkey needs the person to have confirmed it's them (password or a code) this recently. */
 export const STEP_UP_MINUTES = 5;
+
+// --- app passwords (mail apps over IMAP, POP3, SMTP and HTTPS; docs/internal/07-security.md "App passwords") ------
+
+/**
+ * What an app password may be used for. Each one is an allow-list of mail-server permissions; everything else is off
+ * (`@anhourmail/stalwart-client` `SCOPE_ALLOW`): `imap` and `pop3` reading mail, `smtp` sending, `jmap` mail over
+ * HTTPS (reading and sending in JMAP apps), `dav` contacts and calendars (CardDAV, CalDAV and their JMAP objects).
+ */
+export const APP_PASSWORD_PROTOCOLS = ["imap", "pop3", "smtp", "jmap", "dav"] as const;
+export type AppPasswordProtocol = (typeof APP_PASSWORD_PROTOCOLS)[number];
+
+export const APP_PASSWORD_PROTOCOL_LABELS: Readonly<Record<AppPasswordProtocol, { label: string; hint: string }>> = {
+  imap: { label: "Read mail (IMAP)", hint: "Mail apps that keep folders in sync. Most apps use this." },
+  pop3: { label: "Download mail (POP3)", hint: "Older apps that download mail to one device." },
+  smtp: { label: "Send mail (SMTP)", hint: "Sending from the app, a printer or a script." },
+  jmap: { label: "Mail over HTTPS (JMAP)", hint: "JMAP mail apps: read and send mail over HTTPS." },
+  dav: { label: "Contacts and calendars", hint: "CardDAV and CalDAV apps over HTTPS." },
+};
+
+/** Ticked for a new app password: what a phone or desktop mail app needs. POP3 is opt-in. */
+export const APP_PASSWORD_DEFAULT_PROTOCOLS: readonly AppPasswordProtocol[] = ["imap", "smtp", "dav"];
+
+export const isAppPasswordProtocol = (v: unknown): v is AppPasswordProtocol =>
+  typeof v === "string" && (APP_PASSWORD_PROTOCOLS as readonly string[]).includes(v);
+
+/**
+ * App passwords per mailbox. Matches the mail server's own default ceiling (`maxAppPasswords`, 5 on the pinned
+ * Stalwart), so the console never offers one the server would refuse. The docs render it (`appPasswordsPerMailbox`).
+ */
+export const APP_PASSWORDS_PER_MAILBOX = 5;
+
+/** App password names people choose ("Phone", "Work laptop"). */
+export const APP_PASSWORD_NAME_MAX = 40;

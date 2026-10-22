@@ -103,6 +103,13 @@ describe("permission matrix invariants", () => {
     expect(accountRoleCan("auditor", "bulk.read")).toBe(true);
   });
 
+  it("every role but the Auditor manages app passwords for their own mailboxes; revoking others' takes mailbox.manage", () => {
+    for (const r of ACCOUNT_ROLES) expect(accountRoleCan(r, "app_password.manage.own")).toBe(r !== "auditor");
+    expect(isCritical("app_password.manage.own")).toBe(false);
+    const revokeOthers = ACCOUNT_ROLES.filter((r) => accountRoleCan(r, "mailbox.manage"));
+    for (const r of revokeOthers) expect(accountRoleCan(r, "app_password.manage.own")).toBe(true);
+  });
+
   it("only Owners can require two-factor sign-in or a passkey for the account (critical)", () => {
     for (const r of ACCOUNT_ROLES) expect(accountRoleCan(r, "account.security.manage")).toBe(r === "owner");
     expect(isCritical("account.security.manage")).toBe(true);
