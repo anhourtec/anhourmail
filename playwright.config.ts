@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * Committed e2e role journeys (`npm run test:e2e`), headless in CI. Expects the apps running
- * (`npm run dev` locally; CI starts built apps). Interactive checks in a session use Playwright MCP instead.
+ * (`npm run dev` locally; CI starts built apps).
  */
 import { defineConfig, devices } from "@playwright/test";
 
