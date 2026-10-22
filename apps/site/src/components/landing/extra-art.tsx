@@ -44,7 +44,7 @@ export function DkimRotation() {
 }
 
 export function SettingsCard() {
-  const rows = CLIENT_ENDPOINTS.filter((e) => e.protocol !== "ManageSieve");
+  const rows = CLIENT_ENDPOINTS;
   return (
     <div aria-hidden="true" className="am-site-frame">
       <div className="am-site-frame-bar">

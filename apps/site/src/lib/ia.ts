@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { CLIENT_ENDPOINTS } from "@anhourmail/shared";
 
-/** Client protocols customers can use, from the single source of truth (ManageSieve is a filter detail). */
-export const PROTOCOLS = [...new Set(CLIENT_ENDPOINTS.map((e) => e.protocol))].filter((p) => p !== "ManageSieve");
+/** Client protocols customers can use, from the single source of truth. */
+export const PROTOCOLS = [...new Set(CLIENT_ENDPOINTS.map((e) => e.protocol))];
 export const PROTOCOL_LIST = new Intl.ListFormat("en", { type: "conjunction" }).format(PROTOCOLS);
 /**
  * Site information architecture: one list drives the header mega-menu, the features overview, the footer and

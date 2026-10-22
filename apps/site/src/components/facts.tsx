@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import {
   ADDONS,
+  APP_PASSWORDS_PER_MAILBOX,
   BILLING,
   CARDDAV,
   BULK_MAIL,
@@ -18,6 +19,7 @@ import {
   PRODUCT_DOMAIN,
   RECOVERY_CODES,
   SECOND_STEP_LIMITS,
+  STEP_UP_MINUTES,
   TOTP,
   TRUST_TIERS,
   TRUSTED_DEVICE_DAYS,
@@ -66,6 +68,9 @@ const VALUES = {
   recoveryCodeWarnAt: String(RECOVERY_CODES.warnAtOrBelow),
   trustedDeviceDays: String(TRUSTED_DEVICE_DAYS),
   secondStepLockMinutes: String(SECOND_STEP_LIMITS.lockMinutes),
+  // App passwords (packages/shared/src/security.ts)
+  appPasswordsPerMailbox: String(APP_PASSWORDS_PER_MAILBOX),
+  stepUpMinutes: String(STEP_UP_MINUTES),
 } as const;
 
 export type FactKey = keyof typeof VALUES;
