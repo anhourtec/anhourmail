@@ -25,6 +25,8 @@ export const LIMITS = {
   // Role changes and removals of people (per caller, fail closed).
   sensitive: { limit: 30, windowSec: 3600, by: "caller", failMode: "closed" },
   dnsVerify: { limit: 30, windowSec: 3600, by: "caller", failMode: "open" },
+  // Console global search (app bar): each call reads several lists, so tighter than `read`.
+  search: { limit: 60, windowSec: 60, by: "caller", failMode: "open" },
   aliasCreate: { limit: 60, windowSec: 3600, by: "caller", failMode: "closed" },
   export: { limit: 5, windowSec: 3600, by: "caller", failMode: "closed" },
   sending: { limit: 60, windowSec: 3600, by: "caller", failMode: "closed" },
@@ -35,6 +37,8 @@ export const LIMITS = {
   webmailSignInAddress: { limit: 10, windowSec: 900, by: "caller", failMode: "closed" },
   webmail: { limit: 900, windowSec: 60, by: "caller", failMode: "open" },
   webmailDownload: { limit: 120, windowSec: 60, by: "caller", failMode: "open" },
+  // The contacts list reads every card (up to 5,000 in batches): tighter than the proxy.
+  webmailContacts: { limit: 120, windowSec: 60, by: "caller", failMode: "open" },
   webmailUpload: { limit: 60, windowSec: 600, by: "caller", failMode: "closed" },
 } as const satisfies Record<string, RateLimit>;
 

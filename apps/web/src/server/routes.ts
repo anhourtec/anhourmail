@@ -30,6 +30,7 @@ export const ROUTES: readonly RouteSpec[] = [
   { method: "GET", path: "/api/health/ready", file: "app/api/health/ready/route.ts", guard: "infra" },
   { method: "GET", path: "/api/auth/*", file: "app/api/auth/[...all]/route.ts", guard: "infra" },
   { method: "GET", path: "/api/me", file: "app/api/me/route.ts", guard: "session" },
+  { method: "GET", path: "/api/search", file: "app/api/search/route.ts", guard: "session" },
   { method: "GET", path: "/api/platform/audit", file: "app/api/platform/audit/route.ts", guard: "platform.audit.read" },
   {
     method: "GET",
@@ -277,6 +278,39 @@ export const ROUTES: readonly RouteSpec[] = [
     guard: "webmail",
   },
   { method: "PUT", path: "/api/webmail/drafts", file: "app/api/webmail/drafts/route.ts", guard: "webmail" },
+  { method: "GET", path: "/api/webmail/contacts", file: "app/api/webmail/contacts/route.ts", guard: "webmail" },
+  { method: "POST", path: "/api/webmail/contacts", file: "app/api/webmail/contacts/route.ts", guard: "webmail" },
+  { method: "DELETE", path: "/api/webmail/contacts", file: "app/api/webmail/contacts/route.ts", guard: "webmail" },
+  {
+    method: "PATCH",
+    path: "/api/webmail/contacts/:contactId",
+    file: "app/api/webmail/contacts/[contactId]/route.ts",
+    guard: "webmail",
+  },
+  {
+    method: "POST",
+    path: "/api/webmail/contacts/move",
+    file: "app/api/webmail/contacts/move/route.ts",
+    guard: "webmail",
+  },
+  {
+    method: "PUT",
+    path: "/api/webmail/contacts/settings",
+    file: "app/api/webmail/contacts/settings/route.ts",
+    guard: "webmail",
+  },
+  {
+    method: "POST",
+    path: "/api/webmail/contacts/import",
+    file: "app/api/webmail/contacts/import/route.ts",
+    guard: "webmail",
+  },
+  {
+    method: "GET",
+    path: "/api/webmail/contacts/export",
+    file: "app/api/webmail/contacts/export/route.ts",
+    guard: "webmail",
+  },
   {
     method: "GET",
     path: "/api/webmail/messages/:emailId/attached/:blobId",
