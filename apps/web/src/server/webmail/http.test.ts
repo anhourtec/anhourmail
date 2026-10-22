@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 
-import { BodyTooLargeError, MAX_UPLOADS, readCappedBytes, withUploadSlot } from "./http";
+import {
+  ACCOUNT_HEADER,
+  BodyTooLargeError,
+  MAX_UPLOADS,
+  noAccount,
+  readCappedBytes,
+  shownAccount,
+  withUploadSlot,
+} from "./http";
 
 describe("upload slots and capped bodies", () => {
   it("runs at most MAX_UPLOADS uploads at once and asks the rest to retry", async () => {
@@ -32,5 +40,20 @@ describe("upload slots and capped bodies", () => {
     expect([...bytes]).toEqual([1, 2, 3]);
     await expect(readCappedBytes(req(new Uint8Array(11)), 10)).rejects.toBeInstanceOf(BodyTooLargeError);
     expect((await readCappedBytes(new Request("http://x/"), 10)).byteLength).toBe(0);
+  });
+});
+
+describe("the account a contacts change is for", () => {
+  const req = (v?: string) => new Request("http://x/", { headers: v === undefined ? {} : { [ACCOUNT_HEADER]: v } });
+
+  it("reads a plain id from the header and refuses anything else", async () => {
+    expect(shownAccount(req("a1_B-2"))).toBe("a1_B-2");
+    expect(shownAccount(req())).toBeNull();
+    expect(shownAccount(req(""))).toBeNull();
+    expect(shownAccount(req("a b"))).toBeNull();
+    expect(shownAccount(req("x".repeat(256)))).toBeNull();
+    const res = noAccount();
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: { message: "Reload the page and try again." } });
   });
 });

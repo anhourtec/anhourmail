@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { type NextRequest, NextResponse } from "next/server";
 
-import { hostKind, routeHost } from "./server/host-routing";
+import { hostKind, routeHost, WEBMAIL_COOKIE_NAMES, webmailSignedOutRedirect } from "./server/host-routing";
 import { newNonce, webmailCsp } from "./server/webmail/csp";
 
 /**
@@ -32,6 +32,20 @@ export function proxy(request: NextRequest) {
       return NextResponse.rewrite(url, { request: { headers: clean } });
     }
     return NextResponse.next({ request: { headers: clean } });
+  }
+
+  const signIn = webmailSignedOutRedirect(
+    target,
+    WEBMAIL_COOKIE_NAMES.some((name) => request.cookies.has(name)),
+    hostKind(host, production ? undefined : process.env.WEBMAIL_DEV_PORT) === "mail" ? "" : "/webmail",
+  );
+  if (signIn) {
+    const url = request.nextUrl.clone();
+    url.pathname = signIn;
+    url.search = "";
+    const res = NextResponse.redirect(url, 307);
+    res.headers.set("Cache-Control", "no-store");
+    return res;
   }
 
   const nonce = newNonce();

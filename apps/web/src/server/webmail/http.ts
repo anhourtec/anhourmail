@@ -123,3 +123,15 @@ export async function withUploadSlot(fn: () => Promise<Response>): Promise<Respo
     uploads -= 1;
   }
 }
+
+/** The header carrying the account the app is showing; contacts changes refuse a different active mailbox. */
+export const ACCOUNT_HEADER = "x-webmail-account";
+
+/** The account id from `ACCOUNT_HEADER`, or null when it is missing or malformed. */
+export function shownAccount(req: Request): string | null {
+  const v = req.headers.get(ACCOUNT_HEADER) ?? "";
+  return /^[A-Za-z0-9_-]{1,255}$/.test(v) ? v : null;
+}
+
+/** 400 for a contacts change without the account the app is showing. */
+export const noAccount = () => badRequest("Reload the page and try again.");
