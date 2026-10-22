@@ -349,7 +349,7 @@ export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
         icon: PlugIcon,
         label: "Standard protocols",
         title: "Every app, every device.",
-        body: "Thunderbird, Apple Mail on Mac, iPhone and iPad, Outlook, FairEmail and K-9 Mail on Android — if it speaks standard mail, it works.",
+        body: "Desktop mail apps on Windows, Mac and Linux, and the mail apps on your phone or tablet — if it speaks standard mail, it works.",
         bullets: [
           "Encrypted connections only",
           "Automatic setup where apps support it",

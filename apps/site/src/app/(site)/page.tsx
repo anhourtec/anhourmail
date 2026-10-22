@@ -125,7 +125,7 @@ const STEPS = [
   {
     icon: SmartphoneIcon,
     title: "Use any app",
-    body: "Read mail in the webmail, or in Thunderbird, Apple Mail and others.",
+    body: "Read mail in the webmail, or in the mail app you already use on your computer or phone.",
   },
 ] as const;
 

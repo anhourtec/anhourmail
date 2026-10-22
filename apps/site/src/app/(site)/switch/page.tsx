@@ -12,7 +12,7 @@ import { CtaBand, EssentialsGrid, PageHero, Prose, SectionHead } from "@/compone
 export const metadata: Metadata = {
   title: "Switch to AnhourMail",
   description:
-    "Moving from Gmail, Outlook or another provider: forward your mail now, bring your domain, and import old mail when the import tool arrives.",
+    "Moving from another provider: forward your mail now, bring your domain, and import old mail when the import tool arrives.",
   alternates: { canonical: "/switch" },
   openGraph: { title: "Switch to AnhourMail", url: "/switch" },
 };
@@ -45,7 +45,7 @@ export default function SwitchPage() {
     <>
       <PageHero
         title="Moving your email, without the weekend"
-        lead={`Leaving Gmail, Outlook or another provider for ${BRAND.product} is mostly waiting for mail to arrive in the new place. Here’s the order that works.`}
+        lead={`Leaving another provider for ${BRAND.product} is mostly waiting for mail to arrive in the new place. Here’s the order that works.`}
       />
       <section className="am-site-section">
         <ol className="am-site-wrap-wide grid grid-cols-[minmax(0,1fr)] gap-5 md:grid-cols-2 lg:grid-cols-4">
