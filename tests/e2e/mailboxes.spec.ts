@@ -7,7 +7,8 @@ test("an owner creates a mailbox, changes its storage, suspends, resumes, delete
 }, testInfo) => {
   test.setTimeout(90_000); // waits on the provisioning worker four times
   const u = e2eUsers();
-  const domain = `${u.run}-mbx-${testInfo.project.name}.test`;
+  // A retry gets its own domain: the first attempt's is still there (removed with the run's other fixtures).
+  const domain = `${u.run}-mbx-${testInfo.project.name}-${testInfo.retry}.test`;
   await signIn(page, u.users.owner, u.password);
 
   // A verified domain first.
@@ -72,7 +73,11 @@ test("an owner creates a mailbox, changes its storage, suspends, resumes, delete
   await details.getByRole("tab", { name: "Access" }).click();
   await details.getByRole("button", { name: "Suspend mailbox" }).click();
   await expect(details.getByText("Suspended", { exact: true })).toBeVisible();
+  // Wait for the request before polling: the reload below would cancel it while it's in flight (a cold dev server
+  // compiles the route on its first call, so the request can take seconds).
+  const resumed = page.waitForResponse((r) => r.request().method() === "POST" && r.url().endsWith("/resume"));
   await details.getByRole("button", { name: "Resume mailbox" }).click();
+  expect((await resumed).ok()).toBe(true);
   await expect(async () => {
     await page.reload();
     await expect(details.getByText("Active", { exact: true })).toBeVisible({ timeout: 1000 });
@@ -102,7 +107,9 @@ test("an owner creates a mailbox, changes its storage, suspends, resumes, delete
   await expect(row.getByText("Deleting")).toBeVisible();
   await row.getByRole("button", { name: `Actions for jane@${domain}` }).click();
   await page.getByRole("menuitem", { name: "Restore…" }).click();
+  const restored = page.waitForResponse((r) => r.request().method() === "POST" && r.url().endsWith("/restore"));
   await details.getByRole("button", { name: "Restore mailbox" }).click();
+  expect((await restored).ok()).toBe(true);
   await expect(async () => {
     await page.reload();
     await expect(details.getByText("Active", { exact: true })).toBeVisible({ timeout: 1000 });
