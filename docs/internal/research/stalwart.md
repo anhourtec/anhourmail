@@ -197,6 +197,58 @@ The back-reference in `c2` follows standard RFC 8620 semantics. **UNVERIFIED** t
   - It is **not** the Fastmail `https://www.fastmail.com/dev/maskedemail` capability. No such URN appears in the v0.16.27 source. The advertised JMAP capability URNs are listed in §5 [S59].
   - Its count is capped by `quotas.maxMaskedAddresses` [S26].
 
+### Suspending an account (verified on the pinned v0.16.27, 2026-10-22)
+
+`x:Account` (schema `x:UserAccount`, read from `GET /api/schema`) has **no enabled/disabled flag**. Its fields are
+`name`, `domainId`, `emailAddress` (server-set), `credentials`, `roles` (`User` / `Admin` / `Custom`), `permissions`
+(`Inherit` / `Merge` / `Replace`, the last two with `enabledPermissions` and `disabledPermissions` sets of the
+`Permission` enum), `quotas`, `aliases`, `memberGroupIds`, `memberTenantId`, `encryptionAtRest`, `locale`,
+`timeZone`, `description`, `externalId`, plus server-set `createdAt` and `usedDiskQuota`. `disabledPermissions` "take
+precedence over enabled permissions", including those inherited from roles.
+
+Options considered: deleting credentials (destroys the password and every app password, not reversible), switching
+the role (changes more than access), destroying the account (deletes mail). Chosen, as the least destructive:
+`permissions: { "@type": "Merge", enabledPermissions: {}, disabledPermissions: { authenticate, imapAuthenticate,
+pop3Authenticate, sieveAuthenticate, emailSend, emailReceive } }`; resuming sets `permissions: { "@type": "Inherit" }`
+(`SUSPENDED_PERMISSIONS` in `packages/stalwart-client/src/management.ts`).
+
+Verified against the dev stack with a throwaway domain and accounts (then destroyed):
+
+| Check while suspended                        | Result                                                                                |
+| -------------------------------------------- | ------------------------------------------------------------------------------------- |
+| JMAP session, password                       | HTTP 403                                                                              |
+| JMAP session, app password                   | HTTP 403 (the app password survives and works again after resume)                     |
+| SMTP AUTH (465)                              | `550 5.7.1 Your account is not authorized to use this service.`                       |
+| IMAP LOGIN (993), POP3 PASS (995)            | server closes the connection; no session                                              |
+| Mail to it or an alias                       | Submitted on 465: `RCPT` and `DATA` accepted, then **not delivered** but bounced to the sender (a DSN arrived in the sender's mailbox), queue empty. Inbound on 25: `RCPT` accepted (not taken to `DATA`; local delivery is the same path) |
+| Stored mail, credentials                     | unchanged (`usedDiskQuota` the same; same password signs in after resume)             |
+
+Notes: refusal is at delivery time, not at `RCPT` (a suspended address still exists in the directory). A deleting
+mailbox in our control plane also has its aliases removed from the account, so mail to them is refused at `RCPT` as
+unknown recipients. DAV (`PROPFIND /dav/card/…`) returns 403 while suspended. **Limitation:** an IMAP session that
+was already logged in when the suspension landed keeps working (`SELECT` and `FETCH` still succeed, also after
+`x:Action InvalidateCaches`); it ends only when the client disconnects or the session times out. New mail can't reach
+it (delivery is refused). Ending such sessions would need a credential change, which would also destroy the app
+passwords, so we don't. `x:Account/set { destroy }` removes the account
+and its mail; the purge verifies with `x:Account/get` that the id still has the expected address first.
+
+**OAuth tokens issued before a suspension** (verified 2026-10-22 with a throwaway `dev.test` account, then destroyed;
+headless code flow with the `anhourmail-webmail` client): the old access token is refused at once — `GET /jmap/session`
+→ **403** immediately and still 403 after 2 s and 8 s. A new sign-in is refused (`{type:"failure"}`). But the
+**refresh grant still succeeds** and mints a new access token (which is also refused with 403), and after resuming
+(`Inherit`) the **old access token works again** (200) — suspension disables the account, it does not revoke tokens.
+So the webmail BFF does not rely on Stalwart alone: it checks the control-plane mailbox status at sign-in and on every
+use of a session (`MailboxAccessGate`, cached ≤ 30 s), ends the session (drops the tokens) for `suspended`,
+`deleting` or unknown mailboxes, and also treats an upstream 403 as "this mailbox can't be used right now".
+
+**Client address behind the BFF** (verified 2026-10-22): `x:Http` has `rateLimitAnonymous` (100 / 60 s by default),
+`rateLimitAuthenticated` (1000 / 60 s) and `useXForwarded` (default `false`); `x:Security` has `authBanRate` /
+`authBanPeriod` for failed logins. Without forwarding, every webmail sign-in counts against the app's own address.
+With `useXForwarded: true`, 130 anonymous `/api/auth` calls carrying `X-Forwarded-For: 198.51.100.7` got 100 × 200
+then 30 × **429**, while one with `198.51.100.8` still got 200: limits follow the header. The setting is a plain
+boolean (no trusted-network list; `proxyTrustedNetworks` is for the PROXY protocol on listeners), so it is only safe
+while Stalwart's HTTP port is reachable from the app network alone. A throttled `/api/auth` answers **HTTP 429**.
+
 ---
 
 ## 5. JMAP

@@ -38,14 +38,14 @@ Checks live in the **service layer** (permission + ownership scope). Route handl
 
 Plus and Supporter accounts can add people (family, a small group). Free accounts have one Owner and nobody else.
 
-| Role                                    | Can                                                                                                                                                    | Cannot                                               |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
-| **Owner** (global admin of the account) | Everything in the account, including deleting it, managing admins and transferring ownership                                                           | Remove or demote the last Owner                      |
-| **Domain Administrator**                | Add, verify and remove domains; see DNS records and checks; set catch-all                                                                              | Billing, people management, delete account           |
-| **User Administrator**                  | Create, suspend and delete mailboxes; invite and remove Members; reset Member passwords/2FA; manage anyone's aliases and masked aliases in the account | Change admin roles, billing, domains, delete account |
-| **Billing Administrator** (account)     | Plan changes, payment method, invoices, refunds request                                                                                                | Domains, people, mailboxes                           |
-| **Member**                              | Their own mailbox, own aliases and masked aliases, own settings, own Security activity, app passwords, export own mailbox                              | Anything account-wide                                |
-| **Read-only (Auditor)**                 | View settings, people, domains, mailboxes (metadata), and the account audit log; export the audit log                                                  | Any change                                           |
+| Role                                    | Can                                                                                                                                                                                                                                                      | Cannot                                               |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| **Owner** (global admin of the account) | Everything in the account, including deleting it, managing admins and transferring ownership                                                                                                                                                             | Remove or demote the last Owner                      |
+| **Domain Administrator**                | Add, verify and remove domains; see DNS records and checks; set catch-all                                                                                                                                                                                | Billing, people management, delete account           |
+| **User Administrator**                  | Create mailboxes; suspend, delete and restore Members', unassigned and their own mailboxes (an Owner's or another admin's: Owner only); invite and remove Members; reset Member passwords/2FA; manage anyone's aliases and masked aliases in the account | Change admin roles, billing, domains, delete account |
+| **Billing Administrator** (account)     | Plan changes, payment method, invoices, refunds request                                                                                                                                                                                                  | Domains, people, mailboxes                           |
+| **Member**                              | Their own mailbox, own aliases and masked aliases, own settings, own Security activity, app passwords, export own mailbox                                                                                                                                | Anything account-wide                                |
+| **Read-only (Auditor)**                 | View settings, people, domains, mailboxes (metadata), and the account audit log; export the audit log                                                                                                                                                    | Any change                                           |
 
 A person can hold several account roles. Permissions are the union.
 
@@ -106,6 +106,20 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
 5. **Mail content is never visible to staff** through any console path.
 6. **Suspended** users and accounts can sign in only to export or pay (billing suspension) or not at all (abuse suspension, export by request).
 7. Changes to roles, sending limits, signup gating or abuse logic need a `security-reviewer` pass (rule 27).
+8. **Mailbox lifecycle above your role:** suspending, resuming, deleting or restoring a mailbox assigned to an Owner
+   or any admin (any role but Member) takes an Owner. A User Administrator holds `mailbox.manage` but gets **403**
+   (audited as `denied`) for those mailboxes, except their own; the console hides the actions for them. This is a
+   per-mailbox check in the service (`packages/core/src/mailboxes/service.ts`), not a separate permission, so the
+   matrix and the RBAC harness (random ids → 404) are unchanged; unit tests cover it.
+
+## Webmail
+
+The webmail is not a console area and is not in the permission matrix: it is reached with a **mailbox** sign-in
+(address + mailbox password) on the webmail origin, and a console session never grants it (RBAC harness: every
+`webmail`-guarded route answers 401 to every console persona). What a webmail session can do is bounded by the BFF's
+JMAP allow-list and its own mailbox (`accountId` must match). A mailbox that is `suspended` or `deleting` in the
+control plane, or unknown to it, can't sign in, and an open session ends within 30 s (`MailboxAccessGate`). The
+console's **Open webmail** link (person menu, customers only) pre-fills the address and nothing else.
 
 ## What each role sees (navigation)
 

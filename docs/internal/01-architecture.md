@@ -91,12 +91,36 @@ We **never store mailbox passwords** (rule 23). Stalwart hashes them.
 
 ### How the webmail gets a Stalwart session (research: `research/stalwart.md` §6)
 
-1. The user signs in to the console (better-auth session cookie on `app.anhourmail.com`).
-2. Opening webmail redirects to `mail.anhourmail.com/sso?code=…`: a **one-time, 60-second handoff code** (stored hashed in Redis, bound to the user and the target mailbox). The mail host exchanges it server-side and sets its own **host-only** `__Host-` session cookie. No cookie is shared on `.anhourmail.com`.
-3. On first webmail use for a mailbox, the BFF runs Stalwart's **headless OAuth code flow with PKCE**: `POST /api/auth` (account + mailbox secret + MFA if set) → `clientCode` → `POST /auth/token`. The access and refresh tokens are **encrypted at rest** (secrets module, key ring, AAD = session id) and stored server-side, keyed to the webmail session.
-   - Where the mailbox secret comes from at that step (prompt on first webmail open vs. derive at provisioning) is a Phase 1 prototype item (`09-roadmap.md`).
-4. The browser calls `mail.anhourmail.com/jmap/*` (same origin). The BFF attaches `Authorization: Bearer <token>`, rewrites session URLs, refreshes tokens, and forwards. **The browser never sees a Stalwart token.**
-5. Back-office jobs only (support tooling, imports) use an **impersonation service account** (`user%svc`): IP-restricted, secret in the key ring, every use audited. Never for interactive webmail.
+Built in Phase 4 slice 1 (2026-10-22; ADR-0018):
+
+1. The webmail has its own sign-in form on `mail.anhourmail.com` (mailbox address + mailbox password). The console's
+   **Open webmail** link only pre-fills the address (`/sign-in?address=…`); no console cookie or handoff code reaches
+   the webmail. The webmail API (`/api/webmail/*`) is served on the webmail origin only, and the console API never is
+   (`server/host-routing.ts`).
+2. `POST /api/webmail/auth` runs Stalwart's **headless OAuth code flow with PKCE** (`packages/stalwart-client`
+   `oauth.ts`, behind `server/adapters/stalwart-oauth.ts`, client `anhourmail-webmail`): `POST /api/auth` → client
+   code → `POST /auth/token`, forwarding the trusted client IP as `X-Forwarded-For` (Stalwart `x:Http.useXForwarded`). The
+   password is used once and never stored or logged. Limits: `webmailSignIn` per IP and `webmailSignInAddress` (wrong
+   passwords only) per address, both fail-closed; Stalwart throttling surfaces as "busy". The control plane then checks the mailbox (`MailboxAccessGate`,
+   below).
+3. Access and refresh tokens are **sealed with the key ring** (`packages/server/src/keyring.ts`: AES-256-GCM, HKDF per
+   purpose, key id in the ciphertext, AAD = the Redis key) in Redis under `am:wm:s:<sha256(session id)>` (7 days idle,
+   30 days absolute). The browser holds only the opaque id in an HttpOnly, SameSite=Lax cookie (`__Host-am.webmail` on
+   https, `am.webmail` in dev). Tokens refresh a minute before expiry (one refresh per session at a time); a refused
+   grant or a second 401 ends the session. Stalwart has no revocation endpoint, so sign-out drops our copy.
+4. The browser calls same-origin `/api/webmail/session` (a JMAP Session document pointing at the proxy) and
+   `/api/webmail/jmap`. The proxy checks the request against an allow-list (core + mail capabilities, read/list
+   methods, `Email/set` for keyword updates only; ≤ 16 calls; ≤ 256 KB; `accountId` must be the session's), attaches the Bearer token, and
+   forwards through a **per-user queue with ≤ 4 in flight**, retrying `limit` errors with jittered backoff. Message
+   bodies come from `/api/webmail/messages/:id`, **sanitised on the server** (`server/webmail/sanitize.ts`) and shown in
+   a sandboxed `srcdoc` frame; attachments stream from `/api/webmail/download/:blobId` as `attachment`, `nosniff`.
+   **The browser never sees a Stalwart token.** Webmail pages get a nonce-based CSP from `src/proxy.ts`.
+5. **Suspension is enforced by the BFF too.** Stalwart refuses a suspended account's existing access tokens (403) but
+   still honours its refresh grant and accepts the old token again after resume (`research/stalwart.md`). So every
+   sign-in and every use of a session asks the control plane (`MailboxAccessGate` in `packages/core/src/webmail`,
+   Postgres lookup by address, cached ≤ 30 s): `suspended`, `deleting` or unknown mailboxes end the session, and an
+   upstream 403 does too. Mailboxes that exist only in Stalwart (dev `dev.test`) can't use the webmail.
+6. Back-office jobs only (support tooling, imports) use an **impersonation service account** (`user%svc`): IP-restricted, secret in the key ring, every use audited. Never for interactive webmail.
 
 Why the host split: the origin that renders untrusted email HTML (`mail.`) is isolated from the origin that can delete accounts and change billing (`app.`). A bug in message rendering cannot read console cookies or call console APIs (ADR-0003).
 
@@ -150,13 +174,48 @@ worker (apps/worker/src/worker.ts) ───────────┘
         audit platform.provisioning_failed
 scheduler ─► job:reconcile (hourly) ─► desired vs Stalwart ─► drift report + audit platform.reconciler_drift
              (missing / unknown / quota mismatch). Never deletes.
+scheduler ─► job:mailbox-purge (hourly) ─► deleting mailboxes past purge_after: destroy the Stalwart account, then
+             the mailbox + alias rows; audit platform.mailbox_purged (system, account scope). The only path that
+             deletes mail.
 ```
+
+Mailbox lifecycle (status in `mailbox.status`; every change is a console mutation that queues `mailbox.ensure`):
+
+```
+provisioning ──worker──► active ──suspend──► suspended ──resume──► provisioning ──worker──► active
+     any but deleting ──delete──► deleting (purge_after = now + MAILBOX_DELETE_GRACE_DAYS)
+     deleting ──restore (before purge_after, domain still held)──► provisioning ──worker──► active
+     deleting ──scheduler, purge_after passed──► rows gone, Stalwart account destroyed
+```
+
+- Suspended and deleting mailboxes are suspended on Stalwart with `x:Account.permissions = Merge` +
+  `disabledPermissions` (sign-in on every protocol, send, receive); credentials and mail are untouched, so resume
+  restores everything (`research/stalwart.md` "Suspending an account"). A deleting mailbox's aliases are also taken off
+  the account (refused at `RCPT`); its address and its aliases' addresses stay reserved in Postgres until the purge.
+- Lifecycle changes are conditional updates (`transition(id, from, to)`), so concurrent changes conflict (409)
+  instead of overwriting each other. A running job that sees the status change underneath leaves it alone (the change
+  queued its own job). Restore is refused once `purge_after` has passed, and the purge re-checks status and date
+  inside its unit of work, so a restore and the purge can't both win.
+- The reconciler treats active and suspended mailboxes as required, deleting mailboxes as neither missing nor
+  unknown, and any mailbox Stalwart has an id for as known. It also compares suspension (active vs suspended/deleting
+  against the account's disabled sign-in) and re-queues `mailbox.ensure` for each mismatch.
+- A lifecycle change whose job gave up keeps its status with `last_error` set; the console shows **Not applied** (a
+  boolean, never the error text) and suspending or deleting again re-queues the job (audited, `retry: true`).
+  Every new lifecycle change clears `last_error`.
+- One subject at a time: `claimNext` never claims a job whose subject has another non-stale job running (claims
+  are serialised by a transaction advisory lock), and `apply()` re-reads the mailbox right before calling Stalwart,
+  so an older job can't land after a newer one.
+- The purge deletes the row (conditional on `deleting` + due, which also locks it) **before** destroying the Stalwart
+  account in the same transaction: a concurrent restore waits and then gets 409; a Stalwart failure rolls back.
+- Suspend / resume / delete / restore of a mailbox assigned to an Owner or admin takes an Owner (403 for a User
+  Administrator, audited as denied; `roles.md` guard rail 8).
 
 - Addresses are one namespace across `mailbox` and `mail_alias` (each table also has its own unique index). Creating
   either takes a transaction-scoped advisory lock on the address before checking it, and a unique violation maps to
   409, so concurrent creates can't share an address. Alias changes queue `mailbox.ensure`, which writes the whole
   alias list (enabled flags included) to the Stalwart account.
-- Job kinds: `domain.ensure`, `mailbox.ensure` (account + quota + aliases, including masked aliases). Every call
+- Job kinds: `domain.ensure`, `domain.remove`, `mailbox.ensure` (account + quota + suspension + aliases, including
+  masked aliases). Every call
   is idempotent (upsert by natural key), so retries and duplicate jobs are safe.
 - New mailboxes get a random, unusable argon2id password; mail access is via webmail sign-in and app passwords.
 - Platform domains (free tier, staff) are desired implicitly through their mailboxes; `RECONCILE_IGNORE_DOMAINS`

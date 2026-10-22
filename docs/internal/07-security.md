@@ -30,7 +30,7 @@ Last updated: 2026-10-21.
 - TLS 1.2+ only with AEAD suites (Stalwart cannot negotiate 1.0/1.1), no AUTH before STARTTLS. HSTS with preload once stable. MTA-STS enforce, TLS-RPT, DANE when DNSSEC is in place, REQUIRETLS advertised. Encryption layers, zero-access mode and the claims we may make: `12-encryption-and-security-posture.md` (ADR-0016).
 - Sign-in: TOTP + WebAuthn security keys/passkeys + recovery codes for the console; per-device scoped app passwords for mail protocols (Stalwart has no WebAuthn).
 - Cookies: `__Host-` prefix, `Secure`, `HttpOnly`, `SameSite=Lax`, host-only (separate for `app.` and `mail.`).
-- Secrets: AES-256-GCM, key ring with key ids, HKDF-derived keys, AAD per row, required in production, re-encryption job (`research/reference-patterns.md` pattern 5).
+- Secrets: AES-256-GCM, key ring with key ids, HKDF-derived keys, AAD per row, required in production, re-encryption job (`research/reference-patterns.md` pattern 5). Implemented in `packages/server/src/keyring.ts` (`SECRETS_KEYRING="id:base64key,…"`, first = active; dev derives a key from `BETTER_AUTH_SECRET`); first user: webmail session tokens. The re-encryption job is still to come (`keyIdOf` finds values under a retired key).
 - Logging: JSON, request ids, redaction list (`packages/server/src/log.ts`), and no `console.*` in server code (`check:logging`).
 - Dependencies: exact versions, licence allowlist, weekly update review.
 

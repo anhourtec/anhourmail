@@ -56,6 +56,16 @@ Each migration gets a section in this shape:
 - Rollback:
 ```
 
+### 0007_mailbox_lifecycle · uncommitted · 2026-10-22 · Safe
+
+- Added: `mailbox.purge_after timestamptz` (nullable; set while a mailbox is `deleting`), partial index
+  `mailbox_purge_idx` on `purge_after` `where status = 'deleting'` (the hourly purge's lookup).
+- Changed: `mailbox.status` gains the value `deleting` (text column; no constraint change).
+- Removed: —
+- Data: none (existing rows get `purge_after = null`).
+- Rollback: first make sure no row is `deleting` (restore them, or let the purge finish), then drop the index and
+  the column. Older code reads `deleting` rows as `provisioning`.
+
 ### 0006_remove_waitlist · uncommitted · 2026-10-22 · Not recommended
 
 - Added: —

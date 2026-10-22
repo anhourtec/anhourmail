@@ -1,6 +1,6 @@
 ---
 title: Mailboxes
-description: Create mailboxes on your own domain, give them to people in your account, and set their storage.
+description: Create mailboxes on your own domain, give them to people in your account, set their storage, and suspend, delete or restore them.
 ---
 
 A mailbox is an address with its own storage, like `jane@example.org`. On the Plus and Supporter plans you can
@@ -21,6 +21,43 @@ The mailbox shows **Setting up** for a moment, then **Active**.
 Open the mailbox and change **Storage**. The new quota applies within a minute. Lowering it below what the mailbox
 already holds doesn't delete anything, but the mailbox stops accepting new mail until there's room again.
 
+## Suspend a mailbox
+
+Open the mailbox and choose **Suspend mailbox**. Within a minute:
+
+- Nobody can sign in to it: webmail, mail apps (IMAP, POP3 and SMTP) and app passwords are all refused. A mail app
+  that is already connected can stay connected until it disconnects, but receives no new mail.
+- Mail sent to it or to its aliases isn't delivered; the sender gets a bounce.
+- Nothing in it is deleted. Messages, folders, settings and app passwords are all kept.
+
+Choose **Resume mailbox** to turn it back on. It shows **Setting up** for a moment, then **Active**.
+
+## Delete a mailbox
+
+Open the mailbox, choose **Delete mailbox…**, and confirm. A deleted mailbox can be restored for
+
+<Value of="mailboxDeleteGraceDays" /> days:
+
+- Straight away it's suspended (see above), and its aliases stop receiving mail too.
+- Its address, and its aliases' addresses, stay reserved, so nobody else can take them.
+- The list shows it as **Deleting**, with the date until which you can restore it.
+
+After that date the mailbox, its aliases and all of its mail are permanently deleted, and the addresses are free
+again. This can't be undone.
+
+### Restore a deleted mailbox
+
+Before that date, open the mailbox and choose **Restore mailbox**. It comes back with its aliases and all of its mail,
+and shows **Active** again within a minute (even if it was suspended before you deleted it). A mailbox can't be
+restored if its domain is no longer verified in your account.
+
 ## Who can manage mailboxes
 
-Owners and User Admins can create mailboxes and change storage. Domain Admins and Auditors can see them.
+Owners and User Admins can create, suspend, delete and restore mailboxes and change their storage. Only an owner can
+suspend, delete or restore a mailbox that belongs to an owner or an admin. Domain Admins and Auditors can see
+mailboxes.
+
+If a suspension or deletion couldn't be applied on the mail server, the mailbox shows **Not applied** and its page
+offers **Retry**.
+
+A domain can't be removed while mailboxes use it, including deleted mailboxes that can still be restored.

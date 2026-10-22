@@ -1,12 +1,43 @@
 # 05 — Webmail
 
-Last updated: 2026-10-21. Research: `research/legacy-audit.md`, `research/ui-references.md`, `research/stalwart.md` §5.
+Last updated: 2026-10-22.
+
+**Status (2026-10-22): slice 1 is built** — webmail sign-in (OAuth code flow + PKCE, tokens sealed server-side), the
+JMAP proxy (allow-list, per-user queue ≤ 4, `limit` retry), folders with counts and nesting, the thread-collapsed
+windowed list, the reader (server-sanitised HTML in a sandboxed `srcdoc` frame, remote images blocked, attachments as
+downloads), read/unread/flag, basic shortcuts, and the control-plane mailbox gate. Next slices: push (SSE fan-out),
+IndexedDB cache and `*/changes` sync, the image proxy ("Load images" is shown disabled until then), composer,
+move/archive/delete, search. Until push lands the client refreshes on tab focus and every 5 minutes. Details:
+`01-architecture.md` "How the webmail gets a Stalwart session". Research: `research/legacy-audit.md`, `research/ui-references.md`, `research/stalwart.md` §5.
 
 ## Why HourMail was slow, and what we do instead
 
 HourMail opened a new IMAP connection and logged in on every API call, ran one STATUS per folder serially, re-polled every 30 s, preloaded every folder, autosaved drafts every 2 s with 2–3 IMAP sessions each, and downloaded and re-parsed whole raw messages for each view and attachment (`research/legacy-audit.md`, with file references).
 
 AnhourMail: **browser → same-origin BFF (`mail.anhourmail.com`) → Stalwart JMAP.** There is no IMAP in the browser path. We sync incrementally, push changes, cache locally and fetch only what is on screen.
+
+### Security notes from the slice 1 review (2026-10-22)
+
+- **Account-level suspension must gate the webmail too.** Today the BFF's `MailboxAccessGate` checks the mailbox's
+  own status (`suspended`, `deleting`, unknown). When account-level suspension (a whole customer account) lands, the
+  same gate must also refuse mailboxes of a suspended account — extend `MailboxStatusLookup` rather than adding a
+  second check, so sign-in and every session use stay covered.
+- **Attachment names never travel in URLs.** `/api/webmail/download/:blobId` carries only the blob id; the link's
+  `download` attribute names the file (the sanitised name the reader shows) and the response is a bare
+  `Content-Disposition: attachment`. Our access log records paths only; NGINX must not log query strings for
+  `/api/webmail/*` either (use `$uri`, not `$request` / `$request_uri`, in the `mail.` log format), in case a future
+  endpoint adds one.
+- **Stalwart sees the end user's address.** The BFF forwards the trusted client IP as `X-Forwarded-For` on
+  `/api/auth` and `/auth/token`, and Stalwart has `x:Http.useXForwarded: true` (dev plan; required in production), so
+  its anonymous rate limit and failed-login ban apply per person, not to the app. That setting trusts the header from
+  any caller, so **Stalwart's HTTP listener must be reachable from the app network only** (it is: internal network
+  in production, `127.0.0.1` in dev by default). Stalwart's 429/403 on sign-in surface as "busy", never as "wrong
+  password".
+- **Proxy allow-list is minimal until the next slices.** `Email/set` may only set or clear `keywords/*` on existing
+  messages (no create, destroy, moves or other properties); the composer and move slices widen it deliberately.
+- **CSS scrubbing is linear and capped** (style attribute 8 KB, `<style>` block 64 KB, over-cap CSS dropped and
+  counted as blocked); `<style>` keeps no attributes; inline `cid:` images are fetched only when the HTML references
+  them, at most 32 per message.
 
 ## Client architecture
 

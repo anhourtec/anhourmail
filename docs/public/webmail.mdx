@@ -1,0 +1,72 @@
+---
+title: Webmail
+description: Read your mail in the browser at the webmail address — how to sign in, what you'll see, and why remote images are blocked.
+---
+
+The webmail is AnhourMail in your browser, at <Value of="webmailHost" />. It's a separate address from the console
+(<Value of="appHost" />), so signing in to one doesn't sign you in to the other.
+
+## Sign in
+
+1. Go to <Value of="webmailHost" />. From the console you can also open your menu and choose **Open webmail**,
+   which fills in your address for you.
+2. Enter your **mailbox address** and your **mailbox password** — the password of the mailbox itself, not an app
+   password.
+3. Choose **Sign in**.
+
+If the address or password is wrong you'll see "Mailbox address or password is wrong." We don't say which one, so nobody
+can use the form to find out which addresses exist. After several wrong tries in a row, wait a few minutes before
+trying again.
+
+Your password is only used to sign in. We don't store it: the mail server checks it and gives your browser session
+a key that stays on our servers, never in the browser. Changing your mailbox password signs the webmail out
+everywhere.
+
+If you see "This mailbox can't be used right now", the mailbox has been suspended or deleted by your account's admin
+(see [Mailboxes](/docs/mailboxes)). Ask them to resume or restore it.
+
+## Reading mail
+
+- On a computer you see your folders, the list of conversations and the open message side by side. On a phone you
+  see one at a time: choose a conversation to open it, and the back arrow to return to the list.
+- Messages in the same conversation are grouped. The number beside a sender shows how many messages it holds; open
+  it and choose any message in the strip at the top to read it.
+- Opening a conversation marks it read. Use the envelope button to mark a message unread again, and the flag button
+  to flag it.
+- Attachments are listed under the message headers. Choosing one downloads it; nothing an attachment contains is
+  opened in the webmail itself.
+- Folders you create, and folders inside folders, appear below the standard ones (Inbox, Drafts, Sent, Archive,
+  Junk, Trash) with their unread counts.
+
+### Keyboard shortcuts
+
+| Key                       | What it does                   |
+| ------------------------- | ------------------------------ |
+| `j` / `k`                 | Next / previous conversation   |
+| `Enter` or `o`            | Open the selected conversation |
+| `u` or `Esc`              | Back to the list               |
+| `s`                       | Flag or unflag                 |
+| `Shift`+`U` / `Shift`+`I` | Mark unread / read             |
+| `?`                       | Show the shortcuts             |
+
+Writing and replying to mail in the webmail is coming next. Until then, use a mail app
+([settings](/docs/clients/imap-smtp-settings)).
+
+## Remote images are blocked
+
+Many messages, especially newsletters, load their pictures from the sender's servers when you open them. That
+tells the sender when you opened the message, roughly where you are, and which device you use — the same trick
+tracking pixels rely on.
+
+So the webmail **never loads remote images**. You'll see a striped placeholder where an image would be and a note
+saying how many were blocked. Tiny tracking pixels are removed entirely. Pictures that are part of the message
+itself (sent inside it) still show.
+
+Loading remote images on request, through our privacy proxy so the sender still can't see you, is coming soon.
+
+## How messages are kept safe
+
+Every message is cleaned on our servers before you see it: scripts, forms, embedded frames and anything that
+could run code or reach out to the internet are removed. The cleaned message is then shown in an isolated frame
+that can't run code or reach the rest of the page. Links open in a new tab and don't tell the site where you came
+from.

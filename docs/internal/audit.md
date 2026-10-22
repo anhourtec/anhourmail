@@ -19,7 +19,7 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `auth` | `auth.sign_in`, `auth.sign_in_failed`, `auth.sign_out`, `auth.password_changed`, `auth.password_reset`, `auth.password_reset_requested`, `auth.two_factor_enabled`, `auth.two_factor_disabled`, `auth.app_password_created`, `auth.app_password_revoked`, `auth.session_revoked`, `auth.locked_out`, `auth.mail_client_sign_in`, `auth.mail_client_sign_in_failed`, `auth.two_factor_reset`, `auth.backup_code_used`, `auth.sessions_revoked_all`, `auth.new_device` |
 | `account` | `account.created`, `account.deleted`, `account.updated`, `account.invite_sent`, `account.invite_accepted`, `account.member_added`, `account.member_removed`, `account.role_changed`, `account.ownership_transferred` |
 | `domain` | `domain.added`, `domain.verified`, `domain.verify_failed`, `domain.removed`, `domain.dns_state_changed` |
-| `mailbox` | `mailbox.created`, `mailbox.suspended`, `mailbox.unsuspended`, `mailbox.deleted`, `mailbox.quota_changed` |
+| `mailbox` | `mailbox.created`, `mailbox.suspended`, `mailbox.unsuspended`, `mailbox.deleted`, `mailbox.quota_changed`, `mailbox.deletion_scheduled`, `mailbox.restored` |
 | `alias` | `alias.created`, `alias.toggled`, `alias.deleted` |
 | `masked_alias` | `masked_alias.created`, `masked_alias.toggled`, `masked_alias.deleted` |
 | `catch_all` | `catch_all.changed` |
@@ -31,7 +31,7 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `abuse` | `abuse.report_received`, `abuse.report_resolved` |
 | `staff` | `staff.role_granted`, `staff.role_revoked`, `staff.act_as_started`, `staff.act_as_ended`, `staff.account_viewed`, `staff.credentials_reset` |
 | `data` | `data.export_requested`, `data.export_downloaded`, `data.import_started`, `data.import_finished`, `data.deletion_requested`, `data.deleted` |
-| `platform` | `platform.settings_changed`, `platform.secret_changed`, `platform.stalwart_upgraded`, `platform.provisioning_failed`, `platform.reconciler_drift`, `platform.audit_chain_broken` |
+| `platform` | `platform.settings_changed`, `platform.secret_changed`, `platform.stalwart_upgraded`, `platform.provisioning_failed`, `platform.reconciler_drift`, `platform.mailbox_purged`, `platform.audit_chain_broken` |
 | `audit` | `audit.exported` |
 | `shared_mailbox` | `shared_mailbox.created`, `shared_mailbox.deleted`, `shared_mailbox.member_added`, `shared_mailbox.member_removed` |
 | `distribution_list` | `distribution_list.created`, `distribution_list.deleted`, `distribution_list.member_added`, `distribution_list.member_removed`, `distribution_list.senders_changed` |
@@ -49,6 +49,15 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `bulk` | `bulk.addon_enabled`, `bulk.addon_disabled`, `bulk.sender_domain_verified`, `bulk.list_created`, `bulk.list_imported`, `bulk.list_deleted`, `bulk.campaign_scheduled`, `bulk.campaign_held`, `bulk.campaign_approved`, `bulk.campaign_sent`, `bulk.campaign_cancelled`, `bulk.suppression_added`, `bulk.suppression_removed`, `bulk.sending_paused` |
 
 <!-- END generated: audit actions -->
+
+Mailbox lifecycle: `mailbox.suspended` and `mailbox.unsuspended` (resume), `mailbox.deletion_scheduled` (meta: the
+status it came from, `purgeAfter`, alias count) and `mailbox.restored` are written by the person in the console;
+`platform.mailbox_purged` is written by the system (`mailbox-purge`) **in the mailbox's account scope**, so the
+account's admins see when a deleted mailbox was removed for good (a failed purge is recorded as `failed` and retried).
+Suspending or deleting again after the worker gave up is recorded with `retry: true`. A User Administrator's attempt
+on an Owner's or admin's mailbox is recorded as `denied` (`forbidden`). The reconciler's `platform.reconciler_drift`
+meta includes `suspensionMismatches` and `requeued`.
+`mailbox.deleted` stays reserved for an immediate deletion without a grace period (not offered today).
 
 Not audited here by design: personal folder create/rename/move/delete and message moves — they are mail data
 handled by Stalwart over JMAP/IMAP and never pass through the control plane (ADR-0014). Audited: folder sharing
