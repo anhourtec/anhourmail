@@ -14,11 +14,15 @@ type Options = {
   maxQuotaGb: number;
 };
 
-/** New mailbox: local part @ one of the account's active domains, optionally for a member, with a quota. */
+/**
+ * New mailbox (in the "Add a mailbox" panel): local part @ one of the account's active domains, optionally for a
+ * member, with a quota. The panel stays open after creating one, so several can be added in a row.
+ */
 export function CreateMailboxForm({ accountId, options }: { accountId: string; options: Options }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [created, setCreated] = useState<string | null>(null);
 
   function onSubmit(e: SyntheticEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -41,19 +45,21 @@ export function CreateMailboxForm({ accountId, options }: { accountId: string; o
   async function create(body: Record<string, string>, form: HTMLFormElement) {
     setPending(true);
     setError(null);
+    setCreated(null);
     const res = await callApi(`/api/accounts/${accountId}/mailboxes`, { method: "POST", body });
     setPending(false);
     if (!res.ok) {
       setError(res.message);
       return;
     }
+    const address = (res.data as { address?: unknown } | undefined)?.address;
+    setCreated(typeof address === "string" ? address : "The mailbox");
     form.reset();
     router.refresh();
   }
 
   return (
-    <form onSubmit={onSubmit} className="flex flex-col gap-4 rounded-xl border p-4 sm:p-5" noValidate>
-      <h2 className="am-h3">New mailbox</h2>
+    <form onSubmit={onSubmit} className="flex max-w-2xl flex-col gap-5" noValidate>
       <div className="flex flex-col gap-1.5">
         <label htmlFor="mbx-local" className="am-h4">
           Address
@@ -112,6 +118,12 @@ export function CreateMailboxForm({ accountId, options }: { accountId: string; o
       {error && (
         <p role="alert" className="am-small text-destructive">
           {error}
+        </p>
+      )}
+      {created && (
+        <p role="status" className="am-small rounded-lg border bg-muted/40 px-3 py-2.5">
+          Created <span className="am-code break-all text-foreground">{created}</span>. It&apos;s set up on the mail
+          server within a minute. Add another, or close this panel.
         </p>
       )}
       <button type="submit" disabled={pending} className={`${primaryButtonClass} w-fit`}>
