@@ -2,6 +2,10 @@
 import { describeAdapterContract } from "../contract";
 import { randomUUID } from "node:crypto";
 
+import { eq } from "drizzle-orm";
+
+import { hashRecoveryCode } from "../auth/recovery-codes";
+
 import { createDb, schema } from "./client";
 import { PgUnitOfWork } from "./repositories";
 
@@ -39,6 +43,51 @@ describeAdapterContract("postgres", async () => {
         .insert(schema.mailAlias)
         .values({ accountId: account.id, mailboxId: m.id, address: alias, kind: "alias" });
       return { domainId: d.id, mailboxId: m.id };
+    },
+    seedAuth: async (userId, input) => {
+      for (const x of input.sessions ?? []) {
+        await db.insert(schema.authSession).values({
+          id: x.id,
+          token: randomUUID(),
+          userId,
+          expiresAt: x.expiresAt,
+          createdAt: x.updatedAt,
+          updatedAt: x.updatedAt,
+          ipAddress: x.ip ?? null,
+          userAgent: x.userAgent ?? null,
+        });
+      }
+      for (const p of input.passkeys ?? []) {
+        await db.insert(schema.authPasskey).values({
+          ...p,
+          userId,
+          publicKey: "public-key",
+          credentialID: randomUUID(),
+          counter: 0,
+          deviceType: "singleDevice",
+          backedUp: false,
+        });
+      }
+      if (input.recoveryCodes !== undefined) {
+        await db.update(schema.authUser).set({ twoFactorEnabled: true }).where(eq(schema.authUser.id, userId));
+        await db.insert(schema.authTwoFactor).values({
+          id: randomUUID(),
+          userId,
+          secret: "sealed-secret",
+          backupCodes: JSON.stringify(
+            Array.from({ length: input.recoveryCodes }, () => hashRecoveryCode(randomUUID())),
+          ),
+          verified: true,
+        });
+      }
+      for (let i = 0; i < (input.trustedDevices ?? 0); i++) {
+        await db.insert(schema.authVerification).values({
+          id: randomUUID(),
+          identifier: `trust-device-${randomUUID()}`,
+          value: userId,
+          expiresAt: new Date(Date.now() + 86_400_000),
+        });
+      }
     },
   };
 });

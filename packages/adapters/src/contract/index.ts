@@ -20,7 +20,17 @@ export type AdapterFactory = () => Promise<{
     domainId: string;
     mailboxId: string;
   }>;
+  /** Seeds identity-layer sign-in state for a user (sessions, passkeys, two-factor, trusted devices). */
+  seedAuth: (userId: string, input: SeedAuth) => Promise<void>;
 }>;
+
+export type SeedAuth = {
+  sessions?: { id: string; expiresAt: Date; updatedAt: Date; ip?: string; userAgent?: string }[];
+  passkeys?: { id: string; name: string; createdAt: Date }[];
+  /** Two-factor on, with this many unused recovery codes. */
+  recoveryCodes?: number;
+  trustedDevices?: number;
+};
 
 const auditInput = (
   scope: AuditEntryInput["scope"],
@@ -672,6 +682,97 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         expect(await uow.run((r) => r.access.memberships(id))).toEqual([]);
         expect(await uow.run((r) => r.access.isSuspended(id))).toBe(false);
         expect(await uow.run((r) => r.access.accountNames([randomUUID(), "not-a-uuid"]))).toEqual({});
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("security: factors, sessions, passkeys and trusted devices stay scoped to their person", async () => {
+      const { uow, cleanup, createUser, seedAuth } = await factory();
+      try {
+        const now = new Date();
+        const at = (min: number) => new Date(now.getTime() + min * 60_000);
+        const sam = await createUser(`sec-sam-${randomUUID()}@example.com`);
+        const lee = await createUser(`sec-lee-${randomUUID()}@example.com`);
+        const [s1, s2, s3, sl] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+        const [pk, pkl] = [randomUUID(), randomUUID()];
+        await seedAuth(sam, {
+          sessions: [
+            { id: s1, expiresAt: at(600), updatedAt: at(-30), ip: "203.0.113.4", userAgent: "UA one" },
+            { id: s2, expiresAt: at(600), updatedAt: at(-5) },
+            { id: s3, expiresAt: at(-1), updatedAt: at(-90) },
+          ],
+          passkeys: [{ id: pk, name: "Laptop", createdAt: at(-10) }],
+          recoveryCodes: 3,
+          trustedDevices: 2,
+        });
+        await seedAuth(lee, {
+          sessions: [{ id: sl, expiresAt: at(600), updatedAt: at(-1) }],
+          passkeys: [{ id: pkl, name: "Key", createdAt: at(-10) }],
+          trustedDevices: 1,
+        });
+
+        expect(await uow.run((r) => r.security.factors(sam))).toEqual({
+          totp: true,
+          passkeys: 1,
+          recoveryCodesLeft: 3,
+        });
+        expect(await uow.run((r) => r.security.factors(lee))).toEqual({
+          totp: false,
+          passkeys: 1,
+          recoveryCodesLeft: 0,
+        });
+        const live = await uow.run((r) => r.security.sessions(sam, now));
+        expect(live.map((x) => x.id)).toEqual([s2, s1]);
+        expect(live[1]).toMatchObject({ ip: "203.0.113.4", userAgent: "UA one" });
+        expect(Object.keys(live[0] ?? {}).sort()).toEqual(
+          ["createdAt", "expiresAt", "id", "ip", "lastActiveAt", "userAgent"].sort(),
+        );
+
+        // Another person's ids behave as unknown.
+        expect(await uow.run((r) => r.security.revokeSession(sam, sl))).toBeNull();
+        expect(await uow.run((r) => r.security.renamePasskey(sam, pkl, "Mine"))).toBeNull();
+        expect(await uow.run((r) => r.security.removePasskey(sam, pkl))).toBeNull();
+        expect((await uow.run((r) => r.security.passkeys(lee)))[0]?.name).toBe("Key");
+
+        expect(await uow.run((r) => r.security.revokeSession(sam, s1))).toMatchObject({ id: s1 });
+        expect(await uow.run((r) => r.security.revokeOtherSessions(sam, s2))).toBe(1);
+        expect((await uow.run((r) => r.security.sessions(sam, now))).map((x) => x.id)).toEqual([s2]);
+        expect((await uow.run((r) => r.security.sessions(lee, now))).map((x) => x.id)).toEqual([sl]);
+        expect(await uow.run((r) => r.security.forgetTrustedDevices(sam))).toBe(2);
+        expect(await uow.run((r) => r.security.forgetTrustedDevices(sam))).toBe(0);
+        expect(await uow.run((r) => r.security.forgetTrustedDevices(lee))).toBe(1);
+
+        expect(await uow.run((r) => r.security.renamePasskey(sam, pk, "Phone"))).toMatchObject({
+          id: pk,
+          name: "Phone",
+        });
+        const keys = await uow.run((r) => r.security.passkeys(sam));
+        expect(keys).toHaveLength(1);
+        expect(Object.keys(keys[0] ?? {}).sort()).toEqual(
+          ["aaguid", "backedUp", "createdAt", "deviceType", "id", "name"].sort(),
+        );
+        expect(await uow.run((r) => r.security.removePasskey(sam, pk))).toMatchObject({ id: pk });
+        expect(await uow.run((r) => r.security.factors(sam))).toMatchObject({ passkeys: 0 });
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("security: account sign-in policies default to none and follow memberships", async () => {
+      const { uow, cleanup, createUser } = await factory();
+      try {
+        const userId = await createUser(`sec-pol-${randomUUID()}@example.com`);
+        const { id } = await uow.run((r) => r.accounts.create({ name: "Contract policy", plan: "plus" }));
+        await uow.run((r) => r.accounts.addMember({ accountId: id, userId, role: "owner" }));
+        expect(await uow.run((r) => r.security.accountPolicy(id))).toBe("none");
+        expect(await uow.run((r) => r.security.policies(userId))).toEqual([{ accountId: id, policy: "none" }]);
+        await uow.run((r) => r.security.setAccountPolicy(id, "passkey"));
+        expect(await uow.run((r) => r.security.accountPolicy(id))).toBe("passkey");
+        expect(await uow.run((r) => r.security.policies(userId))).toEqual([{ accountId: id, policy: "passkey" }]);
+        expect(await uow.run((r) => r.security.accountPolicy(randomUUID()))).toBeNull();
+        expect(await uow.run((r) => r.security.accountPolicy("not-a-uuid"))).toBeNull();
+        expect(await uow.run((r) => r.security.policies(`missing-${randomUUID()}`))).toEqual([]);
       } finally {
         await cleanup();
       }

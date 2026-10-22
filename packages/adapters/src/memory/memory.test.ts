@@ -50,5 +50,26 @@ describeAdapterContract("memory", async () => {
       });
       return { domainId, mailboxId };
     },
+    seedAuth: async (userId, input) => {
+      const s = uow.state;
+      for (const x of input.sessions ?? []) {
+        s.sessions.push({
+          userId,
+          id: x.id,
+          createdAt: x.updatedAt,
+          lastActiveAt: x.updatedAt,
+          expiresAt: x.expiresAt,
+          ip: x.ip ?? null,
+          userAgent: x.userAgent ?? null,
+        });
+      }
+      for (const p of input.passkeys ?? []) {
+        s.passkeys.push({ userId, ...p, deviceType: "singleDevice", backedUp: false, aaguid: null });
+      }
+      if (input.recoveryCodes !== undefined) {
+        s.twoFactor.push({ userId, verified: true, recoveryCodesLeft: input.recoveryCodes });
+      }
+      for (let i = 0; i < (input.trustedDevices ?? 0); i++) s.trustedDevices.push({ userId, id: randomUUID() });
+    },
   };
 });

@@ -22,7 +22,9 @@ import {
   GENESIS_HASH,
   hashEntry,
 } from "@anhourmail/core/audit";
+import type { PasskeyRecord, SecurityRepository, SessionRecord } from "@anhourmail/core/security";
 import type { PlanId } from "@anhourmail/shared/plans";
+import type { SignInPolicy } from "@anhourmail/shared/security";
 import type { AccountRole, PlatformRole } from "@anhourmail/shared/rbac";
 
 /**
@@ -34,7 +36,14 @@ export type MemoryState = {
   platformRoles: { userId: string; role: PlatformRole }[];
   memberships: { userId: string; accountId: string; role: AccountRole; joinedAt?: Date }[];
   suspended: string[];
-  accounts: { id: string; name: string; plan: PlanId; status?: string; createdAt?: Date }[];
+  accounts: {
+    id: string;
+    name: string;
+    plan: PlanId;
+    status?: string;
+    createdAt?: Date;
+    signInPolicy?: SignInPolicy;
+  }[];
   userStates: Record<string, string>;
   jobs: ProvisioningJob[];
   domains: CustomerDomain[];
@@ -48,6 +57,11 @@ export type MemoryState = {
   logins: { userId: string; passwordHash: string }[];
   invites: (Invite & { tokenHash: string; acceptedUserId: string | null; acceptedAt: Date | null })[];
   inviteSends: { accountId: string; inviteId: string; at: Date }[];
+  /** Console sign-in state owned by the identity layer (Postgres: better-auth's tables). */
+  sessions: (SessionRecord & { userId: string })[];
+  passkeys: (PasskeyRecord & { userId: string })[];
+  twoFactor: { userId: string; verified: boolean; recoveryCodesLeft: number }[];
+  trustedDevices: { userId: string; id: string }[];
 };
 
 export const emptyState = (): MemoryState => ({
@@ -66,6 +80,10 @@ export const emptyState = (): MemoryState => ({
   logins: [],
   invites: [],
   inviteSends: [],
+  sessions: [],
+  passkeys: [],
+  twoFactor: [],
+  trustedDevices: [],
 });
 
 const EPOCH = new Date(0);
@@ -480,6 +498,73 @@ function repositories(s: MemoryState): Repositories {
     },
   };
 
+  const passkeyOut = ({ userId: _userId, ...p }: MemoryState["passkeys"][number]): PasskeyRecord => clone(p);
+  const sessionOut = ({ userId: _userId, ...x }: MemoryState["sessions"][number]): SessionRecord => clone(x);
+
+  const security: SecurityRepository = {
+    factors: async (userId) => {
+      const tf = s.twoFactor.find((t) => t.userId === userId && t.verified);
+      return {
+        totp: tf !== undefined,
+        passkeys: s.passkeys.filter((p) => p.userId === userId).length,
+        recoveryCodesLeft: tf?.recoveryCodesLeft ?? 0,
+      };
+    },
+    sessions: async (userId, now) =>
+      s.sessions
+        .filter((x) => x.userId === userId && x.expiresAt > now)
+        .sort((a, b) => b.lastActiveAt.getTime() - a.lastActiveAt.getTime())
+        .map(sessionOut),
+    revokeSession: async (userId, sessionId) => {
+      const i = s.sessions.findIndex((x) => x.userId === userId && x.id === sessionId);
+      if (i === -1) return null;
+      const [gone] = s.sessions.splice(i, 1);
+      return gone ? sessionOut(gone) : null;
+    },
+    revokeOtherSessions: async (userId, keep) => {
+      const before = s.sessions.length;
+      s.sessions = s.sessions.filter((x) => x.userId !== userId || x.id === keep);
+      return before - s.sessions.length;
+    },
+    forgetTrustedDevices: async (userId) => {
+      const before = s.trustedDevices.length;
+      s.trustedDevices = s.trustedDevices.filter((d) => d.userId !== userId);
+      return before - s.trustedDevices.length;
+    },
+    passkeys: async (userId) =>
+      s.passkeys
+        .filter((p) => p.userId === userId)
+        .sort((a, b) => (b.createdAt ?? EPOCH).getTime() - (a.createdAt ?? EPOCH).getTime())
+        .map(passkeyOut),
+    renamePasskey: async (userId, id, name) => {
+      const p = s.passkeys.find((x) => x.userId === userId && x.id === id);
+      if (!p) return null;
+      p.name = name;
+      return passkeyOut(p);
+    },
+    removePasskey: async (userId, id) => {
+      const i = s.passkeys.findIndex((x) => x.userId === userId && x.id === id);
+      if (i === -1) return null;
+      const [gone] = s.passkeys.splice(i, 1);
+      return gone ? passkeyOut(gone) : null;
+    },
+    policies: async (userId) =>
+      s.memberships
+        .filter((m) => m.userId === userId)
+        .map((m) => ({
+          accountId: m.accountId,
+          policy: s.accounts.find((a) => a.id === m.accountId)?.signInPolicy ?? "none",
+        })),
+    accountPolicy: async (accountId) => {
+      const a = s.accounts.find((x) => x.id === accountId);
+      return a ? (a.signInPolicy ?? "none") : null;
+    },
+    setAccountPolicy: async (accountId, policy) => {
+      const a = s.accounts.find((x) => x.id === accountId);
+      if (a) a.signInPolicy = policy;
+    },
+  };
+
   return {
     audit,
     access,
@@ -492,6 +577,7 @@ function repositories(s: MemoryState): Repositories {
     people,
     invites,
     platformAccounts,
+    security,
   };
 }
 

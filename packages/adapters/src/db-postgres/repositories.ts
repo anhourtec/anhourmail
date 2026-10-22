@@ -31,6 +31,7 @@ import { PLAN_ORDER, type PlanId } from "@anhourmail/shared/plans";
 import { ACCOUNT_ROLES, type AccountRole, PLATFORM_ROLES, type PlatformRole } from "@anhourmail/shared/rbac";
 
 import type { Db, Executor } from "./client";
+import { PgSecurityRepository } from "./security";
 import {
   accountMembership,
   auditLog,
@@ -1026,6 +1027,7 @@ const repositories = (x: Executor): Repositories => ({
   people: new PgPeopleRepository(x),
   invites: new PgInviteRepository(x),
   platformAccounts: new PgPlatformAccountRepository(x),
+  security: new PgSecurityRepository(x),
 });
 
 /** One Postgres transaction per `run` (CLAUDE.md rule 46: the audit row commits with the change). */
