@@ -139,8 +139,11 @@ export type MailClient = ReturnType<typeof createMailClient>;
 /** The account the app is showing, sent with contacts changes (the BFF refuses another active mailbox). */
 const ACCOUNT = "X-Webmail-Account";
 
-async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(path, {
+/** The browser's fetch, called plainly (browsers throw "Illegal invocation" when it is called with another `this`). */
+const plainFetch: typeof fetch = (input, init) => fetch(input, init);
+
+async function api<T>(path: string, init: RequestInit = {}, go: typeof fetch = plainFetch): Promise<T> {
+  const res = await go(path, {
     ...init,
     headers: {
       Accept: "application/json",
@@ -165,9 +168,51 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 /** `origin` "" (the default) means same-origin relative URLs, which is what the browser app uses. */
 export function createMailClient(origin = "") {
+  // A webmail session shows one active mailbox, and the BFF answers every request for that one. Adding or switching
+  // a mailbox changes it for the whole session, so a request still on its way (a list refresh, a reload after a
+  // send) would reach the new mailbox with the old one's account id and ids, which the proxy refuses (400). So a
+  // change waits until the requests in flight have been answered and holds new ones while it runs. On success it
+  // keeps holding them: the app reloads to show the other mailbox, so they are never sent.
+  let inFlight = 0;
+  const drained: (() => void)[] = [];
+  let hold: Promise<void> | null = null;
+
+  /** Every request of this client except the mailbox change itself goes through here. */
+  async function gated<T>(fn: () => Promise<T>): Promise<T> {
+    while (hold) await hold;
+    inFlight += 1;
+    try {
+      return await fn();
+    } finally {
+      inFlight -= 1;
+      if (inFlight === 0) for (const done of drained.splice(0)) done();
+    }
+  }
+
+  /** Runs a mailbox change (add or switch) once nothing else is in flight; the caller reloads the page on success. */
+  async function changeMailbox<T>(fn: () => Promise<T>): Promise<T> {
+    while (hold) await hold;
+    let release: (() => void) | undefined;
+    hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      if (inFlight > 0) await new Promise<void>((resolve) => drained.push(resolve));
+      return await fn();
+    } catch (err) {
+      hold = null;
+      release?.();
+      throw err;
+    }
+  }
+
+  const net: typeof fetch = (input, init) => gated(() => fetch(input, init));
+  const bff = <T>(path: string, init: RequestInit = {}) => api<T>(path, init, net);
+
   const jmap = new JmapClient({
     sessionUrl: `${origin}/api/webmail/session`,
     rewriteUrl: (u) => (origin === "" ? u : new URL(u, origin).href),
+    fetch: net,
   });
 
   async function call(calls: [string, Record<string, unknown>, string][]) {
@@ -462,7 +507,7 @@ export function createMailClient(origin = "") {
 
     /** The sanitised message for the reader; null when it no longer exists. `full` lifts the body cap. */
     async message(id: string, opts: { full?: boolean } = {}): Promise<MessageView | null> {
-      const res = await fetch(`${origin}/api/webmail/messages/${encodeURIComponent(id)}${opts.full ? "?full=1" : ""}`, {
+      const res = await net(`${origin}/api/webmail/messages/${encodeURIComponent(id)}${opts.full ? "?full=1" : ""}`, {
         headers: { Accept: "application/json" },
       });
       if (res.status === 401) throw new SignedOutError("signed out");
@@ -473,7 +518,7 @@ export function createMailClient(origin = "") {
 
     /** A forwarded or attached message (message/rfc822) of `emailId`, ready for the reader. */
     async attachedMessage(emailId: string, blobId: string): Promise<MessageView | null> {
-      const res = await fetch(
+      const res = await net(
         `${origin}/api/webmail/messages/${encodeURIComponent(emailId)}/attached/${encodeURIComponent(blobId)}`,
         { headers: { Accept: "application/json" } },
       );
@@ -485,7 +530,7 @@ export function createMailClient(origin = "") {
 
     /** The message source as text for "View original" (first 2 MB). */
     async rawText(emailId: string): Promise<{ text: string; cut: boolean }> {
-      const res = await fetch(`${origin}/api/webmail/messages/${encodeURIComponent(emailId)}/raw`);
+      const res = await net(`${origin}/api/webmail/messages/${encodeURIComponent(emailId)}/raw`);
       if (res.status === 401) throw new SignedOutError("signed out");
       if (!res.ok) throw new Error(`raw HTTP ${String(res.status)}`);
       const text = await res.text();
@@ -504,70 +549,76 @@ export function createMailClient(origin = "") {
       return `${origin}/api/webmail/download/${encodeURIComponent(blobId)}`;
     },
 
-    identities: () => api<Identity[]>(`${origin}/api/webmail/identities`),
+    identities: () => bff<Identity[]>(`${origin}/api/webmail/identities`),
     saveDraft: (d: DraftPayload) =>
-      api<{ id: string }>(`${origin}/api/webmail/drafts`, { method: "PUT", body: JSON.stringify(d) }),
+      bff<{ id: string }>(`${origin}/api/webmail/drafts`, { method: "PUT", body: JSON.stringify(d) }),
     send: (draftId: string, identityId: string) =>
-      api<{ submissionId: string; sendAt: string }>(`${origin}/api/webmail/send`, {
+      bff<{ submissionId: string; sendAt: string }>(`${origin}/api/webmail/send`, {
         method: "POST",
         body: JSON.stringify({ draftId, identityId }),
       }),
     undoSend: (submissionId: string) =>
-      api<{ draftId: string }>(`${origin}/api/webmail/send/undo`, {
+      bff<{ draftId: string }>(`${origin}/api/webmail/send/undo`, {
         method: "POST",
         body: JSON.stringify({ submissionId }),
       }),
     upload: (file: File) =>
-      api<Attachment & { blobId: string }>(`${origin}/api/webmail/upload`, {
+      bff<Attachment & { blobId: string }>(`${origin}/api/webmail/upload`, {
         method: "POST",
         headers: { "Content-Type": file.type || "application/octet-stream" },
         body: file,
       }),
-    mailboxes: () => api<{ active: string; others: string[] }>(`${origin}/api/webmail/mailboxes`),
+    mailboxes: () => bff<{ active: string; others: string[] }>(`${origin}/api/webmail/mailboxes`),
+    /** Signs another mailbox in and makes it active; reload the page on success (other requests stay held). */
     addMailbox: (address: string, password: string) =>
-      api<{ active: string; others: string[] }>(`${origin}/api/webmail/mailboxes`, {
-        method: "POST",
-        body: JSON.stringify({ address, password }),
-      }),
+      changeMailbox(() =>
+        api<{ active: string; others: string[] }>(`${origin}/api/webmail/mailboxes`, {
+          method: "POST",
+          body: JSON.stringify({ address, password }),
+        }),
+      ),
+    /** Makes another signed-in mailbox active; reload the page on success (other requests stay held). */
     switchMailbox: (address: string) =>
-      api<{ active: string; others: string[] }>(`${origin}/api/webmail/mailboxes/active`, {
-        method: "PUT",
-        body: JSON.stringify({ address }),
-      }),
+      changeMailbox(() =>
+        api<{ active: string; others: string[] }>(`${origin}/api/webmail/mailboxes/active`, {
+          method: "PUT",
+          body: JSON.stringify({ address }),
+        }),
+      ),
 
-    contacts: () => api<ContactsData>(`${origin}/api/webmail/contacts`),
+    contacts: () => bff<ContactsData>(`${origin}/api/webmail/contacts`),
     createContact: (account: string, contact: ContactFields, book: "mine" | "other" = "mine") =>
-      api<{ id: string }>(`${origin}/api/webmail/contacts`, {
+      bff<{ id: string }>(`${origin}/api/webmail/contacts`, {
         method: "POST",
         headers: { [ACCOUNT]: account },
         body: JSON.stringify({ contact, book }),
       }),
     updateContact: (account: string, id: string, contact: ContactFields) =>
-      api<{ id: string }>(`${origin}/api/webmail/contacts/${encodeURIComponent(id)}`, {
+      bff<{ id: string }>(`${origin}/api/webmail/contacts/${encodeURIComponent(id)}`, {
         method: "PATCH",
         headers: { [ACCOUNT]: account },
         body: JSON.stringify(contact),
       }),
     deleteContacts: (account: string, ids: string[]) =>
-      api<{ deleted: number }>(`${origin}/api/webmail/contacts`, {
+      bff<{ deleted: number }>(`${origin}/api/webmail/contacts`, {
         method: "DELETE",
         headers: { [ACCOUNT]: account },
         body: JSON.stringify({ ids }),
       }),
     moveContacts: (account: string, ids: string[], to: "mine" | "other") =>
-      api<{ moved: number }>(`${origin}/api/webmail/contacts/move`, {
+      bff<{ moved: number }>(`${origin}/api/webmail/contacts/move`, {
         method: "POST",
         headers: { [ACCOUNT]: account },
         body: JSON.stringify({ ids, to }),
       }),
     setAutoSave: (account: string, autoSave: boolean) =>
-      api<{ autoSave: boolean }>(`${origin}/api/webmail/contacts/settings`, {
+      bff<{ autoSave: boolean }>(`${origin}/api/webmail/contacts/settings`, {
         method: "PUT",
         headers: { [ACCOUNT]: account },
         body: JSON.stringify({ autoSave }),
       }),
     importContacts: (account: string, file: File) =>
-      api<{ imported: number; skipped: number; full: boolean }>(`${origin}/api/webmail/contacts/import`, {
+      bff<{ imported: number; skipped: number; full: boolean }>(`${origin}/api/webmail/contacts/import`, {
         method: "POST",
         headers: { "Content-Type": "text/vcard", [ACCOUNT]: account },
         body: file,

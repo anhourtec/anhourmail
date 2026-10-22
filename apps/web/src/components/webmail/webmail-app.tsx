@@ -155,7 +155,15 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
   const [adding, setAdding] = useState(false);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const pending = useRef(new Set<string>());
+  /** List windows being fetched (`key:page`), each with the ticket of its latest request. */
+  const pending = useRef(new Map<string, number>());
+  const tickets = useRef(0);
+  /**
+   * What the list shows now, and which `load` is the latest. Reloads read it (an action that finishes after the
+   * person moved on — a pin saved after leaving a search — reloads what is shown then, not what was shown when it
+   * started), and an older load's answer never overwrites a newer one's.
+   */
+  const shownRef = useRef<{ shown: Shown; hidden: string[]; seq: number } | null>(null);
   const readerActions = useRef<ReaderActions | null>(null);
   const searchBox = useRef<HTMLInputElement>(null);
   const composerKey = useRef(0);
@@ -200,12 +208,16 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
   }, [client, fail]);
 
   const loadPage = useCallback(
-    async (key: string, filter: Record<string, unknown>, page: number) => {
+    /** `fresh`: fetch again even if this window is on its way (its answer may predate a change); the newest wins. */
+    async (key: string, filter: Record<string, unknown>, page: number, fresh = false) => {
       const k = `${key}:${String(page)}`;
-      if (pending.current.has(k)) return;
-      pending.current.add(k);
+      if (!fresh && pending.current.has(k)) return;
+      const ticket = ++tickets.current;
+      pending.current.set(k, ticket);
+      const latest = () => pending.current.get(k) === ticket;
       try {
         const { total, rows } = await client.page(filter, page * PAGE_SIZE);
+        if (!latest()) return;
         setList((cur) => {
           if (cur?.key !== key) return cur;
           const next = [...cur.rows];
@@ -217,9 +229,9 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
         });
         setError(null);
       } catch (err) {
-        fail(err);
+        if (latest()) fail(err);
       } finally {
-        pending.current.delete(k);
+        if (latest()) pending.current.delete(k);
       }
     },
     [client, fail],
@@ -230,6 +242,9 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
     async (shown: Shown, hiddenIds: string[], opts: { keep?: boolean } = {}) => {
       const key = keyOf(shown);
       const main = mainFilter(shown, hiddenIds);
+      const seq = (shownRef.current?.seq ?? 0) + 1;
+      shownRef.current = { shown, hidden: hiddenIds, seq };
+      const newest = () => shownRef.current?.seq === seq;
       if (!opts.keep) {
         setList({ key, total: null, rows: [], loaded: new Set() });
         setSelected(null);
@@ -243,16 +258,17 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
             0,
             client.pinnedLimit,
           );
-          setPinned(p.rows);
+          if (newest()) setPinned(p.rows);
         } catch (err) {
-          fail(err);
+          if (newest()) fail(err);
         }
       } else {
         setPinned([]);
       }
+      if (!newest()) return;
       const pages = opts.keep && listRef.current?.key === key ? [...listRef.current.loaded] : [];
       if (opts.keep) setList((cur) => (cur?.key === key ? { ...cur, loaded: new Set() } : cur));
-      for (const page of pages.length > 0 ? pages : [0]) void loadPage(key, main, page);
+      for (const page of pages.length > 0 ? pages : [0]) void loadPage(key, main, page, true);
     },
     [client, fail, loadPage],
   );
@@ -276,12 +292,13 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
     [view, narrow, search, hidden, load],
   );
 
-  /** Reloads what is shown (keeping the scroll position's windows with `keep`). */
+  /** Reloads what is shown now (keeping the scroll position's windows with `keep`). */
   const reload = useCallback(
     async (opts: { keep?: boolean } = {}) => {
-      if (view) await load({ view, narrow, search }, hidden, opts);
+      const now = shownRef.current;
+      if (now) await load(now.shown, now.hidden, opts);
     },
-    [view, narrow, search, hidden, load],
+    [load],
   );
 
   // First paint: folders, the Inbox, the person's mailboxes and identities.
@@ -423,6 +440,8 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
         const skip = [roles.sent, roles.drafts].filter((x): x is string => x !== undefined);
         const before = await client.move(threadIds, from, to, keywords, skip);
         void loadFolders();
+        // A reload that started before the move landed (e.g. after a pin) would bring the rows back: load again.
+        void reload({ keep: true });
         toasts.show({
           message: done,
           action: {
@@ -465,6 +484,7 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
             .then((emails) => client.destroy(emails.filter((e) => e.mailboxIds[folderId]).map((e) => e.id)))
             .then(() => {
               void loadFolders();
+              void reload({ keep: true });
               toasts.show({ message: "Deleted forever." });
             })
             .catch((err: unknown) => {
