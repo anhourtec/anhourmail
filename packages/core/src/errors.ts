@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * Domain errors. The HTTP layer maps them: Unauthenticated → 401, Forbidden → 403, NotFound → 404 (also for
- * out-of-scope ids — never confirm another account's ids), Validation → 400, Conflict → 409, PlanLimit → 403.
+ * out-of-scope ids — never confirm another account's ids), Validation → 400, Conflict → 409, PlanLimit → 403,
+ * EnrolmentRequired → 403.
  */
 export class DomainError extends Error {
   constructor(
@@ -47,5 +48,20 @@ export class ConflictError extends DomainError {
 export class PlanLimitError extends DomainError {
   constructor(message: string) {
     super(message, "plan_limit");
+  }
+}
+
+/**
+ * One of the person's accounts requires a sign-in factor they haven't set up yet (two-factor sign-in or a passkey).
+ * Until they do, only their own Security page works (HTTP 403 with its own code, so the console can send them there).
+ */
+export class EnrolmentRequiredError extends DomainError {
+  constructor(readonly factor: "two_factor" | "passkey") {
+    super(
+      factor === "passkey"
+        ? "Your account requires a passkey. Add one on your Security page to continue."
+        : "Your account requires two-factor sign-in. Turn it on on your Security page to continue.",
+      "enrolment_required",
+    );
   }
 }

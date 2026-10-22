@@ -7,8 +7,9 @@ import {
   type PlatformRole,
   platformRoleCan,
 } from "@anhourmail/shared/rbac";
+import type { SignInMethod } from "@anhourmail/shared/security";
 
-import { ForbiddenError, NotFoundError, UnauthenticatedError } from "./errors";
+import { EnrolmentRequiredError, ForbiddenError, NotFoundError, UnauthenticatedError } from "./errors";
 
 /** Who is asking. Built by the app from the session; services never trust client-supplied roles. */
 export type Membership = { accountId: string; role: AccountRole };
@@ -24,13 +25,21 @@ export type UserActor = {
   suspended: boolean;
   /** Set during a staff "act as" session: the staff member really acting. */
   actingAs?: { staffUserId: string; staffEmail: string; staffRole: PlatformRole; reason: string };
+  /**
+   * A sign-in factor one of their accounts requires and they haven't set up (core `missingFactor`). While set, only
+   * `self` permissions pass: everything else answers `EnrolmentRequiredError` until they enrol.
+   */
+  mustEnrol?: "two_factor" | "passkey";
+  /** How the current console session was signed in (shared/security.ts), when known. */
+  signInMethod?: SignInMethod;
 };
 
 export type Actor = { kind: "anonymous" } | UserActor | { kind: "system"; name: string };
 
 export const ANONYMOUS: Actor = { kind: "anonymous" };
 
-export function can(actor: Actor, permission: Permission, accountId?: string): boolean {
+/** The matrix alone, before the enrolment gate. */
+function granted(actor: Actor, permission: Permission, accountId?: string): boolean {
   if (actor.kind === "system") return true;
   const def = PERMISSIONS[permission];
   if (actor.kind === "anonymous" || actor.suspended) return false;
@@ -47,12 +56,24 @@ export function can(actor: Actor, permission: Permission, accountId?: string): b
   }
 }
 
+/** True when the actor's enrolment gate blocks this permission (everything but `self` while a factor is missing). */
+const gated = (actor: Actor, permission: Permission): actor is UserActor & { mustEnrol: "two_factor" | "passkey" } =>
+  actor.kind === "user" && actor.mustEnrol !== undefined && PERMISSIONS[permission].scope !== "self";
+
+export function can(actor: Actor, permission: Permission, accountId?: string): boolean {
+  return granted(actor, permission, accountId) && !gated(actor, permission);
+}
+
 /**
  * The service-layer gate (CLAUDE.md rules 5, 25): 401 when signed out, 404 when the account isn't the
- * actor's (never confirm it exists), 403 when the role lacks the permission.
+ * actor's (never confirm it exists), 403 when the role lacks the permission, and 403 `enrolment_required` when the
+ * role allows it but one of their accounts requires a sign-in factor they haven't set up.
  */
 export function authorize(actor: Actor, permission: Permission, accountId?: string): void {
-  if (can(actor, permission, accountId)) return;
+  if (granted(actor, permission, accountId)) {
+    if (gated(actor, permission)) throw new EnrolmentRequiredError(actor.mustEnrol);
+    return;
+  }
   const scope = PERMISSIONS[permission].scope;
   if (actor.kind === "anonymous") throw new UnauthenticatedError();
   if (actor.kind === "user" && scope === "account") {

@@ -8,6 +8,7 @@ import type { MailboxRepository } from "./mailboxes/repository";
 import type { InviteRepository, PeopleRepository } from "./people/repository";
 import type { PlatformAccountRepository } from "./platform/repository";
 import type { MailDirectoryRepository, ProvisioningRepository } from "./provisioning/ports";
+import type { SecurityRepository } from "./security/repository";
 
 /** Everything a service can touch inside one transaction. Adapters implement it (memory, postgres). */
 export type Repositories = {
@@ -22,6 +23,7 @@ export type Repositories = {
   people: PeopleRepository;
   invites: InviteRepository;
   platformAccounts: PlatformAccountRepository;
+  security: SecurityRepository;
 };
 
 /**

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { ACCOUNT_A, ACCOUNT_B, anonymous, user } from "./__tests__/helpers";
 import { authorize, can } from "./actor";
-import { ForbiddenError, NotFoundError, UnauthenticatedError } from "./errors";
+import { EnrolmentRequiredError, ForbiddenError, NotFoundError, UnauthenticatedError } from "./errors";
 
 describe("can / authorize", () => {
   it("anonymous gets 401 for everything", () => {
@@ -68,5 +68,37 @@ describe("can / authorize", () => {
     expect(can(s, "platform.audit.read")).toBe(false);
     expect(can(s, "audit.read", ACCOUNT_A)).toBe(false);
     expect(can(s, "self.profile.read")).toBe(false);
+  });
+
+  it("an unmet sign-in requirement blocks everything but the person's own pages, without leaking other accounts", () => {
+    const pending = {
+      ...user({ account: [[ACCOUNT_A, "owner"]], platform: ["reports_reader"] }),
+      mustEnrol: "two_factor" as const,
+    };
+    expect(can(pending, "self.security.manage")).toBe(true);
+    expect(can(pending, "mailbox.read", ACCOUNT_A)).toBe(false);
+    expect(can(pending, "platform.audit.read")).toBe(false);
+    expect(() => {
+      authorize(pending, "mailbox.read", ACCOUNT_A);
+    }).toThrow(EnrolmentRequiredError);
+    expect(() => {
+      authorize(pending, "platform.audit.read");
+    }).toThrow(EnrolmentRequiredError);
+    // Another account's ids are still a 404, and a missing role still a 403.
+    expect(() => {
+      authorize(pending, "mailbox.read", ACCOUNT_B);
+    }).toThrow(NotFoundError);
+    expect(() => {
+      authorize(pending, "platform.staff.manage");
+    }).toThrow(ForbiddenError);
+    const passkey = { ...user(), mustEnrol: "passkey" as const };
+    expect(() => {
+      authorize(passkey, "platform.audit.read");
+    }).toThrow(ForbiddenError);
+    const member = { ...user({ account: [[ACCOUNT_A, "member"]] }), mustEnrol: "passkey" as const };
+    expect(() => {
+      authorize(member, "alias.manage.own", ACCOUNT_A);
+    }).toThrow(/requires a passkey/);
+    expect(new EnrolmentRequiredError("two_factor").code).toBe("enrolment_required");
   });
 });

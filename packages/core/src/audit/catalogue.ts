@@ -23,6 +23,11 @@ export const AUDIT_ACTIONS = [
   "auth.backup_code_used",
   "auth.sessions_revoked_all",
   "auth.new_device",
+  "auth.passkey_added",
+  "auth.passkey_renamed",
+  "auth.passkey_removed",
+  "auth.recovery_codes_regenerated",
+  "auth.identity_confirmed",
   // account and people
   "account.created",
   "account.deleted",
@@ -35,6 +40,8 @@ export const AUDIT_ACTIONS = [
   "account.member_removed",
   "account.role_changed",
   "account.ownership_transferred",
+  "account.sign_in_policy_changed",
+  "account.sign_in_factor_added",
   // mail configuration
   "domain.added",
   "domain.verified",
