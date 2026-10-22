@@ -1270,6 +1270,13 @@ export const CREDITS: readonly Credit[] = [
     repository: "https://github.com/scroll-into-view/compute-scroll-into-view",
   },
   {
+    name: "dayjs",
+    version: "1.11.23",
+    license: "MIT",
+    url: "https://day.js.org",
+    repository: "https://github.com/iamkun/dayjs",
+  },
+  {
     name: "debug",
     version: "4.4.3",
     license: "MIT",
@@ -1315,11 +1322,46 @@ export const CREDITS: readonly Credit[] = [
     url: "wooorm/devlop",
   },
   {
+    name: "dom-serializer",
+    version: "3.1.1",
+    license: "MIT",
+    url: "https://github.com/cheeriojs/dom-serializer",
+    repository: "https://github.com/cheeriojs/dom-serializer",
+  },
+  {
+    name: "domelementtype",
+    version: "3.0.0",
+    license: "BSD-2-Clause",
+    url: "https://github.com/fb55/domelementtype",
+    repository: "https://github.com/fb55/domelementtype",
+  },
+  {
+    name: "domhandler",
+    version: "6.0.1",
+    license: "BSD-2-Clause",
+    url: "https://github.com/fb55/domhandler",
+    repository: "https://github.com/fb55/domhandler",
+  },
+  {
+    name: "domutils",
+    version: "4.0.2",
+    license: "BSD-2-Clause",
+    url: "https://github.com/fb55/domutils",
+    repository: "https://github.com/fb55/domutils",
+  },
+  {
     name: "drizzle-orm",
     version: "0.45.4",
     license: "Apache-2.0",
     url: "https://orm.drizzle.team",
     repository: "https://github.com/drizzle-team/drizzle-orm",
+  },
+  {
+    name: "entities",
+    version: "8.1.0",
+    license: "BSD-2-Clause",
+    url: "https://github.com/fb55/entities",
+    repository: "https://github.com/fb55/entities",
   },
   {
     name: "esast-util-from-estree",
@@ -1339,6 +1381,12 @@ export const CREDITS: readonly Credit[] = [
     license: "MIT",
     url: "https://github.com/evanw/esbuild",
     repository: "https://github.com/evanw/esbuild",
+  },
+  {
+    name: "escape-string-regexp",
+    version: "4.0.0",
+    license: "MIT",
+    url: "sindresorhus/escape-string-regexp",
   },
   {
     name: "escape-string-regexp",
@@ -1505,6 +1553,13 @@ export const CREDITS: readonly Credit[] = [
     url: "wooorm/html-void-elements",
   },
   {
+    name: "htmlparser2",
+    version: "12.0.0",
+    license: "MIT",
+    url: "https://github.com/fb55/htmlparser2",
+    repository: "https://github.com/fb55/htmlparser2",
+  },
+  {
     name: "inline-style-parser",
     version: "0.2.7",
     license: "MIT",
@@ -1549,6 +1604,12 @@ export const CREDITS: readonly Credit[] = [
     url: "sindresorhus/is-plain-obj",
   },
   {
+    name: "is-plain-object",
+    version: "5.1.0",
+    license: "MIT",
+    url: "https://github.com/jonschlinkert/is-plain-object",
+  },
+  {
     name: "jose",
     version: "6.2.13",
     license: "MIT",
@@ -1560,6 +1621,13 @@ export const CREDITS: readonly Credit[] = [
     license: "MIT",
     url: "https://kysely.dev",
     repository: "https://github.com/kysely-org/kysely",
+  },
+  {
+    name: "launder",
+    version: "1.7.2",
+    license: "MIT",
+    url: "https://github.com/apostrophecms/apostrophe/tree/main/packages/launder#readme",
+    repository: "https://github.com/apostrophecms/apostrophe",
   },
   {
     name: "longest-streak",
@@ -2021,6 +2089,13 @@ export const CREDITS: readonly Credit[] = [
     url: "wooorm/parse-entities",
   },
   {
+    name: "parse-srcset",
+    version: "1.0.2",
+    license: "MIT",
+    url: "https://github.com/albell/parse-srcset#readme",
+    repository: "https://github.com/albell/parse-srcset",
+  },
+  {
     name: "pg",
     version: "8.23.1",
     license: "MIT",
@@ -2091,6 +2166,12 @@ export const CREDITS: readonly Credit[] = [
   {
     name: "postcss",
     version: "8.5.23",
+    license: "MIT",
+    url: "https://postcss.org/",
+  },
+  {
+    name: "postcss",
+    version: "8.5.31",
     license: "MIT",
     url: "https://postcss.org/",
   },
@@ -2274,6 +2355,13 @@ export const CREDITS: readonly Credit[] = [
     version: "0.9.2",
     license: "MIT",
     url: "h3js/rou3",
+  },
+  {
+    name: "sanitize-html",
+    version: "2.18.1",
+    license: "MIT",
+    url: "https://github.com/apostrophecms/apostrophe/tree/main/packages/sanitize-html#readme",
+    repository: "https://github.com/apostrophecms/apostrophe",
   },
   {
     name: "scheduler",

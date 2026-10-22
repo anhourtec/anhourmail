@@ -5,13 +5,13 @@ import { BrandMark } from "./brand-mark";
 import { SignInBand, SignInVisual } from "./sign-in-visual";
 import { ThemeToggle } from "./theme-toggle";
 
-/** Shared frame for sign-in and sign-up: form column + brand panel (hidden under lg). */
-export function AuthSplit({ children }: { children: ReactNode }) {
+/** Shared frame for sign-in and sign-up: form column + brand panel (hidden under lg). `area` names the product area. */
+export function AuthSplit({ children, area }: { children: ReactNode; area?: string }) {
   return (
     <div className="grid min-h-dvh lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)]">
       <main className="flex flex-col gap-6 px-4 py-6 sm:px-10">
         <div className="flex items-center justify-between">
-          <BrandMark />
+          <BrandMark {...(area ? { area } : {})} />
           <ThemeToggle />
         </div>
         <div className="lg:hidden">

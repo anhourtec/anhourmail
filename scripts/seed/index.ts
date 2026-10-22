@@ -22,11 +22,12 @@ import { type Deps, systemClock } from "@anhourmail/core";
 import type { AuditAction, AuditEntryInput } from "@anhourmail/core/audit";
 import { enqueueProvisioning } from "@anhourmail/core/provisioning";
 import { JmapClient } from "@anhourmail/jmap-client";
-import { customerDomainRecords, PLANS } from "@anhourmail/shared";
+import { customerDomainRecords, MAILBOX_DELETE_GRACE_DAYS, PLANS } from "@anhourmail/shared";
 import { createAppPassword, type StalwartManagement, stalwart } from "@anhourmail/stalwart-client";
 
-import { applyDevMailPlan, DEV_DOMAIN, DEV_MAILBOXES } from "../../infra/stalwart/dev-plan";
+import { applyDevMailPlan, DEV_DOMAIN, DEV_MAILBOXES, devWebmailOrigins } from "../../infra/stalwart/dev-plan";
 import { type CredentialRow, writeCredentials } from "./credentials";
+import { importSampleMail, sampleIds } from "./sample-mail";
 import {
   type AccountKey,
   ACCOUNTS,
@@ -200,7 +201,10 @@ log("stalwart dev mail plan…");
 await mgmt.ready();
 // dev.test mailboxes use DEV_MAILBOX_PASSWORD when set (stack:verify signs in with it), else a random one.
 const devPassword = process.env.DEV_MAILBOX_PASSWORD ?? newPassword();
-const plan = await applyDevMailPlan(mgmt, { mailboxPassword: devPassword });
+const plan = await applyDevMailPlan(mgmt, {
+  mailboxPassword: devPassword,
+  webmailOrigins: devWebmailOrigins(WEBMAIL_URL, process.env.WEBMAIL_DEV_PORT),
+});
 if (plan.restartNeeded) {
   log("restarting stalwart (admin UI bundle or new listeners)…");
   execFileSync("docker", ["compose", "restart", "stalwart"], { cwd: ROOT, stdio: "inherit" });
@@ -429,9 +433,22 @@ if (demo) {
       "This copy to example.com lands in Mailpit.",
     ],
   ];
-  for (const [from, to, subject, text] of sends) {
-    const pw = passwords.get(from);
-    if (pw) await jmapFor(from, pw).sendText({ from, to, subject, text });
+  // A realistic inbox for the webmail demo: imported straight into the family owner's mailbox (nothing is sent).
+  // The sends above only go out on the first run (when the sample mail isn't there yet), so re-seeding doesn't
+  // pile up copies.
+  const sampleOwner = `owner@${fam}`;
+  const sampleOwnerPassword = passwords.get(sampleOwner);
+  const ownerJmap = sampleOwnerPassword ? jmapFor(sampleOwner, sampleOwnerPassword) : null;
+  const firstRun = ownerJmap ? (await sampleIds(ownerJmap, await ownerJmap.accountId())).length === 0 : true;
+  if (firstRun) {
+    for (const [from, to, subject, text] of sends) {
+      const pw = passwords.get(from);
+      if (pw) await jmapFor(from, pw).sendText({ from, to, subject, text });
+    }
+  }
+  if (ownerJmap) {
+    const n = await importSampleMail(ownerJmap, { name: "Alex Rivera", email: sampleOwner }, fam);
+    log(n > 0 ? `sample mail: ${n} messages imported for ${sampleOwner}` : "sample mail: already present");
   }
 
   // App password for IMAP client testing
@@ -450,8 +467,41 @@ if (demo) {
     smtpPort: Number(process.env.STALWART_SUBMISSIONS_PORT ?? "465"),
   };
 
+  // Mailbox lifecycle states (console Mailboxes page): one suspended, one deleted and waiting out its grace period.
+  // Written as intent and applied by the worker's mailbox.ensure job, like the console does (CLAUDE.md rule 26).
+  const lifecycleBoxes = [
+    { address: `paused@${fam}`, status: "suspended" as const, purgeAfter: null },
+    {
+      address: `leaving@${fam}`,
+      status: "deleting" as const,
+      purgeAfter: new Date(Date.now() + MAILBOX_DELETE_GRACE_DAYS * 24 * 3600_000),
+    },
+  ];
+  for (const b of lifecycleBoxes) {
+    const id = await upsertMailbox(db, mgmt, {
+      address: b.address,
+      password: newPassword(), // never shown: nobody signs in to these
+      accountId: accountIds.get("family") ?? "",
+      userId: null,
+      quotaBytes: quota("plus"),
+    });
+    await db
+      .update(schema.mailbox)
+      .set({ status: b.status, purgeAfter: b.purgeAfter, lastError: null })
+      .where(eq(schema.mailbox.id, id));
+    await enqueueProvisioning(deps, { kind: "mailbox.ensure", subjectId: id });
+  }
+
   const records = customerDomainRecords(UNVERIFIED_DOMAIN.name, unverifiedToken);
   special.push(
+    {
+      label: "Suspended mailbox",
+      detail: `\`paused@${fam}\` on Demo Family: no sign-in, mail refused, nothing deleted (worker applies it)`,
+    },
+    {
+      label: "Mailbox being deleted",
+      detail: `\`leaving@${fam}\` on Demo Family: restorable for ${String(MAILBOX_DELETE_GRACE_DAYS)} days, then purged`,
+    },
     { label: "Free user", detail: `\`free@${FREE_DOMAIN}\` (see the Customer: Free user table)` },
     { label: "Supporter", detail: `\`supporter@${FREE_DOMAIN}\` (see the Customer: Supporter table)` },
     {

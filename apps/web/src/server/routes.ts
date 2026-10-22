@@ -6,14 +6,15 @@ import type { Permission } from "@anhourmail/shared/rbac";
  * expectations from this table plus the permission matrix, and fails if an `app/api/.../route.ts` file is
  * missing here (CLAUDE.md rule 35).
  *
- * `guard`: "public" (anyone), "session" (any signed-in person), or a permission from the matrix.
+ * `guard`: "public" (anyone), "session" (any signed-in person), "webmail" (a webmail session on the webmail origin —
+ * a console session never grants it), or a permission from the matrix.
  * `accountParam`: the path parameter holding the account id, for account-scoped permissions.
  */
 export type RouteSpec = {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   path: string;
   file: string;
-  guard: "public" | "session" | "infra" | Permission;
+  guard: "public" | "session" | "webmail" | "infra" | Permission;
   accountParam?: string;
   /** Audit action written by a mutating route (asserted by the harness). */
   audits?: string;
@@ -110,6 +111,38 @@ export const ROUTES: readonly RouteSpec[] = [
     probeStatus: 404,
   },
   {
+    method: "DELETE",
+    path: "/api/accounts/:accountId/mailboxes/:mailboxId",
+    file: "app/api/accounts/[accountId]/mailboxes/[mailboxId]/route.ts",
+    guard: "mailbox.manage",
+    accountParam: "accountId",
+    probeStatus: 404,
+  },
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/mailboxes/:mailboxId/suspend",
+    file: "app/api/accounts/[accountId]/mailboxes/[mailboxId]/suspend/route.ts",
+    guard: "mailbox.manage",
+    accountParam: "accountId",
+    probeStatus: 404,
+  },
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/mailboxes/:mailboxId/resume",
+    file: "app/api/accounts/[accountId]/mailboxes/[mailboxId]/resume/route.ts",
+    guard: "mailbox.manage",
+    accountParam: "accountId",
+    probeStatus: 404,
+  },
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/mailboxes/:mailboxId/restore",
+    file: "app/api/accounts/[accountId]/mailboxes/[mailboxId]/restore/route.ts",
+    guard: "mailbox.manage",
+    accountParam: "accountId",
+    probeStatus: 404,
+  },
+  {
     method: "GET",
     path: "/api/accounts/:accountId/aliases",
     file: "app/api/accounts/[accountId]/aliases/route.ts",
@@ -140,5 +173,29 @@ export const ROUTES: readonly RouteSpec[] = [
     guard: "alias.manage.own",
     accountParam: "accountId",
     probeStatus: 404,
+  },
+  // Webmail BFF (ADR-0003, ADR-0018): served on the webmail origin only (host-routing.ts).
+  {
+    method: "POST",
+    path: "/api/webmail/auth",
+    file: "app/api/webmail/auth/route.ts",
+    guard: "public",
+    // The harness sends no address: everyone gets a validation error.
+    probeStatus: 400,
+  },
+  { method: "DELETE", path: "/api/webmail/auth", file: "app/api/webmail/auth/route.ts", guard: "public" },
+  { method: "GET", path: "/api/webmail/session", file: "app/api/webmail/session/route.ts", guard: "webmail" },
+  { method: "POST", path: "/api/webmail/jmap", file: "app/api/webmail/jmap/route.ts", guard: "webmail" },
+  {
+    method: "GET",
+    path: "/api/webmail/messages/:emailId",
+    file: "app/api/webmail/messages/[emailId]/route.ts",
+    guard: "webmail",
+  },
+  {
+    method: "GET",
+    path: "/api/webmail/download/:blobId",
+    file: "app/api/webmail/download/[blobId]/route.ts",
+    guard: "webmail",
   },
 ];

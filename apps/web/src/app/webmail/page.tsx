@@ -1,26 +1,35 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { Metadata } from "next";
+import { cookies, headers } from "next/headers";
+import { redirect } from "next/navigation";
 
-import { BrandMark } from "@/components/brand-mark";
-import { ThemeToggle } from "@/components/theme-toggle";
+import { WebmailApp } from "@/components/webmail/webmail-app";
+import { env } from "@/server/env";
+import { webmail, webmailCookieName } from "@/server/webmail/instance";
+import { webmailBasePath } from "@/server/webmail/paths";
+import { WebmailBlockedError } from "@/server/webmail/service";
 
 export const metadata: Metadata = { title: "Webmail" };
 
 /**
- * Webmail origin (mail.*). Phase 4 builds the JMAP client here (docs/internal/05-webmail.md); sign-in on this
- * origin uses a one-time handoff from the console, never a shared cookie (ADR-0003).
+ * The webmail (mail.* origin; `/webmail` on dev bare hosts). Signed-out visitors go to the sign-in form; the
+ * session check here only reads our encrypted session record — mail is fetched by the client through the BFF.
  */
-export default function WebmailPage() {
-  return (
-    <main className="mx-auto flex min-h-dvh max-w-2xl flex-col justify-center gap-6 px-4">
-      <div className="flex items-center justify-between">
-        <BrandMark area="Webmail" />
-        <ThemeToggle />
-      </div>
-      <h1 className="am-h1">Webmail is on its way</h1>
-      <p className="am-lead">
-        The fast JMAP webmail lands in phase 4. Until then, use any IMAP mail app with an app password.
-      </p>
-    </main>
+export default async function WebmailPage() {
+  const base = webmailBasePath(
+    (await headers()).get("host"),
+    env().NODE_ENV === "production",
+    process.env.WEBMAIL_DEV_PORT,
   );
+  const id = (await cookies()).get(webmailCookieName())?.value;
+  let session = null;
+  let blocked = false;
+  try {
+    session = id ? await webmail().session(id) : null;
+  } catch (err) {
+    // A suspended or deleted mailbox: the sign-in page says so. A mail-server outage: sign in again later.
+    blocked = err instanceof WebmailBlockedError;
+  }
+  if (!session) redirect(`${base}/sign-in${blocked ? "?reason=unavailable" : ""}`);
+  return <WebmailApp username={session.username} signInHref={`${base}/sign-in`} />;
 }

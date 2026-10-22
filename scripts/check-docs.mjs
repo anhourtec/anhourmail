@@ -80,7 +80,8 @@ function sharedFacts() {
   for (const m of src.matchAll(/\b(aliases|maskedAliases):\s*(\d+)/g)) limits.add(Number(m[2]));
 
   const refundDays = /refundWindowDays:\s*(\d+)/.exec(src)?.[1];
-  return { domain, hosts, ports, amounts, storage, limits, refundDays };
+  const graceDays = /MAILBOX_DELETE_GRACE_DAYS\s*=\s*(\d+)/.exec(src)?.[1];
+  return { domain, hosts, ports, amounts, storage, limits, refundDays, graceDays };
 }
 
 // ---- checks ---------------------------------------------------------------------------------------
@@ -173,6 +174,18 @@ function checkFacts(file, text) {
   }
 }
 
+function checkGraceDays(file, text) {
+  if (!facts.graceDays) return;
+  for (const m of text.matchAll(new RegExp(`\\b${facts.graceDays}[- ]days?\\b`, "gi"))) {
+    report(
+      file,
+      text,
+      m.index ?? 0,
+      `grace period "${m[0]}" is hard-coded — use <Value of="mailboxDeleteGraceDays" />`,
+    );
+  }
+}
+
 function checkInternal(file, text) {
   for (const m of text.matchAll(/docs\/internal|\.\.\/internal\//g)) {
     report(file, text, m.index ?? 0, "references docs/internal — internal docs are never published");
@@ -185,6 +198,7 @@ for (const file of [...files(PUBLIC, [".md", ".mdx"]), ...files(SHARED_DOCS, [".
   count += 1;
   if (file.startsWith(PUBLIC)) checkLinks(file, text);
   checkFacts(file, text);
+  checkGraceDays(file, text);
   checkInternal(file, text);
 }
 

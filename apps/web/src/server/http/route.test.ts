@@ -9,7 +9,7 @@ import { memoryMailer } from "@anhourmail/adapters/mail";
 
 import { setContainerForTests } from "../container";
 import { resetEnvForTests } from "../env";
-import { logPath, ok, readJson, route } from "./route";
+import { logPath, ok, readJson, route, routeTemplate } from "./route";
 
 vi.mock("../auth/actor", () => ({ getActor: async () => ANONYMOUS }));
 
@@ -125,11 +125,37 @@ describe("security hardening (audit 2026-10-21)", () => {
     vi.stubEnv("WEBMAIL_URL", "https://mail.example.test");
     vi.stubEnv("SITE_URL", "https://example.test");
     vi.stubEnv("BETTER_AUTH_SECRET", "y".repeat(48));
+    vi.stubEnv("SECRETS_KEYRING", `k1:${Buffer.alloc(32, 1).toString("base64")}`);
     resetEnvForTests();
     const res = await route(async () => ok(true), { limit: "publicForm" })(
       post("https://app.example.test/api/example", {}, { origin: "https://app.example.test" }),
       params,
     );
     expect(res.status).toBe(400);
+  });
+
+  it("names rate-limit buckets by route pattern, so varying ids never yields a fresh bucket", async () => {
+    expect(routeTemplate("/api/webmail/messages/abc", { emailId: "abc" })).toBe("/api/webmail/messages/:emailId");
+    expect(routeTemplate("/api/accounts/a%20b/mailboxes/m1", { accountId: "a b", mailboxId: "m1" })).toBe(
+      "/api/accounts/:accountId/mailboxes/:mailboxId",
+    );
+    expect(routeTemplate("/api/auth/sign-in/email", { all: ["sign-in", "email"] })).toBe("/api/auth/:all/:all");
+    expect(routeTemplate("/api/x/%E0%A4%A", {})).toBe("/api/x/%E0%A4%A");
+
+    vi.stubEnv("RATE_LIMIT_MULTIPLIER", "1");
+    const handler = route(async () => ok(true), { limit: "webmailDownload" });
+    const statuses: number[] = [];
+    for (let i = 0; i < 121; i++) {
+      const id = `blob${String(i)}`;
+      const res = await handler(new Request(`http://localhost:43200/api/webmail/download/${id}`), {
+        params: Promise.resolve({ blobId: id }),
+      });
+      statuses.push(res.status);
+    }
+    expect(statuses.slice(0, 120).every((s) => s === 200)).toBe(true);
+    expect(statuses[120]).toBe(429);
+    // Static routes get no params from Next.
+    const plain = await route(async () => ok(true))(new Request("http://localhost:43200/api/me"), {});
+    expect(plain.status).toBe(200);
   });
 });

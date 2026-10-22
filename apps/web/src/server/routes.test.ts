@@ -27,7 +27,7 @@ describe("route registry", () => {
   });
 
   it("guards are real permissions or known keywords; account routes name their parameter", () => {
-    const permissioned = ROUTES.filter((r) => !["public", "session", "infra"].includes(r.guard));
+    const permissioned = ROUTES.filter((r) => !["public", "session", "webmail", "infra"].includes(r.guard));
     for (const r of permissioned) expect(PERMISSIONS).toHaveProperty(r.guard);
     const accountScoped = permissioned.filter(
       (r) => PERMISSIONS[r.guard as keyof typeof PERMISSIONS].scope === "account",

@@ -21,6 +21,10 @@ const schema = z.object({
   TRUST_PROXY: z.enum(["true", "false"]).default("false"),
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
+  // Stalwart's HTTP base (internal network in production): the webmail BFF's OAuth and JMAP upstream.
+  STALWART_URL: httpUrl.optional(),
+  // Secrets-at-rest key ring, "id:base64(32 bytes)[,…]" (first = active). Required in production; dev derives one.
+  SECRETS_KEYRING: z.string().optional(),
 });
 
 /** Values from .env.example that must never reach production. */
@@ -39,6 +43,9 @@ const checked = schema.superRefine((e, ctx) => {
       path: ["TRUST_PROXY"],
       message: "Production runs behind our proxy: set TRUST_PROXY=true",
     });
+  }
+  if (!e.SECRETS_KEYRING || e.SECRETS_KEYRING.trim() === "") {
+    ctx.addIssue({ code: "custom", path: ["SECRETS_KEYRING"], message: "Set the secrets key ring in production" });
   }
   // Secure session cookies need an https origin.
   for (const key of ["APP_URL", "WEBMAIL_URL", "SITE_URL"] as const) {

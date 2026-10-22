@@ -4,6 +4,8 @@
 import { useRouter } from "next/navigation";
 import { type SyntheticEvent, useState } from "react";
 
+import { useHydrated } from "@/components/use-hydrated";
+
 import { PasswordInput } from "@/components/password-input";
 
 const inputClass =
@@ -24,6 +26,7 @@ export function SignUpForm() {
   const [displayEdited, setDisplayEdited] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const hydrated = useHydrated();
 
   const autoDisplay = [firstName.trim(), lastName.trim()].filter(Boolean).join(" ");
   const shownDisplay = displayEdited ? displayName : autoDisplay;
@@ -78,7 +81,7 @@ export function SignUpForm() {
   }
 
   return (
-    <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
+    <form method="post" onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="flex flex-col gap-1.5">
           <span className="am-h4">First name</span>
@@ -171,7 +174,7 @@ export function SignUpForm() {
       )}
       <button
         type="submit"
-        disabled={pending}
+        disabled={pending || !hydrated}
         className="h-10 rounded-lg bg-primary font-medium text-[15px] text-primary-foreground transition-opacity disabled:opacity-60"
       >
         {pending ? "Creating your account…" : "Create account"}

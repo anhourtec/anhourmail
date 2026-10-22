@@ -3,9 +3,15 @@
 
 import { ThemeProvider as NextThemes } from "next-themes";
 
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
+export function ThemeProvider({ children, nonce }: { children: React.ReactNode; nonce?: string | undefined }) {
   return (
-    <NextThemes attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+    <NextThemes
+      attribute="class"
+      defaultTheme="system"
+      enableSystem
+      disableTransitionOnChange
+      {...(nonce ? { nonce } : {})}
+    >
       {children}
     </NextThemes>
   );

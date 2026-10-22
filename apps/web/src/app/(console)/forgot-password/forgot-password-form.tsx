@@ -3,6 +3,8 @@
 
 import { type SyntheticEvent, useState } from "react";
 
+import { useHydrated } from "@/components/use-hydrated";
+
 const inputClass =
   "h-10 w-full rounded-lg border bg-background px-3 text-[15px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring";
 
@@ -13,6 +15,7 @@ export function ForgotPasswordForm() {
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const hydrated = useHydrated();
 
   async function submit(email: string) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -55,7 +58,7 @@ export function ForgotPasswordForm() {
   }
 
   return (
-    <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
+    <form method="post" onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
       <label className="flex flex-col gap-1.5">
         <span className="am-h4">Email</span>
         <input
@@ -74,7 +77,7 @@ export function ForgotPasswordForm() {
       )}
       <button
         type="submit"
-        disabled={pending}
+        disabled={pending || !hydrated}
         className="h-10 rounded-lg bg-primary font-medium text-[15px] text-primary-foreground transition-opacity disabled:opacity-60"
       >
         {pending ? "Sending…" : "Send reset link"}

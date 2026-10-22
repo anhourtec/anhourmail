@@ -8,7 +8,7 @@ import type { RequestMeta } from "@anhourmail/core";
 import { clientIp } from "@anhourmail/server/client-ip";
 import { log } from "@anhourmail/server/log";
 import { callerKey, checkRateLimit, LIMITS, type LimitName } from "@anhourmail/server/rate-limit";
-import { requestIdFrom, runWithRequestContext } from "@anhourmail/server/request-context";
+import { type RequestContext, requestIdFrom, runWithRequestContext } from "@anhourmail/server/request-context";
 
 import { container } from "../container";
 import { env } from "../env";
@@ -31,12 +31,15 @@ const STATUS: Record<string, number> = {
 
 export type RouteOptions = {
   limit?: LimitName;
+  /** Which session identifies the caller for per-caller limits: the console's (default) or the webmail's. */
+  session?: "console" | "webmail";
 };
 
 export type RouteContext = { req: Request; meta: RequestMeta };
 
 type RouteParams = Record<string, string | string[] | undefined>;
-type Params = { params: Promise<RouteParams> };
+/** Next passes `params` only for dynamic routes. */
+type Params = { params?: Promise<RouteParams> };
 type Handler = (ctx: RouteContext, params: RouteParams) => Promise<Response>;
 
 export const ok = (data: unknown, status = 200) => NextResponse.json({ data }, { status });
@@ -49,6 +52,30 @@ const SAFE = new Set(["GET", "HEAD", "OPTIONS"]);
 /** Path segments that carry one-time tokens (reset links, invites, …) are never logged (CLAUDE.md rule 12). */
 const TOKEN_PATH = /(\/(?:reset-password|verify-email|invite|magic-link|confirm)\/)[^/?#]+/gi;
 export const logPath = (path: string): string => path.replace(TOKEN_PATH, "$1[redacted]").slice(0, 512);
+
+/**
+ * The route pattern for a request path: every segment that is a route parameter becomes `:name`
+ * (`/api/accounts/3f…/mailboxes/9a…` → `/api/accounts/:accountId/mailboxes/:mailboxId`). Rate-limit buckets use it so
+ * a caller can't get fresh buckets by varying ids. Unknown tails are cut at 512 characters.
+ */
+export function routeTemplate(path: string, params: RouteParams): string {
+  const byValue = new Map<string, string>();
+  for (const [key, value] of Object.entries(params)) {
+    for (const v of Array.isArray(value) ? value : value === undefined ? [] : [value]) byValue.set(v, `:${key}`);
+  }
+  const decode = (seg: string) => {
+    try {
+      return decodeURIComponent(seg);
+    } catch {
+      return seg;
+    }
+  };
+  return path
+    .split("/")
+    .map((seg) => (seg === "" ? seg : (byValue.get(decode(seg)) ?? byValue.get(seg) ?? seg)))
+    .join("/")
+    .slice(0, 512);
+}
 
 /** Writes (POST/PUT/PATCH/DELETE) must come from this origin: the CSRF guard for cookie auth. */
 function originAllowed(req: Request): boolean {
@@ -63,9 +90,12 @@ function originAllowed(req: Request): boolean {
   }
 }
 
-function sessionCookie(req: Request): string | null {
+function sessionCookie(req: Request, kind: "console" | "webmail" = "console"): string | null {
   const cookie = req.headers.get("cookie") ?? "";
-  const m = /(?:^|;\s*)(?:__Secure-)?am\.session_token=([^;]+)/.exec(cookie);
+  const m =
+    kind === "webmail"
+      ? /(?:^|;\s*)(?:__Host-)?am\.webmail=([^;]+)/.exec(cookie)
+      : /(?:^|;\s*)(?:__Secure-)?am\.session_token=([^;]+)/.exec(cookie);
   return m?.[1] ?? null;
 }
 
@@ -73,22 +103,26 @@ export function route(handler: Handler, opts: RouteOptions = {}) {
   return async (req: Request, ctx: Params): Promise<Response> => {
     const requestId = requestIdFrom(req.headers);
     const started = performance.now();
-    return runWithRequestContext({ requestId }, async () => {
+    const context: RequestContext = { requestId };
+    return runWithRequestContext(context, async () => {
       const path = new URL(req.url).pathname;
       let res: Response;
       let errorCode: string | undefined;
       try {
         const ip = clientIp(req.headers);
+        context.clientIp = ip;
         const limitName = opts.limit ?? (SAFE.has(req.method) ? "read" : "write");
         if (ip === null && LIMITS[limitName].by === "ip" && env().NODE_ENV === "production") {
           // Never fall back to one shared bucket for anonymous callers (security audit 2026-10-21).
           throw new ValidationError("Missing client address.");
         }
+        const params: RouteParams = (await ctx.params) ?? {};
         const rl = await checkRateLimit(
           container().counter,
-          `${limitName}:${req.method} ${logPath(path).replace(/[0-9a-f-]{20,}/gi, ":id")}`,
+          // One bucket per route, not per id: `/api/webmail/messages/:emailId`, whatever the id.
+          `${limitName}:${req.method} ${routeTemplate(path, params)}`,
           LIMITS[limitName],
-          LIMITS[limitName].by === "ip" ? `ip:${ip ?? "direct"}` : callerKey(sessionCookie(req), ip),
+          LIMITS[limitName].by === "ip" ? `ip:${ip ?? "direct"}` : callerKey(sessionCookie(req, opts.session), ip),
         );
         if (!rl.allowed) {
           errorCode = "rate_limited";
@@ -99,7 +133,7 @@ export function route(handler: Handler, opts: RouteOptions = {}) {
           res = errorBody("forbidden", "Cross-origin request blocked.", 403);
         } else {
           const meta: RequestMeta = { requestId, ip, userAgent: req.headers.get("user-agent") };
-          res = await handler({ req, meta }, await ctx.params);
+          res = await handler({ req, meta }, params);
           for (const [k, v] of Object.entries(rl.headers)) res.headers.set(k, v);
         }
       } catch (err) {

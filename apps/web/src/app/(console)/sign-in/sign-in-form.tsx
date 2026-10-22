@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type SyntheticEvent, useState } from "react";
 
+import { useHydrated } from "@/components/use-hydrated";
+
 import { PasswordInput } from "@/components/password-input";
 
 const inputClass =
@@ -15,6 +17,7 @@ export function SignInForm() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const hydrated = useHydrated();
 
   async function onSubmit(e: SyntheticEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -42,6 +45,7 @@ export function SignInForm() {
 
   return (
     <form
+      method="post"
       onSubmit={(e) => {
         void onSubmit(e);
       }}
@@ -84,7 +88,7 @@ export function SignInForm() {
       )}
       <button
         type="submit"
-        disabled={pending}
+        disabled={pending || !hydrated}
         className="h-10 rounded-lg bg-primary font-medium text-[15px] text-primary-foreground transition-opacity disabled:opacity-60"
       >
         {pending ? "Signing in…" : "Sign in"}

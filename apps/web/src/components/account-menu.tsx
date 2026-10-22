@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 "use client";
 
-import { BookOpen, Building2, Check, CircleUser, CreditCard, LogOut } from "lucide-react";
+import { BookOpen, Building2, Check, CircleUser, CreditCard, LogOut, Mail } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
@@ -9,7 +9,13 @@ import { useState } from "react";
 import { menuKeys } from "./popover";
 import { clearSidebarCookies } from "./sidebar-cookies";
 
-export type MenuUser = { name: string; email: string; staffRole: string | null };
+export type MenuUser = {
+  name: string;
+  email: string;
+  staffRole: string | null;
+  /** The webmail sign-in on its own origin, with the address pre-filled (never a credential; ADR-0018). */
+  webmailHref?: string;
+};
 export type MenuAccount = { id: string; name: string; role: string; href: string };
 
 export function initials(name: string, email: string): string {
@@ -117,6 +123,12 @@ export function AccountMenu({
       <div role="separator" className="my-1 h-px bg-border" />
       {soon("Profile and security", CircleUser)}
       {soon("Billing", CreditCard)}
+      {user.webmailHref && (
+        <a role="menuitem" href={user.webmailHref} className={itemClass} onClick={onNavigate}>
+          <Mail className="size-4" aria-hidden />
+          Open webmail
+        </a>
+      )}
       <a role="menuitem" href={`${siteUrl}/docs`} className={itemClass} onClick={onNavigate}>
         <BookOpen className="size-4" aria-hidden />
         Documentation

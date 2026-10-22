@@ -43,6 +43,8 @@ function expectedStatus(route: RouteSpec, p: Persona, accountId: string): number
   const okStatus = route.probeStatus ?? (route.method === "POST" ? 202 : 200);
   if (route.guard === "public") return okStatus;
   if (route.guard === "session") return p.actor.kind === "user" ? 200 : 401;
+  // Webmail routes need a webmail session; no console session (any role) ever grants one.
+  if (route.guard === "webmail") return 401;
   if (route.guard === "infra") return 200;
   try {
     authorize(p.actor, route.guard, route.accountParam ? accountId : undefined);

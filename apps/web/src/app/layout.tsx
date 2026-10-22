@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 
 import { BRAND_ICONS } from "@anhourmail/ui/anhourtec-logo";
 import { brandFontVars } from "@anhourmail/ui/fonts";
@@ -14,11 +15,13 @@ export const metadata: Metadata = {
   ...BRAND_ICONS,
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Set by src/proxy.ts on webmail pages (nonce CSP); the theme script must carry it.
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
     <html lang="en-CA" className={brandFontVars} suppressHydrationWarning>
       <body>
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider nonce={nonce}>{children}</ThemeProvider>
       </body>
     </html>
   );

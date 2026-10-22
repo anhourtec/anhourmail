@@ -4,6 +4,8 @@
 import Link from "next/link";
 import { type SyntheticEvent, useState } from "react";
 
+import { useHydrated } from "@/components/use-hydrated";
+
 import { PasswordInput } from "@/components/password-input";
 
 const inputClass =
@@ -14,6 +16,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const hydrated = useHydrated();
 
   async function submit(newPassword: string, confirm: string) {
     if (newPassword.length < MIN_PASSWORD) {
@@ -65,7 +68,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
   }
 
   return (
-    <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
+    <form method="post" onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
       <label className="flex flex-col gap-1.5">
         <span className="am-h4">New password</span>
         <PasswordInput
@@ -94,7 +97,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
       )}
       <button
         type="submit"
-        disabled={pending}
+        disabled={pending || !hydrated}
         className="h-10 rounded-lg bg-primary font-medium text-[15px] text-primary-foreground transition-opacity disabled:opacity-60"
       >
         {pending ? "Saving…" : "Save new password"}
