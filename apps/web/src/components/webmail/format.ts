@@ -30,28 +30,82 @@ export function tone(email: string | undefined): number {
   return h % 5;
 }
 
-const sameDay = (a: Date, b: Date) =>
-  a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+/**
+ * How dates and times are written (Settings → Region and shortcuts): the region's conventions, a time zone (unset =
+ * the device's) and 12- or 24-hour time (unset = the region's). Set once by the app when preferences load or change.
+ */
+export type DateStyle = { locale: string; timeZone?: string; hourCycle?: "h12" | "h23" };
+let style: DateStyle = { locale: "en-CA" };
+
+export function setDateStyle(next: DateStyle): void {
+  style = { ...next };
+}
+
+const zoned = (opts: Intl.DateTimeFormatOptions): Intl.DateTimeFormatOptions => ({
+  ...opts,
+  ...(style.timeZone ? { timeZone: style.timeZone } : {}),
+  ...(style.hourCycle && opts.hour ? { hourCycle: style.hourCycle } : {}),
+});
+
+/** One formatter per time zone (building one is slow; date headers ask for every loaded row). */
+const ymdFormats = new Map<string, Intl.DateTimeFormat>();
+
+/** Year, month and day of `d` in the chosen time zone (for "same day" checks and date headers). */
+function ymd(d: Date): [number, number, number] {
+  const key = style.timeZone ?? "";
+  let fmt = ymdFormats.get(key);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat("en-CA", zoned({ year: "numeric", month: "2-digit", day: "2-digit" }));
+    ymdFormats.set(key, fmt);
+  }
+  const parts = fmt.formatToParts(d);
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? "0");
+  return [get("year"), get("month"), get("day")];
+}
+
+/** Days between the calendar dates of `a` and `b` in the chosen zone (b − a). */
+function dayDiff(a: Date, b: Date): number {
+  const [ay, am, ad] = ymd(a);
+  const [by, bm, bd] = ymd(b);
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86_400_000);
+}
+
+const sameDay = (a: Date, b: Date) => dayDiff(a, b) === 0;
 
 /** Compact list date: time today, weekday this week, "Oct 12" this year, else ISO date. */
 export function listDate(iso: string, now = new Date()): string {
   const d = new Date(iso);
-  if (sameDay(d, now)) return d.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
+  if (sameDay(d, now)) return d.toLocaleTimeString(style.locale, zoned({ hour: "numeric", minute: "2-digit" }));
   const days = (now.getTime() - d.getTime()) / 86_400_000;
-  if (days < 6 && days > 0) return d.toLocaleDateString("en-CA", { weekday: "short" });
-  if (d.getFullYear() === now.getFullYear()) return d.toLocaleDateString("en-CA", { month: "short", day: "numeric" });
+  if (days < 6 && days > 0) return d.toLocaleDateString(style.locale, zoned({ weekday: "short" }));
+  if (ymd(d)[0] === ymd(now)[0]) return d.toLocaleDateString(style.locale, zoned({ month: "short", day: "numeric" }));
   return d.toISOString().slice(0, 10);
 }
 
 export function fullDate(iso: string): string {
-  return new Date(iso).toLocaleString("en-CA", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  return new Date(iso).toLocaleString(
+    style.locale,
+    zoned({ weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }),
+  );
+}
+
+/**
+ * The date-header group of a message in the list: "Today", "Yesterday", "Earlier this week", "Last week",
+ * "Earlier this month", then the month ("September 2026").
+ */
+export function dateGroup(iso: string, now = new Date()): string {
+  const d = new Date(iso);
+  const diff = dayDiff(d, now);
+  if (diff <= 0) return "Today";
+  if (diff === 1) return "Yesterday";
+  // Weeks start on Monday.
+  const [ny, nm, nd] = ymd(now);
+  const weekday = (new Date(Date.UTC(ny, nm - 1, nd)).getUTCDay() + 6) % 7;
+  if (diff <= weekday) return "Earlier this week";
+  if (diff <= weekday + 7) return "Last week";
+  const [dy, dm] = ymd(d);
+  if (ny === dy && nm === dm) return "Earlier this month";
+  return d.toLocaleDateString(style.locale, zoned({ month: "long", year: "numeric" }));
 }
 
 export function fileSize(bytes: number): string {
@@ -120,11 +174,11 @@ export function relativeTime(iso: string, now = new Date()): string {
   const d = new Date(iso);
   const sec = Math.round((now.getTime() - d.getTime()) / 1000);
   if (sec < 45) return "just now";
-  const rtf = new Intl.RelativeTimeFormat("en-CA", { numeric: "always" });
+  const rtf = new Intl.RelativeTimeFormat(style.locale, { numeric: "always" });
   if (sec < 3600) return rtf.format(-Math.max(1, Math.round(sec / 60)), "minute");
   if (sec < 86_400) return rtf.format(-Math.round(sec / 3600), "hour");
   if (sec < 4 * 86_400) return rtf.format(-Math.round(sec / 86_400), "day");
-  return d.toLocaleDateString("en-CA", { day: "numeric", month: "short", year: "numeric" });
+  return d.toLocaleDateString(style.locale, zoned({ day: "numeric", month: "short", year: "numeric" }));
 }
 
 /** Parses the search box: `from:`, `to:`, `subject:`, `has:attachment`, `is:unread`, `is:flagged`, plus free text. */

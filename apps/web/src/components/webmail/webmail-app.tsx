@@ -23,11 +23,14 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { MessageListSkeleton } from "@anhourmail/ui/skeletons";
+import type { WebmailPreferences } from "@anhourmail/shared/webmail";
+import { useTheme } from "next-themes";
 
 import type { Address, MessageView } from "@/server/webmail/view";
 import { Tooltip } from "@/components/tooltip";
 
 import { type ComposeSeed, Composer } from "./composer";
+import { SettingsWindow } from "./settings/settings-window";
 import { ContactsView } from "./contacts-view";
 import { AddMailboxDialog, ConfirmDialog, Modal } from "./dialogs";
 import {
@@ -38,6 +41,7 @@ import {
   quoteBody,
   replyRecipients,
   replySubject,
+  setDateStyle,
 } from "./format";
 import {
   createMailClient,
@@ -60,7 +64,10 @@ import { type Mailboxes, Sidebar } from "./sidebar";
 import { ToastHost, useToasts } from "./toasts";
 
 type Shown = { view: View; narrow: Narrow; search: SearchQuery | null };
-const keyOf = (s: Shown) => JSON.stringify([s.view, s.narrow, s.search]);
+const keyOf = (
+  s: Shown,
+  look: { grouping: string; attachmentChips: boolean } = { grouping: "", attachmentChips: false },
+) => JSON.stringify([s.view, s.narrow, s.search, look.grouping, look.attachmentChips]);
 /** The main section's filter: pinned conversations have their own section in folder views. */
 const mainFilter = (s: Shown, hidden: string[]) =>
   listFilter(
@@ -98,6 +105,7 @@ export const SHORTCUTS: [string, string][] = [
   ["x", "Select"],
   ["Shift+U / Shift+I", "Mark unread / read"],
   ["/", "Search"],
+  [",", "Settings"],
   ["?", "Show these shortcuts"],
 ];
 
@@ -114,7 +122,16 @@ const wide = () => typeof window !== "undefined" && window.matchMedia("(min-widt
  * drawer, actions in a bottom bar). Reads and acts through the same-origin BFF only. Actions are optimistic, with
  * undo where it makes sense; sending is held for a few seconds so it can be undone.
  */
-type AppProps = { username: string; signInHref: string; helpHref: string; initialCollapsed: boolean };
+type AppProps = {
+  username: string;
+  signInHref: string;
+  helpHref: string;
+  /** The console's Aliases page (Settings → Account links there). */
+  consoleHref: string;
+  initialCollapsed: boolean;
+  /** This mailbox's saved preferences (read on the server, so the first paint already follows them). */
+  initialPreferences: WebmailPreferences;
+};
 
 export function WebmailApp(props: AppProps) {
   return (
@@ -124,8 +141,21 @@ export function WebmailApp(props: AppProps) {
   );
 }
 
-function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps) {
-  const client = useMemo(() => createMailClient(), []);
+function Mailroom({ username, signInHref, helpHref, consoleHref, initialCollapsed, initialPreferences }: AppProps) {
+  const client = useMemo(() => {
+    const c = createMailClient();
+    c.setGrouping(initialPreferences.grouping);
+    return c;
+    // Created once; grouping changes go through setGrouping below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one client per app
+  }, []);
+  const [prefs, setPrefs] = useState<WebmailPreferences>(initialPreferences);
+  const prefsRef = useRef(prefs);
+  useEffect(() => {
+    prefsRef.current = prefs;
+  });
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const rowKey = useCallback((r: ListRow) => (prefs.grouping === "messages" ? r.id : r.threadId), [prefs.grouping]);
   const toasts = useToasts();
   const [folders, setFolders] = useState<Folder[] | null>(null);
   const [view, setView] = useState<View | null>(null);
@@ -139,7 +169,9 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
   });
   const [pinned, setPinned] = useState<ListRow[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
+  /** The open row's key (its conversation, or the message when not grouping) and the row itself. */
   const [openThread, setOpenThread] = useState<string | null>(null);
+  const [openRow, setOpenRow] = useState<ListRow | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const anchor = useRef<number | null>(null);
   const [priorityCount, setPriorityCount] = useState(0);
@@ -216,7 +248,9 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
       pending.current.set(k, ticket);
       const latest = () => pending.current.get(k) === ticket;
       try {
-        const { total, rows } = await client.page(filter, page * PAGE_SIZE);
+        const { total, rows } = await client.page(filter, page * PAGE_SIZE, PAGE_SIZE, {
+          attachments: prefsRef.current.attachmentChips,
+        });
         if (!latest()) return;
         setList((cur) => {
           if (cur?.key !== key) return cur;
@@ -240,7 +274,7 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
   /** Loads the list for `shown`: the pinned section (folder views), then the first window (or the loaded ones). */
   const load = useCallback(
     async (shown: Shown, hiddenIds: string[], opts: { keep?: boolean } = {}) => {
-      const key = keyOf(shown);
+      const key = keyOf(shown, prefsRef.current);
       const main = mainFilter(shown, hiddenIds);
       const seq = (shownRef.current?.seq ?? 0) + 1;
       shownRef.current = { shown, hidden: hiddenIds, seq };
@@ -257,6 +291,7 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
             listFilter(shown.view, { ...shown.narrow }, hiddenIds, { pinned: true }),
             0,
             client.pinnedLimit,
+            { attachments: prefsRef.current.attachmentChips },
           );
           if (newest()) setPinned(p.rows);
         } catch (err) {
@@ -312,8 +347,14 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
         const h = [f.find((x) => x.role === "trash")?.id, f.find((x) => x.role === "junk")?.id].filter(
           (x): x is string => x !== undefined,
         );
-        const first = f.find((x) => x.role === "inbox") ?? f[0];
-        if (first) {
+        const start = prefsRef.current.startIn;
+        const chosen = start.startsWith("folder:") ? f.find((x) => `folder:${x.id}` === start) : undefined;
+        const first = chosen ?? f.find((x) => x.role === "inbox") ?? f[0];
+        if (start === "priority") {
+          const shown: Shown = { view: { kind: "priority" }, narrow: {}, search: null };
+          setView(shown.view);
+          void load(shown, h);
+        } else if (first) {
           const shown: Shown = { view: { kind: "folder", id: first.id }, narrow: {}, search: null };
           setView(shown.view);
           void load(shown, h);
@@ -370,6 +411,74 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
     };
   }, [refresh]);
 
+  // ---- preferences --------------------------------------------------------------------------------------
+
+  /** Applies a preference change at once, then saves it (rolled back with a message if saving fails). */
+  const updatePrefs = useCallback(
+    (patch: Partial<WebmailPreferences>) => {
+      const before = prefsRef.current;
+      const next = { ...before, ...patch };
+      prefsRef.current = next;
+      setPrefs(next);
+      client.updatePreferences(patch).catch((err: unknown) => {
+        prefsRef.current = before;
+        setPrefs(before);
+        fail(err, "That setting couldn't be saved. Try again.");
+      });
+    },
+    [client, fail],
+  );
+
+  // Theme: the saved choice wins on load; switching it anywhere (the sidebar toggle too) is saved.
+  const { theme, setTheme } = useTheme();
+  const expectedTheme = useRef<string>(initialPreferences.theme);
+  /** False until the page shows the saved theme: this browser's remembered theme must not overwrite it. */
+  const themeSynced = useRef(false);
+  useEffect(() => {
+    expectedTheme.current = prefs.theme;
+    if (theme !== prefs.theme) setTheme(prefs.theme);
+    // Only when the saved preference changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- follows prefs.theme
+  }, [prefs.theme]);
+  useEffect(() => {
+    if (!themeSynced.current) {
+      if (theme === expectedTheme.current) themeSynced.current = true;
+      return;
+    }
+    if (theme && theme !== expectedTheme.current && (theme === "light" || theme === "dark" || theme === "system")) {
+      expectedTheme.current = theme;
+      updatePrefs({ theme });
+    }
+  }, [theme, updatePrefs]);
+
+  // Motion and how dates are written.
+  useEffect(() => {
+    const root = document.documentElement;
+    if (prefs.motion === "reduced") root.dataset.motion = "reduced";
+    else delete root.dataset.motion;
+    return () => {
+      delete root.dataset.motion;
+    };
+  }, [prefs.motion]);
+  setDateStyle({
+    locale: prefs.region,
+    ...(prefs.timeZone !== "auto" ? { timeZone: prefs.timeZone } : {}),
+    ...(prefs.hourCycle !== "auto" ? { hourCycle: prefs.hourCycle } : {}),
+  });
+
+  // Grouping and attachment chips change what the list fetches: reload it.
+  const listShape = `${prefs.grouping}:${String(prefs.attachmentChips)}`;
+  const shapeRef = useRef(listShape);
+  useEffect(() => {
+    if (shapeRef.current === listShape) return;
+    shapeRef.current = listShape;
+    client.setGrouping(prefs.grouping);
+    setOpenThread(null);
+    setOpenRow(null);
+    setChecked(new Set());
+    void reload();
+  }, [listShape, prefs.grouping, client, reload]);
+
   // ---- rows ---------------------------------------------------------------------------------------------
 
   const flatTotal = pinned.length + (list?.total ?? 0);
@@ -386,22 +495,31 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
   /** Takes conversations out of the list right away (they moved elsewhere). */
   const dropThreads = useCallback(
     (threadIds: Set<string>) => {
-      setPinned((p) => p.filter((r) => !threadIds.has(r.threadId)));
+      setPinned((p) => p.filter((r) => !threadIds.has(rowKey(r))));
       setList((cur) => {
         if (!cur) return cur;
-        const rows = cur.rows.filter((r) => !r || !threadIds.has(r.threadId));
+        const rows = cur.rows.filter((r) => !r || !threadIds.has(rowKey(r)));
         const removed = cur.rows.length - rows.length;
         return { ...cur, rows, total: cur.total === null ? null : Math.max(0, cur.total - removed) };
       });
       setChecked(new Set());
       if (openThread && threadIds.has(openThread)) {
-        // Open the next conversation, like a mail client.
-        const next = selected !== null ? rowAt(selected + 1) : undefined;
-        setOpenThread(next && !threadIds.has(next.threadId) ? next.threadId : null);
-        if (!next) setSelected(null);
+        // Then open the next or previous conversation, or go back to the list (a setting).
+        const after = prefsRef.current.afterMove;
+        const target =
+          after === "list" || selected === null ? undefined : rowAt(after === "next" ? selected + 1 : selected - 1);
+        if (target && !threadIds.has(rowKey(target))) {
+          setOpenThread(rowKey(target));
+          setOpenRow(target);
+          if (after === "previous" && selected !== null) setSelected(selected - 1);
+        } else {
+          setOpenThread(null);
+          setOpenRow(null);
+          setSelected(null);
+        }
       }
     },
-    [openThread, selected, rowAt],
+    [openThread, selected, rowAt, rowKey],
   );
 
   // ---- actions ------------------------------------------------------------------------------------------
@@ -435,6 +553,8 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
     ) => {
       if (!to || threadIds.length === 0) return;
       const from = currentFolder?.id ?? null;
+      // "Mark as read when moving" (a setting): never for Trash.
+      if (prefsRef.current.markReadOnMove && to !== roles.trash) keywords = { $seen: true, ...keywords };
       dropThreads(new Set(threadIds));
       try {
         const skip = [roles.sent, roles.drafts].filter((x): x is string => x !== undefined);
@@ -507,12 +627,12 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
           keyword,
           on,
         );
-        patchRows((r) => (threadIds.includes(r.threadId) ? { ...r, keywords: { ...r.keywords, [keyword]: on } } : r));
+        patchRows((r) => (threadIds.includes(rowKey(r)) ? { ...r, keywords: { ...r.keywords, [keyword]: on } } : r));
       } catch (err) {
         fail(err);
       }
     },
-    [client, currentFolder, onKeyword, patchRows, fail],
+    [client, currentFolder, onKeyword, patchRows, fail, rowKey],
   );
 
   const act = useCallback(
@@ -656,6 +776,7 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
       text: "",
       attachments: [],
       focus: "to",
+      signature: true,
     });
   }, [openComposer]);
 
@@ -678,6 +799,7 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
           attachments: mode === "forward" ? m.attachments : [],
           ...(toMe ? { fromEmail: toMe } : {}),
           focus: mode === "forward" ? "to" : "body",
+          signature: true,
         },
         inline ? "inline" : "panel",
       );
@@ -710,13 +832,14 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
   );
 
   const onSent = useCallback(
-    (submissionId: string) => {
+    (submissionId: string, _draftId: string, holdSeconds: number) => {
       setComposer(null);
       setContacts([]); // New recipients may have been saved: suggestions reload next time.
       refresh();
       toasts.show({
         message: "Message sent.",
-        duration: 5500,
+        // Undo works while the server holds the message (the chosen delay), less a moment for the request.
+        duration: Math.max(3000, holdSeconds * 1000 - 500),
         action: {
           label: "Undo",
           onClick: () => {
@@ -748,9 +871,10 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
         void openDraft(row.id);
         return;
       }
-      setOpenThread(row.threadId);
+      setOpenThread(rowKey(row));
+      setOpenRow(row);
     },
-    [rowAt, currentFolder, openDraft],
+    [rowAt, currentFolder, openDraft, rowKey],
   );
 
   const close = useCallback(() => {
@@ -764,9 +888,12 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
       setSelected(next);
       anchor.current = next;
       const row = rowAt(next);
-      if (openThread !== null && row && currentFolder?.role !== "drafts") setOpenThread(row.threadId);
+      if (openThread !== null && row && currentFolder?.role !== "drafts") {
+        setOpenThread(rowKey(row));
+        setOpenRow(row);
+      }
     },
-    [flatTotal, selected, rowAt, openThread, currentFolder],
+    [flatTotal, selected, rowAt, openThread, currentFolder, rowKey],
   );
 
   const toggleCheck = useCallback(
@@ -777,20 +904,20 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
           const [a, b] = anchor.current < index ? [anchor.current, index] : [index, anchor.current];
           for (let i = a; i <= b; i++) {
             const r = rowAt(i);
-            if (r) next.add(r.threadId);
+            if (r) next.add(rowKey(r));
           }
         } else {
           const r = rowAt(index);
           if (r) {
-            if (next.has(r.threadId)) next.delete(r.threadId);
-            else next.add(r.threadId);
+            if (next.has(rowKey(r))) next.delete(rowKey(r));
+            else next.add(rowKey(r));
           }
           anchor.current = index;
         }
         return next;
       });
     },
-    [rowAt],
+    [rowAt, rowKey],
   );
 
   const selectView = (v: View) => {
@@ -805,7 +932,7 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
     if (checked.size > 0) return [...checked];
     if (openThread) return [openThread];
     const r = selected !== null ? rowAt(selected) : undefined;
-    return r ? [r.threadId] : [];
+    return r ? [rowKey(r)] : [];
   };
 
   // ---- keyboard -----------------------------------------------------------------------------------------
@@ -813,7 +940,14 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
-      if (composer?.variant === "panel" || confirm || adding) return;
+      if (composer?.variant === "panel" || confirm || adding || settingsOpen) return;
+      // With shortcuts off (a setting), only Escape works.
+      if (!prefs.shortcuts && e.key !== "Escape") return;
+      if (e.key === ",") {
+        e.preventDefault();
+        setSettingsOpen(true);
+        return;
+      }
       if (e.key === "Escape") {
         if (help) setHelp(false);
         else if (drawer) setDrawer(false);
@@ -921,6 +1055,8 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
 
   const signOut = async () => {
     try {
+      // "Empty Trash when I sign out" (a setting the person turned on).
+      if (prefs.emptyTrashOnSignOut && roles.trash) await client.emptyFolder(roles.trash).catch(() => undefined);
       await client.signOut();
     } finally {
       signedOut();
@@ -959,6 +1095,10 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
         setDrawer(false);
         setHelp(true);
       }}
+      onSettings={() => {
+        setDrawer(false);
+        setSettingsOpen(true);
+      }}
       onSignOut={() => {
         void signOut();
       }}
@@ -969,6 +1109,19 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
       onSwitchMailbox={switchMailbox}
     />
   );
+
+  // Reading pane (a setting): beside the list, below it, or instead of it (the list comes back on close).
+  const pane = prefs.readingPane;
+  const open_ = openThread !== null;
+  const mailGrid =
+    pane === "right"
+      ? "md:grid-cols-[23rem_minmax(0,1fr)] lg:grid-cols-[26rem_minmax(0,1fr)]"
+      : pane === "bottom"
+        ? "md:grid-rows-[minmax(0,2fr)_minmax(0,3fr)]"
+        : "";
+  const listVisibility = pane === "off" ? (open_ ? "hidden" : "flex") : open_ ? "hidden md:flex" : "flex";
+  const readerVisibility =
+    pane === "off" ? (open_ ? "flex flex-col" : "hidden") : open_ ? "flex flex-col" : "hidden md:flex md:flex-col";
 
   const title = searching
     ? "Search results"
@@ -1039,7 +1192,7 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
         const all = new Set<string>();
         for (let i = 0; i < flatTotal; i++) {
           const r = rowAt(i);
-          if (r) all.add(r.threadId);
+          if (r) all.add(rowKey(r));
         }
         setChecked(all);
       },
@@ -1097,6 +1250,7 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
         seed={composer.seed}
         variant="inline"
         trashId={roles.trash}
+        alwaysCcBcc={prefs.showCcBcc}
         onClose={({ savedDraft }) => {
           setComposer(null);
           if (savedDraft) toasts.show({ message: "Draft saved." });
@@ -1108,8 +1262,8 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
 
   return (
     <div
-      className={`grid h-dvh grid-cols-1 overflow-hidden md:grid-cols-[23rem_minmax(0,1fr)] ${
-        collapsed ? "lg:grid-cols-[3.5rem_26rem_minmax(0,1fr)]" : "lg:grid-cols-[15rem_26rem_minmax(0,1fr)]"
+      className={`grid h-dvh grid-cols-1 overflow-hidden ${
+        collapsed ? "lg:grid-cols-[3.5rem_minmax(0,1fr)]" : "lg:grid-cols-[15rem_minmax(0,1fr)]"
       }`}
     >
       <aside className="hidden min-h-0 border-sidebar-border border-r lg:block">{sidebar(collapsed)}</aside>
@@ -1151,14 +1305,15 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
               text: "",
               attachments: [],
               focus: "body",
+              signature: true,
             });
           }}
         />
       ) : (
-        <>
+        <div className={`grid min-h-0 grid-cols-1 ${mailGrid}`} data-reading-pane={pane}>
           <section
             aria-label={title}
-            className={`flex min-h-0 flex-col border-r ${openThread !== null ? "hidden md:flex" : "flex"}`}
+            className={`flex min-h-0 flex-col ${pane === "bottom" ? "md:border-b" : pane === "right" ? "border-r" : ""} ${listVisibility}`}
           >
             <header className="flex h-14 shrink-0 items-center gap-1 px-2">
               <Tooltip label="Folders">
@@ -1345,6 +1500,8 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
                   checked={checked}
                   sentFolder={currentFolder?.role === "sent" || currentFolder?.role === "drafts"}
                   label={`${title} messages`}
+                  look={prefs}
+                  rowKey={rowKey}
                   onOpen={open}
                   onCheck={toggleCheck}
                   onRange={onRange}
@@ -1353,12 +1510,15 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
             </div>
           </section>
 
-          <main className={`min-h-0 ${openThread !== null ? "flex flex-col" : "hidden md:flex md:flex-col"}`}>
+          <main className={`min-h-0 ${readerVisibility}`}>
             {openThread !== null ? (
               <Reader
                 key={openThread}
                 client={client}
-                threadId={openThread}
+                threadId={openRow?.threadId ?? openThread}
+                onlyEmailId={prefs.grouping === "messages" ? (openRow?.id ?? openThread) : undefined}
+                markRead={{ mode: prefs.markRead, delay: prefs.markReadDelay }}
+                defaultReply={prefs.defaultReply}
                 folders={folders ?? []}
                 currentFolder={currentFolder}
                 hiddenMailboxIds={hidden.filter((id) => id !== currentFolder?.id)}
@@ -1389,6 +1549,7 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
                     text: "",
                     attachments: [],
                     focus: "body",
+                    signature: true,
                   });
                 }}
                 knownAddresses={known}
@@ -1410,7 +1571,7 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
               </div>
             )}
           </main>
-        </>
+        </div>
       )}
 
       {composer?.variant === "panel" && (
@@ -1424,6 +1585,7 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
           seed={composer.seed}
           variant="panel"
           trashId={roles.trash}
+          alwaysCcBcc={prefs.showCcBcc}
           onClose={({ savedDraft }) => {
             setComposer(null);
             if (savedDraft) toasts.show({ message: "Draft saved." });
@@ -1434,6 +1596,23 @@ function Mailroom({ username, signInHref, helpHref, initialCollapsed }: AppProps
         />
       )}
 
+      {settingsOpen && (
+        <SettingsWindow
+          client={client}
+          preferences={prefs}
+          folders={folders ?? []}
+          consoleHref={consoleHref}
+          shortcuts={SHORTCUTS}
+          onChange={updatePrefs}
+          onIdentitiesChanged={setIdentities}
+          onSignOut={() => {
+            void signOut();
+          }}
+          onClose={() => {
+            setSettingsOpen(false);
+          }}
+        />
+      )}
       {help && (
         <Modal
           title="Keyboard shortcuts"

@@ -658,7 +658,7 @@ export function ContactsView({
   const ids = [...checked];
 
   return (
-    <div className="col-span-1 grid min-h-0 grid-cols-1 md:col-span-2 md:grid-cols-[23rem_minmax(0,1fr)] lg:grid-cols-[26rem_minmax(0,1fr)]">
+    <div className="grid min-h-0 min-w-0 grid-cols-1 md:grid-cols-[23rem_minmax(0,1fr)] lg:grid-cols-[26rem_minmax(0,1fr)]">
       <section
         aria-label="Contacts"
         className={`flex min-h-0 flex-col border-r ${detailOpen ? "hidden md:flex" : "flex"}`}

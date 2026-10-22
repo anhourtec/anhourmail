@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { JmapClient, JmapError } from "@anhourmail/jmap-client";
 
+import type { WebmailPreferences } from "@anhourmail/shared/webmail";
+
 import type { BookView, ContactInput, ContactView } from "@/server/webmail/contacts";
+import type { Junk, Vacation } from "@/server/webmail/sieve";
+import type { SettingsOverview } from "@/server/webmail/settings";
 import type { Address, MessageView } from "@/server/webmail/view";
 
 /**
@@ -37,8 +41,16 @@ export type Summary = {
   hasAttachment: boolean;
 };
 
-export type ListRow = Summary & { threadSize: number };
-export type Identity = { id: string; name: string; email: string };
+export type ListRow = Summary & {
+  threadSize: number;
+  /** Attachment names and types (only fetched when the list shows attachment chips). */
+  attachments?: { name: string | null; type: string }[];
+};
+
+/** How the list groups mail: whole conversations (one row each) or every message on its own row. */
+export type Grouping = WebmailPreferences["grouping"];
+export type Identity = { id: string; name: string; email: string; signature?: string };
+export type { SettingsOverview };
 export type Attachment = { blobId: string; name: string; type: string; size: number };
 export type DraftPayload = {
   replaces?: string;
@@ -168,6 +180,9 @@ async function api<T>(path: string, init: RequestInit = {}, go: typeof fetch = p
 
 /** `origin` "" (the default) means same-origin relative URLs, which is what the browser app uses. */
 export function createMailClient(origin = "") {
+  /** Rows are conversations (keys are thread ids) or single messages (keys are email ids). */
+  let grouping: Grouping = "conversations";
+
   // A webmail session shows one active mailbox, and the BFF answers every request for that one. Adding or switching
   // a mailbox changes it for the whole session, so a request still on its way (a list refresh, a reload after a
   // send) would reach the new mailbox with the old one's account id and ids, which the proxy refuses (400). So a
@@ -243,6 +258,11 @@ export function createMailClient(origin = "") {
   async function threadEmails(threadIds: string[]): Promise<{ id: string; mailboxIds: Record<string, boolean> }[]> {
     if (threadIds.length === 0) return [];
     const a = await accountId();
+    if (grouping === "messages") {
+      // Each row is one message: its key is the email id.
+      const res = await call([["Email/get", { accountId: a, ids: threadIds, properties: ["mailboxIds"] }, "g"]]);
+      return (res.get("g")?.list ?? []) as { id: string; mailboxIds: Record<string, boolean> }[];
+    }
     const res = await call([
       ["Thread/get", { accountId: a, ids: threadIds }, "t"],
       [
@@ -271,6 +291,14 @@ export function createMailClient(origin = "") {
   }
 
   return {
+    /** Switches how rows are keyed and listed (a preference); the app reloads the list afterwards. */
+    setGrouping(next: Grouping): void {
+      grouping = next;
+    },
+    get grouping(): Grouping {
+      return grouping;
+    },
+
     async folders(): Promise<Folder[]> {
       const a = await accountId();
       const res = await call([
@@ -315,8 +343,14 @@ export function createMailClient(origin = "") {
     },
 
     /** One window of the thread-collapsed list, newest first, with each thread's size. */
-    async page(filter: Condition, position: number, limit = PAGE_SIZE): Promise<{ total: number; rows: ListRow[] }> {
+    async page(
+      filter: Condition,
+      position: number,
+      limit = PAGE_SIZE,
+      opts: { attachments?: boolean } = {},
+    ): Promise<{ total: number; rows: ListRow[] }> {
       const a = await accountId();
+      const properties = opts.attachments ? [...SUMMARY, "attachments"] : SUMMARY;
       const res = await call([
         [
           "Email/query",
@@ -324,7 +358,7 @@ export function createMailClient(origin = "") {
             accountId: a,
             filter,
             sort: [{ property: "receivedAt", isAscending: false }],
-            collapseThreads: true,
+            collapseThreads: grouping === "conversations",
             position,
             limit,
             calculateTotal: true,
@@ -333,7 +367,12 @@ export function createMailClient(origin = "") {
         ],
         [
           "Email/get",
-          { accountId: a, "#ids": { resultOf: "q", name: "Email/query", path: "/ids" }, properties: SUMMARY },
+          {
+            accountId: a,
+            "#ids": { resultOf: "q", name: "Email/query", path: "/ids" },
+            properties,
+            ...(opts.attachments ? { bodyProperties: ["name", "type"] } : {}),
+          },
           "g",
         ],
         ["Thread/get", { accountId: a, "#ids": { resultOf: "g", name: "Email/get", path: "/list/*/threadId" } }, "t"],
@@ -347,7 +386,7 @@ export function createMailClient(origin = "") {
       const rows = ids
         .map((id) => emails.get(id))
         .filter((e): e is Summary => e !== undefined)
-        .map((e) => ({ ...e, threadSize: threads.get(e.threadId) ?? 1 }));
+        .map((e) => ({ ...e, threadSize: grouping === "messages" ? 1 : (threads.get(e.threadId) ?? 1) }));
       return { total, rows };
     },
 
@@ -550,22 +589,30 @@ export function createMailClient(origin = "") {
     },
 
     identities: () => bff<Identity[]>(`${origin}/api/webmail/identities`),
-    saveDraft: (d: DraftPayload) =>
-      bff<{ id: string }>(`${origin}/api/webmail/drafts`, { method: "PUT", body: JSON.stringify(d) }),
-    send: (draftId: string, identityId: string) =>
-      bff<{ submissionId: string; sendAt: string }>(`${origin}/api/webmail/send`, {
+    // Drafts, sending, undo and uploads carry the account this tab shows: if another tab switched the session to a
+    // different mailbox meanwhile, the BFF refuses (400) instead of acting on that other mailbox.
+    saveDraft: async (d: DraftPayload) =>
+      bff<{ id: string }>(`${origin}/api/webmail/drafts`, {
+        method: "PUT",
+        headers: { [ACCOUNT]: await accountId() },
+        body: JSON.stringify(d),
+      }),
+    send: async (draftId: string, identityId: string) =>
+      bff<{ submissionId: string; sendAt: string; holdSeconds: number }>(`${origin}/api/webmail/send`, {
         method: "POST",
+        headers: { [ACCOUNT]: await accountId() },
         body: JSON.stringify({ draftId, identityId }),
       }),
-    undoSend: (submissionId: string) =>
+    undoSend: async (submissionId: string) =>
       bff<{ draftId: string }>(`${origin}/api/webmail/send/undo`, {
         method: "POST",
+        headers: { [ACCOUNT]: await accountId() },
         body: JSON.stringify({ submissionId }),
       }),
-    upload: (file: File) =>
+    upload: async (file: File) =>
       bff<Attachment & { blobId: string }>(`${origin}/api/webmail/upload`, {
         method: "POST",
-        headers: { "Content-Type": file.type || "application/octet-stream" },
+        headers: { "Content-Type": file.type || "application/octet-stream", [ACCOUNT]: await accountId() },
         body: file,
       }),
     mailboxes: () => bff<{ active: string; others: string[] }>(`${origin}/api/webmail/mailboxes`),
@@ -625,6 +672,53 @@ export function createMailClient(origin = "") {
       }),
     exportContactsUrl: (ids?: string[]) =>
       `${origin}/api/webmail/contacts/export${ids && ids.length > 0 ? `?ids=${ids.map(encodeURIComponent).join(",")}` : ""}`,
+
+    settings: () => bff<SettingsOverview>(`${origin}/api/webmail/settings`),
+    /** Saves preferences for the mailbox the app shows (its JMAP account id; refused if another became active). */
+    updatePreferences: async (patch: Partial<WebmailPreferences>) =>
+      bff<WebmailPreferences>(`${origin}/api/webmail/settings/preferences`, {
+        method: "PATCH",
+        headers: { [ACCOUNT]: await accountId() },
+        body: JSON.stringify(patch),
+      }),
+    updateIdentity: (account: string, id: string, change: { name?: string; signature?: string }) =>
+      bff<Identity>(`${origin}/api/webmail/settings/identities/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { [ACCOUNT]: account },
+        body: JSON.stringify(change),
+      }),
+    saveVacation: (account: string, vacation: Vacation, timeZone: string) =>
+      bff<Vacation>(`${origin}/api/webmail/settings/vacation`, {
+        method: "PUT",
+        headers: { [ACCOUNT]: account },
+        body: JSON.stringify({ vacation, timeZone }),
+      }),
+    saveJunk: (account: string, junk: Junk) =>
+      bff<Junk>(`${origin}/api/webmail/settings/junk`, {
+        method: "PUT",
+        headers: { [ACCOUNT]: account },
+        body: JSON.stringify(junk),
+      }),
+    requestForwarding: (account: string, address: string) =>
+      bff<{ target: string; emailed: boolean }>(`${origin}/api/webmail/settings/forwarding`, {
+        method: "POST",
+        headers: { [ACCOUNT]: account },
+        body: JSON.stringify({ address }),
+      }),
+    setForwarding: (account: string, enabled: boolean, keepCopy: boolean) =>
+      bff<{ enabled: boolean; address: string | null; keepCopy: boolean }>(
+        `${origin}/api/webmail/settings/forwarding`,
+        {
+          method: "PUT",
+          headers: { [ACCOUNT]: account },
+          body: JSON.stringify({ enabled, keepCopy }),
+        },
+      ),
+    removeForwarding: (account: string) =>
+      bff<{ removed: boolean }>(`${origin}/api/webmail/settings/forwarding`, {
+        method: "DELETE",
+        headers: { [ACCOUNT]: account },
+      }),
 
     async signOut(): Promise<void> {
       await fetch(`${origin}/api/webmail/auth`, { method: "DELETE" });

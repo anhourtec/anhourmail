@@ -15,6 +15,7 @@ import {
   type LucideIcon,
   PenLine,
   Send,
+  Settings,
   ShieldAlert,
   Trash2,
   UserPlus,
@@ -138,6 +139,7 @@ export function Sidebar({
   onSelect,
   onCompose,
   onShortcuts,
+  onSettings,
   onSignOut,
   onAddMailbox,
   onSwitchMailbox,
@@ -153,6 +155,7 @@ export function Sidebar({
   onSelect: (view: View) => void;
   onCompose: () => void;
   onShortcuts: () => void;
+  onSettings: () => void;
   onSignOut: () => void;
   onAddMailbox: () => void;
   onSwitchMailbox: (address: string) => void;
@@ -308,6 +311,17 @@ export function Sidebar({
             <LifeBuoy className="size-4 text-muted-foreground" aria-hidden />
             {!collapsed && "Help & feedback"}
           </a>
+        </Tooltip>
+        <Tooltip label="Settings" shortcut="," side="right" disabled={!collapsed}>
+          <button
+            type="button"
+            onClick={onSettings}
+            aria-label="Settings"
+            className={`flex h-8 w-full items-center gap-2.5 rounded-lg text-left text-[13.5px] text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent/70 hover:text-sidebar-foreground ${collapsed ? "justify-center" : "px-2.5"}`}
+          >
+            <Settings className="size-4 text-muted-foreground" aria-hidden />
+            {!collapsed && "Settings"}
+          </button>
         </Tooltip>
         <Tooltip label="Keyboard shortcuts" shortcut="?" side="right" disabled={!collapsed}>
           <button

@@ -36,7 +36,30 @@ export type ComposeSeed = {
   fromEmail?: string;
   /** Where the caret starts: the top of the body (replies) or the To field. */
   focus: "to" | "body";
+  /** Add the sender's signature (new messages, replies and forwards; not when reopening a draft). */
+  signature?: boolean;
 };
+
+/** The block a signature adds to a plain-text message: the conventional "-- " separator line, then the text. */
+export const signatureBlock = (signature: string | undefined): string =>
+  signature && signature.trim() !== "" ? `\n\n-- \n${signature}` : "";
+
+/** The body a composer starts with: the signature above any quoted text (so the reply is written above both). */
+export function initialBody(seed: ComposeSeed, signature: string | undefined): string {
+  return seed.signature ? `${signatureBlock(signature)}${seed.text}` : seed.text;
+}
+
+/** Swaps one signature block for another when the sender changes (only if the old one is still there unchanged). */
+export function swapSignature(text: string, from: string | undefined, to: string | undefined): string {
+  const old = signatureBlock(from);
+  const next = signatureBlock(to);
+  if (old === "") return next === "" ? text : `${next}${text}`;
+  const at = text.indexOf(old);
+  const end = at + old.length;
+  // Only the unchanged block: it ends the text or is followed by a line break (the quoted message).
+  if (at === -1 || (end < text.length && text[end] !== "\n")) return text;
+  return `${text.slice(0, at)}${next}${text.slice(end)}`;
+}
 
 const EMAIL = /^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/;
 const MAX_UPLOAD = WEBMAIL_ATTACHMENTS.perFileMb * 1024 * 1024;
@@ -238,6 +261,7 @@ export function Composer({
   onClose,
   onSent,
   onSavedDraft,
+  alwaysCcBcc = false,
 }: {
   client: MailClient;
   identities: Identity[];
@@ -250,20 +274,39 @@ export function Composer({
   /** Where a discarded draft goes. */
   trashId: string | undefined;
   onClose: (opts: { savedDraft: boolean }) => void;
-  onSent: (submissionId: string, draftId: string) => void;
+  onSent: (submissionId: string, draftId: string, holdSeconds: number) => void;
   onSavedDraft?: () => void;
+  /** Show the Cc and Bcc fields from the start (a setting). */
+  alwaysCcBcc?: boolean;
 }) {
   const [to, setTo] = useState(seed.to);
   const [cc, setCc] = useState(seed.cc);
   const [bcc, setBcc] = useState(seed.bcc);
-  const [showCc, setShowCc] = useState(seed.cc.length > 0 || seed.bcc.length > 0);
+  const [showCc, setShowCc] = useState(alwaysCcBcc || seed.cc.length > 0 || seed.bcc.length > 0);
   const [subject, setSubject] = useState(seed.subject);
-  const [text, setText] = useState(seed.text);
-  const [attachments, setAttachments] = useState<Attachment[]>(seed.attachments);
-  const [uploading, setUploading] = useState(0);
   const [identityId, setIdentityId] = useState(
     () => identities.find((i) => i.email === seed.fromEmail)?.id ?? identities[0]?.id ?? "",
   );
+  const [text, setText] = useState(() => initialBody(seed, identities.find((i) => i.id === identityId)?.signature));
+  const [attachments, setAttachments] = useState<Attachment[]>(seed.attachments);
+  const [uploading, setUploading] = useState(0);
+  // Identities can arrive after the composer opened: pick the sender then, with its signature.
+  const [seenIdentities, setSeenIdentities] = useState(identities);
+  if (seenIdentities !== identities) {
+    setSeenIdentities(identities);
+    const pick = identities.find((i) => i.email === seed.fromEmail) ?? identities[0];
+    if (identityId === "" && pick) {
+      setIdentityId(pick.id);
+      if (seed.signature) setText((t) => swapSignature(t, undefined, pick.signature));
+    }
+  }
+  const chooseIdentity = (next: string) => {
+    if (seed.signature) {
+      const sig = (id: string) => identities.find((i) => i.id === id)?.signature;
+      setText((t) => swapSignature(t, sig(identityId), sig(next)));
+    }
+    setIdentityId(next);
+  };
   const [save, setSave] = useState<SaveState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -389,8 +432,8 @@ export function Composer({
     try {
       const id = dirty.current || !draftId.current ? await saveNow() : draftId.current;
       if (!id) return;
-      const { submissionId } = await client.send(id, identityId);
-      onSent(submissionId, id);
+      const { submissionId, holdSeconds } = await client.send(id, identityId);
+      onSent(submissionId, id, holdSeconds);
     } catch (err) {
       if (err instanceof SignedOutError) throw err;
       setError(err instanceof RefusedError ? err.message : "Couldn't send. Check your connection and try again.");
@@ -485,7 +528,7 @@ export function Composer({
             id="compose-from"
             value={identityId}
             onChange={(e) => {
-              setIdentityId(e.target.value);
+              chooseIdentity(e.target.value);
             }}
             className="h-8 min-w-0 flex-1 rounded-md bg-transparent font-mono text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >

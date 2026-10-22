@@ -108,9 +108,18 @@ export function Reader({
   knownAddresses,
   onAddContact,
   registerActions,
+  onlyEmailId,
+  markRead = { mode: "open", delay: 5 },
+  defaultReply = "reply",
 }: {
   client: MailClient;
   threadId: string;
+  /** Show just this message of the thread (the list isn't grouping conversations). */
+  onlyEmailId?: string | undefined;
+  /** When opened mail is marked read: at once, after `delay` seconds, or never (a setting). */
+  markRead?: { mode: "open" | "delay" | "never"; delay: number };
+  /** What the Reply button and `r` do (a setting). */
+  defaultReply?: "reply" | "replyAll";
   folders: Folder[];
   /** The folder being viewed (null in Priority or search). */
   currentFolder: Folder | null;
@@ -155,17 +164,21 @@ export function Reader({
 
   useEffect(() => {
     let live = true;
+    let timer: number | undefined;
     client
       .thread(threadId)
       .then((all) => {
         if (!live) return;
         const visible = all.filter((e) => !hiddenMailboxIds.some((id) => e.mailboxIds[id]));
-        const list = visible.length > 0 ? visible : all;
+        const shown = visible.length > 0 ? visible : all;
+        const one = onlyEmailId ? shown.filter((e) => e.id === onlyEmailId) : [];
+        const list = one.length > 0 ? one : shown;
         setThread(list);
         // Open the newest message that isn't an unsent draft (a draft reply stays listed in the conversation).
         setExpandedId(list.filter((e) => e.keywords.$draft !== true).at(-1)?.id ?? list.at(-1)?.id ?? null);
         const unread = list.filter((e) => e.keywords.$seen !== true).map((e) => e.id);
-        if (unread.length > 0) {
+        const markSeen = () => {
+          if (!live) return;
           void onKeyword(unread, "$seen", true)
             .then(() => {
               if (live) {
@@ -177,7 +190,10 @@ export function Reader({
               }
             })
             .catch(() => undefined);
-        }
+        };
+        if (unread.length > 0 && markRead.mode === "open") markSeen();
+        else if (unread.length > 0 && markRead.mode === "delay")
+          timer = window.setTimeout(markSeen, markRead.delay * 1000);
       })
       .catch((err: unknown) => {
         if (!live) return;
@@ -186,6 +202,7 @@ export function Reader({
       });
     return () => {
       live = false;
+      window.clearTimeout(timer);
     };
     // The thread id is the identity of this reader (the parent re-keys it); callbacks are stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per thread
@@ -253,7 +270,7 @@ export function Reader({
         if (expanded) setKeyword([expanded.id], "$seen", r);
       },
       reply: (mode) => {
-        reply(mode);
+        reply(mode === "reply" ? defaultReply : mode);
       },
     });
     return () => {
@@ -267,15 +284,24 @@ export function Reader({
         .filter((f) => f.id !== currentFolder?.id && f.role !== "drafts" && f.role !== "sent")
     : [];
   const more: MenuEntry[] = [
-    {
-      label: "Reply all",
-      icon: ReplyAll,
-      onSelect: () => {
-        reply("replyAll");
-      },
-      disabled: !loaded,
-      hint: "a",
-    },
+    defaultReply === "replyAll"
+      ? {
+          label: "Reply",
+          icon: Reply,
+          onSelect: () => {
+            reply("reply");
+          },
+          disabled: !loaded,
+        }
+      : {
+          label: "Reply all",
+          icon: ReplyAll,
+          onSelect: () => {
+            reply("replyAll");
+          },
+          disabled: !loaded,
+          hint: "a",
+        },
     {
       label: "Forward",
       icon: Forward,
@@ -369,6 +395,7 @@ export function Reader({
   );
 
   const senderName = displayName(expanded?.from?.[0]);
+  const ReplyIcon = defaultReply === "replyAll" ? ReplyAll : Reply;
   return (
     <section aria-label="Message" className="flex h-full min-h-0 flex-col">
       <div className="flex h-14 shrink-0 items-center gap-0.5 border-b px-2">
@@ -453,17 +480,17 @@ export function Reader({
               </button>
             </Tooltip>
           )}
-          <Tooltip label="Reply" shortcut="r">
+          <Tooltip label={defaultReply === "replyAll" ? "Reply all" : "Reply"} shortcut="r">
             <button
               type="button"
               onClick={() => {
-                reply("reply");
+                reply(defaultReply);
               }}
               disabled={!loaded}
-              aria-label="Reply"
+              aria-label={defaultReply === "replyAll" ? "Reply all" : "Reply"}
               className={iconButtonClass}
             >
-              <Reply className="size-4" aria-hidden />
+              <ReplyIcon className="size-4" aria-hidden />
             </button>
           </Tooltip>
           <Menu label="More actions" icon={EllipsisVertical} items={more} />
@@ -577,12 +604,14 @@ export function Reader({
                 type="button"
                 disabled={!loaded}
                 onClick={() => {
-                  reply("reply", true);
+                  reply(defaultReply, true);
                 }}
                 className="flex h-11 w-full items-center gap-3 rounded-xl border bg-background px-3.5 text-left text-[13.5px] text-muted-foreground shadow-xs transition-colors hover:border-ring/50 hover:text-foreground"
               >
                 <Reply className="size-4 shrink-0" aria-hidden />
-                <span className="min-w-0 flex-1 truncate">Reply to {senderName}…</span>
+                <span className="min-w-0 flex-1 truncate">
+                  {defaultReply === "replyAll" ? "Reply all" : `Reply to ${senderName}`}…
+                </span>
                 <Paperclip className="size-4 shrink-0 opacity-60" aria-hidden />
                 <Send className="size-4 shrink-0 opacity-60" aria-hidden />
               </button>
@@ -642,13 +671,13 @@ export function Reader({
         <button
           type="button"
           onClick={() => {
-            reply("reply");
+            reply(defaultReply);
           }}
           disabled={!loaded}
-          aria-label="Reply"
+          aria-label={defaultReply === "replyAll" ? "Reply all" : "Reply"}
           className={iconButtonClass}
         >
-          <Reply className="size-5" aria-hidden />
+          <ReplyIcon className="size-5" aria-hidden />
         </button>
         <Menu label="More actions" icon={EllipsisVertical} items={more} side="top" />
       </nav>

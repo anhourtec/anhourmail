@@ -1,7 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { fileKind, parseSearch, quoteBody, relativeTime, replyRecipients, replySubject } from "./format";
+import {
+  dateGroup,
+  fileKind,
+  fullDate,
+  listDate,
+  parseSearch,
+  quoteBody,
+  relativeTime,
+  replyRecipients,
+  replySubject,
+  setDateStyle,
+} from "./format";
 import { listFilter } from "./mail-client";
 
 const now = new Date("2026-10-22T12:00:00Z");
@@ -112,5 +123,34 @@ describe("webmail formatting", () => {
     expect(fileKind("application/zip", "a.zip")).toBe("archive");
     expect(fileKind("text/plain", "a.txt")).toBe("text");
     expect(fileKind("application/x-thing", "a.bin")).toBe("file");
+  });
+});
+
+describe("date style and date headers", () => {
+  afterEach(() => {
+    setDateStyle({ locale: "en-CA" });
+  });
+
+  it("groups messages by day, week and month in the chosen time zone", () => {
+    setDateStyle({ locale: "en-CA", timeZone: "UTC" });
+    // Thursday 22 October 2026, noon UTC.
+    const now = new Date("2026-10-22T12:00:00Z");
+    expect(dateGroup("2026-10-22T01:00:00Z", now)).toBe("Today");
+    expect(dateGroup("2026-10-21T23:00:00Z", now)).toBe("Yesterday");
+    expect(dateGroup("2026-10-19T09:00:00Z", now)).toBe("Earlier this week");
+    expect(dateGroup("2026-10-14T09:00:00Z", now)).toBe("Last week");
+    expect(dateGroup("2026-10-02T09:00:00Z", now)).toBe("Earlier this month");
+    expect(dateGroup("2026-09-02T09:00:00Z", now)).toBe("September 2026");
+    // In Vancouver it's still the 21st at 01:00 UTC on the 22nd.
+    setDateStyle({ locale: "en-CA", timeZone: "America/Vancouver" });
+    expect(dateGroup("2026-10-22T01:00:00Z", now)).toBe("Yesterday");
+  });
+
+  it("writes dates in the region's style, zone and hour cycle", () => {
+    setDateStyle({ locale: "en-GB", timeZone: "UTC", hourCycle: "h23" });
+    expect(fullDate("2026-10-22T21:30:00Z")).toMatch(/22 Oct 2026.*21:30/);
+    setDateStyle({ locale: "en-US", timeZone: "UTC", hourCycle: "h12" });
+    expect(fullDate("2026-10-22T21:30:00Z")).toMatch(/Oct 22, 2026.*9:30\sPM/);
+    expect(listDate("2026-10-22T21:30:00Z", new Date("2026-10-22T22:00:00Z"))).toMatch(/9:30\sPM/);
   });
 });
