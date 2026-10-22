@@ -7,6 +7,7 @@ import { systemClock } from "@anhourmail/core";
 import type { CreatedAppPassword } from "@anhourmail/core/app-passwords";
 import { setLogSinkForTests } from "@anhourmail/server/log";
 import { memoryCounter } from "@anhourmail/server/rate-limit";
+import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 
 import { setContainerForTests } from "../container";
 import { resetEnvForTests } from "../env";
@@ -40,7 +41,7 @@ beforeEach(() => {
   resetEnvForTests();
   mailer = memoryMailer();
   setContainerForTests({
-    deps: { uow: new MemoryUnitOfWork(), clock: systemClock },
+    deps: { uow: new MemoryUnitOfWork(), clock: systemClock, platform: PUBLIC_PLATFORM },
     counter: memoryCounter(),
     mailer,
     dns: { lookup: async () => [] },

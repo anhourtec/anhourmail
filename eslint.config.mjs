@@ -28,6 +28,20 @@ const INFRA_IMPORTS = [
   },
 ];
 
+/**
+ * The product's published hostnames (anhourmail.com) are for the marketing site and docs. Server code and the console
+ * use the deployment's configured platform (`deps.platform`, the web app's `platform()`; PLATFORM_DOMAIN), so a
+ * staging or self-hosted install never shows customers production names.
+ */
+const PUBLIC_FACTS = "HOSTS|CLIENT_ENDPOINTS|CARDDAV|PUBLIC_PLATFORM";
+const publicFactsRule = (names, where) => [
+  "error",
+  {
+    selector: `ImportDeclaration[source.value=/^@anhourmail.shared(.platform)?$/] ImportSpecifier[imported.name=/^(${names})$/]`,
+    message: `Use the configured platform (${where}), not the product's published hostnames — PLATFORM_DOMAIN, docs/internal/01-architecture.md "Platform hostnames".`,
+  },
+];
+
 export default tseslint.config(
   {
     ignores: [
@@ -118,6 +132,19 @@ export default tseslint.config(
     ],
     ignores: ["**/*.test.ts"],
     rules: { "no-console": "error" },
+  },
+  // Hostnames customers see come from PLATFORM_DOMAIN in server code and the console (rule 32 note above).
+  {
+    files: ["packages/{core,adapters}/src/**", "apps/worker/**"],
+    ignores: ["**/*.test.ts"],
+    rules: { "no-restricted-syntax": publicFactsRule(PUBLIC_FACTS, "deps.platform") },
+  },
+  {
+    files: ["apps/web/src/**"],
+    ignores: ["**/*.test.ts"],
+    rules: {
+      "no-restricted-syntax": publicFactsRule(`${PUBLIC_FACTS}|PRODUCT_DOMAIN`, "platform() in @/server/platform"),
+    },
   },
   {
     files: ["**/*.tsx"],

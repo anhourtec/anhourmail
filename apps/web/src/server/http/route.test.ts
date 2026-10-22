@@ -6,6 +6,7 @@ import { ANONYMOUS, ForbiddenError, systemClock } from "@anhourmail/core";
 import { setLogSinkForTests } from "@anhourmail/server/log";
 import { memoryCounter } from "@anhourmail/server/rate-limit";
 import { memoryMailer } from "@anhourmail/adapters/mail";
+import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 
 import { setContainerForTests } from "../container";
 import { resetEnvForTests } from "../env";
@@ -29,7 +30,7 @@ beforeEach(() => {
   resetEnvForTests();
   uow = new MemoryUnitOfWork();
   setContainerForTests({
-    deps: { uow, clock: systemClock },
+    deps: { uow, clock: systemClock, platform: PUBLIC_PLATFORM },
     counter: memoryCounter(),
     mailer: memoryMailer(),
     dns: noDns,
@@ -124,6 +125,7 @@ describe("security hardening (audit 2026-10-21)", () => {
     vi.stubEnv("APP_URL", "https://app.example.test");
     vi.stubEnv("WEBMAIL_URL", "https://mail.example.test");
     vi.stubEnv("SITE_URL", "https://example.test");
+    vi.stubEnv("PLATFORM_DOMAIN", "example.test");
     vi.stubEnv("BETTER_AUTH_SECRET", "y".repeat(48));
     vi.stubEnv("SECRETS_KEYRING", `k1:${Buffer.alloc(32, 1).toString("base64")}`);
     resetEnvForTests();

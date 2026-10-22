@@ -9,6 +9,7 @@ import { WebmailSettingsService } from "@anhourmail/core/webmail";
 import { createKeyRing } from "@anhourmail/server/keyring";
 import { setLogSinkForTests } from "@anhourmail/server/log";
 import { memorySlidingQuota } from "@anhourmail/server/rate-limit";
+import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 
 import { checkJmapRequest } from "./jmap-policy";
 import { GrantRefusedError, signatureHtml, WebmailRefusedError, WebmailService } from "./service";
@@ -191,7 +192,7 @@ async function setup() {
       sent.push(m);
     },
   };
-  const core = new WebmailSettingsService({ uow, clock: { now: () => new Date() } });
+  const core = new WebmailSettingsService({ uow, clock: { now: () => new Date() }, platform: PUBLIC_PLATFORM });
   confirmedSource.core = core;
   const settings = new WebmailSettings({ mail: svc, settings: core, mailer, webmailUrl: "https://mail.example/" });
   const script = () => managed.get("acc1") ?? "";

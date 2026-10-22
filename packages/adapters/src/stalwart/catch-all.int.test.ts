@@ -16,6 +16,7 @@ import { setCatchAll } from "@anhourmail/core/domains";
 import { suspendMailbox } from "@anhourmail/core/mailboxes";
 import { enqueueProvisioning, runNextJob } from "@anhourmail/core/provisioning";
 import { StalwartManagement, StalwartTransport } from "@anhourmail/stalwart-client";
+import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 
 import { hashPassword } from "../auth/password";
 import { createDb, schema } from "../db-postgres/client";
@@ -31,7 +32,7 @@ if (!dbUrl || !stalwartUrl || !admin || !adminPassword) {
 }
 
 const { db, pool } = createDb(dbUrl);
-const deps = { uow: new PgUnitOfWork(db), clock: systemClock };
+const deps = { uow: new PgUnitOfWork(db), clock: systemClock, platform: PUBLIC_PLATFORM };
 const mgmt = new StalwartManagement(
   new StalwartTransport({ baseUrl: stalwartUrl, auth: { type: "basic", username: admin, password: adminPassword } }),
 );

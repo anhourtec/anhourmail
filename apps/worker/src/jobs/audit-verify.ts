@@ -3,6 +3,7 @@
  * Verifies every audit hash chain (docs/internal/audit.md "Integrity"). A break is logged at fatal and the job
  * exits 1, which the scheduler reports; the alert channel is wired in phase 6.
  */
+import { workerPlatform } from "../platform";
 import { selectDistinct } from "./scopes";
 
 import { createDb, PgUnitOfWork } from "@anhourmail/adapters/postgres";
@@ -13,7 +14,7 @@ import { log } from "@anhourmail/server/log";
 const url = process.env.DATABASE_URL;
 if (!url) throw new Error("DATABASE_URL is not set");
 const { db, pool } = createDb(url);
-const deps = { uow: new PgUnitOfWork(db), clock: systemClock };
+const deps = { uow: new PgUnitOfWork(db), clock: systemClock, platform: workerPlatform() };
 const l = log.child({ component: "audit-verify" });
 
 let broken = 0;

@@ -3,6 +3,7 @@ import { Resolver } from "node:dns/promises";
 
 import type { DnsResolver, LookupType } from "@anhourmail/core/domains";
 import { customerDomainRecords } from "@anhourmail/shared/dns";
+import type { Platform } from "@anhourmail/shared/platform";
 
 /** "Doesn't exist" answers become `[]`; anything else (timeout, SERVFAIL, refused) is a failed lookup. */
 const EMPTY = new Set(["ENOTFOUND", "ENODATA", "ENONAME"]);
@@ -42,9 +43,14 @@ export function systemResolver(opts: { timeoutMs?: number; servers?: string[] } 
 /**
  * Development only: `.test` names (a reserved TLD that can never resolve on the internet) answer as if the
  * customer published every record correctly — except names starting with `unverified-`, which have none, so both
- * console states can be tried. Everything else goes to `fallback`. Never wired up in production.
+ * console states can be tried. Records point at `platform` (the configured platform domain), so they pass the same
+ * checks the console runs. Everything else goes to `fallback`. Never wired up in production.
  */
-export function devResolver(fallback: DnsResolver, tokens: (domain: string) => Promise<string[]>): DnsResolver {
+export function devResolver(
+  fallback: DnsResolver,
+  tokens: (domain: string) => Promise<string[]>,
+  platform: Platform,
+): DnsResolver {
   return {
     async lookup(type, fqdn) {
       const name = fqdn.replace(/\.$/, "").toLowerCase();
@@ -56,7 +62,7 @@ export function devResolver(fallback: DnsResolver, tokens: (domain: string) => P
       // Every account that added the name gets its own ownership TXT (as if each had published it).
       const answers = new Set<string>();
       for (const token of await tokens(domain)) {
-        for (const r of customerDomainRecords(domain, token)) {
+        for (const r of customerDomainRecords(domain, token, platform)) {
           if (r.type !== type || (r.name === "@" ? domain : `${r.name}.${domain}`) !== name) continue;
           answers.add(r.type === "MX" ? `${String(r.priority ?? 10)} ${r.value}` : r.value);
         }

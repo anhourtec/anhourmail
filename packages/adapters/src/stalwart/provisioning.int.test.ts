@@ -11,6 +11,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { systemClock } from "@anhourmail/core";
 import { enqueueProvisioning, reconcile, runNextJob } from "@anhourmail/core/provisioning";
 import { StalwartManagement, StalwartTransport } from "@anhourmail/stalwart-client";
+import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 
 import { createDb, schema } from "../db-postgres/client";
 import { PgUnitOfWork } from "../db-postgres/repositories";
@@ -25,7 +26,7 @@ if (!dbUrl || !stalwartUrl || !admin || !adminPassword) {
 }
 
 const { db, pool } = createDb(dbUrl);
-const deps = { uow: new PgUnitOfWork(db), clock: systemClock };
+const deps = { uow: new PgUnitOfWork(db), clock: systemClock, platform: PUBLIC_PLATFORM };
 const mgmt = new StalwartManagement(
   new StalwartTransport({ baseUrl: stalwartUrl, auth: { type: "basic", username: admin, password: adminPassword } }),
 );

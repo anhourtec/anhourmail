@@ -14,6 +14,7 @@ import { memoryOneTime } from "@anhourmail/server/one-time";
 
 import { systemClock } from "@anhourmail/core";
 import { factorRemovalRefusal, sessionRefusalFor } from "@anhourmail/core/security";
+import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 
 import { createDb, schema } from "../db-postgres/client";
 import { PgUnitOfWork } from "../db-postgres/repositories";
@@ -28,7 +29,7 @@ const ORIGIN = "http://localhost:43299";
 const events: AuthSecurityEvent[] = [];
 const claimOnce = memoryOneTime();
 const passwordChanges: { userId: string; via: string; keepSessionId: string | null; removePasskeys: boolean }[] = [];
-const deps = { uow: new PgUnitOfWork(db), clock: systemClock };
+const deps = { uow: new PgUnitOfWork(db), clock: systemClock, platform: PUBLIC_PLATFORM };
 const factorsAdded: { userId: string; factor: string; firstFactor: boolean }[] = [];
 let resetUrl = "";
 const auth = createAuth({

@@ -18,6 +18,7 @@ import { WebmailSettingsService } from "@anhourmail/core/webmail";
 import { memorySlidingQuota } from "@anhourmail/server/rate-limit";
 import { createKeyRing } from "@anhourmail/server/keyring";
 import { stalwart } from "@anhourmail/stalwart-client";
+import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 
 import { memoryKv, WebmailSessionStore } from "../webmail/session-store";
 import { WebmailService } from "../webmail/service";
@@ -131,7 +132,7 @@ describe("webmail settings on the dev Stalwart", () => {
   const mail = mailService();
   const uow = new MemoryUnitOfWork();
   const sent: MailMessage[] = [];
-  const core = new WebmailSettingsService({ uow, clock: systemClock });
+  const core = new WebmailSettingsService({ uow, clock: systemClock, platform: PUBLIC_PLATFORM });
   confirmedSource = core;
   const settings = new WebmailSettings({
     mail,
@@ -214,7 +215,10 @@ describe("webmail settings on the dev Stalwart", () => {
     const link = /\/forwarding\/confirm\/([A-Za-z0-9_-]{43})/.exec(sent.at(-1)?.text ?? "")?.[1];
     expect(sent.at(-1)?.to).toBe(target.address);
     if (!link) throw new Error("no confirmation link");
-    await new WebmailSettingsService({ uow, clock: systemClock }).confirmForwarding(link, req);
+    await new WebmailSettingsService({ uow, clock: systemClock, platform: PUBLIC_PLATFORM }).confirmForwarding(
+      link,
+      req,
+    );
 
     await settings.setForwarding(ownerSession, account, { enabled: true, keepCopy: true }, req);
     expect(uow.state.audit.at(-1)).toMatchObject({ action: "forwarding.changed", meta: { enabled: true } });

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { MemoryUnitOfWork } from "@anhourmail/adapters/memory";
 import type { Deps, UserActor } from "@anhourmail/core";
 import type { AccountRole, PlatformRole } from "@anhourmail/shared/rbac";
+import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 
 import { consoleSearch, normaliseSearch, rank, SEARCH_PER_KIND } from "./search";
 
@@ -84,7 +85,7 @@ function world(): Deps {
       createdAt: at,
     },
   );
-  return { uow, clock: { now: () => new Date("2026-10-22T12:00:00Z") } };
+  return { uow, clock: { now: () => new Date("2026-10-22T12:00:00Z") }, platform: PUBLIC_PLATFORM };
 }
 
 const user = (id: string, account: [string, AccountRole][] = [], platform: PlatformRole[] = []): UserActor => ({

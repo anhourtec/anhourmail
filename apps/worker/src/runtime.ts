@@ -7,19 +7,22 @@ import type { DnsResolver } from "@anhourmail/core/domains";
 import type { MailServer } from "@anhourmail/core/provisioning";
 import { stalwart } from "@anhourmail/stalwart-client";
 
+import { workerPlatform } from "./platform";
+
 /** Composition root for worker processes (ADR-0008): Postgres unit of work, Stalwart mail server, DNS. */
 export function runtime(): { deps: Deps; mail: MailServer; dns: DnsResolver; close: () => Promise<void> } {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL is not set");
+  const platform = workerPlatform();
   const { db, pool } = createDb(url);
   return {
-    deps: { uow: new PgUnitOfWork(db), clock: systemClock },
+    deps: { uow: new PgUnitOfWork(db), clock: systemClock, platform },
     mail: stalwartMailServer(stalwart()),
     // Development answers for `.test` names (devResolver); production always asks real DNS.
     dns:
       process.env.NODE_ENV === "production"
         ? systemResolver()
-        : devResolver(systemResolver(), (name) => domainVerifyTokens(db, name)),
+        : devResolver(systemResolver(), (name) => domainVerifyTokens(db, name), platform),
     close: () => pool.end(),
   };
 }

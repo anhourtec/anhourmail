@@ -3,6 +3,8 @@ import "server-only";
 
 import { z } from "zod";
 
+import { isPlatformDomain, parsePlatformDomain, productionPlatformProblems } from "@anhourmail/shared/platform";
+
 /** An http(s) URL: these become links and origins, so no other scheme is accepted in any mode. */
 const httpUrl = z.url({ protocol: /^https?$/ });
 
@@ -12,6 +14,16 @@ const schema = z.object({
   APP_URL: httpUrl,
   WEBMAIL_URL: httpUrl,
   SITE_URL: httpUrl,
+  // The deployment's own domain: mail, DNS and client hostnames are built under it (`platform()`). Unset or blank =
+  // anhourmail.com. A staging or self-hosted install sets its own so customers never see production names.
+  PLATFORM_DOMAIN: z
+    .string()
+    .optional()
+    .transform((v) => (v ?? "").trim().toLowerCase())
+    .refine((v) => v === "" || isPlatformDomain(v), {
+      message: "Use a domain name like example.org (lowercase, no scheme, no trailing dot)",
+    })
+    .transform((v) => parsePlatformDomain(v)),
   WEB_DEV_PORT: z.coerce.number().int().default(43200),
   BETTER_AUTH_SECRET: z.string().min(32),
   // Closed unless explicitly opened (the maintainer opens it while the app is behind the IP allow-list).
@@ -46,6 +58,15 @@ const checked = schema.superRefine((e, ctx) => {
   }
   if (!e.SECRETS_KEYRING || e.SECRETS_KEYRING.trim() === "") {
     ctx.addIssue({ code: "custom", path: ["SECRETS_KEYRING"], message: "Set the secrets key ring in production" });
+  }
+  // The console and webmail must sit directly under an explicitly set platform domain (app.<domain>, mail.<domain>):
+  // a deployment on another domain that forgot PLATFORM_DOMAIN would otherwise tell customers production's mail hosts.
+  for (const message of productionPlatformProblems({
+    platformDomainSetting: process.env.PLATFORM_DOMAIN,
+    domain: e.PLATFORM_DOMAIN,
+    urls: { APP_URL: e.APP_URL, WEBMAIL_URL: e.WEBMAIL_URL },
+  })) {
+    ctx.addIssue({ code: "custom", path: ["PLATFORM_DOMAIN"], message });
   }
   // Secure session cookies need an https origin.
   for (const key of ["APP_URL", "WEBMAIL_URL", "SITE_URL"] as const) {
