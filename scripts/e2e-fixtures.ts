@@ -51,8 +51,38 @@ if (mode === "create") {
     }
     users[key] = email;
   }
+  // A mailbox of the run's own for webmail journeys that send and receive. Stalwart throttles mail per sender domain
+  // and recipient (25 an hour by default, rule 27 — left as is), so sending to a shared demo mailbox runs out after
+  // a few runs; a fresh recipient on a fresh domain gets a fresh allowance. Created on the mail server and in the
+  // control plane (active, so the webmail's access gate admits it); `delete` removes both (names carry the run id).
+  const recipientDomain = `${run}.test`;
+  const recipient = { address: `inbox@${recipientDomain}`, password: `${randomBytes(12).toString("base64url")}-E2e` };
+  const mgmt = stalwart();
+  const domainStalwartId = await mgmt.upsertDomain({ name: recipientDomain });
+  const userStalwartId = await mgmt.upsertUser({
+    name: "inbox",
+    domain: recipientDomain,
+    password: await hashPassword(recipient.password),
+    quotaBytes: 50 * 1024 * 1024,
+  });
+  await db.insert(schema.customerDomain).values({
+    accountId: account.id,
+    name: recipientDomain,
+    status: "active",
+    verifyToken: run,
+    stalwartId: domainStalwartId,
+  });
+  await db.insert(schema.mailbox).values({
+    accountId: account.id,
+    address: recipient.address,
+    stalwartId: userStalwartId,
+    status: "active",
+    quotaBytes: 50 * 1024 * 1024,
+  });
   mkdirSync("test-results", { recursive: true });
-  writeFileSync(FILE, JSON.stringify({ run, password, accountName: account.name, users }, null, 2), { mode: 0o600 });
+  writeFileSync(FILE, JSON.stringify({ run, password, accountName: account.name, users, recipient }, null, 2), {
+    mode: 0o600,
+  });
 } else if (mode === "delete") {
   const { run } = JSON.parse(readFileSync(FILE, "utf8")) as { run: string };
   // Cleanup matches names by run id; refuse anything that isn't one, so a bad file can't match everything.
@@ -67,6 +97,15 @@ if (mode === "create") {
       if (domainOf(u.address).includes(run)) await mgmt.destroy("x:Account", u.id);
     }
     for (const d of await mgmt.listDomains()) if (d.name.includes(run)) await mgmt.destroyDomain(d.id);
+    // Tests that fail sign-in on purpose come from 203.0.113.0/24 (RFC 5737, never a real client); lift any ban
+    // the mail server put on those addresses so a later run picking the same one isn't refused.
+    const bans = (await mgmt.transport.getAll<{ id: string; address: string }>("x:BlockedIp", ["address"])).filter(
+      (b) => /^203\.0\.113\.\d+$/.test(b.address),
+    );
+    if (bans.length > 0) {
+      await mgmt.transport.set("x:BlockedIp", { destroy: bans.map((b) => b.id) });
+      await mgmt.transport.call([["x:Action/set", { create: { r: { "@type": "ReloadBlockedIps" } } }, "r"]]);
+    }
   } catch (err) {
     console.warn(`e2e cleanup: mail server not cleaned (${err instanceof Error ? err.message : String(err)})`);
   }

@@ -8,6 +8,8 @@ export type E2eUsers = {
   password: string;
   accountName: string;
   users: Record<"globalAdmin" | "reportsReader" | "owner" | "member" | "userAdmin", string>;
+  /** A mailbox of this run's own (fresh mail-server allowance per run) for webmail send/receive journeys. */
+  recipient: { address: string; password: string };
 };
 
 export const urls = {
@@ -31,17 +33,30 @@ export const test = base.extend<{ consoleErrors: string[] }>({
   },
 });
 
+/** The console home: its greeting ("Good morning, Pat"; "Hello, Pat" before the browser's clock is read). */
+export const homeHeading = (page: Page) =>
+  page.getByRole("heading", { level: 1, name: /^(Hello|Good (morning|afternoon|evening)), / });
+
 export async function signIn(page: Page, email: string, password: string): Promise<void> {
   await page.goto(`${urls.app}/sign-in`);
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+  await expect(homeHeading(page)).toBeVisible();
+}
+
+/** The open flyout details panel (a modal dialog), by its name. */
+export const panel = (page: Page, name: string | RegExp) =>
+  page.getByRole("dialog", typeof name === "string" ? { name, exact: true } : { name });
+
+/** After a reload the panel is server-rendered first; once the page is interactive, focus moves into it. */
+export async function panelReady(page: Page, name: string | RegExp) {
+  await expect(panel(page, name).locator(":focus")).toHaveCount(1);
 }
 
 /**
  * The console navigation. On small screens it lives in a drawer behind "Open navigation", so open it first; on
- * wide screens the sidebar is always there.
+ * wide screens the left navigation is always there.
  */
 export async function openNav(page: Page) {
   const menu = page.getByRole("button", { name: "Open navigation" });
@@ -49,7 +64,14 @@ export async function openNav(page: Page) {
   return page.getByRole("navigation", { name: "Console" });
 }
 
-/** Signs out through the person's menu in the header. */
+/** The app bar's search box (behind "Open search" on small screens). */
+export async function openSearch(page: Page) {
+  const open = page.getByRole("button", { name: "Open search" });
+  if (await open.isVisible()) await open.click();
+  return page.getByRole("combobox", { name: "Search the console" });
+}
+
+/** Signs out through the person's menu in the app bar. */
 export async function signOut(page: Page) {
   await page.getByRole("button", { name: "Your account", exact: true }).click();
   await page.getByRole("menuitem", { name: "Sign out" }).click();

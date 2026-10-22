@@ -8,10 +8,14 @@
 import { demoPassword } from "../support/demo-credentials";
 import type { Page } from "@playwright/test";
 
-import { expect, test, urls } from "./fixtures";
+import { e2eUsers, expect, test, urls } from "./fixtures";
 
 const OWNER = "owner@demo-family.test";
-const MEMBER = "member@demo-family.test";
+/**
+ * The run's own second mailbox (tests/e2e fixtures): the mail server throttles mail per sender domain and recipient,
+ * so journeys that send don't share one demo recipient's hourly allowance across runs.
+ */
+const recipient = () => e2eUsers().recipient;
 
 // Playwright's trace recorder snapshots every frame by injecting script; the message frame's sandbox blocks that and
 // Chrome logs "Blocked script execution in 'about:srcdoc'", which would fail the console-error check. That message
@@ -28,6 +32,12 @@ async function showList(page: Page) {
 async function showFolders(page: Page) {
   const nav = page.getByRole("navigation", { name: "Folders" });
   if (!(await nav.isVisible())) await page.getByRole("button", { name: "Toggle folders" }).click();
+}
+
+/** On phones a contact replaces the contact list: go back to it. */
+async function backToContacts(page: Page) {
+  const back = page.getByRole("button", { name: "Back to contacts" });
+  if (await back.isVisible()) await back.click();
 }
 
 /** The Next.js dev indicator (dev builds only) sits over the phone action bar's corner: hide it in tests. */
@@ -59,16 +69,25 @@ async function findBySearch(page: Page, query: string, text: string) {
   }).toPass({ timeout: 40_000 });
 }
 
-test("a wrong mailbox password gets the generic error", async ({ page }) => {
-  // Not checking console errors here: the browser logs the expected 401.
-  await page.goto(`${urls.webmail}/sign-in?address=${encodeURIComponent(OWNER)}`);
-  await expect(page.getByRole("heading", { name: "Sign in to your mailbox" })).toBeVisible();
-  await expect(page.getByLabel("Mailbox address")).toHaveValue(OWNER);
-  // A native submit (before the page's JavaScript runs) must never put the password in a URL.
-  await expect(page.locator("form")).toHaveAttribute("method", "post");
-  await page.getByLabel("Password", { exact: true }).fill("not-the-password");
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("alert").filter({ hasText: "Mailbox address or password is wrong." })).toBeVisible();
+test.describe("deliberate wrong passwords", () => {
+  // Their own client address from the documentation range (RFC 5737), random per run: the dev forwarder passes a
+  // loopback client's address through, so the mail server counts (and may ban) this address — never the shared
+  // loopback identity every other test signs in from, nor the forwarder.
+  test.use({
+    extraHTTPHeaders: { "X-Forwarded-For": `203.0.113.${String(1 + Math.floor(Math.random() * 254))}` },
+  });
+
+  test("a wrong mailbox password gets the generic error", async ({ page }) => {
+    // Not checking console errors here: the browser logs the expected 401.
+    await page.goto(`${urls.webmail}/sign-in?address=${encodeURIComponent(OWNER)}`);
+    await expect(page.getByRole("heading", { name: "Sign in to your mailbox" })).toBeVisible();
+    await expect(page.getByLabel("Mailbox address")).toHaveValue(OWNER);
+    // A native submit (before the page's JavaScript runs) must never put the password in a URL.
+    await expect(page.locator("form")).toHaveAttribute("method", "post");
+    await page.getByLabel("Password", { exact: true }).fill("not-the-password");
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "Mailbox address or password is wrong." })).toBeVisible();
+  });
 });
 
 test("a person signs in to the webmail, reads mail with remote images blocked, and signs out", async ({
@@ -164,6 +183,7 @@ test("write, send, receive in a second mailbox, reply, search and switch back @d
   // Compose to another demo mailbox (local delivery only).
   await page.getByRole("button", { name: "New email" }).click();
   const composer = page.getByRole("dialog", { name: "New message" });
+  const MEMBER = recipient().address;
   await composer.getByLabel("To", { exact: true }).fill(MEMBER);
   await composer.getByLabel("To", { exact: true }).press("Enter");
   await expect(composer.getByRole("button", { name: `Remove ${MEMBER}` })).toBeVisible();
@@ -178,7 +198,7 @@ test("write, send, receive in a second mailbox, reply, search and switch back @d
   await page.getByRole("menuitem", { name: "Add another mailbox" }).click();
   const add = page.getByRole("dialog", { name: "Add another mailbox" });
   await add.getByLabel("Mailbox address").fill(MEMBER);
-  await add.getByLabel("Password", { exact: true }).fill(demoPassword(MEMBER));
+  await add.getByLabel("Password", { exact: true }).fill(recipient().password);
   await add.getByRole("button", { name: "Add mailbox" }).click();
   await expect(page.getByRole("radio", { name: MEMBER })).toHaveAttribute("aria-checked", "true");
   await findBySearch(page, `subject:${tag}`, `Plans ${tag}`);
@@ -209,7 +229,9 @@ test("write, send, receive in a second mailbox, reply, search and switch back @d
     .click();
   await expect(reader.getByRole("list", { name: "Conversation" }).getByRole("listitem")).toHaveCount(2);
 
-  // Pin it, see it in Inbox's Pinned section, archive with undo, then delete it for good from Trash.
+  // Pin it, see it in Inbox's Pinned section, archive with undo, then delete it for good from Trash. The shortcut
+  // acts on the open message, so wait until the reader has it.
+  await expect(reader.getByRole("button", { name: "Pin" })).toBeVisible();
   await page.keyboard.press("p");
   await expect(reader.getByRole("button", { name: "Unpin" })).toBeVisible();
   await page.getByRole("searchbox", { name: "Search mail" }).fill("");
@@ -264,7 +286,7 @@ test("the composer fits the screen (full screen on phones) and sends", async ({ 
   await page.getByRole("button", { name: "New email" }).click();
   const composer = page.getByRole("dialog", { name: "New message" });
   await expectComposerLayout(page, composer);
-  await composer.getByLabel("To", { exact: true }).fill(`${MEMBER},`);
+  await composer.getByLabel("To", { exact: true }).fill(`${recipient().address},`);
   await composer.getByLabel("Subject").fill(`Phone ${tag}`);
   await composer.getByLabel("Message").fill("Sent from the composer test.");
   await composer.getByRole("button", { name: "Send" }).click();
@@ -353,7 +375,7 @@ test("ticking a row selects it with a visible checkbox; the print view is sandbo
   await box.click();
   await expect(box).toHaveAttribute("aria-checked", "true");
   await expect(page.getByRole("toolbar", { name: "Selected conversations" }).getByText("1 selected")).toBeVisible();
-  // Like Gmail: the avatar square shows a real checkbox (ticked) while the row is selected, not a blank tile.
+  // The avatar square shows a real checkbox (ticked) while the row is selected, not a blank tile.
   await expect(box.locator("svg")).toBeVisible();
   await page.keyboard.press("Escape");
 
@@ -370,4 +392,105 @@ test("ticking a row selects it with a visible checkbox; the print view is sandbo
   expect(res.headers()["content-security-policy"]).toContain("sandbox");
   expect(res.headers()["content-security-policy"]).toContain("default-src 'none'");
   await popup.close();
+});
+
+test("contacts: browse, search, add, edit and delete a contact; Other contacts holds people you emailed", async ({
+  page,
+  consoleErrors,
+}) => {
+  const tag = Math.random().toString(36).slice(2, 8);
+  await signInWebmail(page, OWNER);
+  await showFolders(page);
+  await page.getByRole("navigation", { name: "Folders" }).getByRole("button", { name: "Contacts" }).click();
+  await expect(page.getByRole("heading", { name: "Contacts", level: 1 })).toBeVisible();
+  const list = page.getByRole("list", { name: "Contact list" });
+  await expect(list.getByRole("button", { name: /Maya Chen/ })).toBeVisible();
+
+  // Search narrows the A–Z list; a contact opens in the detail pane (the only pane on phones).
+  await page.getByRole("searchbox", { name: "Search contacts" }).fill("piano");
+  await expect(list.getByRole("button", { name: /Maya Chen/ })).toBeVisible();
+  await expect(list.getByRole("button", { name: /Jordan Lee/ })).toHaveCount(0);
+  await list.getByRole("button", { name: /Maya Chen/ }).click();
+  const detail = page.getByRole("region", { name: "Contact: Maya Chen" });
+  await expect(detail.getByRole("button", { name: "maya@piano-studio.example" })).toBeVisible();
+  await expect(detail.getByText("Chen Piano Studio")).toBeVisible();
+  await backToContacts(page);
+  await page.getByRole("searchbox", { name: "Search contacts" }).fill("");
+
+  // Other contacts: people saved when you emailed them.
+  await page
+    .getByRole("group", { name: "Contact groups" })
+    .getByRole("button", { name: /Other contacts/ })
+    .click();
+  await expect(list.getByRole("button", { name: /Riley Morgan/ })).toBeVisible();
+  await expect(list.getByRole("button", { name: /Maya Chen/ })).toHaveCount(0);
+  await page.getByRole("group", { name: "Contact groups" }).getByRole("button", { name: /^All/ }).click();
+
+  // Add, edit, delete (two steps).
+  await page.getByRole("button", { name: "New contact" }).first().click();
+  const form = page.getByRole("form", { name: "New contact" });
+  await form.getByLabel("First name").fill("Test");
+  await form.getByLabel("Last name").fill(`Person ${tag}`);
+  await form.getByLabel("Email 1", { exact: true }).fill(`test-${tag}@example.org`);
+  await form.getByRole("button", { name: "Save" }).click();
+  const mine = page.getByRole("region", { name: `Contact: Test Person ${tag}` });
+  await expect(mine.getByRole("button", { name: `test-${tag}@example.org` })).toBeVisible();
+  await mine.getByRole("button", { name: "Edit contact" }).click();
+  await page.getByRole("form", { name: "Edit contact" }).getByLabel("Company").fill("Test Co");
+  await page.getByRole("form", { name: "Edit contact" }).getByRole("button", { name: "Save" }).click();
+  await expect(mine.getByText("Test Co")).toBeVisible();
+  await mine.getByRole("button", { name: "Delete contact" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByRole("button", { name: new RegExp(`Test Person ${tag}`) })).toHaveCount(0);
+  expect(consoleErrors).toEqual([]);
+});
+
+test("toolbar buttons show a styled tooltip with the shortcut soon after hover @desktop-only", async ({
+  page,
+  consoleErrors,
+}) => {
+  await signInWebmail(page, OWNER);
+  await page
+    .getByRole("listbox", { name: "Inbox messages" })
+    .getByRole("option", { name: /Your holds are ready for pickup/ })
+    .click();
+  const pin = page.getByRole("region", { name: "Message" }).getByRole("button", { name: /^(Pin|Unpin)$/ });
+  await expect(pin).not.toHaveAttribute("title");
+  await pin.hover();
+  const tip = page.getByRole("tooltip");
+  // Shown after the short delay (150 ms), not the browser's slow native tooltip.
+  await expect(tip).toBeVisible({ timeout: 600 });
+  await expect(tip).toContainText(/Pin|Unpin/);
+  await expect(tip.locator("kbd")).toHaveText("p");
+  const describedBy = (await pin.getAttribute("aria-describedby")) ?? "";
+  expect(describedBy).toContain((await tip.getAttribute("id")) ?? "missing");
+  await page.keyboard.press("Escape");
+  await expect(tip).toHaveCount(0);
+  expect(consoleErrors).toEqual([]);
+});
+
+test("add a sender to contacts from the reader", async ({ page, consoleErrors }) => {
+  await signInWebmail(page, OWNER);
+  await page
+    .getByRole("listbox", { name: "Inbox messages" })
+    .getByRole("option", { name: /Your holds are ready for pickup/ })
+    .click();
+  const reader = page.getByRole("region", { name: "Message" });
+  await reader.getByRole("button", { name: "Add to contacts" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "added to contacts" })).toBeVisible();
+  await expect(reader.getByRole("button", { name: "Add to contacts" })).toHaveCount(0);
+
+  // Tidy up: delete it from Contacts.
+  await showList(page);
+  await showFolders(page);
+  await page.getByRole("navigation", { name: "Folders" }).getByRole("button", { name: "Contacts" }).click();
+  await page.getByRole("searchbox", { name: "Search contacts" }).fill("notices@westside");
+  await page
+    .getByRole("list", { name: "Contact list" })
+    .getByRole("button", { name: /Westside Library/ })
+    .click();
+  await page.getByRole("button", { name: "Delete contact" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByRole("list", { name: "Contact list" })).toHaveCount(0);
+  expect(consoleErrors).toEqual([]);
 });

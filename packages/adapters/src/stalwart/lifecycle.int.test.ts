@@ -55,6 +55,14 @@ afterAll(async () => {
   const d = (await mgmt.listDomains()).find((x) => x.name === domain);
   if (d) await mgmt.destroyDomain(d.id);
   if (accountId) await db.delete(schema.customerAccount).where(eq(schema.customerAccount.id, accountId));
+  // Lift a ban the deliberate failures may have put on this test's own address.
+  const bans = (await mgmt.transport.getAll<{ id: string; address: string }>("x:BlockedIp", ["address"])).filter(
+    (b) => b.address === clientAddress,
+  );
+  if (bans.length > 0) {
+    await mgmt.transport.set("x:BlockedIp", { destroy: bans.map((b) => b.id) });
+    await mgmt.transport.call([["x:Action/set", { create: { r: { "@type": "ReloadBlockedIps" } } }, "r"]]);
+  }
   await pool.end();
 });
 
@@ -79,8 +87,18 @@ async function drain(subjectId: string): Promise<void> {
 }
 
 const basic = `Basic ${Buffer.from(`${address}:${password}`).toString("base64")}`;
+/**
+ * This test's own client address (RFC 5737 documentation range, random per run): its sign-ins fail on purpose while
+ * the account is suspended or deleted, and Stalwart (`useXForwarded`) counts those failures against this address —
+ * never against the dev forwarder every other request comes from.
+ */
+const clientAddress = `198.51.100.${String(1 + Math.floor(Math.random() * 254))}`;
 const sessionStatus = async () =>
-  (await fetch(`${stalwartUrl}/jmap/session`, { headers: { Authorization: basic } })).status;
+  (
+    await fetch(`${stalwartUrl}/jmap/session`, {
+      headers: { Authorization: basic, "X-Forwarded-For": clientAddress },
+    })
+  ).status;
 
 /** JMAP as the mailbox itself. */
 async function jmap(calls: unknown[]): Promise<Record<string, unknown>[]> {
