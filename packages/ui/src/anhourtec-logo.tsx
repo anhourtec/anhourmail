@@ -14,12 +14,14 @@ export function AnhourtecLogo({ className = "h-5 w-auto" }: { className?: string
   );
 }
 
-/** Icons and manifest for Next `metadata` (same files in every app). */
+/** Icons and manifest for Next `metadata` (same files in every app; the SVG favicon follows the OS theme). */
 export const BRAND_ICONS: Pick<Metadata, "icons" | "manifest"> = {
   icons: {
     icon: [
-      { url: "/favicon.ico", sizes: "any" },
-      { url: "/favicon-96x96.png", sizes: "96x96", type: "image/png" },
+      { url: "/favicon.ico", sizes: "48x48" },
+      { url: "/favicon.svg", type: "image/svg+xml" },
+      { url: "/favicon-32x32.png", sizes: "32x32", type: "image/png" },
+      { url: "/favicon-16x16.png", sizes: "16x16", type: "image/png" },
     ],
     apple: "/apple-touch-icon.png",
   },
