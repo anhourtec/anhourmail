@@ -23,15 +23,18 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `alias` | `alias.created`, `alias.toggled`, `alias.deleted` |
 | `masked_alias` | `masked_alias.created`, `masked_alias.toggled`, `masked_alias.deleted` |
 | `catch_all` | `catch_all.changed` |
-| `forwarding` | `forwarding.changed` |
+| `forwarding` | `forwarding.changed`, `forwarding.verification_sent`, `forwarding.confirmed` |
 | `sieve` | `sieve.changed` |
 | `vacation` | `vacation.changed` |
+| `junk_rules` | `junk_rules.changed` |
+| `identity` | `identity.changed` |
+| `webmail` | `webmail.preferences_changed` |
 | `billing` | `billing.plan_changed`, `billing.payment_succeeded`, `billing.payment_failed`, `billing.refunded`, `billing.suspended`, `billing.reactivated` |
 | `trust` | `trust.tier_changed`, `trust.limits_changed`, `trust.restricted`, `trust.suspended`, `trust.unsuspended` |
 | `abuse` | `abuse.report_received`, `abuse.report_resolved` |
 | `staff` | `staff.role_granted`, `staff.role_revoked`, `staff.act_as_started`, `staff.act_as_ended`, `staff.account_viewed`, `staff.credentials_reset` |
 | `data` | `data.export_requested`, `data.export_downloaded`, `data.import_started`, `data.import_finished`, `data.deletion_requested`, `data.deleted` |
-| `platform` | `platform.settings_changed`, `platform.secret_changed`, `platform.stalwart_upgraded`, `platform.provisioning_failed`, `platform.reconciler_drift`, `platform.mailbox_purged`, `platform.audit_chain_broken` |
+| `platform` | `platform.settings_changed`, `platform.secret_changed`, `platform.stalwart_upgraded`, `platform.provisioning_failed`, `platform.reconciler_drift`, `platform.mailboxes_requeued`, `platform.mailbox_purged`, `platform.audit_chain_broken` |
 | `audit` | `audit.exported` |
 | `shared_mailbox` | `shared_mailbox.created`, `shared_mailbox.deleted`, `shared_mailbox.member_added`, `shared_mailbox.member_removed` |
 | `distribution_list` | `distribution_list.created`, `distribution_list.deleted`, `distribution_list.member_added`, `distribution_list.member_removed`, `distribution_list.senders_changed` |
@@ -80,11 +83,27 @@ on an Owner's or admin's mailbox is recorded as `denied` (`forbidden`). The reco
 meta includes `suspensionMismatches` and `requeued`.
 `mailbox.deleted` stays reserved for an immediate deletion without a grace period (not offered today).
 
+App passwords (ADR-0020), in the mailbox's **account** scope with the mailbox as the target:
+`auth.app_password_created` (meta `name`, `protocols`; never the secret or Stalwart's credential id) and
+`auth.app_password_revoked` (meta `name` — plus `retry: true` when it was already being revoked and the job is
+queued again — or `all: true` and `count` for "revoke all"). Refusals are `denied` with the
+code: `step_up_required` (no recent confirmation on that session), `act_as` (staff acting as the person),
+`forbidden` (someone else's mailbox, or a User Administrator on an Owner's or admin's mailbox). The removal from the
+mail server is the worker's job and isn't audited again (a job that gives up writes `platform.provisioning_failed`).
+Catch-all: `catch_all.changed` (target = the domain; meta `enabled`, `mailbox` (masked address) and `changed`).
+Suspending or deleting the catch-all's mailbox turns it off in the same entry: `mailbox.suspended` /
+`mailbox.deletion_scheduled` meta `catchAllOff` (the domain names), and so does `platform.provisioning_failed` when
+the catch-all's mailbox ends up `failed`. The reconciler's app password check writes `platform.reconciler_drift`
+(target label `app passwords`; meta `appPasswordRevocationsRequeued`, `unknownAppPasswords`,
+`unexpectedAppPasswordPermissions`, `missingAppPasswords`, `apiKeysOnMailboxes`, `mailboxesUnreachable`; counts only,
+no addresses), and the managed-script check another (target label `managed sieve scripts`; meta `scriptsChecked`,
+`scriptsNotOurs`, `unconfirmedRedirects`, `foreignScripts`, `mailboxesUnreachable`, `requeued`).
+
 People: `account.invite_sent`, `account.invite_resent`, `account.invite_revoked` (target label = the invited
 address, meta = role; never the token), `account.invite_accepted` (meta: role, `newLogin`, the user id; the actor is
 the signed-in person, or `system`/`invite` when the link created the login), `account.role_changed` (meta:
 `previousRole`, `newRole` — `from`/`to` are redacted keys) and `account.member_removed` (meta: role, how many of their
-mailboxes became unassigned). A User Administrator's attempt on an Owner, an admin or an admin-role invite is recorded as
+mailboxes became unassigned, `appPasswordsRevoked`). A User Administrator's attempt on an Owner, an admin or an admin-role invite is recorded as
 `denied` in the account. An invite opened by a different signed-in address is recorded as `denied` in the
 **platform** scope with the invited address masked, so a non-member's address and id never land in the inviting
 account's log. `staff.account_viewed` is written in the viewed account's scope each time staff open its summary;

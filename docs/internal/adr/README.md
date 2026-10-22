@@ -23,3 +23,4 @@ One decision per file, numbered, never rewritten. A later ADR supersedes an earl
 | [0017](0017-dkim-rotation-and-management-api-key.md)         | DKIM fixed selectors rotated by the worker; scoped management API key         | Accepted |
 | [0018](0018-webmail-session-push-and-transport-hardening.md) | Webmail OAuth sessions, push sizing, submission transport hardening           | Accepted |
 | [0019](0019-sender-identity-enforcement.md)                  | Sender identity enforcement for authenticated mail                            | Accepted |
+| [0020](0020-app-passwords-issued-by-the-control-plane.md)    | App passwords issued by the control plane, limited per credential             | Accepted |

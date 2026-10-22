@@ -40,6 +40,19 @@ version. CI builds all three on every push (`.cicd/build.sh`).
 - Stalwart is pinned by tag and digest in compose; upgrades follow `docs/internal/08-operations.md`.
 - Scheduled work runs in the worker/scheduler container, never a host crontab.
 
+## One-off deploy steps
+
+- **Customer Sieve lock backfill (webmail settings, 2026-10-22):** after deploying the release that adds
+  `CUSTOMER_PERMISSIONS`, run `npm run job:mailbox-backfill --workspace @anhourmail/worker` once in the worker
+  container. It queues `mailbox.ensure` for every active mailbox; the worker re-applies the mail-server permissions
+  (customers can't write their own Sieve or VacationResponse) and re-activates each managed Sieve script. Safe to
+  re-run; audited as `platform.mailboxes_requeued`. From then on the hourly reconciler reports and re-queues any
+  mailbox whose lock drifted (`sieveLockMismatch`).
+
+- **App passwords and principals (2026-10-22, ADR-0020):** the same backfill also turns off self-service credentials,
+  the password change and principal look-ups on every customer account (`CUSTOMER_DENIALS` in `CUSTOMER_PERMISSIONS`, also in `SUSPENDED_PERMISSIONS`; the reconciler's `sieveLocked` drift check covers the whole list).
+  Run it once after this release too.
+
 ## Required production settings (the app refuses to start otherwise)
 
 - `TRUST_PROXY=true` — the app runs only behind our NGINX, which sets `X-Forwarded-For` (the right-most entry is
@@ -56,6 +69,17 @@ version. CI builds all three on every push (`.cicd/build.sh`).
   client once with exactly one redirect URI, `https://mail.anhourmail.com/oauth/callback` (`upsertOAuthClient` in
   `packages/stalwart-client`, client id `anhourmail-webmail`).
 - `SIGNUP_MODE` defaults to `closed`; set `open` only while access is limited to the IP allow-list.
+- `STALWART_API_KEY` — the management key (ADR-0017, ADR-0020) on an Admin-role service account with
+  `permissions: { "@type": "Replace" }` and exactly the set in `docs/internal/02-mail-infrastructure.md` ("Production
+  management key"): `authenticate`; the `sysDomain*`, `sysAccount*`, `sysDkimSignature*` objects it manages;
+  `impersonate` with `sysAppPassword{Create,Get,Query,Destroy}` and `sysApiKey{Get,Query}` (app passwords and the
+  reconciler's credential check); `jmapSieveScript{Get,Query,Create,Update,Validate}`, `jmapBlobUpload` and
+  `jmapBlobGet` (the managed Sieve script). Never `jmapEmail*`, `jmapMailbox*`, `jmapBlobLookup` or any other mail
+  permission, and an `allowedIps` list of the app and worker hosts.
+- **The public JMAP/CardDAV host (`imap.`) must not expose Stalwart's `/api/*`, `/auth/*`, `/admin`,
+  `/.well-known/oauth-authorization-server` or `/.well-known/openid-configuration`.** `/api/auth` turns an app password
+  into an account-wide OAuth token (ADR-0020); only the paths mail, contact and calendar apps use (`/jmap`,
+  `/dav/*`, `/.well-known/{jmap,carddav,caldav}`) are proxied there.
 - NGINX access logs must not record invite tokens: redact the path segment after `/invite/` and the `next` query on
   `/sign-in` (e.g. a `map` on `$request_uri` into the log format), since both carry a single-use invite token
   (`docs/internal/07-security.md` "Invites"). Invite acceptance creates console logins even when sign-up is closed.

@@ -73,6 +73,12 @@ mail clients ─► Stalwart 465/587/993/995/4190 (TLS by Stalwart itself)    MX
   Stalwart. Removal marks it `removing` and a `domain.remove` job takes it off Stalwart (refused while accounts
   remain) before the row is deleted.
 - **Stalwart is the source of truth for mail state:** messages, mail credentials, DKIM keys and their published zone (`dnsZoneFile`).
+- **Webmail settings are split by what they control** (05-webmail.md "Settings"): display preferences per mailbox in
+  Postgres (`webmail_preference`); a person's own mail flow (automatic replies, forwarding, junk lists) in one
+  managed Sieve script in their Stalwart account, written by the BFF with their own token (not a provisioning job:
+  it is mailbox data, like folders); sender names and signatures on their JMAP identities. Only the forwarding
+  target's confirmation lives in the control plane (`forwarding_target`), and the BFF writes a redirect only to a
+  confirmed target. Mail-flow changes are audited.
 - Provisioning is a **job**, never an inline request (CLAUDE.md rule 26): write intent (`status = pending`), enqueue, the worker applies it through `stalwart-client` (idempotent upserts by natural key), then set `active` or `failed` with an error code.
 - The **reconciler** (scheduler, every 15 min) compares Postgres intent with Stalwart (`x:Domain`, `x:Account` lists). It **reports** drift (audit `platform.reconciler.drift` + alert) and re-applies missing non-destructive state. It **never deletes** a Stalwart account or mail automatically. Deletions are explicit jobs with a grace period.
 
@@ -80,12 +86,12 @@ mail clients ─► Stalwart 465/587/993/995/4190 (TLS by Stalwart itself)    MX
 
 Two identities, deliberately separate:
 
-|             | Console identity                                                         | Mailbox identity                                                                                                   |
-| ----------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| Lives in    | Postgres via better-auth                                                 | Stalwart directory                                                                                                 |
-| Who         | A person (user) with memberships in accounts and optional platform roles | One mailbox (`name@domain`)                                                                                        |
-| Credentials | Email + password + optional TOTP/passkey (better-auth)                   | Mailbox password (initial, set by provisioning, hashed by Stalwart), app passwords for clients (user self-service) |
-| Used by     | Console, webmail (via BFF)                                               | IMAP/SMTP/JMAP clients                                                                                             |
+|             | Console identity                                                         | Mailbox identity                                                                                                                                                |
+| ----------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Lives in    | Postgres via better-auth                                                 | Stalwart directory                                                                                                                                              |
+| Who         | A person (user) with memberships in accounts and optional platform roles | One mailbox (`name@domain`)                                                                                                                                     |
+| Credentials | Email + password + optional TOTP/passkey (better-auth)                   | Mailbox password (initial, set by provisioning, hashed by Stalwart), app passwords for clients (issued by the control plane for the mailbox's person, ADR-0020) |
+| Used by     | Console, webmail (via BFF)                                               | IMAP/SMTP/JMAP clients                                                                                                                                          |
 
 We **never store mailbox passwords** (rule 23). Stalwart hashes them.
 
@@ -252,9 +258,16 @@ provisioning ──worker──► active ──suspend──► suspended ─�
   either takes a transaction-scoped advisory lock on the address before checking it, and a unique violation maps to
   409, so concurrent creates can't share an address. Alias changes queue `mailbox.ensure`, which writes the whole
   alias list (enabled flags included) to the Stalwart account.
-- Job kinds: `domain.ensure`, `domain.remove`, `mailbox.ensure` (account + quota + suspension + aliases, including
-  masked aliases). Every call
-  is idempotent (upsert by natural key), so retries and duplicate jobs are safe.
+- Job kinds: `domain.ensure` (the domain + its catch-all address while the catch-all mailbox is active),
+  `domain.remove`, `mailbox.ensure` (account + quota + suspension + aliases, including masked aliases),
+  `app_password.revoke` (subject: a mailbox; destroys its `revoking` app passwords, matching id and creation time,
+  then deletes the rows). Every call is idempotent (upsert by natural key), so retries and duplicate jobs are safe.
+- **App passwords are the exception to "provisioning is a job"** (ADR-0020): creating one calls Stalwart inside the
+  request, because the secret must go straight back to the person and nowhere else; the metadata row and the audit
+  entry commit after, and a failed commit destroys the new credential again. Revocation is a job like everything else.
+- Catch-all: `customer_domain.catch_all_mailbox_id`, set through `setCatchAll` (`domain.manage`, paid plans) and
+  cleared in the same unit of work that suspends or deletes its mailbox (`turnOffCatchAllFor`, which re-queues the
+  domain).
 - New mailboxes get a random, unusable argon2id password; mail access is via webmail sign-in and app passwords.
 - Platform domains (free tier, staff) are desired implicitly through their mailboxes; `RECONCILE_IGNORE_DOMAINS`
   lists mail-server-only infrastructure domains (dev: `dev.test`).

@@ -35,6 +35,8 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 | #    | Migration                          | Commit      | Date       | Change                                                                                               | Rollback        |
 | ---- | ---------------------------------- | ----------- | ---------- | ---------------------------------------------------------------------------------------------------- | --------------- |
+| 0012 | `0012_app_passwords_catch_all`     | uncommitted | 2026-10-22 | `app_password` (metadata only); `customer_domain.catch_all_mailbox_id`                               | Safe            |
+| 0011 | `0011_webmail_settings`            | uncommitted | 2026-10-22 | `webmail_preference` (display choices per mailbox), `forwarding_target` (one confirmed target each)  | Safe            |
 | 0010 | `0010_session_sign_in_method`      | uncommitted | 2026-10-22 | `auth_session.sign_in_method` (how the session signed in)                                            | Safe            |
 | 0009 | `0009_sign_in_security`            | uncommitted | 2026-10-22 | `auth_two_factor`, `auth_passkey`; `auth_user.two_factor_enabled`; `customer_account.sign_in_policy` | Safe            |
 | 0008 | `0008_invite_send_log`             | uncommitted | 2026-10-22 | `invite_send` table (one row per invite email sent) for the per-account daily cap                    | Safe            |
@@ -58,6 +60,33 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0012_app_passwords_catch_all · uncommitted · 2026-10-22 · Safe
+
+- Added: `app_password` (`id`, `account_id` → `customer_account` and `mailbox_id` → `mailbox`, both on delete
+  cascade; `name`, `protocols text[]`, `credential_id` + `credential_created_at` (Stalwart's id and creation time —
+  ids are reused, so both are matched before a revoke), `status` active/revoking, `created_by`, `created_at`; index on
+  `mailbox_id`). Metadata only: the secret is never stored (ADR-0020). `customer_domain.catch_all_mailbox_id` (uuid →
+  `mailbox`, on delete set null): the domain's catch-all mailbox, null = off.
+- Changed: —
+- Removed: —
+- Data: none (new table empty; every domain's catch-all starts off).
+- Rollback: drop the column and the table. App passwords already on the mail server keep working but disappear from
+  the console (revoke them on Stalwart first, or they can't be revoked from the console); a catch-all already applied
+  stays on the mail server until the domain is next applied (`domain.ensure` resets it).
+
+### 0011_webmail_settings · uncommitted · 2026-10-22 · Safe
+
+- Added: `webmail_preference` (`mailbox_id` primary key → `mailbox` on delete cascade, `prefs jsonb`, `updated_at`):
+  the webmail's display preferences per mailbox — closed choices only, normalised on read, no mail content and no
+  addresses. `forwarding_target` (`mailbox_id` primary key → `mailbox`, `account_id` → `customer_account`, both on
+  delete cascade; `address`, `status` pending/confirmed, `token_hash` unique (sha256 of the confirmation token, null
+  once confirmed), `expires_at`, `confirmed_at`, `requested_at`, `sends_in_window`, `window_started_at`).
+- Changed: —
+- Removed: —
+- Data: none (new tables; no rows until someone changes a webmail setting or asks to forward).
+- Rollback: drop both tables. Preferences fall back to defaults; forwarding rules already in the mail server keep
+  working until the person changes them, but a pending confirmation link stops working.
 
 ### 0010_session_sign_in_method · uncommitted · 2026-10-22 · Safe
 

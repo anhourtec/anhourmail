@@ -1,6 +1,6 @@
 # 05 — Webmail
 
-Last updated: 2026-10-22.
+Last updated: 2026-10-22 (settings, part 1).
 
 **Status (2026-10-22): slice 1 is built** — webmail sign-in (OAuth code flow + PKCE, tokens sealed server-side), the
 JMAP proxy (allow-list, per-user queue ≤ 4, `limit` retry), folders with counts and nesting, the thread-collapsed
@@ -127,13 +127,20 @@ frame-ancestors 'none'` unless the route sets its own sandboxing one). The app-w
   To/Cc/Bcc recipient whose address isn't on any card (matched case-insensitively against the cards' own `emails`,
   because the `email` query filter lags fresh writes) to Other contacts with the name the message used. Existing
   cards are never changed; at most 100 recipients per send. Best effort: a restart inside those seconds skips it;
-  errors are logged by kind only, never with addresses.
+  errors are logged by kind only, never with addresses. It always acts on **the account that sent** (captured at
+  send time): if the person switched mailbox during the hold, it uses that mailbox's own tokens from the session
+  (`#callOther`; refreshed in memory if due, the session record isn't rewritten) instead of refusing; if that mailbox
+  was signed out of the session meanwhile, it skips (review run-22).
 - **5,000 contacts per mailbox**, enforced by the BFF (create, import and auto-save count the cards first; Stalwart
   accepts a `maxContactCards` quota but didn't enforce it, `research/stalwart.md`). Below the cap the "already saved"
   check reads every card, so it is complete; the list says "Showing the first 5,000" if cards added over CardDAV
   push a mailbox past it.
 - **Account pinning:** the list returns the `accountId`; every change sends it back in `X-Webmail-Account` and the
   BFF refuses (400) if it's missing, or if the session's active mailbox is another one (switched in another tab).
+  The same pin applies to **drafts, send, undo send and uploads** (`PUT /drafts`, `POST /send`, `POST /send/undo`,
+  `POST /upload`; review run-22): the client sends the account the tab shows (its JMAP session account), and the BFF
+  refuses before acting, so a send or draft save from a tab showing mailbox A can never act on mailbox B after a
+  switch in another tab (e2e `webmail-settings.spec.ts`, unit `compose.test.ts`).
 - **Values from cards are cleaned** before they reach the app or a vCard (control characters removed, line breaks
   only in notes), and labels map through `Map`s, so a label such as `constructor` is just a label.
 - **The setting** lives in Stalwart too: the Other contacts book's `description` says whether saving is on (default
@@ -143,6 +150,149 @@ frame-ancestors 'none'` unless the route sets its own sandboxing one). The app-w
   addresses not yet on a card.
 - **CardDAV for phones and desktop apps:** `CARDDAV` in `packages/shared` (the client host, `/dav/card/`), signed in
   with the mailbox address and an app password. Production needs the NGINX route (private ops repo).
+
+### Settings (slice 4, part 1)
+
+Opened from **Settings** in the sidebar footer or `,`; a large dialog on wide screens and full screen on phones
+(groups, then one panel). `components/webmail/settings/*`, BFF `server/webmail/{settings,sieve}.ts`, control plane
+`packages/core/src/webmail/settings-*.ts`.
+
+**Structure (maintainer decision, 2026-10-22).** The brief listed capabilities by category (Account, General, Mail
+with nine sub-sections, Calendar, People). We ship **eight flat groups** instead of two levels of tabs, because a
+person looking for a setting thinks in tasks, not in a product's category tree: **Appearance**, **Reading**,
+**Writing**, **Automatic replies**, **Forwarding**, **Junk and blocked senders**, **Account**, **Region and
+shortcuts**. Calendar (nothing to configure yet) and People (contacts' only setting already sits in Contacts) are
+not listed: an empty group doesn't earn its place. **Search settings** matches a group's label or any of its
+keywords (`settings/sections.ts`), so "vacation", "spam" or "24-hour" still find the right group.
+
+- **Instant, with live preview.** Display preferences apply on click (optimistic, saved in the background, rolled
+  back with a message if saving fails); the app behind updates, and Appearance shows two made-up rows rendered with
+  the real `MessageRow`. Only multi-field forms that change mail flow have a Save button (automatic replies,
+  forwarding, junk lists, a signature, your name). One primary button per panel.
+- **Opinionated choices.** One **density** control (compact / comfortable / roomy) sets text size and spacing
+  together; reading pane right (default) / bottom / off; preview off / 1 / 2 lines; motion follows the device or is
+  reduced (an "always animate" option would override an accessibility setting, so it isn't offered).
+- **Defaults** are the current behaviour, so most people never open settings: comfortable, right pane, 2 preview
+  lines, grouped by conversation, mark read when opened, open the next message after a move, Reply, 10 s undo,
+  English (Canada) dates, the device's time zone, shortcuts on, start in Inbox.
+- **Not offered (no real behaviour yet), recorded rather than shown as placeholders:** loading remote images
+  ("always ask" / "allow for contacts") needs the image proxy — the Reading panel states that remote images are
+  blocked; read receipts — Stalwart v0.16.27 doesn't advertise JMAP MDN, and the webmail never sends them (stated);
+  "basic formatted" messages — the composer sends plain text only (stated); "empty Deleted after N days" — JMAP
+  doesn't expose when a message was moved to Trash, so a correct per-person policy needs the worker-side
+  `folder_policy` (phase 6); the server-wide 30-day clean-up applies meanwhile. "Empty Trash when I sign out" is
+  offered: it is explicit and runs from the browser through the proxy's Trash-only delete.
+
+**Where each setting lives.**
+
+| Setting                                                                                                                 | Stored                                                                                                  | Changes behaviour in                                                                                                                                                                            |
+| ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Theme, density, reading pane, preview, grouping, sender/subject first, initials, attachment names, date headers, motion | `webmail_preference.prefs` (control plane, per mailbox id; closed values, `@anhourmail/shared/webmail`) | `webmail-app` (layout, theme via next-themes, `data-motion`), `message-list` (`rowHeight(look)`, date headers between windowed rows), `mail-client` (`collapseThreads`, `attachments` property) |
+| Mark as read (open / after N s / never), after delete or archive, mark read when moving                                 | same                                                                                                    | `reader` (timer), `webmail-app` (`dropThreads`, `moveThreads` adds `$seen`)                                                                                                                     |
+| Reply button, undo-send delay, always show Cc/Bcc                                                                       | same                                                                                                    | `reader`, `composer`; the delay is read **server-side** at send (`holdSeconds` dep → `HOLDFOR`, 1–60 s or the 6 s fallback), never trusted from the browser                                     |
+| Region, time format, time zone, start in, shortcuts on/off, empty Trash on sign-out                                     | same                                                                                                    | `format.ts` `setDateStyle`, initial view, key handler, sign-out                                                                                                                                 |
+| Sender name, signature                                                                                                  | Stalwart JMAP `Identity` (`name`, `textSignature`, `htmlSignature` = escaped text + `<br>`)             | composer (inserted after `-- `, swapped when From changes)                                                                                                                                      |
+| Automatic replies, forwarding on/off + keep a copy, blocked/safe senders, trusted-only                                  | Stalwart: one managed Sieve script per mailbox (`anhourmail`)                                           | delivery                                                                                                                                                                                        |
+| Forwarding target + confirmation                                                                                        | `forwarding_target` (control plane)                                                                     | the BFF writes a redirect only to a confirmed target                                                                                                                                            |
+
+**Customers can't change mail flow themselves (security reviews run-20/21, verified on v0.16.27, 2026-10-22).**
+With a mailbox password a person could otherwise install a Sieve `redirect`/`enotify` over ManageSieve (port 4190)
+or JMAP `SieveScript/set` — an open relay from our IPs with per-message targets, bypassing forwarding confirmation,
+quotas and audit — or call `VacationResponse/set`, which activates Stalwart's own `vacation` script and switches ours
+off. So every customer mailbox carries `CUSTOMER_PERMISSIONS` (`packages/stalwart-client/src/management.ts`):
+`disabledPermissions` `sieveAuthenticate` (ManageSieve login), `jmapSieveScript{Create,Update,Destroy}` and
+`jmapVacationResponse{Create,Update,Destroy}` (`jmapSieveScriptSet/Delete/Activate/Rename` and
+`jmapVacationResponseSet` don't exist on the pinned server). The same list also turns off self-service credentials,
+principal and DAV directory look-ups, and sharing (ADR-0020, `07-security.md` "App passwords"). Sign-in, sending, delivery, reading scripts and blob upload
+(attachments) are untouched. `SUSPENDED_PERMISSIONS` is a superset, so resuming never briefly unlocks; new accounts
+are created locked even when the caller doesn't pass `suspended` (dev seed, e2e fixtures).
+
+- **Deactivation is closed too** (run-22): with `jmapSieveScriptDestroy` and `jmapVacationResponse{Create,Destroy}`
+  also denied, a bare `SieveScript/set { onSuccessDeactivateScript: true }` answers `forbidden` for the user
+  (verified). Before that it worked, and a user could deactivate then delete our script. `mailRules` still reports
+  `inactive` if the script is switched off some other way (by hand, or an account not locked yet); every settings
+  save and every `mailbox.ensure` re-activate it (management credentials; nothing is deleted).
+- **Drift and backfill:** `listUsers`/`listMailboxes` report `sieveLocked` (all customer denials present, or
+  suspended); the hourly reconciler adds `sieveLockMismatch` for active mailboxes and re-queues `mailbox.ensure`, like
+  suspension drift. Existing mailboxes are backfilled once at deploy: `npm run job:mailbox-backfill --workspace
+@anhourmail/worker` queues `mailbox.ensure` for every active mailbox (audited `platform.mailboxes_requeued`;
+  `deploy/README.md` "One-off deploy steps"). Run on dev 2026-10-22: 31 queued, all 31 control-plane mailboxes
+  locked afterwards (the only unlocked accounts were leftover test accounts unknown to the control plane).
+- **What a User-role token can still call over public JMAP** (probed): standard mail/contacts/submission objects on
+  its own account and its own `x:AppPassword`; `x:Account/get|set`, `x:Domain/get`, `x:SieveSystemScript/set` are
+  `forbidden` (research/stalwart.md).
+
+The one managed script (`anhourmail`, `MANAGED_SIEVE_SCRIPT` in `@anhourmail/shared/webmail`) is read and **written
+with management credentials** (`StalwartManagement.getSieveScript` → `{content, active}` / `putSieveScript` /
+`activateSieveScript`; standard JMAP `SieveScript/*` + blob upload/download, admin can address another account),
+never the user's token — behind `server/adapters/stalwart.ts` `managedSieve()` (rule 21), injected into the BFF as the
+`ManagedSieve` port. There is no "include the person's previous script" behaviour (they can't have one).
+
+**Sieve, not JMAP VacationResponse (verified on v0.16.27).** `VacationResponse/set` installs and activates its own
+`vacation` script, and only one script can be active, so every other rule would stop. So automatic replies are part
+of our managed script (`vacation`, `:days 3`, `:addresses` = the mailbox's identities, dates with
+`currentdate :zone <offset>`). The script (`sieve.ts`) runs:
+
+1. junk rules — safe senders (and, with trusted-only, contact addresses) skip; blocked addresses/domains →
+   `fileinto :specialuse "\\Junk" "Junk"; stop;`; trusted-only → everything else to Junk;
+2. `if not <suppress> { automatic reply (optionally contacts only); redirect / redirect :copy to the confirmed
+target }` — replies and forwarding run **only for ordinary person-to-person mail**. `<suppress>` is any of:
+   Stalwart's own `X-Spam-Status: Yes` (a forged `No` can't override — `:contains "Yes"` matches any copy), a
+   `List-*` header, `Precedence: bulk/list/junk`, `Auto-Submitted` other than `no`, or an empty envelope sender
+   (bounces). Verified end to end: a blocked / bulk / spam / list sender gets no reply and no forward, a clean
+   sender gets both. This stops auto-reply and relay of spam and backscatter. "Contacts only" tests the **envelope
+   sender** (`envelope :is "from"`), the validated MAIL FROM, not a forgeable header.
+
+Blocked and junked mail is never answered or forwarded (the `stop` comes first). Settings are stored in the script
+as a base64url JSON comment and validated on read, so the mail server stays the source of truth. **Injection:**
+every value reaches the script only through `sieveString` (backslash and quote escaped, control characters
+dropped); the script requires only `fileinto`, `special-use`, `mailbox`, `envelope`, and `vacation`/`date`/
+`relational`/`copy` when used — never `variables`, `enotify`, `editheader`, `encoded-character` or `regex` — so
+`${…}` is literal and there is no notify/redirect-by-variable; sender entries must be a plain address or domain.
+Tests in `sieve.test.ts` strip every quoted string and check no command was introduced. Contacts for "contacts
+only" rules are written into the script (≤ 1,000 addresses, within Stalwart's 100 KB `maxSizeScript`) and refreshed
+after webmail contact changes (CardDAV changes at the next save).
+
+**Forwarding is confirmed by the target.** `POST /api/webmail/settings/forwarding` refuses the mailbox's own
+addresses (loops), a `restricted` sender (`sendingTier()`), and more than 5 confirmation emails per mailbox per
+24 h (the counter is read `FOR UPDATE`; plus the fail-closed `forwardingVerify` tier); it stores only the token's
+sha256 and emails a link (with the mailbox address **masked**) to `/forwarding/confirm/<token>` (72 h). Opening the
+page changes nothing; its button posts the token (link scanners can't confirm) and the page shows the full mailbox
+address. Only then can the owner turn forwarding on; asking for another address turns forwarding to the old one off
+at once. Enabling forwarding or automatic replies is refused while the tier is `restricted`. Every writer reads the
+session once and refuses on an `X-Webmail-Account` pin mismatch before any lookup. **`WebmailService.saveMailRules`
+itself** keeps a redirect only when it equals the control-plane confirmed target (`confirmedForward` dep), so every
+caller — the settings writers and the contacts refresh — goes through the same filter, and the script comment is
+never trusted for it. The counter's first request inserts a placeholder row (`ON CONFLICT DO NOTHING`) and locks it,
+so two first requests can't both pass the cap. Stalwart's `maxNumberRedirects` is 1.
+
+**Open items (security reviews run-20/21):**
+
+- Forwarded mail isn't charged to the webmail's per-mailbox send quota (`SlidingQuotaStore`); whether Stalwart's
+  `MtaOutboundThrottle` counts redirects, and whether SRS / the hop limit need setting, is unverified — a
+  per-mailbox forwarding cap may be wanted.
+- Untrusted-Sieve interpreter hardening (disable unused capabilities, cap outgoing messages per run) is **lower
+  priority now that no customer can write Sieve or VacationResponse**; the exact v0.16 setting-object names still need discovery from the
+  running server before changing the dev plan and production settings (don't guess).
+- When trust tiers become stored, a mailbox turning `restricted` should actively switch its forwarding and
+  automatic replies off (today they're only refused at change time).
+
+**API (webmail origin, `webmail` guard, account pinned with `X-Webmail-Account` on every change).**
+
+| Route                                                  | What                                                             | Tier                                   | Audit                                                 |
+| ------------------------------------------------------ | ---------------------------------------------------------------- | -------------------------------------- | ----------------------------------------------------- |
+| `GET /api/webmail/settings`                            | preferences, identities, quota, rules + state, forwarding target | `webmailSettings`                      | —                                                     |
+| `PATCH /api/webmail/settings/preferences`              | display preferences (known keys and values only)                 | `write`                                | `webmail.preferences_changed` (key names)             |
+| `PATCH /api/webmail/settings/identities/:id`           | sender name / signature of an own identity                       | `write`                                | `identity.changed` (field names)                      |
+| `PUT /api/webmail/settings/vacation`                   | automatic replies                                                | `write`                                | `vacation.changed` (flags)                            |
+| `PUT /api/webmail/settings/junk`                       | blocked / safe senders, trusted-only                             | `write`                                | `junk_rules.changed` (counts)                         |
+| `POST · PUT · DELETE /api/webmail/settings/forwarding` | ask to confirm · on/off + keep a copy · remove                   | `forwardingVerify` · `write` · `write` | `forwarding.verification_sent` · `forwarding.changed` |
+| `POST /api/webmail/forwarding/confirm`                 | the target confirms (public, token in the body)                  | `publicForm`                           | `forwarding.confirmed`                                |
+
+Audit entries are written in the mailbox's own account (its admins see them) as a `system` actor named by the
+mailbox address; meta never holds message text, signatures or list entries — target addresses are masked. The
+JMAP proxy still refuses every `SieveScript/*`, `VacationResponse/*`, `Identity/set` and `Quota/*` call
+(`settings.test.ts`), so the confirmation and audit can't be skipped from the browser.
 
 ### Security notes from the slice 1 review (2026-10-22)
 

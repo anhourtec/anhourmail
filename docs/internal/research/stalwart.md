@@ -251,6 +251,92 @@ while Stalwart's HTTP port is reachable from the app network alone. A throttled 
 
 ---
 
+### App passwords (verified on the pinned v0.16.27, 2026-10-22)
+
+Throwaway `apppw-probe.test` domain and accounts, destroyed afterwards (ADR-0020):
+
+- Object `x:AppPassword` (permission prefix `sysAppPassword`): `description`, `secret` (server-set, returned once by
+  `/set`; `****` on `/get`), `createdAt` (server-set, second precision), `expiresAt`, `allowedIps`, `permissions`
+  (`Inherit` | `Disable` | `Replace`, each with a `permissions` set of `Permission` names). No last-used field.
+  The same credentials appear in `x:Account.credentials` as `@type: "AppPassword"` with a `credentialId`.
+- Secret format: `app_` + 36 lowercase letters and digits.
+- **Who can create:** the account itself (Basic with its password). An admin adding one through
+  `x:Account/set { "credentials/1": {…} }` gets `invalidProperties` "Secondary credentials cannot be set directly".
+  `x:AppPassword/set { accountId: <other account> }` works for the recovery admin, and for an API key whose account has
+  `impersonate` + `sysAppPassword*`; without `impersonate` it is `forbidden` "You are not an owner of account …".
+  That key has no mail access (`Email/query` / `Mailbox/get` on the other account → `forbidden`) when its `Replace`
+  permissions grant no `jmap*`.
+- `x:AppPassword/get|set { accountId }` lists and destroys another account's app passwords the same way.
+- Ids are short and **reused** after a revocation (`b`, `c`, …): match id and `createdAt` before destroying.
+- Default ceiling `maxAppPasswords` 5 per account (`overQuota` "You have exceeded your quota of 5 app passwords").
+- **Limits are enforced per credential:** `Disable { imapAuthenticate }` → IMAP LOGIN refused (connection closed);
+  `Disable { emailSend }` → SMTP AUTH `550 5.7.1 Your account is not authorized`; `Disable` of every `dav*` → CardDAV
+  PROPFIND 403; of every `jmap*` → JMAP methods `forbidden` (the session document still answers 200).
+- **`Inherit` is dangerous:** the User role grants self-service (`sysAccountPasswordUpdate`, `sysAppPasswordCreate`,
+  `sysApiKeyCreate`, masked email, …), so an `Inherit` app password could mint more app passwords over JMAP (it hit
+  only the quota). With those disabled, `x:AppPassword/set` answers `forbidden`.
+- **OAuth escalation:** `POST /api/auth` (authCode) accepts an app password, and the token it leads to carries the
+  account's full permissions (`/api/account` lists all 239), not the credential's. Never let app passwords reach
+  `/api/auth` (our `StalwartOAuth.signIn` refuses them) and never expose `/api/auth` publicly.
+- Suspension (`SUSPENDED_PERMISSIONS`) blocks app passwords over IMAP and HTTP (403) and resuming restores them.
+- **Replacing `x:Account.credentials`** (e.g. `{ "0": { "@type": "Password", … } }` to set a password) **drops every
+  app password** of the account.
+- Failed-login accounting (`x:Security.authBanRate` 100 per address per day, `authBanPeriod` null = permanent): a
+  refusal for a missing permission (suspended account, a protocol the app password leaves out) does **not** count;
+  a wrong or revoked credential does. In dev every mail-port client is the `mail-edge` forwarder's address, which other
+  test runs had already brought to the limit on 2026-10-22: one more wrong IMAP login banned it (all HTTP and mail
+  ports reset) until the ban was lifted from inside the container (`x:BlockedIp/set destroy` + `ReloadBlockedIps`).
+
+Follow-up checks (review run-21, same day, throwaway accounts destroyed):
+
+- **`Replace` grants only what the caller holds:** an API key with `impersonate` + `sysAppPassword*` creating an app
+  password with `Replace { imap* }` gets `forbidden` "You are not authorized to grant permissions: imapThread, …".
+  A key that holds those permissions can grant them, but it can then read every mailbox (`Email/get`, `Mailbox/get`
+  succeed with `impersonate`). `Disable` of any names works with the minimal key, so we encode allow-lists as
+  "disable every other known permission".
+- **`Principal/query` enumerates the server:** any user (password, OAuth token, `Inherit` or `Disable` app password)
+  got all 44 accounts, although `/api/account` lists no `jmapPrincipalQuery`/`Get` for the User role. Disabling
+  `jmapPrincipalQuery` blocks the query and `jmapPrincipalGet` the get. DAV doesn't enumerate: `PROPFIND /dav/pal/`
+  shows only the user's own principal and a `principal-property-search` returned nothing (403 without
+  `davPrincipalSearch`); CardDAV discovery and the address-book home still answer 207 without any `davPrincipal*`.
+- **Account-level denials don't limit the management key:** with every self-service permission (reads included) and
+  the principal reads disabled on a customer account, the key still creates, lists and destroys its app passwords;
+  the user (password or token) gets `forbidden` for `x:AppPassword/*`, `x:ApiKey/*`, `x:AccountPassword/set`, while
+  `Email/query`, `Identity/get` and `ContactCard/query` keep working.
+- **`secret$suffix`:** an app password followed by `$123456` signs in (HTTP Basic → 200): Stalwart splits a trailing
+  `$…` as a one-time code and ignores it when the credential has none.
+- **Production key set** (`authenticate`, `impersonate`, `sysAppPassword{Create,Get,Query,Destroy}`,
+  `sysApiKey{Get,Query}`, `jmapSieveScript{Get,Query,Create,Update,Validate}`, `jmapBlobUpload`, `jmapBlobGet`):
+  `Email/query`, `Email/get`, `Mailbox/get`, `Blob/lookup` → `forbidden`; managed Sieve script get/upload/set work
+  even though the account denies the user `jmapSieveScriptCreate`. **`GET /jmap/download/<account>/<blobId>` of an
+  email's blob returns the raw message** when the id is known.
+
+Third round (review run-22, throwaway accounts on two domains, destroyed afterwards):
+
+- **DAV directory search finds other customers:** `REPORT /dav/pal/` `principal-property-search` matching "bob"
+  returned `bob@` on another domain (and on `dev.test`), with a password and with an OAuth token. `PROPFIND
+  /dav/pal/<address>/` confirms a known address exists (no permission found that gates it; low — like an SMTP RCPT
+  probe). With `davPrincipal{Search,SearchPropSet,List,Match}` disabled the search answers 403, while phone-style
+  CardDAV discovery (`/.well-known/carddav`, `current-user-principal`, `addressbook-home-set`, PROPFIND of the home,
+  `PUT` of a card) and `/.well-known/caldav` still answer 207/201. `x:Sharing.allowDirectoryQueries` (already `false`
+  in dev) changed none of this.
+- **Sharing:** `shareWith` on `Mailbox/set` (create or update), `AddressBook/set` and `Calendar/set` is accepted for a
+  plain user, and the other account then appears in the sharee's session. No permission gates it on its own: the ACL
+  ones (`imapAclSet`, `dav*Acl`), share notifications and principal reads don't. Only denying the object's
+  `Create`/`Update` does (folders: verified forbidden; the webmail never sends `Mailbox/set` or `Calendar/set`).
+  Address books are created and updated by the webmail (contacts auto-save), so `AddressBook/set { shareWith }`
+  stays possible with a mailbox password. Impersonating as the user takes the user's permissions; the admin acting on
+  the account by `accountId` doesn't (the dev seed makes sample folders that way).
+- **Sieve:** with only `jmapSieveScript{Create,Update}` denied, a user could deactivate our script and then destroy
+  it. With `jmapSieveScriptDestroy` and `jmapVacationResponse{Create,Destroy}` also denied, destroy **and** the bare
+  deactivate answer `forbidden`.
+
+### Catch-all (verified on the pinned v0.16.27, 2026-10-22)
+
+`x:Domain/set { update: { <id>: { catchAllAddress } } }` takes effect at once (no reload). Unset: `RCPT TO` an unknown
+address → `550 5.1.2 Mailbox does not exist.` Set: the message is accepted and delivered to the catch-all mailbox (its
+`To` keeps the original address). The target may be an account on another local domain. `null` clears it.
+
 ## 5. JMAP
 
 ### Supported specs
@@ -336,6 +422,73 @@ Probed with a demo mailbox; the webmail's contacts (05-webmail.md "Contacts") ar
   internal (rule 18), so CardDAV is published through NGINX on the client host (`CARDDAV` in
   `packages/shared/src/platform.ts`, same host as JMAP); the NGINX route for `/dav/` and `/.well-known/carddav`
   lives in the private ops repo and must exist before the public guide's URL works.
+
+### Sieve and automatic replies (verified on the pinned v0.16.27, 2026-10-22)
+Probed with throwaway `dev.test` accounts; the webmail settings (05-webmail.md "Settings") are built on these.
+- **Capability** `urn:ietf:params:jmap:sieve` (RFC 9661): `maxSizeScript` 102,400, `maxNumberScripts` 100,
+  `maxNumberRedirects` **1**, `notificationMethods ["mailto"]`, `externalLists` null (no extlists, so contact
+  addresses must be written into a script). Extensions include `fileinto`, `mailbox`, `special-use`, `copy`, `date`,
+  `relational`, `vacation`, `vacation-seconds`, `include`, `variables`, `encoded-character`, `regex`, `editheader`.
+- **Scripts:** upload the text as a blob (`POST /jmap/upload/<account>/`, `application/sieve`), then
+  `SieveScript/set` `create {name, blobId}` / `update {blobId}` with `onSuccessActivateScript` (`#creationId` works).
+  **Only one script is active**; activating one deactivates the rest. `SieveScript/validate` returned
+  `error: null` even for an obviously broken script, so it isn't relied on; `set` refuses scripts that don't compile.
+- **`urn:ietf:params:jmap:vacationresponse`** is advertised, but `VacationResponse/set {isEnabled: true}` creates a
+  script named `vacation` and makes it the active one (the previously active script is deactivated); activating
+  another script makes `VacationResponse/get` report `isEnabled: false`. It can't coexist with other rules, so the
+  webmail writes automatic replies into its own script instead.
+- **Delivery checks** (inbound SMTP from the host, and JMAP submissions between accounts): `fileinto :specialuse
+  "\\Junk" "Junk"` files into the Junk folder; `vacation` replies once per sender (local senders get it in their
+  inbox, outside senders' replies go to Mailpit in dev); `redirect :copy` delivers to the target and keeps a copy;
+  `include :personal :optional` runs another of the account's scripts. Covered by
+  `apps/web/src/server/adapters/webmail-settings.int.test.ts`.
+- **`X-Spam-Status`** is added by Stalwart's filter, but a sender-supplied header of the same name is kept as well
+  (a forged `Yes` survived), so rules must not trust that header.
+- **Quota/get** (`urn:ietf:params:jmap:quota`) returns one `octets` quota with `scope: "account"`, `used` and
+  `hardLimit` (the account's `maxDiskQuota`).
+- **Identity/set** updates `name`, `textSignature` and `htmlSignature` on the account's own identities (aliases
+  have their own identity each; the default `name` is the address).
+
+#### User Sieve is an open-relay vector; we block it (security review run-20, 2026-10-22)
+- **Reproduced:** a mailbox token can upload `require ["variables"]; if header :matches "X-T" "*" { redirect
+  "${1}"; }` and `SieveScript/set`-activate it; a message with an `X-T` header then relays to the attacker's
+  per-message target — an open relay from our IPs, bypassing our forwarding confirmation, quotas and audit.
+  `enotify`/`redirect` to any address work the same way. ManageSieve on 4190 with the mailbox password does too.
+- **Mitigation (management.ts `CUSTOMER_PERMISSIONS`, applied at provisioning):** `disabledPermissions`
+  `{ sieveAuthenticate, jmapSieveScriptCreate, jmapSieveScriptUpdate }`. Probed the `Permission` enum by setting
+  candidate names (invalid ones give `invalidPatch`): valid are `jmapSieveScriptCreate`, `jmapSieveScriptUpdate`,
+  `jmapSieveScriptGet`, `jmapSieveScriptValidate`, `jmapBlobUpload`; **`jmapSieveScriptSet`/`…Delete`/`…Activate`/
+  `…Rename` are not valid names** (destroy and activate ride on create/update). After lockdown: a user
+  `SieveScript/set create` is `forbidden`, a user blob upload still works (attachments need it), ManageSieve
+  `AUTHENTICATE` is `NO`, JMAP sign-in/sending/delivery are unaffected, and `authenticate` stays enabled so the
+  reconciler's suspended check is unchanged.
+- **Management credentials can manage another account's Sieve:** the admin principal's `SieveScript/get|set` and
+  blob upload/download accept a target `accountId` (equal to the mailbox's x:Account id), so the BFF writes the one
+  managed script with management credentials (`StalwartManagement.getSieveScript`/`putSieveScript`) instead of the
+  user token.
+- **Suppressing auto-reply/forward on automated mail:** `vacation`'s own RFC 5230 handling already skips
+  list/auto-submitted mail, but we also gate replies **and** redirect behind
+  `if not anyof(header :contains "X-Spam-Status" "Yes", header :matches ["List-Id","List-Unsubscribe","List-Help","List-Post"] "?*", header :contains "Precedence" ["bulk","list","junk"], allof(exists "Auto-Submitted", not header :is "Auto-Submitted" "no"), envelope :all :is "from" "")`.
+  Verified: clean mail is replied-to and forwarded; blocked, bulk (`List-Id` alone), spam (`X-Spam-Status: Yes`)
+  and spoofed-spam mail get neither. Note `exists ["a","b"]` is **all-of** in RFC 5228, so a list test must use a
+  `header :matches` with multiple header-names (any-of), not `exists` with a list.
+- **VacationResponse is a bypass too (run-21):** a locked (Sieve-denied) token's `VacationResponse/set {isEnabled:
+  true}` still succeeded and activated Stalwart's `vacation` script, deactivating ours. Its permission is
+  **`jmapVacationResponseUpdate`** (also valid: `jmapVacationResponseGet`; `jmapVacationResponseSet` is invalid).
+  Denied → `forbidden` "You are not authorized to update objects of this type". Now part of `CUSTOMER_PERMISSIONS`.
+- **Activate/deactivate without create/update (run-21):** with create/update denied, a user's bare
+  `SieveScript/set {onSuccessActivateScript: <other id>}` is silently ignored (state unchanged), but
+  `{onSuccessDeactivateScript: true}` **deactivates our script** — there is no permission for it. `destroy` of the
+  active script is refused (`scriptIsActive`). Management credentials re-activate it with a bare
+  `onSuccessActivateScript` (verified); `mailbox.ensure` and every settings save do that, and the webmail shows
+  `inactive` meanwhile.
+- **What a User-role token can call over public JMAP (run-21, NV-C):** its own mail/contacts/submission/Sieve-read
+  objects and its own `x:AppPassword/get`; `x:Account/get` and `x:Account/set` (incl. its own permissions),
+  `x:Domain/get` and `x:SieveSystemScript/set` all answer `forbidden`. No `x:*` call writes Sieve or account
+  permissions.
+- **Untrusted-Sieve interpreter limits (open):** with user Sieve blocked this is defense-in-depth only; the exact
+  v0.16 setting-object names for the untrusted interpreter's allowed capabilities and max outgoing messages per run
+  weren't found from `/api/schema` (302 redirect) — discover them from the running server before changing config.
 
 ### Recommended push approach behind a reverse proxy or BFF
 - The browser never talks to Stalwart. The BFF opens **one upstream push channel per active user**, preferably the JMAP WebSocket with `WebSocketPushEnable`, or EventSource. It fans `StateChange` events out to the browser over its own SSE or WebSocket.
@@ -591,7 +744,7 @@ stalwart-cli create Action/ReloadSettings
 
 ### Not verified / open questions
 - API keys used as Bearer on `/jmap` for mail data: docs say no, code suggests possibly yes. Test this.
-- Whether an impersonated session can create an `AppPassword` for the target user.
+- ~~Whether an impersonated session can create an `AppPassword` for the target user.~~ Yes (see "App passwords").
 - The exact behaviour and listener availability of the 8080 HTTP listener after normal startup.
 - Whether a long-lived EventSource or WebSocket counts against `maxConcurrentRequests`.
 - That `Domain.dkimManagement: Automatic` with `dnsManagement: Manual` generates the initial key on creation. A 0.16.25 changelog fix implies keys are generated under manual DNS [S2], but this is not tested.
