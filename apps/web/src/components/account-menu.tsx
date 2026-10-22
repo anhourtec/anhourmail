@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 "use client";
 
-import { BookOpen, Building2, Check, CircleUser, CreditCard, LogOut, Mail } from "lucide-react";
+import { BookOpen, Building2, Check, CircleUser, CreditCard, LogOut, Mail, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
@@ -149,7 +149,11 @@ export function AccountMenu({
       )}
 
       <div role="separator" className="my-1 h-px bg-border" />
-      {soon("Profile and security", CircleUser)}
+      <Link role="menuitem" href="/security" onClick={onNavigate} className={itemClass}>
+        <ShieldCheck className="size-4" aria-hidden />
+        Security
+      </Link>
+      {soon("Profile", CircleUser)}
       {soon("Billing", CreditCard)}
       {user.webmailHref && (
         <a role="menuitem" href={user.webmailHref} className={itemClass} onClick={onNavigate}>
