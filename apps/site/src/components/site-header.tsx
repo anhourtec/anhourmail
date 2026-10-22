@@ -67,12 +67,12 @@ export function SiteHeader() {
         </ul>
         <div className="ml-auto flex items-center gap-1 lg:ml-0">
           <ThemeToggle onDark />
-          <a href={SIGN_IN_URL} className="am-site-nav-link hidden sm:inline-flex">
+          <a href={SIGN_IN_URL} className="am-site-nav-link hidden shrink-0 whitespace-nowrap sm:inline-flex">
             Sign in
           </a>
           <a
             href={SIGN_UP_URL}
-            className="am-site-btn am-site-btn--primary hidden h-[42px] rounded-[16px] px-4 text-sm sm:inline-flex"
+            className="am-site-btn am-site-btn--primary hidden h-[42px] shrink-0 whitespace-nowrap rounded-[16px] px-4 text-sm sm:inline-flex"
           >
             Get started
           </a>
