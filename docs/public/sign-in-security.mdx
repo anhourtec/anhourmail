@@ -1,0 +1,96 @@
+---
+title: Sign-in security
+description: Protect your AnhourMail console sign-in with an authenticator app, recovery codes and passkeys, and see where you're signed in.
+---
+
+Your password gets you into the AnhourMail console. You can add more protection on your **Security** page: open the
+menu under your initials in the top-right corner and choose **Security**.
+
+These settings protect the console. Mail apps (phone, desktop) keep signing in with app passwords, as before.
+
+## Two-factor sign-in with an authenticator app
+
+After your password, the console asks for a <Value of="totpDigits" />-digit code from an authenticator app on your
+phone or computer. Any standard app works (it uses the common time-based codes).
+
+To turn it on:
+
+1. On your Security page, under **Authenticator app**, choose **Turn on** and confirm your password.
+2. Scan the QR code with your app. If you can't scan it, add an account by hand with the set-up key shown below the
+   code. The QR code is drawn in your browser; the key never goes to another service.
+3. Enter the code your app shows and choose **Turn on**.
+4. Save your recovery codes (below). They're shown once.
+
+Each code works once: if you sign in twice within the same 30 seconds, wait for the next code.
+
+To turn it off, choose **Turn off** and enter your password and a current code (or a recovery code).
+
+## Recovery codes
+
+When you turn on two-factor sign-in you get <Value of="recoveryCodeCount" /> recovery codes. If you lose your
+authenticator app, choose **Use a recovery code instead** when signing in and type one of them. Each code works once.
+
+- Keep them somewhere safe, such as a password manager. **Copy** and **Download** help you save them.
+- We store only a scrambled (hashed) form of each code, so we can't show them to you again.
+- Your Security page shows how many are left and warns you when <Value of="recoveryCodeWarnAt" /> or fewer remain.
+  **New recovery codes** gives you a fresh set and stops the old ones working.
+
+## Trust this browser
+
+On the second step you can tick **Trust this browser for <Value of="trustedDeviceDays" /> days**. That browser then
+skips the code step until the time runs out. **Sign out everywhere else** on your Security page makes every browser ask
+again, and so do turning two-factor sign-in off and resetting your password. Resetting your password also signs you out
+everywhere.
+
+Passkeys keep working after a password reset. Afterwards your Security page asks you to check them and remove any you
+don't recognise. If you think someone else got into your login, tick **Also remove all passkeys** when you reset your
+password, or when you choose **Sign out everywhere else**. If your account requires passkeys, they can't be removed
+this way: ask an Owner of the account for help.
+
+## Passkeys and security keys
+
+A passkey signs you in with your fingerprint, face, device PIN or a security key, without a password or code. It's the
+strongest protection against phishing: it only works on the real AnhourMail console address.
+
+- **Add a passkey** on your Security page, give it a name (for example "Work laptop"), and follow your browser's
+  prompts. If you signed in more than a few minutes ago, or with only your password while you have an authenticator app or a
+  passkey, you're asked for a code first (or to sign in with your passkey). We email you
+  whenever a passkey is added, so you'd know if someone else did it.
+- **Rename** or **Remove** a passkey from the list. Removing it here stops it signing you in to AnhourMail.
+- To sign in with one, choose **Sign in with a passkey** on the sign-in page. You can also use it instead of a code on
+  the second step.
+
+Your passkey has to check that it's you (PIN, fingerprint or face). Security keys without a PIN set can't be added.
+
+## Wrong codes
+
+After several wrong codes the sign-in attempt ends and you start again. If wrong codes keep coming, sign-in with a
+second step is locked for <Value of="secondStepLockMinutes" /> minutes. Every refused attempt shows in your recent
+activity.
+
+## Where you're signed in
+
+**Where you're signed in** lists your console sessions with the browser, the system and the network part of the
+address (like `203.0.113.x`), when each one signed in and when it was last active. **Sign out** ends one session at
+once; **Sign out everywhere else** ends all but the one you're using.
+
+## Recent activity
+
+Your Security page lists your recent sign-ins (including failed and refused ones, and how you signed in) and every
+change to how you sign in, newest first. It never shows codes, passwords or full addresses. Anything Anhourtec staff
+did is labelled as such.
+
+## Requiring it for everyone in an account
+
+Owners can require a second step for everyone in their account, in the **Sign-in requirements** section of their
+Security page:
+
+- **Two-factor sign-in**: a second step after the password (authenticator app or recovery code), or a passkey. The
+  password alone no longer signs in.
+- **A passkey or security key**: people sign in with their passkey.
+
+Before you can require something, you need it yourself, and you need to have signed in that way. When someone sets up their first way to sign in because of the requirement, they and the account's Owners get
+an email, so an unexpected change stands out. Anyone in the account who doesn't have it yet is taken to their
+Security page after signing in, and the rest of the console opens once they've set it up. The change is recorded in the
+account's [audit log](/docs/audit-log). Removing your last passkey or turning off your authenticator app is refused
+while a requirement depends on it.

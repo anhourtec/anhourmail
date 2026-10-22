@@ -16,7 +16,11 @@ import {
   PLAN_ORDER,
   PLANS,
   PRODUCT_DOMAIN,
+  RECOVERY_CODES,
+  SECOND_STEP_LIMITS,
+  TOTP,
   TRUST_TIERS,
+  TRUSTED_DEVICE_DAYS,
   type TrustTier,
   WEBMAIL_ATTACHMENTS,
 } from "@anhourmail/shared";
@@ -56,6 +60,12 @@ const VALUES = {
   bulkAddOnName: ADDONS[BULK_MAIL.addOnId].name,
   bulkAddOnStatus: ADDONS[BULK_MAIL.addOnId].status === "planned" ? "coming later" : "available now",
   bulkAddOnPlans: ADDONS[BULK_MAIL.addOnId].requires.map((id) => PLANS[id].name).join(" and "),
+  // Console sign-in security (packages/shared/src/security.ts)
+  totpDigits: String(TOTP.digits),
+  recoveryCodeCount: String(RECOVERY_CODES.count),
+  recoveryCodeWarnAt: String(RECOVERY_CODES.warnAtOrBelow),
+  trustedDeviceDays: String(TRUSTED_DEVICE_DAYS),
+  secondStepLockMinutes: String(SECOND_STEP_LIMITS.lockMinutes),
 } as const;
 
 export type FactKey = keyof typeof VALUES;
