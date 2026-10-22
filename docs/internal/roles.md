@@ -4,7 +4,7 @@ Last updated: 2026-10-22
 
 **Source of truth: `packages/shared/src/rbac`.** That code is canonical: the permission list, the role → permission matrix, critical-permission flags and guard rails. The UI (what to show), the API (what to allow) and the RBAC harness (`npm run test:rbac`) all derive from it. This document explains the matrix for people. If the two disagree, the code wins, and this file is updated in the same change (rule 35).
 
-The model follows Microsoft 365 admin roles: a few platform (staff) roles, and per-account roles for people inside a customer account.
+The model follows a familiar admin-centre shape: a few platform (staff) roles, and per-account roles for people inside a customer account.
 
 ## Outcomes
 
@@ -152,6 +152,15 @@ console's **Open webmail** link (person menu, customers only) pre-fills the addr
 | Security activity (self) | ✓     | ✓          | ✓        | ✓           | ✓      | ✓       | —                      |
 | Customer accounts        | ✗     | ✗          | ✗        | ✗           | ✗      | ✗       | all but Reports Reader |
 | Staff console            | ✗     | ✗          | ✗        | ✗           | ✗      | ✗       | per platform role      |
+
+The console groups these under section labels (Mail: Mailboxes, Aliases, Domains · People · Account: Billing, Audit
+log · Platform for staff; `navTree` in `console-nav.ts`). Counts beside rows come from the same services with the
+person's own permissions (mailboxes with `mailbox.read`, aliases with `alias.manage.own`, domains with `domain.read`,
+pending invites with `member.read`), and the sidebar's main button is the first create action the role allows
+(`mailbox.manage` → New mailbox, `member.manage` → New invite, `alias.manage.own` → New alias,
+`platform.accounts.read` → Find an account). The app bar's **search** (`GET /api/search`, guard `session`) asks
+each source only where the actor holds its permission, in their own accounts: it can't reach another account and
+never returns more than the pages would.
 
 ## Testing
 

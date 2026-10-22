@@ -8,22 +8,28 @@ create mailboxes on any domain you've connected and verified (see [Use your own 
 
 ## Create a mailbox
 
-1. In the console, open **Mailboxes**.
+1. In the console, open **Mailboxes** and choose **Add a mailbox** (or **New mailbox** at the top of the
+   navigation). A panel opens on the right.
 2. Type the part before the @ and choose the domain. Letters, numbers, dots, hyphens and underscores work;
    `+` is reserved, because `you+anything@` already reaches you.
 3. Choose who it **belongs to**, or leave it for later.
 4. Set its **storage** in whole GB, up to your plan's storage per mailbox.
 
-The mailbox shows **Setting up** for a moment, then **Active**.
+The panel stays open, so you can add several in a row. The mailbox shows **Setting up** in the list for a moment,
+then **Active**.
+
+Choose a mailbox's address in the list to open its details panel. **Overview** shows who it belongs to and its
+storage; **Storage** and **Access** are where you change them. The ⋮ menu beside each address has the same actions,
+and you can tick several mailboxes to suspend, resume or delete them together.
 
 ## Change storage
 
-Open the mailbox and change **Storage**. The new quota applies within a minute. Lowering it below what the mailbox
+Open the mailbox, choose the **Storage** tab and change **Storage (GB)**. The new quota applies within a minute. Lowering it below what the mailbox
 already holds doesn't delete anything, but the mailbox stops accepting new mail until there's room again.
 
 ## Suspend a mailbox
 
-Open the mailbox and choose **Suspend mailbox**. Within a minute:
+Open the mailbox, choose the **Access** tab and then **Suspend mailbox**. Within a minute:
 
 - Nobody can sign in to it: webmail, mail apps (IMAP, POP3 and SMTP) and app passwords are all refused. A mail app
   that is already connected can stay connected until it disconnects, but receives no new mail.
@@ -34,7 +40,7 @@ Choose **Resume mailbox** to turn it back on. It shows **Setting up** for a mome
 
 ## Delete a mailbox
 
-Open the mailbox, choose **Delete mailbox…**, and confirm. A deleted mailbox can be restored for
+Open the mailbox, choose the **Access** tab, then **Delete mailbox…**, and confirm. A deleted mailbox can be restored for
 
 <Value of="mailboxDeleteGraceDays" /> days:
 
@@ -47,7 +53,7 @@ again. This can't be undone.
 
 ### Restore a deleted mailbox
 
-Before that date, open the mailbox and choose **Restore mailbox**. It comes back with its aliases and all of its mail,
+Before that date, open the mailbox (or choose **Restore…** in its ⋮ menu) and choose **Restore mailbox**. It comes back with its aliases and all of its mail,
 and shows **Active** again within a minute (even if it was suspended before you deleted it). A mailbox can't be
 restored if its domain is no longer verified in your account.
 

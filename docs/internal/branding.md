@@ -39,28 +39,32 @@ Dark mode (`.dark` on `<html>`, `next-themes`, default `system`): background 7 1
 
 ## App components (console + webmail)
 
-- **Sidebar** (decision 2026-10-22, maintainer asked for an expandable/compact, more capable nav): full-height
-  sidebar beside the content. **Expanded** (256 px): wordmark on top, Overview, then one collapsible section per
-  scope — "Anhourtec staff" and one per account (Lucide icon + name in sentence case, chevron; never mono uppercase
-  labels). Items are a 20 px Lucide icon + label, 40 px tall; the current page gets the accent tint plus a 3 px
-  primary bar on the left. Pages not built yet stay listed, dimmed, with a quiet "Soon" (no pill). Foot: initials
-  avatar, email, collapse button. **Compact** (64 px rail): icons only, a blue "A" monogram on top, sections split
-  by hairlines, labels in a tooltip on hover/focus. Toggle with the button or ⌘/Ctrl+B; the width and collapsed
-  sections live in cookies so the server renders the first paint right. **Under `lg`** it becomes a drawer behind
-  a menu button (overlay, Escape closes, a followed link closes it, focus returns to the button).
-- **Console header and the person's menu** (decision 2026-10-22, modelled on the admin-dashboard reference): left,
-  the sidebar toggle (drawer button under `lg`); right, three 36 px controls — **Preferences** (popover: Theme
-  Light/Dark/System and Sidebar Expanded/Icons only as segmented controls, "Restore defaults"), a **theme** button
-  that cycles Light → Dark → System, and the **avatar** (initials; no remote images) opening the person's menu:
-  name and email (and staff role), their accounts with role and a tick on the current one, Profile and security /
-  Billing ("Soon" until built), Documentation, Sign out. The sidebar's foot carries a small "Need a hand?" card
-  (guides, support) and the same menu behind a name + email button with a ⋮. No third-party marks (no GitHub
-  button: rule 53).
-- **Page header:** `PageHeader` from `@anhourmail/ui/page-header` — optional breadcrumb, h1 with actions on the right,
-  one lead line. **No eyebrow label above the title** (decision 2026-10-21). Context comes from breadcrumbs, shown only
-  when the page is at least two levels deep (e.g. `Demo Family › Domains › example.com`). No card around the page.
+- **Console layout** (decision 2026-10-22, maintainer: familiar admin-centre layout): a **48 px app bar** across the
+  top on the navy `--appbar` surface in both themes — the navigation button (drawer under `lg`, icon rail on wide
+  screens), the wordmark (`tone="onDark"`) with "Console", a wide centred **search** (`/` focuses it; mailboxes,
+  aliases, domains, people, and customer accounts for staff), then theme, help, the account's name and the person's
+  round initials avatar opening their menu.
+- **Sidebar** (decision 2026-10-22, maintainer: the console uses the webmail sidebar's design): shared pieces in
+  `apps/web/src/components/sidebar/app-sidebar.tsx`. Top: square initial tiles (mailboxes in the webmail, accounts in
+  the console; the current one has a check badge) and a ⋮ menu, then the name and the address under a hairline, then
+  one prominent outlined action (New email; New mailbox / New invite / New alias / Find an account by role). Rows are
+  16 px icon + label, 32 px tall, counts on the right in mono (primary when something waits on someone), the current
+  row tinted with a primary icon; muted section labels ("Folders"; "Mail", "People", "Account", "Platform"). Foot:
+  Help & feedback, Keyboard shortcuts (`?`), theme switch and sign out. Collapses to a 56 px icon rail (tooltips,
+  dots for counts) and is a drawer on small screens. Pages not built yet stay listed with a quiet "Soon".
+- **Page template** (console): breadcrumb → large title (`am-h1`) → one-line description → **command bar** (hairline
+  above, icon + text actions, the list's search box and a ⋯ overflow on the right) → **filter chips** where filters
+  exist → content. `PageHeader` from `@anhourmail/ui/page-header`; command bar and chips in
+  `components/console/`. No card around the page, no eyebrow.
+- **Details panels:** a flyout from the right over the list (about 62% wide, full screen on phones), modal (focus
+  trap, Escape, focus returns to the row), its state in the URL (`?mailbox=`, `?domain=`, `?person=`, `?new=1`,
+  `&tab=`). Header: large initials circle, name, coloured status line, inline action links; underline tabs; a
+  two-column label / value / "Manage …" grid. Create forms open in the same panel (narrow).
 - **Buttons:** actions use `size="sm"` with a leading Lucide icon. Full-width `lg` only for auth submits. Destructive actions go through a confirm dialog that names the thing.
-- **Lists:** one shared DataTable (title + count, search, column visibility, sortable headers with `aria-sort`, bulk bar, row click opens detail, numbered pagination). Cells: StatusBadge, DateCell (mono, `en-CA`, "Never"), EntityCell, icon-only RowAction with a required label.
+- **Lists:** checkbox column with a bulk bar where bulk actions exist, a medium-weight primary column (mono for
+  addresses and domains) with a ⋮ row menu, secondary columns, sortable headers with `aria-sort`, hairline rows about
+  46 px tall. **Status** is a small coloured icon + plain text (`StatusText`), not a pill; pills stay for tags like
+  "You". Destructive actions confirm in a dialog that names the thing.
 - **Mail-specific:** DNS record rows (mono values, per-row copy button, live status pill), alias chips (`.am-tag`), the three-pane webmail with resizable panes.
 - **Empty states** say what is missing plus one action. No illustrations.
 - **Toasts** confirm completed actions. Errors that need a decision stay inline.
