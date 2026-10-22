@@ -5,14 +5,17 @@ import { can } from "@anhourmail/core";
 import { accountAuditPage } from "@anhourmail/core/audit";
 import { listPeople } from "@anhourmail/core/people";
 import { PageHeader } from "@anhourmail/ui/page-header";
+import { BookOpen, RefreshCw } from "lucide-react";
 
 import { AuditFilters } from "@/components/audit/audit-filters";
 import { AuditPager } from "@/components/audit/audit-pager";
 import { AuditTable } from "@/components/audit/audit-table";
+import { CommandBar, CommandLink, OverflowMenu } from "@/components/console/command-bar";
 import { AREA_OPTIONS, readAuditParams } from "@/server/audit-page";
 import { auditRows } from "@/server/audit-rows";
 import { requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
+import { env } from "@/server/env";
 import { forPage } from "@/server/page-guard";
 
 export const metadata: Metadata = { title: "Audit log" };
@@ -32,7 +35,7 @@ export default async function AccountAuditPage({
     page: await accountAuditPage(deps, actor, accountId, filters),
     people: can(actor, "member.read", accountId) ? (await listPeople(deps, actor, accountId)).members : [],
   }));
-  const crumbs = [{ label: "Overview", href: "/" }, { label: "Audit log" }];
+  const crumbs = [{ label: "Home", href: "/" }, { label: "Audit log" }];
   if (!data) {
     return (
       <>
@@ -55,6 +58,25 @@ export default async function AccountAuditPage({
         description="Every change in this account: who made it, when and from which network. Entries can't be edited or deleted, and anything Anhourtec staff do here is listed too."
         breadcrumbs={crumbs}
       />
+      <CommandBar
+        label="Audit log actions"
+        end={
+          <OverflowMenu
+            items={[
+              {
+                label: "Audit log guide",
+                href: `${env().SITE_URL.replace(/\/$/, "")}/docs/audit-log`,
+                icon: <BookOpen />,
+                external: true,
+              },
+            ]}
+          />
+        }
+      >
+        <CommandLink href={path} icon={<RefreshCw />}>
+          Newest entries
+        </CommandLink>
+      </CommandBar>
       <AuditFilters action={path} areas={AREA_OPTIONS} actors={actors} current={current} />
       <AuditTable rows={auditRows(data.page.entries)} />
       <AuditPager path={path} filters={current} paged={paged} nextBefore={data.page.nextBefore} />

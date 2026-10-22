@@ -5,10 +5,12 @@ import { notFound } from "next/navigation";
 import { can } from "@anhourmail/core";
 import { platformAuditPage } from "@anhourmail/core/audit";
 import { PageHeader } from "@anhourmail/ui/page-header";
+import { RefreshCw } from "lucide-react";
 
 import { AuditFilters } from "@/components/audit/audit-filters";
 import { AuditPager } from "@/components/audit/audit-pager";
 import { AuditTable } from "@/components/audit/audit-table";
+import { CommandBar, CommandLink } from "@/components/console/command-bar";
 import { AREA_OPTIONS, readAuditParams } from "@/server/audit-page";
 import { auditRows } from "@/server/audit-rows";
 import { requireUser } from "@/server/console-frame";
@@ -39,8 +41,13 @@ export default async function PlatformAuditPage({
       <PageHeader
         title="Platform audit"
         description="Staff actions, platform settings, sign-ups and refused requests from outside any account. Entries can't be edited or deleted."
-        breadcrumbs={[{ label: "Overview", href: "/" }, { label: "Platform audit" }]}
+        breadcrumbs={[{ label: "Home", href: "/" }, { label: "Platform audit" }]}
       />
+      <CommandBar label="Platform audit actions">
+        <CommandLink href={path} icon={<RefreshCw />}>
+          Newest entries
+        </CommandLink>
+      </CommandBar>
       <AuditFilters action={path} areas={AREA_OPTIONS} actors={ACTORS} current={current} />
       <AuditTable rows={auditRows(page.entries)} />
       <AuditPager path={path} filters={current} paged={paged} nextBefore={page.nextBefore} />
