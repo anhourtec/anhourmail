@@ -2,7 +2,7 @@
   "name": "anhourmail",
   "version": "0.0.0",
   "private": true,
-  "description": "AnhourMail \u2014 private, fast hosted email. Console, webmail, marketing site, docs and worker.",
+  "description": "AnhourMail — private, fast hosted email. Console, webmail, marketing site, docs and worker.",
   "license": "AGPL-3.0-only",
   "type": "module",
   "engines": {
@@ -70,6 +70,11 @@
     "typescript-eslint": "8.72.0",
     "vitest": "5.0.5",
     "concurrently": "10.0.6"
+  },
+  "overrides": {
+    "@esbuild-kit/core-utils": {
+      "esbuild": "0.28.2"
+    }
   },
   "lint-staged": {
     "*.{js,mjs,ts,tsx}": [
