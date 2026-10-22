@@ -396,11 +396,13 @@ describe("webmail settings: control plane and mail server together", () => {
           message: "Secret plans",
           contactsOnly: false,
         },
-        timeZone: "America/Vancouver",
+        // A zone without daylight saving, so the expected offset doesn't depend on the machine's time zone data
+        // (runners disagree about the day a daylight-saving change happens).
+        timeZone: "Asia/Kolkata",
       },
       req,
     );
-    expect(t.script()).toContain('currentdate :zone "-0800" :value "ge" "date" "2026-11-01"');
+    expect(t.script()).toContain('currentdate :zone "+0530" :value "ge" "date" "2026-11-01"');
     const vac = t.uow.state.audit.at(-1);
     expect(vac).toMatchObject({
       action: "vacation.changed",
