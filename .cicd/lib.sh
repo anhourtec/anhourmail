@@ -53,4 +53,7 @@ apps_up() {
   wait_http "http://127.0.0.1:${WEB_DEV_PORT:-43200}/sign-in"
   wait_http "http://127.0.0.1:${SITE_DEV_PORT:-43100}/"
   wait_http "http://127.0.0.1:${WEBMAIL_DEV_PORT:-43300}/"
+  # Compile every page and API route once before the journeys run, so a first visit never waits on a cold compile.
+  step "warm routes"
+  node scripts/warm-routes.mjs "http://127.0.0.1:${WEB_DEV_PORT:-43200}" >>"${APPS_LOG}" 2>&1
 }
