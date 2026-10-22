@@ -103,6 +103,7 @@ function fakeMail(fail = false): MailServer & { destroyed: { externalId: string 
     removeDomain: unused,
     listDomains: unused,
     listMailboxes: unused,
+    revokeAppPassword: unused,
     destroyMailbox: async (input) => {
       if (fail) throw new Error("mail server unavailable");
       destroyed.push(input);

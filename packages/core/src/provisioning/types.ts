@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /** Provisioning: the control plane holds desired state; the worker applies it to the mail server (CLAUDE.md rule 26). */
 
-export type JobKind = "domain.ensure" | "domain.remove" | "mailbox.ensure";
+/** `app_password.revoke`: subject is a mailbox; takes its `revoking` app passwords off the mail server. */
+export type JobKind = "domain.ensure" | "domain.remove" | "mailbox.ensure" | "app_password.revoke";
 export type JobStatus = "queued" | "running" | "succeeded" | "failed";
 
 export type ProvisioningJob = {

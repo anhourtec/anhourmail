@@ -27,4 +27,9 @@ export type SecurityRepository = {
   /** null for an unknown account. */
   accountPolicy(accountId: string): Promise<SignInPolicy | null>;
   setAccountPolicy(accountId: string, policy: SignInPolicy): Promise<void>;
+  /**
+   * True when this console session confirmed it's the person (a sign-in or `POST /api/auth/step-up`) recently enough
+   * that the marker hasn't expired at `now`. Not used up: sensitive actions in the next few minutes share it.
+   */
+  stepUpFresh(userId: string, sessionId: string, now: Date): Promise<boolean>;
 };

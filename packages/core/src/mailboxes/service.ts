@@ -5,6 +5,7 @@ import { MAILBOX_DELETE_GRACE_DAYS, MAX_MAILBOXES, PLANS } from "@anhourmail/sha
 
 import { type Actor, authorize } from "../actor";
 import { maskEmail } from "../audit/record";
+import { turnOffCatchAllFor } from "../domains/catch-all";
 import { ConflictError, ForbiddenError, NotFoundError, PlanLimitError, ValidationError } from "../errors";
 import { mutation } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
@@ -55,7 +56,7 @@ async function views(repos: Repositories, accountId: string, list: Mailbox[]): P
  * Member) takes an Owner: a User Admin can't lock out the people above them or each other. Their own mailbox and
  * unassigned or members' mailboxes are fine.
  */
-function lifecycleLocked(
+export function lifecycleLocked(
   actor: Actor,
   accountId: string,
   m: Mailbox,
@@ -312,7 +313,9 @@ export async function suspendMailbox(
       if (m.lastError === null) throw new ConflictError("This mailbox is already suspended.");
       return { next: await moveTo(deps, repos, m, "suspended", null), meta: { from: m.status, retry: true } };
     }
-    return { next: await moveTo(deps, repos, m, "suspended", null), meta: { from: m.status } };
+    const next = await moveTo(deps, repos, m, "suspended", null);
+    const catchAllOff = await turnOffCatchAllFor(deps, repos, m.id);
+    return { next, meta: { from: m.status, ...(catchAllOff.length > 0 ? { catchAllOff } : {}) } };
   });
 }
 
@@ -352,7 +355,16 @@ export async function deleteMailbox(
     const purgeAfter = new Date(deps.clock.now().getTime() + MAILBOX_DELETE_GRACE_DAYS * DAY_MS);
     const next = await moveTo(deps, repos, m, "deleting", purgeAfter);
     const aliases = (await repos.aliases.listByAccount(accountId)).filter((a) => a.mailboxId === m.id).length;
-    return { next, meta: { from: m.status, purgeAfter: purgeAfter.toISOString(), aliases } };
+    const catchAllOff = await turnOffCatchAllFor(deps, repos, m.id);
+    return {
+      next,
+      meta: {
+        from: m.status,
+        purgeAfter: purgeAfter.toISOString(),
+        aliases,
+        ...(catchAllOff.length > 0 ? { catchAllOff } : {}),
+      },
+    };
   });
 }
 

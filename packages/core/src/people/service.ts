@@ -367,7 +367,8 @@ export async function changeMemberRole(
 
 /**
  * Removes someone from the account (`member.manage`; an Owner or an admin needs `account.admins.manage`). Not
- * yourself, and never the last Owner. Their mailboxes stay (unassigned) — suspend or delete them separately.
+ * yourself, and never the last Owner. Their mailboxes stay (unassigned) — suspend or delete them separately — but
+ * the app passwords on those mailboxes are revoked (the worker takes them off the mail server).
  */
 export async function removeMember(
   deps: Deps,
@@ -401,10 +402,23 @@ export async function removeMember(
       if (target.role === "owner" && ownerCount(members) <= 1) throw new ConflictError(LAST_OWNER);
       if (!(await repos.people.remove(accountId, target.userId))) throw new NotFoundError();
       const mailboxes = (await repos.mailboxes.listByAccount(accountId)).filter((m) => m.userId === target.userId);
+      // The app passwords they made for those mailboxes go with them: they're credentials the removed person holds.
+      let appPasswordsRevoked = 0;
+      for (const m of mailboxes) {
+        const moved = await repos.appPasswords.markRevoking(m.id, null);
+        appPasswordsRevoked += moved.length;
+        if (moved.length > 0) {
+          await repos.provisioning.enqueue({
+            kind: "app_password.revoke",
+            subjectId: m.id,
+            runAfter: deps.clock.now(),
+          });
+        }
+      }
       return {
         result: { userId: target.userId },
         target: { label: target.email },
-        meta: { role: target.role, mailboxesUnassigned: mailboxes.length },
+        meta: { role: target.role, mailboxesUnassigned: mailboxes.length, appPasswordsRevoked },
       };
     },
   );

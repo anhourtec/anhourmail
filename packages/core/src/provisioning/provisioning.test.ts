@@ -3,23 +3,43 @@ import { describe, expect, it } from "vitest";
 
 import { deps as makeDeps, fixedClock } from "../__tests__/helpers";
 import type { MailServer } from "./ports";
-import { enqueueProvisioning, reconcile, runNextJob } from "./service";
+import { enqueueProvisioning, reconcile, requeueActiveMailboxes, runNextJob } from "./service";
 import { backoffMs, MAX_ATTEMPTS } from "./types";
 
 type Box = { address: string; quotaBytes: number; aliases: string[]; suspended: boolean };
 
-function fakeMailServer(opts: { failTimes?: number } = {}): MailServer & { domains: string[]; boxes: Box[] } {
+type Revoked = { externalId: string; credentialId: string; createdAt: Date };
+
+function fakeMailServer(opts: { failTimes?: number } = {}): MailServer & {
+  domains: string[];
+  boxes: Box[];
+  catchAll: Map<string, string | null>;
+  revoked: Revoked[];
+} {
   let failures = opts.failTimes ?? 0;
-  const state = { domains: [] as string[], boxes: [] as Box[] };
+  const state = {
+    domains: [] as string[],
+    boxes: [] as Box[],
+    catchAll: new Map<string, string | null>(),
+    revoked: [] as Revoked[],
+  };
   return {
     ...state,
-    ensureDomain: async (name) => {
+    ensureDomain: async (name, catchAllAddress) => {
       if (failures > 0) {
         failures -= 1;
         throw new Error("mail server unavailable");
       }
       if (!state.domains.includes(name)) state.domains.push(name);
+      state.catchAll.set(name, catchAllAddress ?? null);
       return { externalId: `dom:${name}` };
+    },
+    revokeAppPassword: async (input) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error("mail server unavailable");
+      }
+      state.revoked.push(input);
     },
     ensureMailbox: async ({ address, quotaBytes, suspended, aliases }) => {
       const existing = state.boxes.find((b) => b.address === address);
@@ -219,6 +239,114 @@ describe("provisioning jobs", () => {
     }
     expect(d.uow.state.mailboxes[0]).toMatchObject({ status: "failed" });
   });
+
+  it("turns off a catch-all whose mailbox ends up failed, and queues the domain", async () => {
+    const { d, clock } = setup();
+    d.uow.state.catchAll.push({ domainId: "d1", mailboxId: "m1" });
+    const mail: MailServer = { ...fakeMailServer(), ensureMailbox: () => Promise.reject(new Error("quota refused")) };
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      await runNextJob(d, mail);
+      clock.set(new Date(clock.now().getTime() + backoffMs(i + 1)));
+    }
+    expect(d.uow.state.catchAll).toEqual([]);
+    expect(d.uow.state.jobs.some((j) => j.kind === "domain.ensure" && j.subjectId === "d1")).toBe(true);
+    expect(d.uow.state.audit.at(-1)).toMatchObject({
+      action: "platform.provisioning_failed",
+      meta: { catchAllOff: ["example.test"] },
+    });
+  });
+});
+
+describe("catch-all and app password jobs", () => {
+  it("applies the domain's catch-all only while its mailbox is active", async () => {
+    const { d } = setup();
+    const mail = fakeMailServer();
+    d.uow.state.catchAll.push({ domainId: "d1", mailboxId: "m1" });
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await runNextJob(d, mail);
+    expect(mail.catchAll.get("example.test")).toBeNull(); // m1 is still provisioning
+    d.uow.state.mailboxes[0]!.status = "active";
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await runNextJob(d, mail);
+    expect(mail.catchAll.get("example.test")).toBe("owner@example.test");
+    d.uow.state.catchAll = [];
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await runNextJob(d, mail);
+    expect(mail.catchAll.get("example.test")).toBeNull();
+  });
+
+  it("revokes a mailbox's revoking app passwords on the mail server, then deletes their rows", async () => {
+    const { d, clock } = setup();
+    const mail = fakeMailServer();
+    d.uow.state.mailboxes[0]!.stalwartId = "acc-1";
+    const row = (id: string, status: "active" | "revoking") => ({
+      id,
+      accountId: "a1",
+      mailboxId: "m1",
+      name: id,
+      protocols: ["imap" as const],
+      credentialId: `c-${id}`,
+      credentialCreatedAt: new Date(1000),
+      createdAt: clock.now(),
+      createdBy: "u",
+      status,
+    });
+    d.uow.state.appPasswords.push(row("p1", "revoking"), row("p2", "active"), row("p3", "revoking"));
+    await enqueueProvisioning(d, { kind: "app_password.revoke", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(mail.revoked).toEqual([
+      { externalId: "acc-1", credentialId: "c-p1", createdAt: new Date(1000) },
+      { externalId: "acc-1", credentialId: "c-p3", createdAt: new Date(1000) },
+    ]);
+    expect(d.uow.state.appPasswords.map((p) => p.id)).toEqual(["p2"]);
+    expect(d.uow.state.jobs[0]?.status).toBe("succeeded");
+  });
+
+  it("deletes revoking rows of a mailbox that never reached the mail server, and gives up without touching domains", async () => {
+    const { d, clock } = setup();
+    d.uow.state.appPasswords.push({
+      id: "p1",
+      accountId: "a1",
+      mailboxId: "m1",
+      name: "Phone",
+      protocols: ["imap"],
+      credentialId: "c1",
+      credentialCreatedAt: new Date(0),
+      createdAt: clock.now(),
+      createdBy: null,
+      status: "revoking",
+    });
+    const mail = fakeMailServer();
+    await enqueueProvisioning(d, { kind: "app_password.revoke", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(mail.revoked).toEqual([]);
+    expect(d.uow.state.appPasswords).toEqual([]);
+
+    // A mail server that keeps failing: the job gives up and is audited; no domain is marked.
+    d.uow.state.mailboxes[0]!.stalwartId = "acc-1";
+    d.uow.state.appPasswords.push({
+      id: "p2",
+      accountId: "a1",
+      mailboxId: "m1",
+      name: "Phone",
+      protocols: ["imap"],
+      credentialId: "c2",
+      credentialCreatedAt: new Date(0),
+      createdAt: clock.now(),
+      createdBy: null,
+      status: "revoking",
+    });
+    const failing = fakeMailServer({ failTimes: 99 });
+    await enqueueProvisioning(d, { kind: "app_password.revoke", subjectId: "m1" });
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      await runNextJob(d, failing);
+      clock.set(new Date(clock.now().getTime() + backoffMs(i + 1)));
+    }
+    expect(d.uow.state.jobs.at(-1)).toMatchObject({ kind: "app_password.revoke", status: "failed" });
+    expect(d.uow.state.domains[0]?.lastError).toBeNull();
+    expect(d.uow.state.audit.map((e) => e.action)).toEqual(["platform.provisioning_failed"]);
+  });
 });
 
 describe("reconcile", () => {
@@ -378,6 +506,77 @@ describe("suspension drift", () => {
     expect(mail.boxes.find((b) => b.address === "paused@example.test")?.suspended).toBe(true);
     expect(mail.boxes.find((b) => b.address === "open@example.test")?.suspended).toBe(false);
     expect((await reconcile(d, mail)).suspensionMismatch).toEqual([]);
+  });
+});
+
+describe("customer Sieve lock drift and backfill", () => {
+  /** The fake mail server, plus which accounts lack the customer lock (ensure puts it back, like the real one). */
+  function lockingServer() {
+    const mail = fakeMailServer();
+    const open = new Set<string>();
+    const ensure = mail.ensureMailbox.bind(mail);
+    mail.ensureMailbox = async (input) => {
+      open.delete(input.address);
+      return ensure(input);
+    };
+    const list = mail.listMailboxes.bind(mail);
+    mail.listMailboxes = async () => (await list()).map((m) => ({ ...m, sieveLocked: !open.has(m.address) }));
+    return { mail, open };
+  }
+
+  it("re-queues active mailboxes whose lock is missing, and the job re-applies it", async () => {
+    const { d } = setup();
+    const base = {
+      accountId: "a1",
+      userId: null,
+      createdAt: new Date(0),
+      quotaBytes: 1,
+      purgeAfter: null,
+      lastError: null,
+    };
+    d.uow.state.mailboxes = [
+      { ...base, id: "m1", address: "open@example.test", status: "active", stalwartId: "x1" },
+      { ...base, id: "m2", address: "fine@example.test", status: "active", stalwartId: "x2" },
+      { ...base, id: "m3", address: "paused@example.test", status: "suspended", stalwartId: "x3" },
+    ];
+    const { mail, open } = lockingServer();
+    await mail.ensureDomain("example.test");
+    await mail.ensureMailbox(ensureArgs("open@example.test", 1));
+    await mail.ensureMailbox(ensureArgs("fine@example.test", 1));
+    await mail.ensureMailbox({ ...ensureArgs("paused@example.test", 1), suspended: true });
+    open.add("open@example.test"); // e.g. created before the lock existed, or changed by hand
+    open.add("paused@example.test"); // suspended: its own permissions lock it; not reported here
+
+    const report = await reconcile(d, mail);
+    expect(report.sieveLockMismatch).toEqual(["open@example.test"]);
+    expect(report.clean).toBe(false);
+    expect(d.uow.state.jobs.map((j) => [j.kind, j.subjectId])).toEqual([["mailbox.ensure", "m1"]]);
+    expect(d.uow.state.audit.at(-1)?.meta).toMatchObject({ sieveLockMismatches: 1, requeued: 1 });
+    while (await runNextJob(d, mail)) {
+      /* drain */
+    }
+    expect((await reconcile(d, mail)).sieveLockMismatch).toEqual([]);
+  });
+
+  it("backfills: queues an ensure for every active mailbox, audited", async () => {
+    const { d } = setup();
+    const base = {
+      accountId: "a1",
+      userId: null,
+      createdAt: new Date(0),
+      quotaBytes: 1,
+      purgeAfter: null,
+      lastError: null,
+    };
+    d.uow.state.mailboxes = [
+      { ...base, id: "m1", address: "one@example.test", status: "active", stalwartId: "x1" },
+      { ...base, id: "m2", address: "two@example.test", status: "active", stalwartId: "x2" },
+      { ...base, id: "m3", address: "paused@example.test", status: "suspended", stalwartId: "x3" },
+      { ...base, id: "m4", address: "gone@example.test", status: "deleting", stalwartId: "x4" },
+    ];
+    expect(await requeueActiveMailboxes(d)).toBe(2);
+    expect(d.uow.state.jobs.map((j) => j.subjectId).sort()).toEqual(["m1", "m2"]);
+    expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "platform.mailboxes_requeued", meta: { requeued: 2 } });
   });
 });
 

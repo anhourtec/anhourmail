@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { turnOffCatchAllFor } from "../domains/catch-all";
 import { mutation } from "../mutation";
 import type { Deps, RequestMeta } from "../ports";
 import type { MailServer } from "./ports";
@@ -17,6 +18,23 @@ const describe = (err: unknown): string =>
   (err instanceof Error ? `${err.name}: ${err.message}` : String(err)).replace(/\s+/g, " ").slice(0, 300);
 
 async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promise<void> {
+  if (job.kind === "app_password.revoke") {
+    // Subject: a mailbox. Each `revoking` app password comes off the mail server, then its row goes.
+    const pending = await deps.uow.run((r) => r.appPasswords.revoking(job.subjectId));
+    if (pending.length === 0) return;
+    const mailbox = await deps.uow.run((r) => r.directory.getMailbox(job.subjectId));
+    for (const p of pending) {
+      if (mailbox?.stalwartId) {
+        await mail.revokeAppPassword({
+          externalId: mailbox.stalwartId,
+          credentialId: p.credentialId,
+          createdAt: p.credentialCreatedAt,
+        });
+      }
+      await deps.uow.run((r) => r.appPasswords.deleteRevoked(p.id));
+    }
+    return;
+  }
   if (job.kind === "domain.remove") {
     const domain = await deps.uow.run((r) => r.directory.getDomain(job.subjectId));
     if (!domain) return; // already gone
@@ -32,7 +50,9 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
     if (domain.status === "removing") return;
     // Only verified domains reach the mail server (DNS ownership proven first).
     if (domain.status !== "active") throw new Error(`domain not verified (status ${domain.status})`);
-    const { externalId } = await mail.ensureDomain(domain.name);
+    // The catch-all as it is now (only while its mailbox is active; turned off otherwise).
+    const catchAll = await deps.uow.run((r) => r.catchAll.targetAddress(domain.id));
+    const { externalId } = await mail.ensureDomain(domain.name, catchAll);
     // Marked for removal while we were adding it: take it off again so the mail server keeps no orphan. If the row
     // is already gone, do nothing by name — another account may hold the name by now; the reconciler reports drift.
     const now = await deps.uow.run((r) => r.directory.getDomain(domain.id));
@@ -110,6 +130,7 @@ export async function runNextJob(deps: Deps, mail: MailServer): Promise<Provisio
         },
         async (repos) => {
           await repos.provisioning.giveUp(job.id, error, now);
+          let catchAllOff: string[] = [];
           if (job.kind === "mailbox.ensure") {
             // A suspension or a scheduled deletion stays in force; only the error is recorded.
             const current = await repos.directory.getMailbox(job.subjectId);
@@ -117,10 +138,15 @@ export async function runNextJob(deps: Deps, mail: MailServer): Promise<Provisio
               status: current?.status === "suspended" || current?.status === "deleting" ? current.status : "failed",
               lastError: error,
             });
-          } else {
+            // A mailbox that can't be applied can't receive: any catch-all pointing at it goes off.
+            catchAllOff = await turnOffCatchAllFor(deps, repos, job.subjectId);
+          } else if (job.kind === "domain.ensure" || job.kind === "domain.remove") {
             await repos.directory.markDomain(job.subjectId, { lastError: error });
           }
-          return { result: undefined, meta: { jobId: job.id, attempts: job.attempts, error } };
+          return {
+            result: undefined,
+            meta: { jobId: job.id, attempts: job.attempts, error, ...(catchAllOff.length > 0 ? { catchAllOff } : {}) },
+          };
         },
       );
     } else {
@@ -143,6 +169,11 @@ export type DriftReport = {
    * changed by hand). Each one is re-queued for the worker; nothing is deleted.
    */
   suspensionMismatch: { address: string; desired: boolean; actual: boolean }[];
+  /**
+   * Active mailboxes whose customer lock is missing on the mail server (the user could write their own Sieve or
+   * VacationResponse). Re-queued like suspension drift; `mailbox.ensure` re-applies the lock.
+   */
+  sieveLockMismatch: string[];
   clean: boolean;
 };
 
@@ -165,6 +196,7 @@ export async function reconcile(
   const haveDomains = new Set(domains);
   const haveMailboxes = new Map(mailboxes.map((m) => [m.address, m.quotaBytes] as const));
   const haveSuspended = new Map(mailboxes.map((m) => [m.address, m.suspended] as const));
+  const haveLocked = new Map(mailboxes.map((m) => [m.address, m.sieveLocked] as const));
   // Must exist with this quota: active and suspended mailboxes (suspension keeps the account and its mail).
   const required = desired.mailboxes.filter((m) => m.status === "active" || m.status === "suspended");
   // Ours if present: those, plus deleting mailboxes (kept until the purge, or never created if they never got that
@@ -193,6 +225,7 @@ export async function reconcile(
         : [];
     }),
     suspensionMismatch: [],
+    sieveLockMismatch: [],
     clean: true,
   };
   // Settled states only: a provisioning or failed mailbox has a job (or an error) of its own.
@@ -206,6 +239,10 @@ export async function reconcile(
     if (actual !== undefined && actual !== want) {
       report.suspensionMismatch.push({ address: m.address, desired: want, actual });
       requeue.push(m.id);
+    } else if (m.status === "active" && haveLocked.get(m.address) === false) {
+      // Suspended/deleting accounts are locked by their superset permissions; only active ones can drift open.
+      report.sieveLockMismatch.push(m.address);
+      requeue.push(m.id);
     }
   }
   report.clean =
@@ -214,7 +251,8 @@ export async function reconcile(
       report.unknownOnMailServer.domains.length +
       report.unknownOnMailServer.mailboxes.length +
       report.quotaMismatch.length +
-      report.suspensionMismatch.length ===
+      report.suspensionMismatch.length +
+      report.sieveLockMismatch.length ===
     0;
 
   if (!report.clean) {
@@ -242,6 +280,7 @@ export async function reconcile(
             unknownMailboxes: report.unknownOnMailServer.mailboxes.length,
             quotaMismatches: report.quotaMismatch.length,
             suspensionMismatches: report.suspensionMismatch.length,
+            sieveLockMismatches: report.sieveLockMismatch.length,
             requeued: requeue.length,
           },
         };
@@ -249,4 +288,31 @@ export async function reconcile(
     );
   }
   return report;
+}
+
+/**
+ * One-off backfill (deploy step, 05-webmail.md "Settings"): queue `mailbox.ensure` for every active mailbox, so each
+ * one gets the current mail-server permissions (the customer Sieve lock) and its managed Sieve script re-activated.
+ * Idempotent (ensure is); suspended and deleting mailboxes are left to their own jobs. Returns how many were queued.
+ */
+export async function requeueActiveMailboxes(deps: Deps): Promise<number> {
+  return mutation(
+    deps,
+    SYSTEM,
+    req(`backfill-${String(deps.clock.now().getTime())}`),
+    {
+      action: "platform.mailboxes_requeued",
+      permission: "self.profile.read",
+      accountId: null,
+      target: { type: "mail_server" },
+    },
+    async (repos) => {
+      const { mailboxes } = await repos.directory.desired();
+      const active = mailboxes.filter((m) => m.status === "active");
+      for (const m of active) {
+        await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: m.id, runAfter: deps.clock.now() });
+      }
+      return { result: active.length, meta: { requeued: active.length } };
+    },
+  );
 }

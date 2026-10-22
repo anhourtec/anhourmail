@@ -17,3 +17,17 @@ export type DomainRepository = {
   /** Pending domains created after `since`, in no fixed order (the scheduler samples them so none starves). */
   pending(since: Date, limit: number): Promise<CustomerDomain[]>;
 };
+
+/**
+ * A customer domain's catch-all: the mailbox (of the same account) that receives mail for unknown addresses at the
+ * domain. Callers scope the domain and the mailbox to the account first.
+ */
+export type CatchAllRepository = {
+  /** The catch-all mailbox id, or null when it is off. */
+  get(domainId: string): Promise<string | null>;
+  set(domainId: string, mailboxId: string | null): Promise<void>;
+  /** Turns off every catch-all that points at this mailbox; returns those domains. */
+  clearForMailbox(mailboxId: string): Promise<{ id: string; name: string }[]>;
+  /** Where the mail server sends unknown recipients: the catch-all mailbox's address while it is active, else null. */
+  targetAddress(domainId: string): Promise<string | null>;
+};

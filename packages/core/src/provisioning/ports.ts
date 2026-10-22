@@ -34,7 +34,11 @@ export type MailDirectoryRepository = {
  * deletion grace period has ended calls it.
  */
 export type MailServer = {
-  ensureDomain(name: string): Promise<{ externalId: string }>;
+  /**
+   * Adds or updates a domain. `catchAllAddress`: where mail for unknown addresses at the domain goes (an active
+   * mailbox of the same account); null or omitted, unknown recipients are refused during the SMTP conversation.
+   */
+  ensureDomain(name: string, catchAllAddress?: string | null): Promise<{ externalId: string }>;
   ensureMailbox(input: {
     /** The mail server's id once created; null for a new mailbox, which must not adopt an existing account. */
     externalId: string | null;
@@ -55,6 +59,15 @@ export type MailServer = {
   /** Removes an empty domain (and its signing keys). Refuses if any mailbox still lives on it. Idempotent. */
   removeDomain(name: string): Promise<void>;
   listDomains(): Promise<string[]>;
-  /** Every mailbox with its quota and whether it is suspended (sign-in and delivery off). */
-  listMailboxes(): Promise<{ address: string; quotaBytes: number; suspended: boolean }[]>;
+  /**
+   * Revokes one app password of a mailbox. Only the credential with this id **and** creation time (ids are reused);
+   * already gone is fine. Idempotent.
+   */
+  revokeAppPassword(input: { externalId: string; credentialId: string; createdAt: Date }): Promise<void>;
+  /**
+   * Every mailbox with its quota, whether it is suspended (sign-in and delivery off), and whether the customer lock
+   * is in place (the user can't change mail flow: no own Sieve, no VacationResponse). `sieveLocked` undefined =
+   * not reported (treated as fine).
+   */
+  listMailboxes(): Promise<{ address: string; quotaBytes: number; suspended: boolean; sieveLocked?: boolean }[]>;
 };

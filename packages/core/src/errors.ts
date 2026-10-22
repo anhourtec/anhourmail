@@ -65,3 +65,13 @@ export class EnrolmentRequiredError extends DomainError {
     );
   }
 }
+
+/**
+ * The action needs the person to have confirmed it's them in the last few minutes (password, a current code or a
+ * fresh sign-in). HTTP 403 with its own code, so the console can ask and retry.
+ */
+export class StepUpRequiredError extends DomainError {
+  constructor() {
+    super("Confirm it's you first: enter your password or a code.", "step_up_required");
+  }
+}

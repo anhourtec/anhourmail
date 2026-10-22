@@ -3,3 +3,4 @@ export * from "./dns";
 export * from "./entity";
 export type * from "./repository";
 export * from "./service";
+export * from "./catch-all";
