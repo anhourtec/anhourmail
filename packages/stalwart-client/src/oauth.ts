@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { createHash, randomBytes } from "node:crypto";
 
+import { isAppPasswordSecret } from "./app-passwords";
 import { type StalwartManagement } from "./management";
 
 /**
@@ -151,6 +152,9 @@ export class StalwartOAuth {
    * (429 / 403) → `OAuthThrottledError`, never "wrong password".
    */
   async signIn(accountName: string, accountSecret: string, clientIp?: string | null): Promise<OAuthTokens> {
+    // An app password would get an account-wide token here, without the permissions the credential has turned off
+    // (verified on v0.16.27): app passwords are for mail apps over their own protocols, never this sign-in.
+    if (isAppPasswordSecret(accountSecret)) throw new OAuthDeniedError("sign-in refused");
     const { verifier, challenge } = pkcePair();
     const res = await this.#post(
       "/api/auth",

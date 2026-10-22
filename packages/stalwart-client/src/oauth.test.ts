@@ -86,6 +86,14 @@ describe("StalwartOAuth", () => {
     }
   });
 
+  it("refuses an app password without asking the server (its token would drop the credential's limits)", async () => {
+    const { f, seen } = fakeFetch(() => Response.json({ type: "authenticated", client_code: "c" }));
+    const secret = `app_${"a1b2c3d4e5".repeat(3)}k9m8x7`;
+    await expect(new StalwartOAuth(opts(f)).signIn("a@x.test", secret)).rejects.toBeInstanceOf(OAuthDeniedError);
+    await expect(new StalwartOAuth(opts(f)).signIn("a@x.test", ` ${secret} `)).rejects.toBeInstanceOf(OAuthDeniedError);
+    expect(seen).toEqual([]);
+  });
+
   it("maps throttling and bans (429, 403) to OAuthThrottledError, never to a wrong password", async () => {
     for (const status of [429, 403]) {
       const { f } = fakeFetch(() => new Response("", { status }));
