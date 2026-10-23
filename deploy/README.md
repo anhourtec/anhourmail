@@ -106,6 +106,13 @@ version. CI builds all three on every push (`.cicd/build.sh`).
   its documented set (`GET /api/account`) and anything else is refused. Never give the web app the provisioning key:
   it would let the internet-facing process create and change accounts.
 
+- **`MAILBOX_PASSWORD_GRANT_KEY`** — **web app and the management proxy only** (32+ random characters, e.g.
+  `openssl rand -base64 48`). The web app signs each mailbox password reset or change with it (HMAC bound to the
+  account and the exact argon2id hash, valid ≤ 1 hour); the management proxy accepts the worker's password replacement
+  only with a valid grant, so the provisioning key alone can't set a customer's password. The worker and scheduler
+  refuse to start with it. Rotate by setting the new value on both at once (grants in flight fail and are retried by
+  the person or admin).
+
 - **The public JMAP/CardDAV host (`imap.`) must not expose Stalwart's `/api/*`, `/auth/*`, `/admin`,
   `/.well-known/oauth-authorization-server` or `/.well-known/openid-configuration`.** `/api/auth` turns an app password
   into an account-wide OAuth token (ADR-0020); only the paths mail, contact and calendar apps use (`/jmap`,
