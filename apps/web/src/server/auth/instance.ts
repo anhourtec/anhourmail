@@ -19,17 +19,22 @@ import { log } from "@anhourmail/server/log";
 import { redisOneTime } from "@anhourmail/server/one-time";
 import { redis } from "@anhourmail/server/redis";
 import { requestContext } from "@anhourmail/server/request-context";
+import { EMAIL_VERIFICATION_HOURS } from "@anhourmail/shared/security";
 
 import { container } from "../container";
 
 import { env } from "../env";
-import { firstFactorEmail, passkeyAddedEmail, passwordResetEmail } from "../mail/system-email";
+import { emailVerificationEmail, firstFactorEmail, passkeyAddedEmail, passwordResetEmail } from "../mail/system-email";
+import { platform } from "../platform";
 
 /**
  * Sign-up mode: `open` (anyone who can reach the console; production keeps it behind the firewall allow-list) or
  * `closed` (no sign-up page).
  */
 export const signUpOpen = (): boolean => env().SIGNUP_MODE === "open";
+
+/** Where the "confirm your email address" link lands (better-auth appends `?error=<code>` when it fails). */
+export const EMAIL_VERIFIED_PATH = "/email-verified";
 
 /** Dev: the machine's LAN IPv4 addresses, so the console works from other devices (DEV_HOST=0.0.0.0). */
 export function lanOrigins(port: number): string[] {
@@ -66,7 +71,13 @@ async function auditAuthEvent(e: AuthSecurityEvent): Promise<void> {
     const name = typeof e.meta?.passkeyName === "string" ? e.meta.passkeyName : "Passkey";
     await container()
       .mailer.send(
-        passkeyAddedEmail({ to: e.email, passkeyName: name, at: new Date(), securityUrl: `${env().APP_URL}/security` }),
+        passkeyAddedEmail({
+          to: e.email,
+          passkeyName: name,
+          at: new Date(),
+          securityUrl: `${env().APP_URL}/security`,
+          site: platform().hosts.site,
+        }),
       )
       .catch((err: unknown) => {
         log.error("passkey notice email failed", { component: "auth", err });
@@ -102,6 +113,7 @@ export const securityHooks: SecurityHooks = {
               at: new Date(),
               securityUrl: `${env().APP_URL}/security`,
               forOwner: n.owner,
+              site: platform().hosts.site,
             }),
           )
           .catch((err: unknown) => {
@@ -167,17 +179,66 @@ export function auth(): Auth {
         // Only called for addresses that have an account, so a delivery failure must not change the HTTP answer
         // (a 5xx only for real accounts would reveal them): log it and carry on.
         await container()
-          .mailer.send(passwordResetEmail({ to: email, name, url }))
+          .mailer.send(passwordResetEmail({ to: email, name, url, site: platform().hosts.site }))
           .catch((err: unknown) => {
             log.error("password reset email failed", { component: "auth", err });
           });
         await recordSecurityEvent(
           container().deps,
           { action: "auth.password_reset_requested", userId: "", email },
-          { requestId: requestContext()?.requestId ?? "reset", ip: null, userAgent: null },
+          // The request's client address (TRUST_PROXY rules, `route()`), for staff watching for abuse; no user agent.
+          {
+            requestId: requestContext()?.requestId ?? "reset",
+            ip: requestContext()?.clientIp ?? null,
+            userAgent: null,
+          },
         ).catch((err: unknown) => {
           log.error("audit write failed", { component: "auth", err });
         });
+      },
+      emailVerification: {
+        expiresInSec: EMAIL_VERIFICATION_HOURS * 3600,
+        // At sign-up and from the console's "send the link again". The link is ours: the auth endpoint on this
+        // origin, landing on a fixed page (never a URL from the request). Delivery failures are logged, not shown.
+        send: async ({ email, token }) => {
+          const url = `${e.APP_URL.replace(/\/$/, "")}/api/auth/verify-email?token=${encodeURIComponent(token)}&callbackURL=${encodeURIComponent(EMAIL_VERIFIED_PATH)}`;
+          await container()
+            .mailer.send(
+              emailVerificationEmail({
+                to: email,
+                url,
+                hours: EMAIL_VERIFICATION_HOURS,
+                site: platform().hosts.site,
+              }),
+            )
+            .catch((err: unknown) => {
+              log.error("email confirmation send failed", { component: "auth", err });
+            });
+          await recordSecurityEvent(
+            container().deps,
+            { action: "auth.email_verification_sent", userId: null, email },
+            {
+              requestId: requestContext()?.requestId ?? "verify",
+              ip: requestContext()?.clientIp ?? null,
+              userAgent: null,
+            },
+          ).catch((err: unknown) => {
+            log.error("audit write failed", { component: "auth", err });
+          });
+        },
+        onVerified: async (user) => {
+          await recordSecurityEvent(
+            container().deps,
+            { action: "auth.email_verified", userId: user.id, email: user.email },
+            {
+              requestId: requestContext()?.requestId ?? "verify",
+              ip: requestContext()?.clientIp ?? null,
+              userAgent: null,
+            },
+          ).catch((err: unknown) => {
+            log.error("audit write failed", { component: "auth", err });
+          });
+        },
       },
       onUserCreated: async (user) => {
         try {
@@ -185,7 +246,12 @@ export function auth(): Auth {
             container().deps,
             { kind: "system", name: "sign-up" },
             { userId: user.id, email: user.email, name: user.name },
-            { requestId: requestContext()?.requestId ?? "sign-up", ip: null, userAgent: null },
+            // Where the sign-up came from (platform log, full address for staff watching open sign-ups); no user agent.
+            {
+              requestId: requestContext()?.requestId ?? "sign-up",
+              ip: requestContext()?.clientIp ?? null,
+              userAgent: null,
+            },
           );
         } catch (err) {
           // The console user exists; the account can be provisioned again on retry (idempotent).

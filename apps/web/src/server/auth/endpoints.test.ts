@@ -13,6 +13,13 @@ describe("auth endpoint allow-list", () => {
     expect(authEndpoint("POST", "/api/auth/step-up")).toEqual({ tier: "sensitive" });
     expect(authEndpoint("GET", "/api/auth/passkey/generate-register-options")).toEqual({ tier: "sensitive" });
     expect(authEndpoint("GET", "/api/auth/reset-password/abcDEF_123-x")).toEqual({ tier: "auth" });
+    expect(authEndpoint("GET", "/api/auth/verify-email")).toEqual({ tier: "auth" });
+  });
+
+  it("exposes the emailed confirmation link but never the public send endpoint (the console has its own route)", () => {
+    expect(authEndpoint("POST", "/api/auth/send-verification-email")).toBeNull();
+    expect(authEndpoint("POST", "/api/auth/verify-email")).toBeNull();
+    expect(authEndpoint("POST", "/api/auth/change-email")).toBeNull();
   });
 
   it("refuses endpoints the console replaces or doesn't use", () => {

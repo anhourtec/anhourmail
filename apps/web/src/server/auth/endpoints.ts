@@ -9,6 +9,8 @@ export type AuthTier = "auth" | "authFactor" | "sensitive";
 
 const ENDPOINTS: Record<"GET" | "POST", Record<string, AuthTier>> = {
   GET: {
+    // The emailed "confirm your email address" link (token in the query; lands on /email-verified).
+    "/verify-email": "auth",
     "/passkey/generate-authenticate-options": "auth",
     "/passkey/generate-register-options": "sensitive",
   },

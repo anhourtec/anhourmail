@@ -29,6 +29,8 @@ const STATUS: Record<string, number> = {
   plan_limit: 403,
   enrolment_required: 403,
   step_up_required: 403,
+  email_unverified: 403,
+  rate_limited: 429,
 };
 
 export type RouteOptions = {
@@ -168,6 +170,22 @@ export function route(handler: Handler, opts: RouteOptions = {}) {
       return res;
     });
   };
+}
+
+/** A second, per-subject limit inside a handler (e.g. per account and per client address) was reached: 429. */
+export class RateLimitedError extends DomainError {
+  constructor() {
+    super("Too many requests. Wait a while and try again.", "rate_limited");
+  }
+}
+
+/**
+ * Checks and counts one more request against `name` for `subject` (`account:<id>`, `ip:<address>`), in addition to the
+ * route's own tier. Throws `RateLimitedError` (429) when it is used up; the tier's fail mode applies when Redis is down.
+ */
+export async function enforceLimit(name: LimitName, subject: string): Promise<void> {
+  const rl = await checkRateLimit(container().counter, name, LIMITS[name], subject);
+  if (!rl.allowed) throw new RateLimitedError();
 }
 
 /** Parses a JSON body; malformed JSON surfaces as a 400 via `route()`. */

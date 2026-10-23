@@ -61,6 +61,13 @@ export const ROUTES: readonly RouteSpec[] = [
     guard: "self.security.manage",
     probeStatus: 404,
   },
+  // "Send the confirmation link again" to the signed-in person's own address (already confirmed → 200, nothing sent).
+  {
+    method: "POST",
+    path: "/api/me/email-verification",
+    file: "app/api/me/email-verification/route.ts",
+    guard: "session",
+  },
   { method: "GET", path: "/api/search", file: "app/api/search/route.ts", guard: "session" },
   { method: "GET", path: "/api/platform/audit", file: "app/api/platform/audit/route.ts", guard: "platform.audit.read" },
   {
@@ -133,6 +140,14 @@ export const ROUTES: readonly RouteSpec[] = [
     accountParam: "accountId",
     // The harness sends no address: allowed callers get a validation error.
     probeStatus: 400,
+  },
+  // Free platform-domain addresses (ADR-0021): is a name available (no name → the rule it breaks, 200).
+  {
+    method: "GET",
+    path: "/api/accounts/:accountId/mailboxes/platform-address",
+    file: "app/api/accounts/[accountId]/mailboxes/platform-address/route.ts",
+    guard: "mailbox.manage",
+    accountParam: "accountId",
   },
   {
     method: "GET",
@@ -350,6 +365,16 @@ export const ROUTES: readonly RouteSpec[] = [
     guard: "platform.accounts.read",
     audits: "staff.account_viewed",
     probeStatus: 404,
+  },
+  // Staff create a free platform-domain address in a customer account (no password; audited in that account's log).
+  {
+    method: "POST",
+    path: "/api/platform/accounts/:accountId/mailboxes",
+    file: "app/api/platform/accounts/[accountId]/mailboxes/route.ts",
+    guard: "platform.mailbox.create",
+    accountParam: "accountId",
+    // The harness sends no address: allowed callers get a validation error.
+    probeStatus: 400,
   },
   // Webmail BFF (ADR-0003, ADR-0018): served on the webmail origin only (host-routing.ts).
   {
