@@ -43,7 +43,7 @@ test("a Global Administrator suspends an account and a person, the customer sees
   await openAccount(page, u.run, s.accountName);
 
   // The account.
-  await page.getByRole("button", { name: "Suspend account…" }).click();
+  await page.getByRole("button", { name: "Suspend account", exact: true }).click();
   const accountPanel = page.getByRole("dialog", { name: "Suspend this account" });
   await accountPanel.getByLabel("Reason").selectOption({ label: "Sending spam" });
   await accountPanel.getByLabel(/Internal note/).fill("e2e: reported by a receiving provider");
@@ -53,7 +53,7 @@ test("a Global Administrator suspends an account and a person, the customer sees
 
   // The person (their row in the People tab).
   const memberRow = page.getByRole("row", { name: new RegExp(s.member.replace(/[.]/g, "\\.")) });
-  await memberRow.getByRole("button", { name: "Suspend person…" }).click();
+  await memberRow.getByRole("button", { name: "Suspend person", exact: true }).click();
   await page.getByRole("dialog", { name: "Suspend this person" }).getByLabel("Reason").selectOption("abuse");
   await submitPanel(page, "Suspend this person", "Suspend person", u.password);
   await expect(memberRow.getByRole("button", { name: "Lift suspension" })).toBeVisible();
@@ -85,7 +85,7 @@ test("a Global Administrator suspends an account and a person, the customer sees
   await submitPanel(page, "Lift the suspension of this person", "Lift suspension", u.password);
   await page.getByRole("button", { name: "Lift suspension" }).first().click();
   await submitPanel(page, "Lift the suspension of this account", "Lift suspension", u.password);
-  await expect(page.getByRole("button", { name: "Suspend account…" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Suspend account", exact: true })).toBeVisible();
   await signOut(page);
 
   // Everything works again.

@@ -93,7 +93,7 @@ export function SuspensionControl({
         className={suspended ? secondaryButtonClass : dangerButtonClass}
       >
         {suspended ? <RotateCcw className="size-4" aria-hidden /> : <Ban className="size-4" aria-hidden />}
-        {suspended ? "Lift suspension" : `Suspend ${noun}…`}
+        {suspended ? "Lift suspension" : `Suspend ${noun}`}
       </button>
     );
   }
