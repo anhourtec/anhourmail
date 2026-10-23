@@ -56,8 +56,8 @@ sidebar, and a bottom action bar on phones.
   `allow-same-origin` on the script-less frame (the parent could then read `scrollHeight`), or an inert twin of the
   message in the page's DOM to measure — both change the isolation model, so neither is done without a decision.
 - **Webmail API CSP:** every `/api/webmail/*` response carries a CSP (`route()` adds `default-src 'none';
-frame-ancestors 'none'` unless the route sets its own sandboxing one). The app-wide CSP in `next.config.mjs` is
-  not applied there, because a config header of the same name replaced the routes' own CSPs (found in this slice).
+frame-ancestors 'none'` unless the route sets its own sandboxing one). `next.config.mjs` sets no CSP at all, because
+  a config header of the same name replaced the routes' own CSPs; `src/proxy.ts` sets each page's one policy.
 
 ### Compose and send (slice 2)
 

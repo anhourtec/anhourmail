@@ -83,6 +83,12 @@ on an Owner's or admin's mailbox is recorded as `denied` (`forbidden`). The reco
 meta includes `suspensionMismatches` and `requeued`.
 `mailbox.deleted` stays reserved for an immediate deletion without a grace period (not offered today).
 
+Storage: `job:quota-cap` writes `mailbox.quota_changed` as the system **in the mailbox's account scope** (meta
+`fromGb`, `toGb`, `planGb`, `usedBytes`, `abovePlan`, `reason: "plan_storage_reduced"`), so the account's admins see
+why a quota went down and when one was kept above the plan; a mailbox it can't lower is reported in the job log, not
+audited. The scheduler's storage measurements (`job:storage-usage`, every 10 minutes) are **not audited**: they record
+an observation of the mail server, not a change anyone asked for, and would flood the log.
+
 First platform administrator: `platform.admin_bootstrapped` is written by the system actor `bootstrap-admin` (worker
 job `job:bootstrap-admin`, deploy/README.md "First platform administrator") in the **platform** scope, with the new
 login as the target (label = the email). Success meta: `role` (`global_admin`) and `linkExpiresAt`; never the
@@ -126,6 +132,17 @@ newest first with a `before` cursor.
 Signed-out and identity events carry the request's client address (TRUST_PROXY rules, the same one the rate limiter
 uses): `account.created` (sign-up), `auth.password_reset_requested`, `auth.email_verification_sent` and
 `auth.email_verified`, like every sign-in event. The IP is the only request detail they keep (no user agent).
+
+Staff suspension (`platform.account.suspend`, roles.md guard rail 17): `trust.suspended` and `trust.unsuspended`, always
+by staff (`staffPath`), written through `mutation()` with `copies` so one unit of work records every scope. An
+account: target `account` (label = the account name), the entry in the **account's own log** (meta `reason` — the
+category in plain words —, `reasonCategory`, `mailboxesSuspended` / `mailboxesResumed`, `mailboxesStillHeld`,
+`catchAllOff`) and a copy in the **platform** log that alone adds `internalNote`. A person: target `user` (label = the
+masked email), the entry in the **platform** log (with `internalNote`, `sessionsRevoked`) and a copy in **each of their
+accounts' logs** without the note. Refusals are `denied`: `step_up_required`, `act_as`, `staff` (target holds a
+platform role), `self`, `not_found` and `forbidden` (the last two in the platform log only); a member's request to a
+suspended account is `denied` `account_suspended` in that account's log. The mailbox jobs it queues aren't audited
+again. A suspended person's refused sign-in is `auth.sign_in_failed` denied `sign_in_requirement` (identity layer).
 
 Free platform addresses (ADR-0021): `mailbox.created` with meta `platformAddress: true` in the account's scope;
 refusals are `denied` with `email_unverified` (sign-in email not confirmed) or `act_as`, failures `failed` with

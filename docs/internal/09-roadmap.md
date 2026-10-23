@@ -108,6 +108,9 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
 
 - Encryption at rest for the provider layer: LUKS on the mail volume (key off-disk), client-side encrypted off-server backups, DNSSEC + DANE on `mx1`, MTA-STS `enforce` after clean TLS-RPT (ADR-0016).
 - Trust tiers enforced end to end, outbound counters fail-closed, Stalwart throttles pushed from the control plane, detection signals, abuse queue, `abuse@` workflow, FBL ingestion, monitoring and alerts, backups + first restore drill.
+- Staff spam/abuse metrics per account on Platform → account (outbound volume, bounces, complaints, blocklist hits),
+  feeding the manual staff suspension that exists today (`03-anti-spam-and-abuse.md` "Staff suspension"); later the
+  Trust & Safety Administrator gets suspension once the abuse queue exists.
 - **Decision required:** the free-tier launch posture (`03-anti-spam-and-abuse.md` "Free-tier risk").
 - **Exit:** a red-team run (scripted spam attempts from new free and paid accounts) is stopped within the published limits; restore drill passes; `security-reviewer` pass on all abuse logic.
 

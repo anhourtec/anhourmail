@@ -140,6 +140,29 @@ Each produces an `AbuseEvent` (`04-data-model.md`) and an audit entry.
 3. Close: data deleted after the retention window. Severe cases (CSAM, credible threats) are preserved and reported per legal obligations; this path is documented in a runbook.
 4. `abuse@anhourmail.com` and `postmaster@` are monitored (RFC 2142), with first response ≤ 24 h.
 
+### Staff suspension (built 2026-10-23)
+
+Until the Phase 6 abuse queue exists, a Global Administrator suspends by hand (`platform.account.suspend`; roles.md
+guard rail 17; code `packages/core/src/platform/suspension.ts`). Procedure:
+
+1. Confirm the signal in the platform audit and the account's page (Platform → Customer accounts → the account):
+   sign-ups and sign-ins from one network, abuse reports to `abuse@`, a receiving provider's complaint, a legal order.
+2. Choose the scope. **Suspend account** when the account itself is the problem (every mailbox stops: no sign-in,
+   sending or receiving; mail kept; its people see only a notice). **Suspend person** (People tab) when one person's
+   login is compromised or abusive in an otherwise fine account (their sessions end, their sign-in is refused, the
+   mailboxes assigned to them stop). Staff and yourself can't be suspended here.
+3. Pick the reason category (spam, abuse, phishing or impersonation, payment, legal, other — what the customer sees)
+   and write the internal note: ticket or report reference, what you saw. The note never leaves staff views.
+4. Confirm with a fresh step-up. The customer is emailed the category and the appeal address (`SUPPORT_EMAIL`).
+5. Appeals arrive at `support@anhourtec.com`. To restore, open the account and **Lift suspension**: only the mailboxes
+   the suspension stopped come back (within a minute or two); ones the customer had suspended stay suspended.
+
+Mail sent to a suspended mailbox is bounced (Stalwart `emailReceive` denied; `SUSPENDED_PERMISSIONS`). Nothing is
+deleted; closing an account after a suspension is a separate, later decision.
+
+**Planned (Phase 6, not built):** per-account staff metrics on the account page — outbound volume, bounces,
+complaints and blocklist hits — so the decision in step 1 doesn't depend on outside reports.
+
 ## AUP summary (full text in the public legal pages, Phase 2)
 
 - No bulk, marketing or unsolicited commercial email on the base plans (CASL; `BULK_MAIL.allowedOnBasePlans = false` in `packages/shared`). Newsletters to opted-in lists are allowed **only** through the paid bulk add-on, which runs on a separate domain and IP pool with its own controls (below).

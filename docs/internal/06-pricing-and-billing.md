@@ -1,25 +1,42 @@
 # 06 — Pricing and billing
 
-Last updated: 2026-10-21. Research: `research/market-and-legal.md` (not legal or tax advice; confirm with an accountant).
+Last updated: 2026-10-23. Research: `research/market-and-legal.md` (not legal or tax advice; confirm with an accountant).
 
 ## Plans
 
 Plans, prices, storage and limits are defined once in `packages/shared/src/plans.ts` (`PLANS`, `BILLING`). The console, marketing pricing table and docs import them. **This document does not restate the numbers.** In outline:
 
 - **Free:** `@anhourmail.com`, invite-only, limited sending (`sending.ts` tier `new`).
-- **Plus:** custom domains, unlimited aliases, catch-all, masked aliases, more storage, annual price in USD and CAD.
+- **Plus:** custom domains, unlimited aliases, catch-all, masked aliases, ten mailboxes with more storage each, fair
+  use per account, annual price in USD and CAD.
 - **Supporter:** Plus plus a badge and early features, pay-what-you-want above a minimum, annual.
 - Annual only. No lifetime deals. No trial on paid plans (Free is the trial). 14-day refund window. Prices are **tax-exclusive**.
 
-### Open pricing decision (flagged to the owner)
+### Pricing decision (maintainer, 2026-10-23)
 
-Research finds US$12/yr viable as a **founding price** but thin as the long-term list price. A US sale nets about US$11 after 7–9% fees, worst-case storage at the full 30 GB is about US$7.50/yr, and one dispute costs CA$15–30 (`research/market-and-legal.md` §6). It recommends:
+Supersedes the open decision recorded on 2026-10-21 (founding price, soft quota, smaller free storage). The numbers live
+in `plans.ts`; in outline:
 
-- US$15 / CA$20 standard, with US$12 / CA$15 locked for founding members.
-- A soft quota on Plus storage with add-ons.
-- Free storage cut from 10 GB to 1–5 GB.
+- **Free:** $0, one `@<platform domain>` address, 1 GB.
+- **Plus:** yearly, lower than the 2026-10-21 placeholder; up to 10 mailboxes included (`includedMailboxes`), 10 GB per
+  mailbox (`storageGb`), unlimited custom domains and aliases, catch-all, add people.
+- **Supporter:** pay what you want above a lower minimum; everything in Plus plus the badge.
+- **No hard limits on paid accounts, fair use instead:** `fairUseStorageGb` (30 GB stored per account across its
+  mailboxes), then `extraStoragePricePerGb` per GB per year; mailboxes beyond the included ten at `extraMailboxPrice`
+  per mailbox per year (CAD rounded up to a clean figure). The pricing page and docs render the line with
+  `fairUseText()`.
+- **Until billing exists (Phase 5)** nothing is charged: an account can't create more than `MAX_MAILBOXES` (= the ten
+  included), and the copy says more mailboxes come with billing. Fair-use storage isn't metered yet; per-mailbox
+  quotas (`storageGb`) are the hard limit today. Charging code is Phase 5.
+- **Storage per mailbox went down** (Free 10 → 1 GB, Plus and Supporter 30 → 10 GB). Existing mailboxes are brought down
+  by the one-off `job:quota-cap` (`08-operations.md`): never below the mail they hold (rounded up to the next GB), each
+  change audited in the account as `mailbox.quota_changed` with reason `plan_storage_reduced`; the console shows a
+  mailbox kept above the plan as such.
 
-**Current values in code are unchanged until the owner decides.**
+**Cost model per paying account (rough, USD per year):** card fee about $0.56 on the Plus price; storage about $3 for a
+typical account (a few GB, three copies, backups); about $5.40 left as margin. At that margin about **210 paying
+accounts** cover the production topology's fixed costs (`09-roadmap.md` "Path to production"). Heavy accounts pay for
+their own storage above the fair-use allowance, so the worst case is bounded rather than absorbed.
 
 ## Stripe design
 

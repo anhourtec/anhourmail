@@ -35,6 +35,8 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 | #    | Migration                          | Commit      | Date       | Change                                                                                                   | Rollback        |
 | ---- | ---------------------------------- | ----------- | ---------- | -------------------------------------------------------------------------------------------------------- | --------------- |
+| 0017 | `0017_staff_suspension`            | uncommitted | 2026-10-23 | `mailbox_staff_hold`; suspension reason, note, time and staff id on `customer_account`, `user_profile`   | Safe            |
+| 0016 | `0016_mailbox_storage_used`        | uncommitted | 2026-10-23 | `mailbox.storage_used_bytes`, `mailbox.storage_checked_at` (last storage measurement; sizes only)        | Safe            |
 | 0015 | `0015_platform_addresses`          | uncommitted | 2026-10-23 | `retired_platform_address` (platform-domain addresses never reissued to another account)                 | Safe            |
 | 0014 | `0014_mailbox_password_grant`      | uncommitted | 2026-10-23 | `mailbox.pending_password_grant` (the web app's HMAC grant for the waiting hash)                         | Safe            |
 | 0013 | `0013_mailbox_password`            | uncommitted | 2026-10-23 | `mailbox.pending_password_hash` (argon2id hash waiting for the worker), `mailbox.password_credential_id` | Safe            |
@@ -56,6 +58,15 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 Each migration gets a section in this shape:
 
 ```
+### 0016_mailbox_storage_used · uncommitted · 2026-10-23 · Safe
+
+- Added: `mailbox.storage_used_bytes` (bigint, nullable), `mailbox.storage_checked_at` (timestamptz, nullable) — written
+  by the scheduler's `job:storage-usage` from Stalwart's `usedDiskQuota`; a size only, never anything about the mail.
+- Changed: —
+- Removed: —
+- Data: none. Existing mailboxes read as "not measured yet" until the first run (within 10 minutes).
+- Rollback: drop the two columns (the console stops showing storage used; nothing else depends on them).
+
 ### 0000_name · `<sha>` · YYYY-MM-DD · <level>
 - Added:
 - Changed:
@@ -63,6 +74,17 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0017_staff_suspension · uncommitted · 2026-10-23 · Safe
+
+- Added: `mailbox_staff_hold` (mailbox_id → mailbox, cascade; kind `account` | `person`; pk both) — the mailboxes a
+  staff suspension suspended, so lifting resumes exactly those; `customer_account.suspension_reason`,
+  `suspension_note` (staff-only), `suspended_at`, `suspended_by`; the same four on `user_profile`.
+- Changed: — (`customer_account.status` and `user_profile.suspended` already existed; a suspension sets them).
+- Removed: —
+- Data: none. Nobody is suspended until staff do it.
+- Rollback: lift every suspension first (or accept that held mailboxes stay suspended), then drop the table and the
+  eight columns.
 
 ### 0015_platform_addresses · uncommitted · 2026-10-23 · Safe
 

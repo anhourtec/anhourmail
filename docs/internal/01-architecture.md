@@ -96,6 +96,10 @@ Two identities, deliberately separate:
 
 We **never store mailbox passwords** (rule 23). Stalwart hashes them.
 
+Every new console or mailbox password passes a breached-password check first (core port `BreachedPasswords`, Pwned
+Passwords range adapter with k-anonymity, better-auth `hooks.before` plugin for console endpoints; fail open; the web
+container is the only caller and the browser never is — `07-security.md` "Breached-password check").
+
 ### Console sign-in factors (2026-10-22; `07-security.md` "Sign-in factors")
 
 better-auth's **two-factor** plugin (TOTP + recovery codes) and **passkey** plugin (`@better-auth/passkey`, WebAuthn via
@@ -142,7 +146,8 @@ Built in Phase 4 slice 1 (2026-10-22; ADR-0018):
    forwards through a **per-user queue with ≤ 4 in flight**, retrying `limit` errors with jittered backoff. Message
    bodies come from `/api/webmail/messages/:id`, **sanitised on the server** (`server/webmail/sanitize.ts`) and shown in
    a sandboxed `srcdoc` frame; attachments stream from `/api/webmail/download/:blobId` as `attachment`, `nosniff`.
-   **The browser never sees a Stalwart token.** Webmail pages get a nonce-based CSP from `src/proxy.ts`, which
+   **The browser never sees a Stalwart token.** Webmail pages get a nonce-based CSP from `src/proxy.ts` (console pages
+   get their own, stricter one there too; `07-security.md` "Standards"), which
    also sends visits to the webmail app page without a session cookie straight to sign-in (presence only; the page
    and the BFF still validate the session).
    **Contacts** never pass through the proxy (it refuses the contacts capability): dedicated `/api/webmail/contacts*`
@@ -174,6 +179,11 @@ Why the host split: the origin that renders untrusted email HTML (`mail.`) is is
   person, result, UTC dates); views carry only the network part of the IP and no user agent; staff and act-as are
   always labelled "Anhourtec staff". Staff look-up of an account (`packages/core/src/platform`) is metadata only and
   writes `staff.account_viewed` into that account's chain.
+- Staff suspension (`packages/core/src/platform/suspension.ts`, Global Administrator, fresh step-up): an account's
+  status becomes `suspended` and its people get 403 `account_suspended` on every account permission (`UserActor
+.suspendedAccountIds`, checked in `authorize()`); a person's sign-in is refused through the same session-refusal
+  path as sign-in requirements (`sessionRefusalFor`). Mailboxes are suspended through the provisioning job like any
+  suspension, each with a hold (`mailbox_staff_hold`) so lifting resumes only those.
 
 ## Tenancy
 
@@ -252,6 +262,14 @@ scheduler ─► job:reconcile (hourly) ─► desired vs Stalwart ─► drift 
 scheduler ─► job:mailbox-purge (hourly) ─► deleting mailboxes past purge_after: destroy the Stalwart account, then
              the mailbox + alias rows; audit platform.mailbox_purged (system, account scope). The only path that
              deletes mail.
+scheduler ─► job:storage-usage (every 10 min, provisioning key) ─► batched x:Account/get (name, usedDiskQuota only)
+             for every mailbox with a stalwart_id ─► mailbox.storage_used_bytes / storage_checked_at. Sizes only
+             (rule 24); a failed batch keeps the last good value; not audited (an observation, not a change). The
+             console reads the columns from Postgres — the web app gets no new Stalwart access (ADR-0020).
+one-off   ─► job:quota-cap (deploy step after a plan's storage per mailbox goes down) ─► reads usage the same way,
+             lowers quota_bytes to the plan's storageGb but never below the mail held (rounded up to the next GB),
+             queues mailbox.ensure (→ quotas.maxDiskQuota); audit mailbox.quota_changed (system, account scope,
+             reason plan_storage_reduced). Never deletes mail; re-runnable.
 ```
 
 Mailbox lifecycle (status in `mailbox.status`; every change is a console mutation that queues `mailbox.ensure`):

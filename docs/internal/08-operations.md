@@ -40,21 +40,46 @@ The public repo's `docker-compose.yml` is **dev/CI only**. Production compose fi
 
 ## Monitoring and alerts
 
-| Signal                                                   | Source                                                                       | Alert                                 |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------- |
-| `/api/health/ready` non-200                              | External uptime check                                                        | Page                                  |
-| Stalwart `/healthz/ready`, queue size, delivery failures | Prometheus `/metrics/prometheus` (Basic auth; Community metrics are limited) | Queue > N for 15 min; deferrals spike |
-| Blocklists (Spamhaus, Barracuda, Talos, …)               | Scheduler daily sweep                                                        | Any listing                           |
-| Google Postmaster spam rate, Microsoft SNDS, Yahoo CFL   | Dashboards + FBL ingestion                                                   | Spam rate ≥ 0.1%                      |
-| OVH anti-spam IP block                                   | OVH API poll                                                                 | Immediate page                        |
-| TLS certificate expiry (HTTP + mail)                     | Scheduler                                                                    | < 14 days                             |
-| Backup job success, restore drill                        | Scheduler                                                                    | Any failure                           |
-| Audit hash-chain verification                            | Scheduler                                                                    | Any break                             |
-| Reconciler drift                                         | Worker                                                                       | Any drift                             |
-| Worker/scheduler heartbeat                               | Container healthcheck                                                        | Unhealthy                             |
-| Disk usage (Stalwart volume, Postgres)                   | Node exporter                                                                | > 75%                                 |
+| Signal                                                   | Source                                                                       | Alert                                   |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------- |
+| `/api/health/ready` non-200                              | External uptime check                                                        | Page                                    |
+| Stalwart `/healthz/ready`, queue size, delivery failures | Prometheus `/metrics/prometheus` (Basic auth; Community metrics are limited) | Queue > N for 15 min; deferrals spike   |
+| Blocklists (Spamhaus, Barracuda, Talos, …)               | Scheduler daily sweep                                                        | Any listing                             |
+| Google Postmaster spam rate, Microsoft SNDS, Yahoo CFL   | Dashboards + FBL ingestion                                                   | Spam rate ≥ 0.1%                        |
+| OVH anti-spam IP block                                   | OVH API poll                                                                 | Immediate page                          |
+| TLS certificate expiry (HTTP + mail)                     | Scheduler                                                                    | < 14 days                               |
+| Backup job success, restore drill                        | Scheduler                                                                    | Any failure                             |
+| Audit hash-chain verification                            | Scheduler                                                                    | Any break                               |
+| Reconciler drift                                         | Worker                                                                       | Any drift                               |
+| Storage measurement (`job:storage-usage`)                | Scheduler log                                                                | `failedBatches` > 0 three runs in a row |
+| Worker/scheduler heartbeat                               | Container healthcheck                                                        | Unhealthy                               |
+| Disk usage (Stalwart volume, Postgres)                   | Node exporter                                                                | > 75%                                   |
 
 Alerts go to the operator by email (via a separate provider, so a broken mail stack can still page) and push.
+
+## Scheduled and one-off jobs
+
+The scheduler container runs every periodic job (rule 17; `apps/worker/src/scheduler.ts`), one at a time, each in its
+own process. One-off jobs run in the worker image with `npm run -w @anhourmail/worker job:<name>`.
+
+| Job                    | When             | Key          | What                                                                                                                                                                                                                    |
+| ---------------------- | ---------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `job:storage-usage`    | Every 10 minutes | Provisioning | Reads each mailbox's `usedDiskQuota` (with its name, nothing else) in batches of 100 and records it on the mailbox row for the console. Logs `failedBatches` as a warning; those mailboxes keep their last good value.  |
+| `job:quota-cap`        | Once, on deploy  | Provisioning | After a plan's storage per mailbox goes down: lowers quotas above the plan, never below the mail held (rounded up to the next GB); queues `mailbox.ensure`; audited. Logs `keptAbovePlanIds` and `unmeasured` (re-run). |
+| `job:mailbox-backfill` | Once, on deploy  | —            | Queues `mailbox.ensure` for every active mailbox (customer Sieve lock).                                                                                                                                                 |
+
+**Deploy step for the 2026-10-23 storage change** (Free 1 GB, Plus and Supporter 10 GB per mailbox): after the release
+is up and the worker is running, run `job:quota-cap` once, check its log (`capped`, `keptAbovePlan`, `unmeasured: 0`;
+re-run if any were unmeasured), and record the counts in `handoff.md`. Mailboxes kept above the plan show it in the
+console and in their account's audit log (`mailbox.quota_changed`, `abovePlan: true`).
+
+## Suspending an account or a person
+
+Staff do it from the console (Global Administrator, Platform → Customer accounts → the account): **Suspend account…**
+or, in the People tab, **Suspend person…**, then a reason category, an internal note and a fresh step-up. The
+procedure and when to use which is in `03-anti-spam-and-abuse.md` "Staff suspension". The worker applies the mailbox
+changes like any suspension (jobs `mailbox.ensure`); if one gives up, the reconciler reports the mismatch and the
+mailbox panel shows "not in force yet". Appeals come to `support@anhourtec.com`; **Lift suspension** restores.
 
 ## Runbooks
 

@@ -26,10 +26,20 @@ Last updated: 2026-10-22.
 ## Standards
 
 - OWASP ASVS L2 as the baseline for the console and BFF. OWASP Top 10 reviewed per release.
-- Passwords: salted argon2id only ("Password storage" below), zxcvbn strength check, breach-list check (k-anonymity, Phase 3 decision).
+- Passwords: salted argon2id only ("Password storage" below), zxcvbn strength check (not built), breached-password check with k-anonymity ("Breached-password check" below; built 2026-10-23).
 - TLS 1.2+ only with AEAD suites (Stalwart cannot negotiate 1.0/1.1), no AUTH before STARTTLS. HSTS with preload once stable. MTA-STS enforce, TLS-RPT, DANE when DNSSEC is in place, REQUIRETLS advertised. Encryption layers, zero-access mode and the claims we may make: `12-encryption-and-security-posture.md` (ADR-0016).
 - Sign-in: TOTP + WebAuthn security keys/passkeys + recovery codes for the console ("Sign-in factors" below); per-device scoped app passwords for mail protocols (Stalwart has no WebAuthn).
 - Cookies: `__Host-` prefix, `Secure`, `HttpOnly`, `SameSite=Lax`, host-only (separate for `app.` and `mail.`).
+- Content-Security-Policy: every page on every origin (console, webmail, site) gets a per-request nonce policy with
+  `'strict-dynamic'` from its app's `src/proxy.ts`; no `next.config` CSP, so a response carries exactly one. Console
+  and site: `default-src 'self'; script-src 'self' 'nonce-…' 'strict-dynamic'; style-src 'self' 'unsafe-inline';
+img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self';
+frame-ancestors 'none'` (`apps/web/src/server/console-csp.ts`, `apps/site/src/lib/csp.ts`); the webmail adds
+  `frame-src 'self'`, `worker-src 'self'`, `blob:` images and `data:` fonts (`server/webmail/csp.ts`). Dev adds
+  `'unsafe-eval'` only. API responses get `default-src 'none'; frame-ancestors 'none'` (webmail print, preview and
+  raw routes set their own `sandbox` policy). The site therefore renders per request (a prerendered page can't carry
+  a fresh nonce). `tests/e2e/csp.spec.ts` pins the headers; the e2e `consoleErrors` fixture fails any journey with a
+  `securitypolicyviolation`.
 - Secrets: AES-256-GCM, key ring with key ids, HKDF-derived keys, AAD per row, required in production, re-encryption job (`research/reference-patterns.md` pattern 5). Implemented in `packages/server/src/keyring.ts` (`SECRETS_KEYRING="id:base64key,…"`, first = active; dev derives a key from `BETTER_AUTH_SECRET`); first user: webmail session tokens. The re-encryption job is still to come (`keyIdOf` finds values under a retired key).
 - Logging: JSON, request ids, redaction list (`packages/server/src/log.ts`), and no `console.*` in server code (`check:logging`).
 - Dependencies: exact versions, licence allowlist, weekly update review.
@@ -39,16 +49,54 @@ Last updated: 2026-10-22.
 Decision 2026-10-21 (maintainer): passwords are stored only as **salted hashes from a deliberately slow
 algorithm — argon2id**.
 
-| Secret                                 | Where                            | How                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| -------------------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Console password (better-auth)         | Postgres `auth_account.password` | argon2id PHC string, random 16-byte salt per hash, OWASP baseline `m=19456 KiB, t=2, p=1`, 32-byte output (`packages/adapters/src/auth/password.ts`, wired into better-auth via `emailAndPassword.password`). `needsRehash()` flags weaker parameters for upgrade on next sign-in.                                                                                                                                                                                                                                                                                                                    |
-| Mailbox password (IMAP/POP3/SMTP/JMAP) | Stalwart's store                 | The control plane hashes with the same argon2id parameters and sends the **PHC string**, never the plaintext, to Stalwart's management API; Stalwart stores and verifies it as-is (verified 2026-10-21: IMAP 993, POP3 995, SMTP 465 AUTH and JMAP sign-ins pass with pre-hashed credentials — `npm run stack:verify`). Because Stalwart's own strength check only runs on plaintext, the rules run in the control plane before hashing (`mailboxPasswordProblem`, the console's 12-character minimum plus what breaks sign-in; a breached-password check is not built yet). See "Mailbox passwords". |
-| App passwords                          | Stalwart                         | Generated by Stalwart (`app_` + 36 random lowercase letters and digits) when the control plane asks, stored hashed by Stalwart, shown to the person once in the create response; never stored, logged or audited by us ("App passwords" below).                                                                                                                                                                                                                                                                                                                                                       |
-| API keys / invite / reset tokens       | Postgres                         | Only a SHA-256 of a high-entropy random token is stored (tokens are not passwords; slow hashing is unnecessary).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| Third-party secrets                    | Postgres                         | AES-256-GCM with a key ring (CLAUDE.md rule 16) — encryption, not hashing, because we must use them.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Secret                                 | Where                            | How                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| -------------------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Console password (better-auth)         | Postgres `auth_account.password` | argon2id PHC string, random 16-byte salt per hash, OWASP baseline `m=19456 KiB, t=2, p=1`, 32-byte output (`packages/adapters/src/auth/password.ts`, wired into better-auth via `emailAndPassword.password`). `needsRehash()` flags weaker parameters for upgrade on next sign-in.                                                                                                                                                                                                                                                                                                                                      |
+| Mailbox password (IMAP/POP3/SMTP/JMAP) | Stalwart's store                 | The control plane hashes with the same argon2id parameters and sends the **PHC string**, never the plaintext, to Stalwart's management API; Stalwart stores and verifies it as-is (verified 2026-10-21: IMAP 993, POP3 995, SMTP 465 AUTH and JMAP sign-ins pass with pre-hashed credentials — `npm run stack:verify`). Because Stalwart's own strength check only runs on plaintext, the rules run in the control plane before hashing (`mailboxPasswordProblem`, the console's 12-character minimum plus what breaks sign-in), then the breached-password check ("Breached-password check"). See "Mailbox passwords". |
+| App passwords                          | Stalwart                         | Generated by Stalwart (`app_` + 36 random lowercase letters and digits) when the control plane asks, stored hashed by Stalwart, shown to the person once in the create response; never stored, logged or audited by us ("App passwords" below).                                                                                                                                                                                                                                                                                                                                                                         |
+| API keys / invite / reset tokens       | Postgres                         | Only a SHA-256 of a high-entropy random token is stored (tokens are not passwords; slow hashing is unnecessary).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Third-party secrets                    | Postgres                         | AES-256-GCM with a key ring (CLAUDE.md rule 16) — encryption, not hashing, because we must use them.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 Never: plaintext, reversible encryption, unsalted or fast hashes (MD5/SHA-x) for passwords; never log or audit
 password material (redaction list).
+
+## Breached-password check
+
+Decision 2026-10-23 (maintainer): every **new** password is checked against the public Pwned Passwords corpus and
+refused when it appears there ("This password has appeared in a data breach. Choose a different one.";
+`BREACHED_PASSWORD` in `packages/shared/src/security.ts`). No count or count bucket is shown: the fact of the breach is
+what matters, and a number invites "only 3 times, fine".
+
+- **Where:** console sign-up, password reset (including the emailed set-password link a new platform administrator
+  gets), change password and set password (better-auth plugin `packages/adapters/src/auth/breached-plugin.ts`, a
+  `hooks.before` on those endpoints, error code `PASSWORD_BREACHED`); invite acceptance that creates a login
+  (`acceptInvite`); mailbox create and free-address claim (`createMailbox`), admin reset (`resetMailboxPassword`) and
+  the webmail's own change (`changeOwnMailboxPassword`) — core error `BreachedPasswordError` (`password_breached`, 400).
+  Sign-in and step-up never check (existing passwords aren't re-judged).
+- **How (k-anonymity):** the port is core `BreachedPasswords` (`packages/core/src/security/breached-passwords.ts`); the
+  adapter (`packages/adapters/src/breached-passwords`) takes the SHA-1 of the UTF-8 password server-side, sends only the
+  first 5 hex characters to `https://api.pwnedpasswords.com/range/<prefix>` with `Add-Padding: true` and
+  `User-Agent: AnhourMail`, no redirects, a 2 s timeout covering the body, a 256 KiB body cap, and compares suffixes
+  locally (padding lines have count 0). The password, the full hash and the prefix are never logged, audited, cached
+  or sent anywhere else. The browser never calls the service (rule 29); the mailbox password is checked while it
+  still exists only in the request, before hashing.
+- **Order:** the length and shape rules first (their message wins), then the breach check. In core services the
+  lookup runs **before** the unit of work (no row lock is held across a network call) and only for an actor who has
+  the permission, so a 403 actor causes no outbound request; the answer is applied after the rules, inside the
+  mutation, so a refusal is audited as `failed` with `password_breached` (never the password).
+- **Fail open (decision):** unreachable, slow (> 2 s), non-200, oversized or malformed answer → `unknown` → the
+  password is accepted, with a `warn` log `breached-password check unavailable; password accepted` carrying only
+  `reason` (`network` | `timeout` | `status` | `too_large` | `malformed`), `status`, `errorName` and `durationMs`. The
+  check is advice on top of the length rules; a third-party outage must not block sign-up or a locked-out person's
+  reset. No metric or audit entry for it.
+- **Config:** `BREACHED_PASSWORD_CHECK` = `on` | `off` | `fake` (web only). Unset = `on`, except `NODE_ENV=test`
+  (`off`). `fake` (memory list in `packages/adapters/src/memory/breached-passwords.ts`, no network) is for dev and CI —
+  `.cicd/lib.sh` exports it so CI never calls out — and production refuses it at start-up. `.env.example` has `on`.
+- **Egress:** only the **web** container calls out. The staging compose gives web the `egress` network; a deployment
+  without HTTPS egress from web fails open on every check (watch for the warning). Node's `fetch` ignores
+  `HTTP(S)_PROXY`; an egress proxy would need explicit support.
+- **Why not better-auth's own `haveIBeenPwned` plugin:** it fails closed (500 when the service can't be reached), has
+  no timeout, fetches by itself (no port, no fake) and only covers better-auth endpoints, not mailbox passwords.
 
 ## Sign-in factors
 
@@ -243,8 +291,34 @@ Decision 2026-10-22 (security review of the people slice):
   (`addPeople`), `MAX_PEOPLE` per account (members + unexpired invites, re-checked under the account lock at
   acceptance) and `INVITE_EMAILS_PER_DAY` per account (a send log that counts resends; revoking gives nothing back).
   No personal Free account is created for such a login.
-- Invite emails have a generic subject; the account and inviter names (chosen by the inviter) appear only in the
-  body, escaped. Sending is rate-limited per caller (`invite` tier) on top of the daily cap.
+- Invite emails have a generic subject; the account and inviter names (chosen by people) appear only in the body,
+  escaped, and never inside one of our sentences: they are quoted mono facts (`Account: "…"`, `Invited by: "…"`), so
+  they read as data and can't pose as our wording (XSS audit run-28 C2). Sending is rate-limited per caller (`invite`
+  tier) on top of the daily cap.
+
+## Names people choose
+
+Decision 2026-10-23 (XSS audit run-28 N3): first, last and display names (sign-up, profile edits, logins created from
+an invite) and personal account names follow one shared rule set, `nameProblem` in `packages/shared/src/names.ts`:
+no C0/C1 control characters or DEL, no bidirectional-text controls (U+200E/F, U+202A–U+202E, U+2066–U+2069), no `@`
+(ASCII or fullwidth), and nothing URL-like (`://`, `www.`, or a dotted token whose last label looks like a top-level
+domain, e.g. `evil.example`). These names reach invite and notice emails and other people's consoles. Console: 400
+`INVALID_NAME` with the rule's sentence (`refuseBadNames` in `packages/adapters/src/auth/index.ts`); core: a
+`ValidationError` (`loginNames`). A personal account name that breaks the rules (e.g. a dotted email local part as the
+fallback) becomes "My account". Known false positives (accepted): a name written like `Mr.Smith` (no space).
+
+## Redirect targets at the identity endpoints
+
+Decision 2026-10-23 (XSS audit run-28 N2): better-auth 1.7.12 accepted an off-site `redirectTo` on
+`/request-password-reset` (the emailed link then carried it) and redirected `GET /reset-password/<token>?callbackURL=`
+to any URL. Our first plugin, `redirectGuardPlugin` (`packages/adapters/src/auth/redirect-guard.ts`), checks
+`callbackURL`, `redirectTo`, `errorCallbackURL` and `newUserCallbackURL` in the body and query of every identity
+endpoint before it runs: a same-origin path (one leading `/`, no `//`, backslashes, whitespace or control characters)
+or an absolute http(s) URL on our own `baseURL`/trusted origins, no credentials; anything else is 403
+`INVALID_REDIRECT`. The forgot-password form sends the relative `/reset-password`. Integration tests prove
+`https://evil.example`, `//evil.example`, `/\evil.example` and `https:evil.example` are refused on request-password-reset,
+the emailed reset link and verify-email.
+
 - Tokens: 256-bit, only the SHA-256 is stored, the token travels in the URL path (`/invite/<token>`) and in the
   sign-in `next` query, never in an API response or our logs (`logPath` redacts it). Pages carrying it send no
   referrer. **Production NGINX must not log the `/invite/<token>` path or the `next` query** (`deploy/README.md`).
