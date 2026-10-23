@@ -5,10 +5,21 @@
  * production = submission to our own Stalwart as the no-reply system mailbox (credentials from the private ops repo).
  * Never logs bodies or recipients (rule 24).
  */
-import nodemailer, { type Transporter } from "nodemailer";
+import nodemailer, { type SendMailOptions, type Transporter } from "nodemailer";
 import type SMTPTransport from "nodemailer/lib/smtp-transport";
 
-export type MailMessage = { to: string; subject: string; text: string; html: string };
+/**
+ * An inline image the HTML part shows by `cid:` (the email logo): carried in the message, never fetched from a URL, so
+ * opening a system email makes no remote request (CLAUDE.md rule 29).
+ */
+export type MailAttachment = { filename: string; contentType: string; /** Base64. */ content: string; cid: string };
+export type MailMessage = {
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+  attachments?: readonly MailAttachment[];
+};
 export type Mailer = { send(message: MailMessage): Promise<void> };
 
 /** The only query keys a transport URL may carry. Anything else (e.g. `logger`, `debug`) is refused. */
@@ -60,11 +71,32 @@ export function mailTransportOptions(url: string): SMTPTransport.Options {
   return opts;
 }
 
+/** What nodemailer is given for one message: inline attachments decoded from base64 and marked inline. */
+export function sendMailOptions(from: string, message: MailMessage): SendMailOptions {
+  const { attachments, ...rest } = message;
+  return {
+    from,
+    ...rest,
+    ...(attachments && attachments.length > 0
+      ? {
+          attachments: attachments.map((a) => ({
+            filename: a.filename,
+            contentType: a.contentType,
+            content: a.content,
+            encoding: "base64",
+            cid: a.cid,
+            contentDisposition: "inline" as const,
+          })),
+        }
+      : {}),
+  };
+}
+
 export function createMailer(opts: { url: string; from: string }): Mailer {
   const transport: Transporter = nodemailer.createTransport(mailTransportOptions(opts.url));
   return {
     async send(message) {
-      await transport.sendMail({ from: opts.from, ...message });
+      await transport.sendMail(sendMailOptions(opts.from, message));
     },
   };
 }

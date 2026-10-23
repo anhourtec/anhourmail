@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 
-import { createMailer, mailTransportOptions } from ".";
+import { createMailer, mailTransportOptions, memoryMailer, sendMailOptions } from ".";
 
 describe("mailTransportOptions", () => {
   it("parses the dev and production shapes with logging always off", () => {
@@ -51,5 +51,41 @@ describe("mailTransportOptions", () => {
       expect(message).toMatch(/^MAIL_TRANSPORT_URL/);
       expect(message).not.toContain("hunter2");
     }
+  });
+});
+
+describe("sendMailOptions", () => {
+  const message = { to: "kim@example.test", subject: "S", text: "T", html: "<p>H</p>" };
+
+  it("passes a message without attachments through as is, with the sender", () => {
+    expect(sendMailOptions("AnhourMail <no-reply@example.test>", message)).toEqual({
+      from: "AnhourMail <no-reply@example.test>",
+      ...message,
+    });
+    expect(sendMailOptions("f@example.test", { ...message, attachments: [] })).not.toHaveProperty("attachments");
+  });
+
+  it("hands inline images to nodemailer as base64, inline, with their content id", () => {
+    const out = sendMailOptions("f@example.test", {
+      ...message,
+      attachments: [{ filename: "logo.png", contentType: "image/png", content: "iVBORw0K", cid: "logo@x" }],
+    });
+    expect(out.attachments).toEqual([
+      {
+        filename: "logo.png",
+        contentType: "image/png",
+        content: "iVBORw0K",
+        encoding: "base64",
+        cid: "logo@x",
+        contentDisposition: "inline",
+      },
+    ]);
+  });
+
+  it("the memory mailer keeps attachments with the message", async () => {
+    const m = memoryMailer();
+    const attachments = [{ filename: "a.png", contentType: "image/png", content: "AA==", cid: "a@x" }];
+    await m.send({ ...message, attachments });
+    expect(m.sent[0]?.attachments).toEqual(attachments);
   });
 });
