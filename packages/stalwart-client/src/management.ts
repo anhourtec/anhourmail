@@ -409,6 +409,20 @@ export class StalwartManagement {
       }));
   }
 
+  /**
+   * Storage used by these accounts (`usedDiskQuota`, server-set, in bytes) with each one's name (local part): only those
+   * two properties, nothing about the mail. Ids that don't exist are left out. Needs `sysAccountGet` (provisioning key).
+   */
+  async accountUsage(ids: readonly string[]): Promise<{ id: string; name: string; usedBytes: number }[]> {
+    if (ids.length === 0) return [];
+    const list = await this.transport.getAll<{ id: string; name?: string; usedDiskQuota?: number }>(
+      "x:Account",
+      ["name", "usedDiskQuota"],
+      [...ids],
+    );
+    return list.map((a) => ({ id: a.id, name: a.name ?? "", usedBytes: a.usedDiskQuota ?? 0 }));
+  }
+
   /** One individual account by id, as a full address with whether it is suspended; undefined if it doesn't exist. */
   async getUser(id: string): Promise<{ id: string; address: string; suspended: boolean } | undefined> {
     const [account] = await this.transport.getAll<{

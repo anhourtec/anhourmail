@@ -155,6 +155,30 @@ describe("StalwartManagement", () => {
     ]);
   });
 
+  it("reads storage used for the given accounts only, name and usedDiskQuota only", async () => {
+    const asked: Record<string, unknown>[] = [];
+    const s = fakeServer({
+      "x:Account/get": (args) => {
+        asked.push(args);
+        return {
+          list: [
+            { id: "u1", name: "alice", usedDiskQuota: 1234 },
+            { id: "u2", name: "bob" },
+          ],
+          notFound: ["gone"],
+        };
+      },
+    });
+    const m = new StalwartManagement(transport(s.fetchImpl));
+    expect(await m.accountUsage([])).toEqual([]);
+    expect(asked).toHaveLength(0);
+    expect(await m.accountUsage(["u1", "u2", "gone"])).toEqual([
+      { id: "u1", name: "alice", usedBytes: 1234 },
+      { id: "u2", name: "bob", usedBytes: 0 },
+    ]);
+    expect(asked).toEqual([{ ids: ["u1", "u2", "gone"], properties: ["name", "usedDiskQuota"] }]);
+  });
+
   it("routes, listeners, singletons, web UI and reload", async () => {
     const sets: [string, Record<string, unknown>][] = [];
     const s = fakeServer({
