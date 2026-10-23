@@ -6,7 +6,17 @@ import type { MailServer } from "./ports";
 import { enqueueProvisioning, reconcile, requeueActiveMailboxes, runNextJob } from "./service";
 import { backoffMs, MAX_ATTEMPTS } from "./types";
 
-type Box = { address: string; quotaBytes: number; aliases: string[]; suspended: boolean };
+type Box = {
+  address: string;
+  quotaBytes: number;
+  aliases: string[];
+  suspended: boolean;
+  /** The argon2id hash the account was created with or last given (null: a random one). */
+  passwordHash: string | null;
+  passwordCredentialId: string;
+  /** The grant the last replacement carried. */
+  grant?: string | null;
+};
 
 type Revoked = { externalId: string; credentialId: string; createdAt: Date };
 
@@ -41,12 +51,29 @@ function fakeMailServer(opts: { failTimes?: number } = {}): MailServer & {
       }
       state.revoked.push(input);
     },
-    ensureMailbox: async ({ address, quotaBytes, suspended, aliases }) => {
+    ensureMailbox: async ({ address, quotaBytes, suspended, aliases, initialPasswordHash }) => {
       const existing = state.boxes.find((b) => b.address === address);
       const box = { address, quotaBytes, suspended, aliases: aliases.map((a) => a.address) };
       if (existing) Object.assign(existing, box);
-      else state.boxes.push(box);
-      return { externalId: `acc:${address}` };
+      else state.boxes.push({ ...box, passwordHash: initialPasswordHash, passwordCredentialId: "a" });
+      const now = state.boxes.find((b) => b.address === address);
+      return {
+        externalId: `acc:${address}`,
+        created: !existing,
+        passwordCredentialId: now?.passwordCredentialId ?? null,
+      };
+    },
+    setMailboxPassword: async ({ externalId, passwordHash, grant }) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error("mail server unavailable");
+      }
+      const box = state.boxes.find((b) => `acc:${b.address}` === externalId);
+      if (!box) throw new Error("no such account");
+      box.passwordHash = passwordHash;
+      box.grant = grant;
+      box.passwordCredentialId = String.fromCharCode(box.passwordCredentialId.charCodeAt(0) + 1);
+      return { credentialId: box.passwordCredentialId };
     },
     destroyMailbox: async ({ externalId, address }) => {
       if (externalId === null) return;
@@ -70,6 +97,7 @@ function fakeMailServer(opts: { failTimes?: number } = {}): MailServer & {
 
 const ensureArgs = (address: string, quotaBytes: number) => ({
   externalId: null,
+  initialPasswordHash: null,
   address,
   quotaBytes,
   suspended: false,
@@ -124,8 +152,17 @@ describe("provisioning jobs", () => {
     expect(await runNextJob(d, mail)).toBeNull();
     expect(mail.domains).toEqual(["example.test"]);
     expect(mail.boxes).toEqual([
-      { address: "owner@example.test", quotaBytes: 1000, aliases: ["hello@example.test"], suspended: false },
+      {
+        address: "owner@example.test",
+        quotaBytes: 1000,
+        aliases: ["hello@example.test"],
+        suspended: false,
+        passwordHash: null,
+        passwordCredentialId: "a",
+      },
     ]);
+    // The new account's Password credential is recorded for the reconciler.
+    expect(d.uow.state.mailboxPasswords).toEqual([{ mailboxId: "m1", pendingHash: null, credentialId: "a" }]);
     expect(d.uow.state.domains[0]?.stalwartId).toBe("dom:example.test");
     expect(d.uow.state.mailboxes[0]).toMatchObject({ status: "active", stalwartId: "acc:owner@example.test" });
     expect(d.uow.state.jobs.every((j) => j.status === "succeeded")).toBe(true);
@@ -706,5 +743,122 @@ describe("mailbox ownership and suspension guards", () => {
     await runNextJob(d, mail);
     expect(d.uow.state.jobs[0]?.status).toBe("failed");
     expect(d.uow.state.mailboxes[0]?.status).toBe("suspended");
+  });
+});
+
+const PHC = (n: number) => `$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaC${String(n)}`;
+
+describe("mailbox passwords (worker)", () => {
+  const provision = async (d: ReturnType<typeof setup>["d"], mail: ReturnType<typeof fakeMailServer>) => {
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    while (await runNextJob(d, mail));
+  };
+
+  it("creates the account with the password chosen at creation, records its credential and drops the hash", async () => {
+    const { d } = setup();
+    const mail = fakeMailServer();
+    d.uow.state.mailboxPasswords.push({ mailboxId: "m1", pendingHash: PHC(1), credentialId: null });
+    await provision(d, mail);
+    expect(mail.boxes[0]).toMatchObject({ passwordHash: PHC(1), passwordCredentialId: "a" });
+    expect(d.uow.state.mailboxPasswords).toEqual([
+      { mailboxId: "m1", pendingHash: null, credentialId: "a", grant: null },
+    ]);
+  });
+
+  it("applies a reset through its own job: only the hash, recorded credential, nothing kept afterwards", async () => {
+    const { d } = setup();
+    const mail = fakeMailServer();
+    await provision(d, mail);
+    await d.uow.run((r) => r.mailboxPasswords.setPending("m1", PHC(2), "grant-2"));
+    await enqueueProvisioning(d, { kind: "mailbox.password", subjectId: "m1" });
+    expect((await runNextJob(d, mail))?.kind).toBe("mailbox.password");
+    expect(mail.boxes[0]).toMatchObject({ passwordHash: PHC(2), passwordCredentialId: "b", grant: "grant-2" });
+    expect(d.uow.state.mailboxPasswords).toEqual([
+      { mailboxId: "m1", pendingHash: null, credentialId: "b", grant: null },
+    ]);
+    // Run again with nothing waiting: a no-op.
+    await enqueueProvisioning(d, { kind: "mailbox.password", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(mail.boxes[0]?.passwordCredentialId).toBe("b");
+  });
+
+  it("keeps a newer password set while the job ran for its own job", async () => {
+    const { d } = setup();
+    const mail = fakeMailServer();
+    await provision(d, mail);
+    await d.uow.run((r) => r.mailboxPasswords.setPending("m1", PHC(3), "grant-3"));
+    const set = mail.setMailboxPassword.bind(mail);
+    mail.setMailboxPassword = async (input) => {
+      const out = await set(input);
+      d.uow.state.mailboxPasswords[0]!.pendingHash = PHC(4); // a second change landed meanwhile
+      return out;
+    };
+    await enqueueProvisioning(d, { kind: "mailbox.password", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(d.uow.state.mailboxPasswords[0]).toMatchObject({ pendingHash: PHC(4), credentialId: "b" });
+  });
+
+  it("retries while the account isn't on the mail server, drops the hash for a deleting mailbox", async () => {
+    const { d } = setup();
+    const mail = fakeMailServer();
+    d.uow.state.mailboxPasswords.push({ mailboxId: "m1", pendingHash: PHC(5), credentialId: null });
+    await enqueueProvisioning(d, { kind: "mailbox.password", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(d.uow.state.jobs[0]).toMatchObject({
+      status: "queued",
+      lastError: "Error: mailbox is not on the mail server yet",
+    });
+    d.uow.state.mailboxes[0]!.status = "deleting";
+    d.uow.state.mailboxes[0]!.stalwartId = "acc:owner@example.test";
+    d.uow.state.jobs = [];
+    await enqueueProvisioning(d, { kind: "mailbox.password", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(d.uow.state.mailboxPasswords[0]?.pendingHash).toBeNull();
+  });
+
+  it("gives up after the last attempt: the hash is dropped, the mailbox status is untouched, and it's audited", async () => {
+    const { d, clock } = setup();
+    const ok = fakeMailServer();
+    await provision(d, ok);
+    const failing = { ...ok, setMailboxPassword: () => Promise.reject(new Error("mail server unavailable")) };
+    await d.uow.run((r) => r.mailboxPasswords.setPending("m1", PHC(6), "grant-6"));
+    await enqueueProvisioning(d, { kind: "mailbox.password", subjectId: "m1" });
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      await runNextJob(d, failing);
+      clock.set(new Date(clock.now().getTime() + backoffMs(i + 1)));
+    }
+    expect(d.uow.state.mailboxPasswords[0]).toMatchObject({ pendingHash: null, credentialId: "a" });
+    expect(d.uow.state.mailboxes[0]?.status).toBe("active");
+    const entry = d.uow.state.audit.at(-1);
+    expect(entry).toMatchObject({ action: "platform.provisioning_failed", target: { type: "mailbox.password" } });
+    expect(JSON.stringify(entry)).not.toContain("argon2id");
+  });
+
+  it("records the Password of a mailbox from before tracking once, and never overwrites a recorded one", async () => {
+    const { d } = setup();
+    const mail = fakeMailServer();
+    await provision(d, mail);
+    d.uow.state.mailboxPasswords[0]!.credentialId = null; // as if migrated from before
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(d.uow.state.mailboxPasswords[0]?.credentialId).toBe("a");
+    mail.boxes[0]!.passwordCredentialId = "z"; // replaced behind our back
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(d.uow.state.mailboxPasswords[0]?.credentialId).toBe("a"); // the reconciler still sees the difference
+  });
+
+  it("drops the hash of a creation that gave up before the account existed", async () => {
+    const { d, clock } = setup();
+    const mail: MailServer = { ...fakeMailServer(), ensureMailbox: () => Promise.reject(new Error("quota refused")) };
+    d.uow.state.mailboxPasswords.push({ mailboxId: "m1", pendingHash: PHC(7), credentialId: null });
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      await runNextJob(d, mail);
+      clock.set(new Date(clock.now().getTime() + backoffMs(i + 1)));
+    }
+    expect(d.uow.state.mailboxes[0]?.status).toBe("failed");
+    expect(d.uow.state.mailboxPasswords[0]?.pendingHash).toBeNull();
   });
 });

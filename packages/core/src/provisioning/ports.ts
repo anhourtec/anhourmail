@@ -24,6 +24,13 @@ export type MailDirectoryRepository = {
   /** Deletes the domain row once the mail server no longer has it (`removing` domains only). */
   deleteDomain(id: string): Promise<void>;
   markMailbox(id: string, update: { status: string; stalwartId?: string; lastError: string | null }): Promise<void>;
+  /**
+   * Records the Password credential id the mail server now has for the mailbox, and clears the waiting password if it
+   * is still `applied` (a newer one set meanwhile stays for its own job). `applied` null records the id only.
+   */
+  passwordApplied(id: string, applied: string | null, credentialId: string): Promise<void>;
+  /** Drops a waiting password (its job gave up, or the mailbox is going away): the hash isn't kept around. */
+  clearPendingPassword(id: string): Promise<void>;
   /** Active domains and every mailbox (for the reconciler, which decides what each status means). */
   desired(): Promise<{ domains: string[]; mailboxes: DesiredMailbox[] }>;
 };
@@ -42,6 +49,11 @@ export type MailServer = {
   ensureMailbox(input: {
     /** The mail server's id once created; null for a new mailbox, which must not adopt an existing account. */
     externalId: string | null;
+    /**
+     * The password for a new account, as a salted argon2id PHC string (never the password). Used only when the
+     * account is created now; null creates it with a random password nobody knows. Never changes an existing one.
+     */
+    initialPasswordHash: string | null;
     address: string;
     quotaBytes: number;
     /**
@@ -50,7 +62,26 @@ export type MailServer = {
      */
     suspended: boolean;
     aliases: { address: string; enabled: boolean; description: string | null }[];
-  }): Promise<{ externalId: string }>;
+  }): Promise<{
+    externalId: string;
+    /** True when the account was created by this call. */
+    created: boolean;
+    /** The account's sign-in Password credential id now (null if it has none, or more than one). */
+    passwordCredentialId: string | null;
+  }>;
+  /**
+   * Replaces the mailbox's sign-in password with `passwordHash` (a salted argon2id PHC string): only the one Password
+   * credential, so app passwords stay; the account's existing tokens stop working (Stalwart derives them from the
+   * password). Only the account we created (`externalId`), and only if it still has this address. Returns the
+   * Password credential id it has afterwards.
+   */
+  setMailboxPassword(input: {
+    externalId: string;
+    address: string;
+    passwordHash: string;
+    /** The web app's grant for this replacement (sent to the management proxy as is), or null. */
+    grant: string | null;
+  }): Promise<{ credentialId: string }>;
   /**
    * Permanently removes the mailbox and its mail. Only touches the account we created (`externalId`), and only if
    * it still has this address; a mailbox that was never created there (`externalId` null) is a no-op. Idempotent.

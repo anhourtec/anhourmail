@@ -1,7 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 
-import { ACCOUNT_A, ACCOUNT_B, anonymous, deps as makeDeps, fixedClock, req, user } from "../__tests__/helpers";
+import {
+  ACCOUNT_A,
+  ACCOUNT_B,
+  anonymous,
+  deps as makeDeps,
+  fakeHasher,
+  fixedClock,
+  MAILBOX_PW,
+  req,
+  user,
+} from "../__tests__/helpers";
+import type { Actor } from "../actor";
+import type { Deps } from "../ports";
 import {
   ConflictError,
   ForbiddenError,
@@ -18,6 +30,10 @@ const userAdmin = user({ id: "uadmin", account: [[ACCOUNT_A, "user_admin"]] });
 const domainAdmin = user({ id: "dadmin", account: [[ACCOUNT_A, "domain_admin"]] });
 const member = user({ id: "member", account: [[ACCOUNT_A, "member"]] });
 const ownerB = user({ id: "owner-b", account: [[ACCOUNT_B, "owner"]] });
+
+/** createMailbox with a valid password unless the test gives its own. */
+const create = (d: Deps, actor: Actor, accountId: string, input: Record<string, unknown>) =>
+  createMailbox(d, actor, accountId, { password: MAILBOX_PW, ...input }, req, fakeHasher);
 
 const DOMAIN_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const PENDING_A = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -65,13 +81,12 @@ describe("normaliseLocalPart", () => {
 describe("mailboxes service", () => {
   it("creates a mailbox for a member on an active domain, queues provisioning and audits it", async () => {
     const d = setup();
-    const m = await createMailbox(
-      d,
-      userAdmin,
-      ACCOUNT_A,
-      { localPart: "Jane", domainId: DOMAIN_A, ownerUserId: "member", quotaGb: 5 },
-      req,
-    );
+    const m = await create(d, userAdmin, ACCOUNT_A, {
+      localPart: "Jane",
+      domainId: DOMAIN_A,
+      ownerUserId: "member",
+      quotaGb: 5,
+    });
     expect(m).toMatchObject({
       address: "jane@family.ca",
       status: "provisioning",
@@ -85,39 +100,31 @@ describe("mailboxes service", () => {
 
   it("defaults the quota to the plan's storage and keeps it within 1 GB … plan storage", async () => {
     const d = setup();
-    const m = await createMailbox(d, owner, ACCOUNT_A, { localPart: "a", domainId: DOMAIN_A }, req);
+    const m = await create(d, owner, ACCOUNT_A, { localPart: "a", domainId: DOMAIN_A });
     expect(m.quotaBytes).toBe(30 * GB);
     for (const quotaGb of [0, 31, 2.5, "x"]) {
-      await expect(
-        createMailbox(d, owner, ACCOUNT_A, { localPart: "b", domainId: DOMAIN_A, quotaGb }, req),
-      ).rejects.toThrow(ValidationError);
+      await expect(create(d, owner, ACCOUNT_A, { localPart: "b", domainId: DOMAIN_A, quotaGb })).rejects.toThrow(
+        ValidationError,
+      );
     }
   });
 
   it("refuses pending or other accounts' domains, non-members, taken addresses and the 11th mailbox", async () => {
     const d = setup();
     const base = { localPart: "x", domainId: DOMAIN_A };
-    await expect(createMailbox(d, owner, ACCOUNT_A, { ...base, domainId: PENDING_A }, req)).rejects.toThrow(
-      ValidationError,
-    );
-    await expect(createMailbox(d, owner, ACCOUNT_A, { ...base, domainId: DOMAIN_B }, req)).rejects.toThrow(
-      ValidationError,
-    );
-    await expect(createMailbox(d, owner, ACCOUNT_A, { ...base, ownerUserId: "owner-b" }, req)).rejects.toThrow(
-      ValidationError,
-    );
-    await createMailbox(d, owner, ACCOUNT_A, base, req);
-    await expect(createMailbox(d, owner, ACCOUNT_A, { ...base, localPart: "X" }, req)).rejects.toThrow(ConflictError);
-    for (let i = 0; i < 9; i++) await createMailbox(d, owner, ACCOUNT_A, { ...base, localPart: `n${String(i)}` }, req);
-    await expect(createMailbox(d, owner, ACCOUNT_A, { ...base, localPart: "eleven" }, req)).rejects.toThrow(
-      PlanLimitError,
-    );
+    await expect(create(d, owner, ACCOUNT_A, { ...base, domainId: PENDING_A })).rejects.toThrow(ValidationError);
+    await expect(create(d, owner, ACCOUNT_A, { ...base, domainId: DOMAIN_B })).rejects.toThrow(ValidationError);
+    await expect(create(d, owner, ACCOUNT_A, { ...base, ownerUserId: "owner-b" })).rejects.toThrow(ValidationError);
+    await create(d, owner, ACCOUNT_A, base);
+    await expect(create(d, owner, ACCOUNT_A, { ...base, localPart: "X" })).rejects.toThrow(ConflictError);
+    for (let i = 0; i < 9; i++) await create(d, owner, ACCOUNT_A, { ...base, localPart: `n${String(i)}` });
+    await expect(create(d, owner, ACCOUNT_A, { ...base, localPart: "eleven" })).rejects.toThrow(PlanLimitError);
   });
 
   it("enforces permission and scope, and audits refusals", async () => {
     const d = setup();
-    const m = await createMailbox(d, owner, ACCOUNT_A, { localPart: "a", domainId: DOMAIN_A }, req);
-    await expect(createMailbox(d, domainAdmin, ACCOUNT_A, { localPart: "b", domainId: DOMAIN_A }, req)).rejects.toThrow(
+    const m = await create(d, owner, ACCOUNT_A, { localPart: "a", domainId: DOMAIN_A });
+    await expect(create(d, domainAdmin, ACCOUNT_A, { localPart: "b", domainId: DOMAIN_A })).rejects.toThrow(
       ForbiddenError,
     );
     await expect(listMailboxes(d, member, ACCOUNT_A)).rejects.toThrow(ForbiddenError);
@@ -136,7 +143,7 @@ describe("mailboxes service", () => {
 
   it("changes the quota (audited, re-provisioned) and shows the bound", async () => {
     const d = setup();
-    const m = await createMailbox(d, owner, ACCOUNT_A, { localPart: "a", domainId: DOMAIN_A }, req);
+    const m = await create(d, owner, ACCOUNT_A, { localPart: "a", domainId: DOMAIN_A });
     const out = await setMailboxQuota(d, userAdmin, ACCOUNT_A, m.id, { quotaGb: "12" }, req);
     expect(out.quotaBytes).toBe(12 * GB);
     expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "mailbox.quota_changed", meta: { fromGb: 30, toGb: 12 } });
@@ -158,9 +165,59 @@ describe("mailboxes service", () => {
     });
   });
 
+  it("takes a password at creation, keeps only its argon2id hash for the worker, and never audits it", async () => {
+    const d = setup();
+    const m = await create(d, owner, ACCOUNT_A, {
+      localPart: "pw",
+      domainId: DOMAIN_A,
+      password: "Tr0ub4dor & 3 more",
+    });
+    const row = d.uow.state.mailboxPasswords.find((p) => p.mailboxId === m.id);
+    expect(row?.pendingHash).toBe(await fakeHasher.hash("Tr0ub4dor & 3 more"));
+    expect(row?.credentialId).toBeNull();
+    const state = JSON.stringify(d.uow.state);
+    expect(state).not.toContain("Tr0ub4dor");
+    expect(JSON.stringify(d.uow.state.audit)).not.toContain("argon2id");
+    expect((await getMailbox(d, owner, ACCOUNT_A, m.id)).passwordPending).toBe(true);
+  });
+
+  it("refuses a missing or weak password before creating anything", async () => {
+    const d = setup();
+    for (const password of [undefined, "", "short", " leading-space-pw", "app_looks-like-an-app-pw", "pw@family.ca"]) {
+      await expect(create(d, owner, ACCOUNT_A, { localPart: "pw", domainId: DOMAIN_A, password })).rejects.toThrow(
+        ValidationError,
+      );
+    }
+    expect(d.uow.state.mailboxes).toHaveLength(0);
+    expect(d.uow.state.jobs).toHaveLength(0);
+    expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "mailbox.created", result: "failed" });
+  });
+
+  it("refuses creating a mailbox while staff act as someone (audited as denied)", async () => {
+    const d = setup();
+    const actingAs = {
+      ...owner,
+      actingAs: {
+        staffUserId: "staff",
+        staffEmail: "s@anhourtec.test",
+        staffRole: "support_admin" as const,
+        reason: "t",
+      },
+    };
+    await expect(create(d, actingAs, ACCOUNT_A, { localPart: "x", domainId: DOMAIN_A })).rejects.toThrow(
+      ForbiddenError,
+    );
+    expect(d.uow.state.mailboxes).toHaveLength(0);
+    expect(d.uow.state.audit.at(-1)).toMatchObject({
+      action: "mailbox.created",
+      result: "denied",
+      errorCode: "act_as",
+    });
+  });
+
   it("refuses quota changes once the mailbox's domain is no longer active in the account", async () => {
     const d = setup();
-    const m = await createMailbox(d, owner, ACCOUNT_A, { localPart: "a", domainId: DOMAIN_A }, req);
+    const m = await create(d, owner, ACCOUNT_A, { localPart: "a", domainId: DOMAIN_A });
     d.uow.state.domains.find((x) => x.id === DOMAIN_A)!.status = "removing";
     await expect(setMailboxQuota(d, owner, ACCOUNT_A, m.id, { quotaGb: 2 }, req)).rejects.toThrow(ConflictError);
   });

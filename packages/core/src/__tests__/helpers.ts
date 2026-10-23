@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { createHash } from "node:crypto";
+
 import { platformFacts } from "@anhourmail/shared/platform";
 import type { AccountRole, PlatformRole } from "@anhourmail/shared/rbac";
 
@@ -37,3 +39,17 @@ export function user(
 }
 
 export const anonymous: Actor = { kind: "anonymous" };
+
+/**
+ * Stands in for the argon2id hasher (`@anhourmail/adapters` `mailboxPasswordHasher`): an argon2id-shaped PHC string
+ * from a SHA-256 of the password, so tests can tell hashes apart and prove the password itself is never kept.
+ */
+export const fakeHasher = {
+  hash: async (password: string): Promise<string> =>
+    `$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHRzYWx0c2FsdA$${createHash("sha256").update(password).digest("base64").replace(/=+$/, "")}`,
+  /** Stands in for the web app's HMAC grant: names the account it was made for. */
+  grant: ({ externalId }: { externalId: string; passwordHash: string }): string => `grant-for-${externalId}`,
+};
+
+/** A password that passes the mailbox password rules. */
+export const MAILBOX_PW = "correct horse battery staple";

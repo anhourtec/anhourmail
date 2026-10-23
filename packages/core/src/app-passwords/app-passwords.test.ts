@@ -80,6 +80,8 @@ function setup() {
     { ...mailbox(MBX_PAUSED, ACCOUNT_A, "paused@family.ca", "member"), status: "suspended" },
     mailbox(MBX_B, ACCOUNT_B, "b@other.ca", "owner-b"),
   );
+  // Every mailbox's sign-in Password is the one the control plane recorded ("p", what the fake reports).
+  for (const m of s.mailboxes) s.mailboxPasswords.push({ mailboxId: m.id, pendingHash: null, credentialId: "p" });
   // Fresh step-ups for the people who create app passwords in these tests.
   for (const userId of ["member", "owner", "uadmin", "member2", "owner-b"]) {
     s.stepUps.push({ userId, sessionId: SESSION, expiresAt: new Date(clock.now().getTime() + 60_000) });
@@ -97,12 +99,14 @@ function fakeIssuer(opts: { fail?: boolean } = {}): AppPasswordIssuer &
     server: Map<string, OnServer[]>;
     apiKeys: Map<string, number>;
     passwordCount: Map<string, number>;
+    passwordIds: Map<string, string[]>;
   } {
   const issued: Issued[] = [];
   const revoked: string[] = [];
   const server = new Map<string, OnServer[]>();
   const apiKeys = new Map<string, number>();
   const passwordCount = new Map<string, number>();
+  const passwordIds = new Map<string, string[]>();
   let n = 0;
   return {
     issued,
@@ -110,11 +114,13 @@ function fakeIssuer(opts: { fail?: boolean } = {}): AppPasswordIssuer &
     server,
     apiKeys,
     passwordCount,
+    passwordIds,
     list: async (externalId) => ({
       appPasswords: server.get(externalId) ?? [],
       apiKeys: apiKeys.get(externalId) ?? 0,
       // Every mailbox has exactly one sign-in Password unless a test overrides it.
       passwords: passwordCount.get(externalId) ?? 1,
+      passwordIds: passwordIds.get(externalId) ?? ["p"],
     }),
     create: async (input) => {
       if (opts.fail) throw new Error("mail server unavailable");
@@ -486,6 +492,42 @@ describe("reconciling app passwords with the mail server", () => {
       action: "platform.reconciler_drift",
       meta: { mailboxesWithExtraPasswords: 2 },
     });
+  });
+});
+
+describe("reconciling mailbox passwords", () => {
+  it("flags a replaced or never-recorded Password credential, skips one with a new password waiting, fixes nothing", async () => {
+    const { d } = setup();
+    const issuer = fakeIssuer();
+    const row = (mailboxId: string) => {
+      const p = d.uow.state.mailboxPasswords.find((x) => x.mailboxId === mailboxId);
+      if (!p) throw new Error("no row");
+      return p;
+    };
+    // Replaced outside the control plane: the mail server has another credential id than the one recorded.
+    issuer.passwordIds.set("s-dddd", ["q"]);
+    // Recorded nothing yet (a mailbox from before tracking).
+    row(MBX_OWNER).credentialId = null;
+    // A reset in flight: a different id is expected until the worker records the new one.
+    row(MBX_UADMIN).pendingHash = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA";
+    issuer.passwordIds.set("s-efef", ["z"]);
+    const report = await reconcileAppPasswords(d, issuer);
+    expect(report).toMatchObject({ clean: false, passwordReplaced: 1, passwordUntracked: 1, extraPasswords: 0 });
+    expect(report.addresses.sort()).toEqual(["kid@family.ca", "mum@family.ca"]);
+    expect(d.uow.state.audit.at(-1)).toMatchObject({
+      action: "platform.reconciler_drift",
+      meta: { mailboxPasswordsReplaced: 1, mailboxPasswordsUntracked: 1 },
+    });
+    expect(JSON.stringify(d.uow.state.audit.at(-1))).not.toContain("argon2id");
+    // Report only: the recorded ids are untouched.
+    expect(row(MBX_MEMBER).credentialId).toBe("p");
+    expect(row(MBX_OWNER).credentialId).toBeNull();
+  });
+
+  it("is clean when every mailbox has the Password it was given", async () => {
+    const { d } = setup();
+    const report = await reconcileAppPasswords(d, fakeIssuer());
+    expect(report).toMatchObject({ clean: true, passwordReplaced: 0, passwordUntracked: 0 });
   });
 });
 

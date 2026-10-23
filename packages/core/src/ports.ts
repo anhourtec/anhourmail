@@ -7,7 +7,7 @@ import type { AliasRepository } from "./aliases/repository";
 import type { AppPasswordRepository } from "./app-passwords/repository";
 import type { AuditRepository } from "./audit/repository";
 import type { CatchAllRepository, DomainRepository } from "./domains/repository";
-import type { MailboxRepository } from "./mailboxes/repository";
+import type { MailboxPasswordRepository, MailboxRepository } from "./mailboxes/repository";
 import type { InviteRepository, PeopleRepository } from "./people/repository";
 import type { PlatformAccountRepository, StaffRepository } from "./platform/repository";
 import type { MailDirectoryRepository, ProvisioningRepository } from "./provisioning/ports";
@@ -23,6 +23,7 @@ export type Repositories = {
   directory: MailDirectoryRepository;
   domains: DomainRepository;
   mailboxes: MailboxRepository;
+  mailboxPasswords: MailboxPasswordRepository;
   aliases: AliasRepository;
   people: PeopleRepository;
   invites: InviteRepository;

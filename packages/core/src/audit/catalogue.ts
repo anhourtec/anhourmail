@@ -55,6 +55,8 @@ export const AUDIT_ACTIONS = [
   "mailbox.quota_changed",
   "mailbox.deletion_scheduled",
   "mailbox.restored",
+  "mailbox.password_reset",
+  "mailbox.password_changed",
   "alias.created",
   "alias.toggled",
   "alias.deleted",

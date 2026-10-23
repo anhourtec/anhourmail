@@ -29,3 +29,17 @@ export type MailboxRepository = {
    */
   deleteIfDue(id: string, now: Date): Promise<boolean>;
 };
+
+/**
+ * A mailbox's password as the control plane hands it to the worker: never the password, only a salted argon2id PHC
+ * string waiting to be applied (rule 23), cleared by the worker once the mail server has it.
+ */
+export type MailboxPasswordRepository = {
+  /**
+   * Records a new password for the worker to apply, with the web app's grant for replacing it on an existing account
+   * (null at creation, or where no grant key is configured); replaces one still waiting.
+   */
+  setPending(mailboxId: string, passwordHash: string, grant: string | null): Promise<void>;
+  /** Whether a password is waiting for the worker. */
+  pending(mailboxId: string): Promise<boolean>;
+};

@@ -35,6 +35,25 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
     }
     return;
   }
+  if (job.kind === "mailbox.password") {
+    // Subject: a mailbox. Sets the password waiting for it (an argon2id hash; the worker never sees a password).
+    const m = await deps.uow.run((r) => r.directory.getMailbox(job.subjectId));
+    if (!m?.pendingPasswordHash) return; // gone, or already applied by an earlier run
+    if (m.status === "deleting") {
+      // Going away: nobody can sign in to it, so the waiting hash is simply dropped.
+      await deps.uow.run((r) => r.directory.clearPendingPassword(m.id));
+      return;
+    }
+    if (m.stalwartId === null) throw new Error("mailbox is not on the mail server yet");
+    const { credentialId } = await mail.setMailboxPassword({
+      externalId: m.stalwartId,
+      address: m.address,
+      passwordHash: m.pendingPasswordHash,
+      grant: m.pendingPasswordGrant,
+    });
+    await deps.uow.run((r) => r.directory.passwordApplied(m.id, m.pendingPasswordHash, credentialId));
+    return;
+  }
   if (job.kind === "domain.remove") {
     const domain = await deps.uow.run((r) => r.directory.getDomain(job.subjectId));
     if (!domain) return; // already gone
@@ -77,8 +96,11 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
   // A deleted mailbox that never reached the mail server has nothing to take off it; one whose grace period has
   // ended belongs to the purge, which may be removing it right now.
   if (deleting && (mailbox.stalwartId === null || isDue(mailbox.purgeAfter, deps.clock.now()))) return;
-  const { externalId } = await mail.ensureMailbox({
+  const creating = mailbox.stalwartId === null;
+  const ensured = await mail.ensureMailbox({
     externalId: mailbox.stalwartId,
+    // A new account gets the password chosen at creation; an existing one keeps its own (a reset has its own job).
+    initialPasswordHash: creating ? mailbox.pendingPasswordHash : null,
     address: mailbox.address,
     quotaBytes: mailbox.quotaBytes,
     // Suspended and deleting mailboxes keep their mail but nobody can sign in, and their mail is refused.
@@ -98,7 +120,14 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
       current.status !== mailbox.status || current.status === "suspended" || current.status === "deleting"
         ? current.status
         : "active";
-    await r.directory.markMailbox(mailbox.id, { status, stalwartId: externalId, lastError: null });
+    await r.directory.markMailbox(mailbox.id, { status, stalwartId: ensured.externalId, lastError: null });
+    // The Password credential the reconciler compares with: the one this call created, or, for a mailbox from before
+    // it was tracked, the one it has now (recorded once; a recorded id is never overwritten here, so drift stays
+    // visible). A password still waiting after a create was the one it was created with.
+    if (ensured.passwordCredentialId !== null && (ensured.created || current.passwordCredentialId === null)) {
+      const applied = ensured.created ? mailbox.pendingPasswordHash : null;
+      await r.directory.passwordApplied(mailbox.id, applied, ensured.passwordCredentialId);
+    }
   });
 }
 
@@ -131,9 +160,14 @@ export async function runNextJob(deps: Deps, mail: MailServer): Promise<Provisio
         async (repos) => {
           await repos.provisioning.giveUp(job.id, error, now);
           let catchAllOff: string[] = [];
-          if (job.kind === "mailbox.ensure") {
-            // A suspension or a scheduled deletion stays in force; only the error is recorded.
+          if (job.kind === "mailbox.password") {
+            // The new password never reached the mail server: drop its hash (the old password still works).
+            await repos.directory.clearPendingPassword(job.subjectId);
+          } else if (job.kind === "mailbox.ensure") {
+            // A suspension or a scheduled deletion stays in force; only the error is recorded. A password waiting
+            // for a create that never happened isn't kept either (a reset sets a new one once it exists).
             const current = await repos.directory.getMailbox(job.subjectId);
+            if (current?.stalwartId === null) await repos.directory.clearPendingPassword(job.subjectId);
             await repos.directory.markMailbox(job.subjectId, {
               status: current?.status === "suspended" || current?.status === "deleting" ? current.status : "failed",
               lastError: error,

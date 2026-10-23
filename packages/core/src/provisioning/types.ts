@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /** Provisioning: the control plane holds desired state; the worker applies it to the mail server (CLAUDE.md rule 26). */
 
-/** `app_password.revoke`: subject is a mailbox; takes its `revoking` app passwords off the mail server. */
-export type JobKind = "domain.ensure" | "domain.remove" | "mailbox.ensure" | "app_password.revoke";
+/**
+ * `app_password.revoke`: subject is a mailbox; takes its `revoking` app passwords off the mail server.
+ * `mailbox.password`: subject is a mailbox; sets the password waiting for it (an argon2id hash, never the password).
+ */
+export type JobKind = "domain.ensure" | "domain.remove" | "mailbox.ensure" | "mailbox.password" | "app_password.revoke";
 export type JobStatus = "queued" | "running" | "succeeded" | "failed";
 
 export type ProvisioningJob = {
@@ -30,6 +33,21 @@ export type MailboxState = {
   /** Set while `deleting`: when the scheduler removes it for good. */
   purgeAfter: Date | null;
   aliases: AliasState[];
+  /**
+   * A new mailbox password waiting for the worker, as a salted argon2id PHC string (never the password itself; rule
+   * 23): set at creation or by a reset or change, cleared once the mail server has it (or the job gave up).
+   */
+  pendingPasswordHash: string | null;
+  /**
+   * The web app's grant for replacing this account's password with exactly `pendingPasswordHash` (HMAC with a key the
+   * worker doesn't hold; the management proxy verifies it). Null at creation or where no key is configured.
+   */
+  pendingPasswordGrant: string | null;
+  /**
+   * The mail server's id for the mailbox's sign-in Password credential as the control plane last set it (null:
+   * not recorded yet, e.g. a mailbox from before this was tracked). The reconciler reports a different one.
+   */
+  passwordCredentialId: string | null;
 };
 
 /** What the reconciler compares with the mail server: every mailbox row, with whether it was ever created there. */

@@ -298,6 +298,15 @@ export type AppPasswordDrift = {
    * in as the mailbox or, with `impersonate`, master-user into it over the mail ports.
    */
   extraPasswords: number;
+  /**
+   * Mailboxes whose one Password credential isn't the one the control plane set (a different credential id): the
+   * password was replaced outside the console, the webmail and the worker. Not counted while a new password is
+   * waiting for the worker. Stalwart keeps the id across some replacements, so this catches many, not all (07-security
+   * "Mailbox passwords").
+   */
+  passwordReplaced: number;
+  /** Mailboxes whose Password credential was never recorded (from before tracking; `job:mailbox-backfill` records). */
+  passwordUntracked: number;
   /** Mailboxes whose credentials the mail server couldn't list. */
   unreachable: number;
   /** Addresses with drift (returned to the caller; never logged or audited). */
@@ -326,6 +335,8 @@ export async function reconcileAppPasswords(deps: Deps, inventory: AppPasswordIn
     missingOnMailServer: 0,
     apiKeys: 0,
     extraPasswords: 0,
+    passwordReplaced: 0,
+    passwordUntracked: 0,
     unreachable: 0,
     addresses: [],
     clean: true,
@@ -366,6 +377,15 @@ export async function reconcileAppPasswords(deps: Deps, inventory: AppPasswordIn
     if (onServer.passwords !== 1) {
       out.extraPasswords += 1;
       drift = true;
+    } else if (!m.passwordPending) {
+      // A reset or change in flight is expected to change it; otherwise it must be the one we set (report only).
+      if (m.passwordCredentialId === null) {
+        out.passwordUntracked += 1;
+        drift = true;
+      } else if (onServer.passwordIds[0] !== m.passwordCredentialId) {
+        out.passwordReplaced += 1;
+        drift = true;
+      }
     }
     if (drift) out.addresses.push(m.address);
   }
@@ -377,6 +397,8 @@ export async function reconcileAppPasswords(deps: Deps, inventory: AppPasswordIn
       out.missingOnMailServer +
       out.apiKeys +
       out.extraPasswords +
+      out.passwordReplaced +
+      out.passwordUntracked +
       out.unreachable +
       out.requeued ===
     0;
@@ -406,6 +428,8 @@ export async function reconcileAppPasswords(deps: Deps, inventory: AppPasswordIn
             missingAppPasswords: out.missingOnMailServer,
             apiKeysOnMailboxes: out.apiKeys,
             mailboxesWithExtraPasswords: out.extraPasswords,
+            mailboxPasswordsReplaced: out.passwordReplaced,
+            mailboxPasswordsUntracked: out.passwordUntracked,
             mailboxesUnreachable: out.unreachable,
           },
         };

@@ -3,14 +3,15 @@ import { randomUUID } from "node:crypto";
 
 import { MAILBOX_DELETE_GRACE_DAYS, MAX_MAILBOXES, PLANS } from "@anhourmail/shared/plans";
 
-import { type Actor, authorize } from "../actor";
+import { type Actor, authorize, can } from "../actor";
 import { maskEmail } from "../audit/record";
 import { turnOffCatchAllFor } from "../domains/catch-all";
 import { ConflictError, ForbiddenError, NotFoundError, PlanLimitError, ValidationError } from "../errors";
-import { mutation } from "../mutation";
+import { mutation, type MutationOutcome } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 import type { MailServer } from "../provisioning/ports";
 import { GB, type Mailbox, type MailboxStatus, normaliseLocalPart } from "./entity";
+import { hashMailboxPassword, mailboxPassword, type PasswordHasher } from "./password-hash";
 
 /** What the console and API show; mail-server ids and errors stay server-side. */
 export type MailboxView = {
@@ -109,17 +110,27 @@ export async function getMailbox(
   actor: Actor,
   accountId: string,
   id: string,
-): Promise<MailboxView & { maxQuotaBytes: number; lifecycleLocked: boolean }> {
+): Promise<
+  MailboxView & { maxQuotaBytes: number; lifecycleLocked: boolean; passwordPending: boolean; canSetPassword: boolean }
+> {
   authorize(actor, "mailbox.read", accountId);
   return deps.uow.run(async (r) => {
     const m = await scoped(r, accountId, id);
     const [v] = await views(r, accountId, [m]);
     if (!v) throw new NotFoundError();
+    const locked = lifecycleLocked(actor, accountId, m, await r.access.members(accountId));
     return {
       ...v,
       maxQuotaBytes: await planQuota(r, accountId),
       /** True when this person may not suspend, delete or restore it (the console hides those actions). */
-      lifecycleLocked: lifecycleLocked(actor, accountId, m, await r.access.members(accountId)),
+      lifecycleLocked: locked,
+      /** A new password is waiting for the mail server (set a moment ago). */
+      passwordPending: await r.mailboxPasswords.pending(m.id),
+      /** This person may set its password (`mailbox.password.reset`, not locked, not acting as someone). */
+      canSetPassword:
+        can(actor, "mailbox.password.reset", accountId) &&
+        !locked &&
+        !(actor.kind === "user" && actor.actingAs !== undefined),
     };
   });
 }
@@ -138,22 +149,26 @@ export async function mailboxOptions(deps: Deps, actor: Actor, accountId: string
 }
 
 /**
- * Creates a mailbox on one of the account's active domains, optionally for one of its members. The worker creates
- * it on the mail server (no password is set: people use webmail sign-in and app passwords).
+ * Creates a mailbox on one of the account's active domains, optionally for one of its members, with the password
+ * its person signs in with (checked against the mailbox password rules and hashed here to argon2id; only the hash
+ * goes to the worker, which sets it when it creates the account on the mail server — the password is never stored,
+ * queued, logged or audited). Refused during a staff act-as session: staff never choose a customer's password.
  */
 export async function createMailbox(
   deps: Deps,
   actor: Actor,
   accountId: string,
-  input: { localPart?: unknown; domainId?: unknown; ownerUserId?: unknown; quotaGb?: unknown },
+  input: { localPart?: unknown; domainId?: unknown; ownerUserId?: unknown; quotaGb?: unknown; password?: unknown },
   req: RequestMeta,
+  hasher: PasswordHasher,
 ): Promise<MailboxView> {
-  return mutation(
+  const out = await mutation(
     deps,
     actor,
     req,
     { action: "mailbox.created", permission: "mailbox.manage", accountId, target: { type: "mailbox" } },
-    async (repos) => {
+    async (repos): Promise<MutationOutcome<MailboxView | "act_as">> => {
+      if (actor.kind === "user" && actor.actingAs) return { result: "act_as", denied: { code: "act_as" } };
       await repos.accounts.lock(accountId); // the mailbox ceiling holds under concurrent creates
       const local = normaliseLocalPart(input.localPart);
       const domainId = typeof input.domainId === "string" ? input.domainId : "";
@@ -171,6 +186,7 @@ export async function createMailbox(
         throw new PlanLimitError(`An account can have up to ${String(MAX_MAILBOXES)} mailboxes.`);
       }
       const address = `${local}@${domain.name}`;
+      const password = mailboxPassword(input.password, address);
       await repos.mailboxes.lockAddress(address); // mailboxes and aliases share one address space
       if (await repos.mailboxes.addressTaken(address)) throw new ConflictError("That address is already in use.");
       const mailbox: Mailbox = {
@@ -186,6 +202,8 @@ export async function createMailbox(
         createdAt: deps.clock.now(),
       };
       await repos.mailboxes.insert(mailbox);
+      // The worker sets it when it creates the account (`MailServer.ensureMailbox` `initialPasswordHash`).
+      await repos.mailboxPasswords.setPending(mailbox.id, await hashMailboxPassword(hasher, password), null);
       await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: mailbox.id, runAfter: deps.clock.now() });
       const [v] = await views(repos, accountId, [mailbox]);
       if (!v) throw new NotFoundError();
@@ -196,6 +214,8 @@ export async function createMailbox(
       };
     },
   );
+  if (out === "act_as") throw new ForbiddenError("Mailboxes can't be created while acting as someone.");
+  return out;
 }
 
 const BEING_DELETED = "This mailbox is being deleted. Restore it first.";

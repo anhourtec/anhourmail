@@ -28,5 +28,7 @@ export type AppPasswordInventory = {
     appPasswords: { credentialId: string; createdAt: Date; protocols: AppPasswordProtocol[] | null }[];
     apiKeys: number;
     passwords: number;
+    /** The Password credentials' ids (a mailbox has exactly one; compared with the one the control plane set). */
+    passwordIds: string[];
   }>;
 };

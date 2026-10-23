@@ -18,8 +18,19 @@ export type AppPasswordRepository = {
    * is already queued or running for them (if not, the job gave up and the reconciler queues it again).
    */
   mailboxesWithRevoking(): Promise<{ mailboxId: string; jobOpen: boolean }[]>;
-  /** Every mailbox the mail server has (`stalwart_id` set), any account, with its status. */
+  /**
+   * Every mailbox the mail server has (`stalwart_id` set), any account, with its status, the Password credential id
+   * the control plane last set (null: not recorded) and whether a new password is waiting for the worker.
+   */
   mailboxesOnServer(): Promise<
-    { id: string; accountId: string; address: string; stalwartId: string; status: string }[]
+    {
+      id: string;
+      accountId: string;
+      address: string;
+      stalwartId: string;
+      status: string;
+      passwordCredentialId: string | null;
+      passwordPending: boolean;
+    }[]
   >;
 };
