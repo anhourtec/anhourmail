@@ -82,22 +82,21 @@ export function ChangePasswordForm({
         <label htmlFor={`${id}-new`} className="text-[13px] text-muted-foreground">
           New password
         </label>
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <div className="min-w-0 flex-1">
-            <PasswordInput
-              id={`${id}-new`}
-              value={next}
-              onChange={(e) => {
-                setNext(e.target.value);
-                setGenerated(null);
-              }}
-              autoComplete="new-password"
-              maxLength={MAILBOX_PASSWORD.max}
-              aria-describedby={`${id}-rules`}
-              spellCheck={false}
-              className={fieldClass}
-            />
-          </div>
+        {/* Full width on its own row (readable next to password-manager icons); the generator on the row below. */}
+        <PasswordInput
+          id={`${id}-new`}
+          value={next}
+          onChange={(e) => {
+            setNext(e.target.value);
+            setGenerated(null);
+          }}
+          autoComplete="new-password"
+          maxLength={MAILBOX_PASSWORD.max}
+          aria-describedby={`${id}-rules`}
+          spellCheck={false}
+          className={fieldClass}
+        />
+        <div className="flex">
           <button
             type="button"
             onClick={() => {
@@ -105,9 +104,9 @@ export function ChangePasswordForm({
               setNext(p);
               setGenerated(p);
             }}
-            className={`${smallSecondary} shrink-0`}
+            className={smallSecondary}
           >
-            <KeyRound className="size-4" aria-hidden /> Generate
+            <KeyRound className="size-4" aria-hidden /> Generate a strong password
           </button>
         </div>
         {generated !== null && generated === next && (

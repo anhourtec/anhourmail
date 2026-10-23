@@ -37,24 +37,24 @@ export function MailboxPasswordField({
       <label htmlFor={`${id}-pw`} className="am-h4">
         {label}
       </label>
-      <div className="flex flex-col gap-2 sm:flex-row">
-        <div className="min-w-0 flex-1">
-          <PasswordInput
-            id={`${id}-pw`}
-            name="password"
-            value={value}
-            onChange={(e) => {
-              onChange(e.target.value);
-              setGenerated(null);
-            }}
-            autoComplete="new-password"
-            maxLength={MAILBOX_PASSWORD.max}
-            aria-describedby={`${id}-rules`}
-            spellCheck={false}
-            autoFocus={autoFocus}
-            className={inputClass}
-          />
-        </div>
+      {/* Full width on its own row: a typed password stays readable next to password-manager icons, even in a
+          narrow side panel. The generator sits on the row below. */}
+      <PasswordInput
+        id={`${id}-pw`}
+        name="password"
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setGenerated(null);
+        }}
+        autoComplete="new-password"
+        maxLength={MAILBOX_PASSWORD.max}
+        aria-describedby={`${id}-rules`}
+        spellCheck={false}
+        autoFocus={autoFocus}
+        className={inputClass}
+      />
+      <div className="flex">
         <button
           type="button"
           onClick={() => {
@@ -63,7 +63,7 @@ export function MailboxPasswordField({
             setGenerated(next);
             setCopied(false);
           }}
-          className={`${secondaryButtonClass} shrink-0`}
+          className={secondaryButtonClass}
         >
           <KeyRound className="size-4" aria-hidden />
           Generate a strong password
