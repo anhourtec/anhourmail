@@ -47,9 +47,14 @@ version. CI builds all three on every push (`.cicd/build.sh`).
 - **Customer Sieve lock backfill (webmail settings, 2026-10-22):** after deploying the release that adds
   `CUSTOMER_PERMISSIONS`, run `npm run job:mailbox-backfill --workspace @anhourmail/worker` once in the worker
   container. It queues `mailbox.ensure` for every active mailbox; the worker re-applies the mail-server permissions
-  (customers can't write their own Sieve or VacationResponse) and re-activates each managed Sieve script. Safe to
-  re-run; audited as `platform.mailboxes_requeued`. From then on the hourly reconciler reports and re-queues any
+  (customers can't write their own Sieve or VacationResponse). A managed Sieve script someone switched off is reported
+  by the reconciler and re-activated by the next settings save (the worker has no owner access). Safe to re-run;
+  audited as `platform.mailboxes_requeued`. From then on the hourly reconciler reports and re-queues any
   mailbox whose lock drifted (`sieveLockMismatch`).
+
+- **Credential split (2026-10-23, ADR-0020):** replace `STALWART_API_KEY` with the three keys above (web: operations;
+  worker: provisioning; scheduler: provisioning + audit), each from its own service account, then destroy the old key
+  and its account. The apps refuse to start while `STALWART_API_KEY` is set.
 
 - **App passwords and principals (2026-10-22, ADR-0020):** the same backfill also turns off self-service credentials,
   the password change and principal look-ups on every customer account (`CUSTOMER_DENIALS` in `CUSTOMER_PERMISSIONS`, also in `SUSPENDED_PERMISSIONS`; the reconciler's `sieveLocked` drift check covers the whole list).
@@ -86,13 +91,21 @@ version. CI builds all three on every push (`.cicd/build.sh`).
   client once with exactly one redirect URI, `https://mail.anhourmail.com/oauth/callback` (`upsertOAuthClient` in
   `packages/stalwart-client`, client id `anhourmail-webmail`).
 - `SIGNUP_MODE` defaults to `closed`; set `open` only while access is limited to the IP allow-list.
-- `STALWART_API_KEY` — the management key (ADR-0017, ADR-0020) on an Admin-role service account with
-  `permissions: { "@type": "Replace" }` and exactly the set in `docs/internal/02-mail-infrastructure.md` ("Production
-  management key"): `authenticate`; the `sysDomain*`, `sysAccount*`, `sysDkimSignature*` objects it manages;
-  `impersonate` with `sysAppPassword{Create,Get,Query,Destroy}` and `sysApiKey{Get,Query}` (app passwords and the
-  reconciler's credential check); `jmapSieveScript{Get,Query,Create,Update,Validate}`, `jmapBlobUpload` and
-  `jmapBlobGet` (the managed Sieve script). Never `jmapEmail*`, `jmapMailbox*`, `jmapBlobLookup` or any other mail
-  permission, and an `allowedIps` list of the app and worker hosts.
+- **Stalwart management keys — one per job, each only in its own containers** (ADR-0020 "Credential split"; exact
+  sets in `packages/stalwart-client/src/keys.ts`, created by `ensureServiceAccount` / `issueServiceKey` from the same
+  package). Each is a `Replace`-typed API key with an `allowedIps` list of the management network and an expiry, owned
+  by a password-less service account whose custom role holds exactly the key's set (not the Admin role):
+  - `STALWART_PROVISIONING_KEY` (account `svc-provision`) — **worker and scheduler only**: domains, accounts, DKIM keys
+    and the permissions a customer mailbox keeps; no `impersonate`.
+  - `STALWART_OPERATIONS_KEY` (account `svc-ops`) — **web only**: app passwords and the managed Sieve script on a
+    mailbox (`impersonate`); no account, domain or DKIM access.
+  - `STALWART_AUDIT_KEY` (account `svc-audit`) — **scheduler only**: reads managed Sieve scripts for the hourly check.
+
+  Each process refuses to start in production without its own key or with any other key, the dev admin
+  (`STALWART_DEV_ADMIN_*`) or the old `STALWART_API_KEY`; at start (web: before first use) each key is compared with
+  its documented set (`GET /api/account`) and anything else is refused. Never give the web app the provisioning key:
+  it would let the internet-facing process create and change accounts.
+
 - **The public JMAP/CardDAV host (`imap.`) must not expose Stalwart's `/api/*`, `/auth/*`, `/admin`,
   `/.well-known/oauth-authorization-server` or `/.well-known/openid-configuration`.** `/api/auth` turns an app password
   into an account-wide OAuth token (ADR-0020); only the paths mail, contact and calendar apps use (`/jmap`,

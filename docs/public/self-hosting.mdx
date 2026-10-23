@@ -52,6 +52,11 @@ Two things apply from the first day:
 - Set `PLATFORM_DOMAIN` in `.env` to your own domain. The console builds every server name it shows your users
   (incoming mail, sending, mail apps, the DNS records for their domains) under it, and checks their DNS against
   the same names.
+- Give each part of AnhourMail its own mail-server key, limited to its job: the console and webmail get a key that
+  can't create or change mail accounts, and the background worker gets one that can't open a mailbox. Each part
+  refuses to start with a key that isn't its own. One job (creating accounts) can still set an account's password, so
+  a production deployment also runs an internal proxy in front of the mail server that blocks that, and a check that
+  reports it if it ever happens. `deploy/README.md` in the repository has the settings and the details.
 - Create your first administrator with the worker's one-off job (below). It emails a one-time link to choose a
   password and refuses once an administrator exists. Don't run the demo seed on a real server: it refuses when
   `NODE_ENV` is `production`.

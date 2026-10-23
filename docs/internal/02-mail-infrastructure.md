@@ -1,6 +1,6 @@
 # 02 — Mail infrastructure
 
-Last updated: 2026-10-21. Research: `research/stalwart.md`, `research/deliverability.md`.
+Last updated: 2026-10-23. Research: `research/stalwart.md`, `research/deliverability.md`.
 
 ## URL and hostname map
 
@@ -86,32 +86,54 @@ active ──(user removes)──► removing (grace 7 days; mail kept) ──�
 - Since v0.16 there is **no REST management API and no TOML**. Only `config.json` (the DataStore location) is on disk. Everything else is a JMAP object under `urn:stalwart:jmap` at `POST /jmap` (`x:Domain`, `x:Account`, `x:MtaRoute`, `x:MtaOutboundStrategy`, `x:NetworkListener`, `x:MtaOutboundThrottle`, `x:WebHook`, `x:Action`, …).
 - Directory changes apply immediately. Listener, route and expression changes need `x:Action ReloadSettings`.
 - All access goes through `packages/stalwart-client` (rule 21). Every write is an idempotent upsert by natural key.
-- Production auth is a scoped **API key** (ADR-0017, verified 2026-10-21). API keys belong to a real account, so a
-  dedicated admin service account (`svc-mgmt@<system domain>`) owns it; the key uses `permissions: {"@type":"Replace",
-permissions: {authenticate, sysDomain*, sysAccount*, sysDkimSignature*, …}}` (`authenticate` is required — without
-  it every request is 403) plus an `allowedIps` allow-list of the control-plane hosts. Verified: it creates and reads
-  domains/accounts/DKIM keys, but `Mailbox/get` and `Email/query` on a user account and other admin objects return
-  `forbidden`. Caveat: `sysAccountCreate` can create Admin-role accounts, so the key is a high-value secret (vault,
-  IP allow-list, rotation). The recovery admin (`STALWART_RECOVERY_ADMIN`) is **never set in production**: it works
-  in normal mode too.
-- **Production management key** (verified 2026-10-22 with a key holding exactly this `Replace` set; ADR-0017,
-  ADR-0020; `deploy/README.md`): `authenticate`; `sysDomain*`, `sysAccount*`, `sysDkimSignature*` (directory and
-  DKIM); `impersonate` + `sysAppPassword{Create,Get,Query,Destroy}` + `sysApiKey{Get,Query}` (app passwords on
-  other accounts — `x:AppPassword/set { accountId }` needs owner access — and the reconciler's credential check);
-  `jmapSieveScript{Get,Query,Create,Update,Validate}` + `jmapBlobUpload` + `jmapBlobGet` (the managed Sieve script,
-  05-webmail.md "Settings"). With that set and `impersonate`: `Email/query`, `Email/get`, `Mailbox/get` and
-  `Blob/lookup` on a customer account → `forbidden`, so the key can't find mail. **But `jmapBlobGet` downloads any
-  blob whose id it already holds, an email's raw message included** (verified): the key never lists blob ids, and
-  blob ids aren't derivable without the content, but this is a real capability — a separate key for the Sieve writer
-  (no `sys*`) and one for app passwords (no `jmap*`) is the planned hardening (ADR-0020). `Replace`-type app password
-  permissions are not used: Stalwart only lets a caller grant permissions it holds itself, which would need mail
-  permissions on this key.
-  **What the key can do to a mailbox anyway** (by design, so it is watched): `impersonate` + `sysAppPasswordCreate`
-  lets it mint an app password with any permissions (even `Inherit`) on any mailbox, and `impersonate` + the Sieve
-  writes let it install a `redirect` on any account. The hourly reconciler reports both: app passwords without a row
-  or with unexpected permissions (`reconcileAppPasswords`), and managed scripts that aren't ours, redirect anywhere
-  but the confirmed forwarding target, or use extensions the webmail never writes (`reconcileManagedScripts`, which
-  re-queues `mailbox.ensure` and never deletes or rewrites).
+- **Production auth is three scoped API keys** (ADR-0017; ADR-0020 "Credential split", verified 2026-10-23 on
+  v0.16.27), never one credential that both creates accounts and acts inside one. Exact sets in
+  `packages/stalwart-client/src/keys.ts`; each key is `Replace`-typed (`authenticate` is required — without it every
+  request is 403), IP-restricted to the management network, expiring and rotated:
+
+  | Key (setting)                              | Owner account   | Used by           | Can                                                                                                                                                                                                                                                     |
+  | ------------------------------------------ | --------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | Provisioning (`STALWART_PROVISIONING_KEY`) | `svc-provision` | worker, scheduler | Domains, accounts, DKIM keys; the 186 permissions a customer mailbox keeps (so it can grant them); app passwords listed and revoked through `x:Account.credentials`. No `impersonate`                                                                   |
+  | Operations (`STALWART_OPERATIONS_KEY`)     | `svc-ops`       | web               | `impersonate` + app passwords (`sysAppPassword{Create,Get,Query,Destroy}`, `sysApiKey{Get,Query}`) + the managed Sieve script (`jmapSieveScript{Get,Query,Create,Update,Validate}`, `jmapBlobUpload`, `jmapBlobGet`). No account, domain or DKIM access |
+  | Audit (`STALWART_AUDIT_KEY`)               | `svc-audit`     | scheduler         | `impersonate` + `jmapSieveScript{Get,Query}` + `jmapBlobGet`: reads managed scripts for the hourly check                                                                                                                                                |
+  - **Why the provisioning key holds mail permissions:** Stalwart lets a credential assign only permissions it holds,
+    measured against the new account's effective set (role minus `disabledPermissions`; disabling needs nothing). The
+    single key of earlier versions failed on staging with `not authorized to grant permissions: jmapPrincipalCreate, …
+and 175 more`. Without `impersonate` these permissions apply to its own account only: on another account
+    `Email/query`, `Mailbox/get`, `Blob/get`, `SieveScript/get` and `x:AppPassword/*` are `forbidden` and a known
+    message blob id downloads as 404. It still can't grant more than a customer keeps (`roles: Admin`, `Inherit`,
+    `Merge +impersonate` → `forbidden`).
+  - **The operations key** with `impersonate`: `Email/query`, `Email/get`, `Mailbox/get` and `Blob/lookup` on a
+    customer account → `forbidden`, so it can't find mail. **But `jmapBlobGet` downloads any blob whose id it already
+    holds, an email's raw message included** (verified; the integration test asserts it so an upgrade that changes it
+    is noticed); blob ids aren't listable or derivable without the content. It can mint an app password with any
+    permissions (even `Inherit`) on any mailbox and install a `redirect` on any account: the hourly reconciler reports
+    both — app passwords without a row or with unexpected permissions (`reconcileAppPasswords`, provisioning key), and
+    managed scripts that aren't ours, redirect anywhere but the confirmed forwarding target, use extensions the webmail
+    never writes or are switched off (`reconcileManagedScripts`, audit key). Report only, never deletes or rewrites.
+  - **Service accounts** have no password and a **custom role equal to their key's set** (a key is capped by its
+    account's role — re-verified). Not the Admin role: any key with `sysAccountUpdate` can set a password on any
+    account, and that password signs in with the role's permissions (with Admin: a full administrator — verified);
+    on `svc-ops`/`svc-audit` the master-user form `<mailbox>%<account>` then signs in as any mailbox over the HTTP
+    management path **and the mail ports** (IMAP/POP3/SMTP — verified run-25; app passwords can't). Because Stalwart
+    Community can't forbid this, production routes the apps to the management listener only through an internal
+    **management proxy** (ops repo `mgmtproxy/`) that refuses credential writes, app-password/API-key writes on a
+    service account, and Basic/`%` logins; Stalwart's listener binds only the proxy's and the public NGINX's networks.
+    The deployment plan creates the accounts (`service-accounts.ts`) and fails on a password, app password or a key
+    whose set differs; the per-minute `job:service-accounts` (`reconcileServiceAccounts`) reports any credential but
+    API keys on them or a missing expected account; the app-password reconciler flags a mailbox without exactly one
+    Password (`extraPasswords`); NGINX refuses the `svc-*` names and `%` publicly. A _replaced_ customer password
+    (new `credentialId`, same count) isn't diffed against a stored id yet (open item; the proxy blocks the write).
+  - **Start-up checks** (`credentialEnvProblems`, `verifyStalwartCredential`): in production each process has its own
+    key and no other (web: operations; worker: provisioning; scheduler: provisioning + audit), never the dev admin,
+    and the legacy `STALWART_API_KEY` is refused everywhere; worker and scheduler at start, and the web app before
+    first use, compare `GET /api/account` with the key's exact set and refuse anything else. ESLint keeps the web app
+    off the provisioning/audit clients and the worker off the operations client.
+  - **Development** uses the recovery admin (`STALWART_DEV_ADMIN_*`) for all three, refused in production. The
+    integration tests run with real keys of each kind (`packages/adapters/src/stalwart/credentials.int.test.ts`,
+    `app-passwords.int.test.ts`). The recovery admin is **never set in production**: it works in normal mode too.
+  - `Replace`-type app password permissions are not used: they could only grant what the operations key holds.
+
 - Stalwart's HTTP listener has no host port. On the public client host (`imap.`), NGINX proxies only what mail,
   contact and calendar apps use — `/jmap` (JMAP for third-party clients, `CLIENT_ENDPOINTS`), `/dav/*` and
   `/.well-known/{jmap,carddav,caldav}` — and **must not expose `/api/*`, `/auth/*`, `/admin` or the OAuth/OIDC

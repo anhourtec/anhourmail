@@ -1,6 +1,7 @@
 # ADR-0020: App passwords issued by the control plane, limited per credential
 
-**Status:** Accepted 2026-10-22
+**Status:** Accepted 2026-10-22 · amended 2026-10-23 (credential split, below — supersedes the single management
+key in decision 1)
 
 ## Context
 
@@ -31,10 +32,10 @@ Verified on the pinned v0.16.27 (throwaway domain and accounts, destroyed afterw
 
 ## Decision
 
-1. **The control plane issues app passwords** with the management credential on the mailbox's account
-   (`x:AppPassword/set { accountId }`). The production service account (ADR-0017) gains `impersonate` and
-   `sysAppPassword{Create,Get,Query,Destroy}`, still with `Replace` permissions and no `jmap*`/`dav*`, so the key can't
-   read mail directly. Its blast radius is unchanged: it could already reset any password (`sysAccountUpdate`).
+1. **The control plane issues app passwords** with a management credential on the mailbox's account
+   (`x:AppPassword/set { accountId }`) that holds `impersonate` and `sysAppPassword{Create,Get,Query,Destroy}`, with
+   `Replace` permissions and no mail objects, so it can't read mail directly. Since the 2026-10-23 amendment that is
+   the web app's **operations key**, which holds no account or domain permissions at all ("Credential split").
 2. **Creation runs in the request**, an exception to "provisioning is a job" (rule 26): the secret must reach the person
    and nowhere else, and a queued job would have to hold it. The request checks permission, ownership, a fresh step-up
    and the per-mailbox limit, creates the credential, then records metadata and the audit entry in one unit of work; if
@@ -50,24 +51,103 @@ Verified on the pinned v0.16.27 (throwaway domain and accounts, destroyed afterw
    `CUSTOMER_PERMISSIONS`), so even an OAuth token minted from an app password straight at Stalwart can't create
    credentials or change the password, and nobody can list other customers. The management key is unaffected
    (verified).
-5. **The reconciler checks credentials:** every mailbox's `x:AppPassword` and `x:ApiKey` against our rows (unknown,
+5. **The reconciler checks credentials:** every mailbox's app passwords and API keys against our rows (unknown,
    unexpected permissions, missing, any API key), reported and audited as `platform.reconciler_drift`, never removed;
-   pending revocations are queued again.
+   pending revocations are queued again. Since the amendment it reads them from `x:Account.credentials` with the
+   provisioning key (no owner access needed), and the revocation job removes them there too.
 6. **Only the person creates them** for their own mailbox (`app_password.manage.own`), never during act-as; admins
    who manage the mailbox can list and revoke. Metadata only in Postgres (`app_password`).
+
+## Credential split (amendment 2026-10-23)
+
+**Context.** The staging rehearsal showed that the single management key could not create customer mailboxes:
+Stalwart lets a credential assign only permissions it holds itself (`forbidden: You are not authorized to grant
+permissions: jmapPrincipalCreate, … and 175 more`). Dev never saw it because dev provisions with the recovery admin.
+Widening that key to every permission a mailbox keeps, while it also held `impersonate`, would let one credential read
+every mailbox. Verified on the pinned v0.16.27 (throwaway domains and accounts, destroyed afterwards;
+`research/stalwart.md` "Credential split"):
+
+- The check compares the new account's **effective** permissions (role minus `disabledPermissions`) with the
+  credential's own set; disabling needs nothing. So a key holding the User role's 239 permissions minus the 53
+  `CUSTOMER_DENIALS` it disables (186) creates, suspends and resumes customer mailboxes with `CUSTOMER_PERMISSIONS`.
+  It still can't hand out more (`roles: Admin`, `Inherit`, `Merge +impersonate` → `forbidden`).
+- Without `impersonate` such a key has no way into another account: `Email/query`, `Mailbox/get`, `Blob/get`,
+  `Identity/get`, `SieveScript/get`, `Blob/lookup`, `x:AppPassword/*` → `forbidden`; downloading a message blob whose
+  id it knows → 404. `x:Account/get credentials` lists app passwords (id, description, `createdAt`, `permissions`) and
+  API keys, and `x:Account/set { "credentials/<position>": null }` removes one app password and nothing else.
+- A key is capped by its account's role (a key with `sysDomainGet` on a User-role account → `forbidden`; a key minted
+  with `impersonate` on an account whose role lacks it doesn't get it). `GET /api/account` with a key returns exactly
+  what it can do.
+- **Any key with `sysAccountUpdate` can set a password on any account, its own included**, and a password sign-in gets
+  the account's role permissions, not the key's: with the Admin role on the service account, that was a full
+  administrator (`x:SystemSettings/get`, `Email/query` on any mailbox). A custom role equal to the key's set limits it
+  to what the key could do anyway.
+
+**Decision.**
+
+1. Three API keys, each on its own service account, never one credential that both creates accounts and acts inside
+   one (`@anhourmail/stalwart-client` `keys.ts` holds the exact sets; `service-accounts.ts` creates them):
+
+   | Key (setting)                              | Account         | Containers        | Permissions                                                                                                                                                                                                                                                            |
+   | ------------------------------------------ | --------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | Provisioning (`STALWART_PROVISIONING_KEY`) | `svc-provision` | worker, scheduler | `authenticate`; `sysDomain*`, `sysAccount*`, `sysDkimSignature*` (Get/Create/Update/Destroy/Query); the 186 permissions a customer mailbox keeps (`CUSTOMER_EFFECTIVE_PERMISSIONS`). No `impersonate`, no `sysAppPassword*`/`sysApiKey*`, no Sieve writes — 201 in all |
+   | Operations (`STALWART_OPERATIONS_KEY`)     | `svc-ops`       | web               | `authenticate`, `impersonate`, `sysAppPassword{Create,Get,Query,Destroy}`, `sysApiKey{Get,Query}`, `jmapSieveScript{Get,Query,Create,Update,Validate}`, `jmapBlobUpload`, `jmapBlobGet` — no account, domain or DKIM access                                            |
+   | Audit (`STALWART_AUDIT_KEY`)               | `svc-audit`     | scheduler         | `authenticate`, `impersonate`, `jmapSieveScriptGet`, `jmapSieveScriptQuery`, `jmapBlobGet` — reads managed scripts only                                                                                                                                                |
+
+2. Each service account has no password and a **custom role equal to its key's set** (not Admin), credentials written
+   only at creation; keys are `Replace`-typed, IP-restricted to the management network, expire, and rotate.
+3. Worker-image processes never get owner access through their own key: provisioning, suspension, deletion,
+   revocation and the credential inventory use the provisioning key; the managed Sieve script is written and made
+   active only by the web app. The hourly managed-script check (the detective control for the operations key's Sieve
+   writes) needs to read scripts, so the **scheduler** additionally holds the read-only audit key. The queue worker
+   doesn't, and a one-off job without it skips that check and says so. This third key is the one deviation from "two
+   keys"; leaving it out would remove the only check on the operations key's Sieve writes.
+4. Start-up checks refuse the wrong settings and the wrong keys: in production each process must have its own key and
+   none of the others (web: operations only; worker: provisioning only; scheduler: provisioning + audit), never the
+   dev admin, and the old `STALWART_API_KEY` is refused everywhere. At start the worker and scheduler, and the web app
+   before first use, ask Stalwart what each key can do (`GET /api/account`) and refuse anything but its exact set.
+   ESLint stops the web app importing the provisioning or audit client and the worker the operations client.
+5. Development keeps the recovery admin for all three (`STALWART_DEV_ADMIN_*`, refused in production); the
+   integration tests run the code under test with real keys of each kind (`credentials.int.test.ts`,
+   `app-passwords.int.test.ts`).
+
+**Consequences of the amendment.**
+
+- Staging can provision mailboxes. The web app (the internet-facing process) can no longer create, change or delete
+  accounts or domains; the worker can no longer read a script, mint an app password or download a blob.
+- **Not preventable inside Stalwart Community, so prevented at the network layer and detected (run-25):** any key
+  with `sysAccountUpdate` (the provisioning key) can set a password on any account — a customer's (then read their
+  mail) or `svc-ops`/`svc-audit` (then sign in with that role's `impersonate`, including Stalwart's
+  `<mailbox>%<account>` master-user form **on the HTTP management path and on the mail ports** IMAP/POP3/SMTP —
+  verified; app passwords can't be used that way); the operations key can likewise mint an `Inherit` app password on
+  `svc-provision`. So in production the apps reach Stalwart's management listener only through an internal
+  **management proxy** (ops repo `mgmtproxy/`, nginx+njs): it refuses any `x:Account/set` writing a `credentials`
+  value (no password set or replaced — the HTTP and mail-port master-user routes both depend on a password existing),
+  any `x:AppPassword/set`/`x:ApiKey/set` on a service account, and any Basic/`%`/non-Bearer auth; Stalwart's listener
+  binds only the proxy's and the public NGINX's networks. Detection on top: the per-minute `job:service-accounts`
+  (`reconcileServiceAccounts` — the three expected service accounts exist and hold API keys only; refuses to pass with
+  `checked: 0` when no infrastructure domain is configured), the app-password reconciler flags a mailbox without
+  exactly one Password credential (`extraPasswords`), the plan and smoke check fail on it, and NGINX refuses the
+  `svc-*` names and `%` publicly. Custom roles (not Admin) bound the damage if a password lands anyway. A _replaced_
+  customer password (same credential count, new `credentialId`) isn't diffed against a stored id yet (open item; the
+  proxy prevents the write on the app path). Stalwart has no setting to disable master-user login (checked
+  `/api/schema`).
+- The worker no longer re-activates a managed script that was switched off: the webmail shows the rules as inactive
+  and the next save turns them on, and the reconciler reports it (`inactive`).
+- Every Stalwart upgrade re-runs `credentials.int.test.ts`: it fails if the User role changes (the provisioning key
+  would no longer be able to create mailboxes) or any boundary above moves.
 
 ## Consequences
 
 - Mail apps work for console-made mailboxes without anyone choosing or knowing a mailbox password.
-- The management key is more powerful on paper (`impersonate`); kept on the internal network, IP-restricted and rotated
-  (ADR-0017). Re-verify `impersonate` semantics on every Stalwart upgrade (rule 22). With the Sieve writer's
-  `jmapBlobGet` it can download a message whose blob id it already holds (it can't list or look ids up). **Later
-  hardening:** separate keys — one for app passwords (`impersonate` + `sysAppPassword*`, no `jmap*`), one for the
-  managed Sieve script (`impersonate` + Sieve/blob, no `sys*`), one for the directory.
+- The operations key holds `impersonate`; kept on the internal network, IP-restricted and rotated (ADR-0017).
+  Re-verify `impersonate` semantics on every Stalwart upgrade (rule 22). With the Sieve writer's `jmapBlobGet` it can
+  download a message whose blob id it already holds (it can't list or look ids up). The directory is on a separate
+  key since the 2026-10-23 amendment.
 - An upgrade that adds self-service permissions to the User role is caught by the integration test
   (`packages/adapters/src/stalwart/app-passwords.int.test.ts`).
-- The key can mint an app password with any permissions (`Inherit` included) on any mailbox, and with the Sieve
-  writes install a `redirect` on any account. Neither can be prevented on Community, so both are detected: the
+- The operations key can mint an app password with any permissions (`Inherit` included) on any mailbox, and with the
+  Sieve writes install a `redirect` on any account. Neither can be prevented on Community, so both are detected: the
   reconciler reports unknown or unexpected credentials and managed scripts that aren't ours or redirect anywhere but a
   confirmed target (report only; `mailbox.ensure` re-queued; nothing deleted or rewritten).
 - Sharing can't be denied by a permission of its own (`shareWith` rides on `/set`): customer accounts can't create or

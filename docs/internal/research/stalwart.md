@@ -331,6 +331,52 @@ Third round (review run-22, throwaway accounts on two domains, destroyed afterwa
   it. With `jmapSieveScriptDestroy` and `jmapVacationResponse{Create,Destroy}` also denied, destroy **and** the bare
   deactivate answer `forbidden`.
 
+### Credential split (verified on the pinned v0.16.27, 2026-10-23)
+
+Throwaway `twokey-probe.test` and per-run `svc-*.test`/`keys-*.test` domains and accounts, destroyed afterwards
+(ADR-0020 "Credential split"; repeated by `packages/adapters/src/stalwart/credentials.int.test.ts`):
+
+- **Granting is checked against the effective set.** A key creating or updating an account may assign only
+  permissions it holds, compared with the account's effective permissions (role minus `disabledPermissions`, plus
+  `enabledPermissions`). Disabling needs nothing. The User role grants 239 permissions (`GET /api/account` as a fresh
+  User-role account with `Inherit`); `CUSTOMER_PERMISSIONS` disables 53 of them (plus 5 principal reads the role
+  doesn't list), leaving 186. A key holding those 186 plus `authenticate` and `sys{Domain,Account,DkimSignature}*`
+  (201 in all) creates a customer mailbox with `CUSTOMER_PERMISSIONS`, suspends (`SUSPENDED_PERMISSIONS`) and resumes
+  it. The same key gets `forbidden` "not authorized to grant permissions" for `roles: Admin` on a customer (402
+  missing), `permissions: Inherit` (the 58 denials), `Merge +impersonate`, creating an Admin account, `x:Role/set`.
+  The single management key of earlier versions failed here (`… jmapPrincipalCreate, … and 175 more`).
+- **No `impersonate`, no way in:** with that key, on another account `Email/query`/`Mailbox/get` → `forbidden` "You
+  do not have access to account …", `Identity/get`, `SieveScript/get`, `Blob/get`, `Blob/lookup` → "You are not an
+  owner of account …", `x:AppPassword/get|set` and `x:ApiKey/get` → `forbidden`, `Principal/query` → `forbidden`, and
+  `GET /jmap/download/<account>/<message blob id>/…` → **404**. Its own account's mail objects work (empty).
+- **Credentials through `x:Account`:** `x:Account/get { properties: [credentials] }` with `sysAccountGet` lists every
+  credential: `Password` (`credentialId`, `****`), `AppPassword` (`credentialId`, `description`, `createdAt`,
+  `permissions`, `****`), `ApiKey`. `x:Account/set { update: { <id>: { "credentials/<position>": null } } }` removes
+  that one entry and keeps the rest (the map is keyed by list position, not credential id). `ifInState` isn't usable
+  here (`x:Account/get` returns no state; a stale value answers HTTP 400).
+- **Keys are capped by their account's role** (re-verified): a key with `{authenticate, sysDomainGet}` on a User-role
+  account has only `authenticate` (`GET /api/account`) and `x:Domain/get` is `forbidden`; a key minted with
+  `impersonate` on an account whose custom role lacks it doesn't get it. `GET /api/account` with an API key returns
+  exactly what the key can do — the start-up scope check uses it.
+- **A password on a service account:** any key with `sysAccountUpdate` sets a `Password` credential on any account,
+  its own included (`credentials/<n>: {"@type":"Password", …}` → updated). Signing in with it gets the **account's role**
+  permissions: with the Admin role that was a full administrator (`x:SystemSettings/get`, `x:NetworkListener/get`,
+  `Email/query` on any mailbox). With a custom role equal to the key's set (`x:Role` `enabledPermissions`, account
+  `roles: {"@type":"Custom", roleIds}`) the same sign-in had the key's 201 permissions and no more; the key itself
+  still provisions. So service accounts get such a role, not Admin.
+- **Operations key** (`authenticate`, `impersonate`, `sysAppPassword{Create,Get,Query,Destroy}`, `sysApiKey{Get,Query}`,
+  `jmapSieveScript{Get,Query,Create,Update,Validate}`, `jmapBlobUpload`, `jmapBlobGet`) on a custom role: creates,
+  lists and destroys app passwords on a mailbox, writes, reads and activates the managed script; `x:Account/get|set`,
+  `x:Domain/get|set`, `x:DkimSignature/get`, `Email/query`, `Mailbox/get`, `Blob/lookup`, `x:ApiKey/set` on a mailbox
+  → `forbidden`. It **can** create an `Inherit` app password on a customer (no grant check there) and download a
+  message blob whose id it has (both known; reconciler and ADR-0020).
+- **Audit key** (`authenticate`, `impersonate`, `jmapSieveScriptGet`, `jmapSieveScriptQuery`, `jmapBlobGet`): reads a
+  mailbox's script and its active flag; `SieveScript/set` (write or deactivate), blob upload, `Email/query`,
+  `x:AppPassword/get`, `x:Account/get` → `forbidden`.
+- Probing with a wrong password through the dev forwarder banned the shared address at once (it was near the daily
+  `authBanRate` already) and took the dev web app's Stalwart access with it until the ban was lifted from inside the
+  container: never test wrong credentials against the shared dev address.
+
 ### Catch-all (verified on the pinned v0.16.27, 2026-10-22)
 
 `x:Domain/set { update: { <id>: { catchAllAddress } } }` takes effect at once (no reload). Unset: `RCPT TO` an unknown

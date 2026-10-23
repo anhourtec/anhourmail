@@ -211,7 +211,8 @@ are created locked even when the caller doesn't pass `suspended` (dev seed, e2e 
   also denied, a bare `SieveScript/set { onSuccessDeactivateScript: true }` answers `forbidden` for the user
   (verified). Before that it worked, and a user could deactivate then delete our script. `mailRules` still reports
   `inactive` if the script is switched off some other way (by hand, or an account not locked yet); every settings
-  save and every `mailbox.ensure` re-activate it (management credentials; nothing is deleted).
+  save re-activates it (the operations key; nothing is deleted), and the hourly reconciler reports it. Since the
+  credential split (ADR-0020) `mailbox.ensure` no longer does: the worker's key has no owner access to a mailbox.
 - **Drift and backfill:** `listUsers`/`listMailboxes` report `sieveLocked` (all customer denials present, or
   suspended); the hourly reconciler adds `sieveLockMismatch` for active mailboxes and re-queues `mailbox.ensure`, like
   suspension drift. Existing mailboxes are backfilled once at deploy: `npm run job:mailbox-backfill --workspace
@@ -223,8 +224,9 @@ are created locked even when the caller doesn't pass `suspended` (dev seed, e2e 
   `forbidden` (research/stalwart.md).
 
 The one managed script (`anhourmail`, `MANAGED_SIEVE_SCRIPT` in `@anhourmail/shared/webmail`) is read and **written
-with management credentials** (`StalwartManagement.getSieveScript` → `{content, active}` / `putSieveScript` /
-`activateSieveScript`; standard JMAP `SieveScript/*` + blob upload/download, admin can address another account),
+with management credentials** — the web app's operations key (`StalwartManagement.getSieveScript` →
+`{content, active}` / `putSieveScript`; standard JMAP `SieveScript/*` + blob upload/download, `impersonate` addresses
+another account; the reconciler reads with the scheduler's audit key),
 never the user's token — behind `server/adapters/stalwart.ts` `managedSieve()` (rule 21), injected into the BFF as the
 `ManagedSieve` port. There is no "include the person's previous script" behaviour (they can't have one).
 

@@ -43,8 +43,9 @@ browser ──HTTPS──► NGINX ─┬─► apps/site  (anhourmail.com: mark
                                  │  BFF: our session ─► Stalwart token (server-side only)
                                  ├─► Postgres (control plane, never mail content)
                                  ├─► Redis
-                                 └─► Stalwart /jmap  (internal network only)
-apps/worker ─► Postgres, Redis, Stalwart management (provisioning jobs, DNS checks, reconciler, imports)
+                                 └─► Stalwart /jmap  (internal network only; operations key: app passwords, managed Sieve)
+apps/worker ─► Postgres, Redis, Stalwart management (provisioning key: provisioning jobs, DNS checks, reconciler,
+               imports; the scheduler also a read-only audit key for the managed-script check — ADR-0020)
 mail clients ─► Stalwart 465/587/993/995 (TLS by Stalwart itself)    MX traffic ─► Stalwart 25
 ```
 
@@ -53,8 +54,8 @@ mail clients ─► Stalwart 465/587/993/995 (TLS by Stalwart itself)    MX traf
 | Component                   | Owns                                                                                                                                                                                       | Never does                                                                                                                      |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
 | `apps/site` (Next.js 16)    | Marketing pages, public docs at `/docs` (Fumadocs, ADR-0007), `/changelog`, `/credits`                                                                                                     | Store data or call Stalwart. "Get started" and "Sign in" link to the console (`APP_URL`); the site has no forms that post data. |
-| `apps/web` (Next.js 16)     | Console (sign-up, invites, plans, billing, domains, mailboxes, aliases, audit, staff tools) and webmail UI; BFF and JMAP proxy; public API routes                                          | Expose Stalwart to the browser, or put mail content in Postgres or logs                                                         |
-| `apps/worker`               | Event-driven jobs (provisioning, transactional mail, Stalwart WebHook ingestion, imports) and periodic jobs (DNS checks, quota sync, reconciler, audit-chain verify, secret re-encryption) | Run anything from a host crontab                                                                                                |
+| `apps/web` (Next.js 16)     | Console (sign-up, invites, plans, billing, domains, mailboxes, aliases, audit, staff tools) and webmail UI; BFF and JMAP proxy; public API routes                                          | Expose Stalwart to the browser, put mail content in Postgres or logs, or hold a Stalwart key that can create or change accounts |
+| `apps/worker`               | Event-driven jobs (provisioning, transactional mail, Stalwart WebHook ingestion, imports) and periodic jobs (DNS checks, quota sync, reconciler, audit-chain verify, secret re-encryption) | Run anything from a host crontab, or hold a Stalwart key that can write inside a mailbox                                        |
 | `packages/core`             | Domain types, business rules, services, repository and port interfaces, audit module                                                                                                       | Import an ORM, driver or SDK (ADR-0008, enforced by ESLint)                                                                     |
 | `packages/adapters`         | Postgres (drizzle) and in-memory implementations of every repository, plus contract tests                                                                                                  | Contain business rules                                                                                                          |
 | `packages/stalwart-client`  | The only Stalwart management client (JMAP `x:*` objects)                                                                                                                                   | Touch mailbox content                                                                                                           |
