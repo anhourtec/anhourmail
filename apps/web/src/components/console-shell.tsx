@@ -105,7 +105,7 @@ export async function ConsoleShell({
         // Customers only (roles.md "Mail (webmail link)": staff ✗). Pre-fills the address, never a credential.
         ...(actor.memberships.length > 0
           ? {
-              webmailHref: `${env().WEBMAIL_URL.replace(/\/$/, "")}/sign-in?address=${encodeURIComponent(actor.email)}`,
+              webmailHref: `${env().WEBMAIL_URL.replace(/\/$/, "")}/sign-in`,
             }
           : {}),
       }}

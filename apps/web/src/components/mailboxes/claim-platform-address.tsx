@@ -147,10 +147,7 @@ export function ClaimPlatformAddress({
             server within a minute; then sign in to the webmail with it and the password you chose.
           </span>
         </p>
-        <a
-          href={`${webmailUrl.replace(/\/$/, "")}/sign-in?address=${encodeURIComponent(created)}`}
-          className={`${secondaryButtonClass} w-fit`}
-        >
+        <a href={`${webmailUrl.replace(/\/$/, "")}/sign-in`} className={`${secondaryButtonClass} w-fit`}>
           Open webmail
         </a>
       </div>

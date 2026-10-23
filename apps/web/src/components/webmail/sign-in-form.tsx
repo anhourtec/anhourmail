@@ -21,15 +21,7 @@ const MESSAGES: Record<number, string> = {
  * Posts the mailbox address and password to the BFF once; on success the session cookie is already set. `domain` is the
  * deployment's free address domain, for the placeholder.
  */
-export function WebmailSignInForm({
-  home,
-  defaultAddress,
-  domain,
-}: {
-  home: string;
-  defaultAddress: string;
-  domain: string;
-}) {
+export function WebmailSignInForm({ home, domain }: { home: string; domain: string }) {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const hydrated = useHydrated();
@@ -77,8 +69,7 @@ export function WebmailSignInForm({
           type="email"
           autoComplete="username"
           placeholder={`you@${domain}`}
-          defaultValue={defaultAddress}
-          autoFocus={defaultAddress === ""}
+          autoFocus
           required
           className={`${inputClass} font-mono text-[14px]`}
         />
@@ -92,7 +83,7 @@ export function WebmailSignInForm({
           name="password"
           autoComplete="current-password"
           placeholder="Mailbox password"
-          autoFocus={defaultAddress !== ""}
+          autoFocus={false}
           required
           className={inputClass}
         />

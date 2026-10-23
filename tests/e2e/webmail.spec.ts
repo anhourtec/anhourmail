@@ -79,9 +79,11 @@ test.describe("deliberate wrong passwords", () => {
 
   test("a wrong mailbox password gets the generic error", async ({ page }) => {
     // Not checking console errors here: the browser logs the expected 401.
+    // An address in the URL is ignored: pre-filled sign-in links look like phishing links to browsers.
     await page.goto(`${urls.webmail}/sign-in?address=${encodeURIComponent(OWNER)}`);
     await expect(page.getByRole("heading", { name: "Sign in to your mailbox" })).toBeVisible();
-    await expect(page.getByLabel("Mailbox address")).toHaveValue(OWNER);
+    await expect(page.getByLabel("Mailbox address")).toHaveValue("");
+    await page.getByLabel("Mailbox address").fill(OWNER);
     // A native submit (before the page's JavaScript runs) must never put the password in a URL.
     await expect(page.locator("form")).toHaveAttribute("method", "post");
     await page.getByLabel("Password", { exact: true }).fill("not-the-password");

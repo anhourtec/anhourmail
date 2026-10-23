@@ -25,11 +25,11 @@ import {
   listPlatformAudit,
 } from "@anhourmail/core/audit";
 import { domainAllowance, listDomains } from "@anhourmail/core/domains";
-import { listMailboxes } from "@anhourmail/core/mailboxes";
+import { listMailboxes, mailboxStoragePool } from "@anhourmail/core/mailboxes";
 import { listPeople } from "@anhourmail/core/people";
 import { MAX_MAILBOXES } from "@anhourmail/shared/plans";
 import { ROLE_LABELS } from "@anhourmail/shared/rbac";
-import { accountStorage, formatBytes, storageSummary } from "@anhourmail/shared/storage";
+import { formatBytes, poolSummary, type StoragePool } from "@anhourmail/shared/storage";
 
 import { CommandBar, CommandLink } from "@/components/console/command-bar";
 import { DetailTabs } from "@/components/console/flyout";
@@ -112,28 +112,27 @@ function MiniList({
 }
 
 /**
- * The account's storage: used across its mailboxes (last measurement, every ~10 minutes) of their quotas added up.
- * Only for people who can see mailboxes.
+ * The account's storage pool: used across its mailboxes (last measurement, every ~10 minutes) of the storage the whole
+ * account shares, and how much of it is not given to a mailbox yet. Only for people who can see mailboxes.
  */
-function AccountStorage({
-  mailboxes,
-}: {
-  mailboxes: readonly { quotaBytes: number; storageUsedBytes: number | null }[];
-}) {
-  const total = accountStorage(mailboxes);
-  const s = storageSummary(total.usedBytes, total.quotaBytes);
-  const count = `${String(total.mailboxes)} ${total.mailboxes === 1 ? "mailbox" : "mailboxes"}`;
+function AccountStorage({ pool, count: n }: { pool: StoragePool; count: number }) {
+  const s = poolSummary(pool);
+  const count = `${String(n)} ${n === 1 ? "mailbox" : "mailboxes"}`;
   return (
     <div className="flex max-w-md flex-col gap-1.5">
       <p className="text-[14px]">
         <span className="font-medium">Storage</span>{" "}
         {s.used === null ? (
-          <span className="text-muted-foreground">not measured yet across {count}</span>
+          <span className="text-muted-foreground">
+            not measured yet across {count} · <span className="am-num">{formatBytes(pool.poolBytes)}</span> shared
+          </span>
         ) : (
           <>
             <span className="am-num">{s.used}</span> used of{" "}
-            <span className="am-num">{formatBytes(total.quotaBytes)}</span>{" "}
-            <span className="text-muted-foreground">across {count}</span>
+            <span className="am-num">{formatBytes(pool.poolBytes)}</span>{" "}
+            <span className="text-muted-foreground">
+              across {count} · <span className="am-num">{formatBytes(pool.unassignedBytes)}</span> unassigned
+            </span>
           </>
         )}
       </p>
@@ -151,15 +150,16 @@ type Card = { id: string; icon: LucideIcon; title: string; text: string; href: s
 /** Everything the home page shows for one account, read through the services with the person's own permissions. */
 async function accountOverview(actor: UserActor, accountId: string) {
   const deps = container().deps;
-  const [mailboxes, people, domains, allowance, aliases, audit] = await Promise.all([
+  const [mailboxes, pool, people, domains, allowance, aliases, audit] = await Promise.all([
     can(actor, "mailbox.read", accountId) ? listMailboxes(deps, actor, accountId) : null,
+    can(actor, "mailbox.read", accountId) ? mailboxStoragePool(deps, actor, accountId) : null,
     can(actor, "member.read", accountId) ? listPeople(deps, actor, accountId) : null,
     can(actor, "domain.read", accountId) ? listDomains(deps, actor, accountId) : null,
     can(actor, "domain.read", accountId) ? domainAllowance(deps, actor, accountId) : null,
     can(actor, "alias.manage.own", accountId) ? listAliases(deps, actor, accountId) : null,
     can(actor, "audit.read", accountId) ? listAccountAudit(deps, actor, accountId, { limit: 6 }) : null,
   ]);
-  return { mailboxes, people, domains, allowance, aliases, audit };
+  return { mailboxes, pool, people, domains, allowance, aliases, audit };
 }
 
 type Overview = Awaited<ReturnType<typeof accountOverview>>;
@@ -497,10 +497,7 @@ export default async function ConsoleHome() {
   const cards = first ? recommendations(actor, first.accountId, first.o, freeDomain) : [];
   const base = current ? `/accounts/${current}` : "";
   const staff = actor.platformRoles.length > 0;
-  const webmail =
-    actor.memberships.length > 0
-      ? `${env().WEBMAIL_URL.replace(/\/$/, "")}/sign-in?address=${encodeURIComponent(actor.email)}`
-      : null;
+  const webmail = actor.memberships.length > 0 ? `${env().WEBMAIL_URL.replace(/\/$/, "")}/sign-in` : null;
 
   const quick: { href: string; icon: React.ReactNode; label: string; external?: boolean }[] = [];
   if (current && first) {
@@ -576,7 +573,9 @@ export default async function ConsoleHome() {
                 </h3>
                 <span className="am-small">{ROLE_LABELS[`account:${role}`]}</span>
               </div>
-              {o.mailboxes && o.mailboxes.length > 0 && <AccountStorage mailboxes={o.mailboxes} />}
+              {o.mailboxes && o.pool && o.mailboxes.length > 0 && (
+                <AccountStorage pool={o.pool} count={o.mailboxes.length} />
+              )}
               <AccountTabs actor={actor} accountId={accountId} o={o} />
             </div>
           ))}

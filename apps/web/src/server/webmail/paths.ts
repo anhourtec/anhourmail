@@ -8,9 +8,3 @@ import { hostKind } from "../host-routing";
 export function webmailBasePath(host: string | null, production: boolean, webmailDevPort?: string): string {
   return hostKind(host ?? "", production ? undefined : webmailDevPort) === "mail" ? "" : "/webmail";
 }
-
-/** Only an address may be pre-filled from the console link; anything else is ignored. */
-export function prefillAddress(value: string | string[] | undefined): string {
-  const v = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return v.length <= 254 && /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(v) ? v : "";
-}

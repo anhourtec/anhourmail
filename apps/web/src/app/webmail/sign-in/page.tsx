@@ -9,13 +9,14 @@ import { env } from "@/server/env";
 import { platform } from "@/server/platform";
 import { BLOCKED_HELP, BLOCKED_MESSAGE, NOTICE_COOKIE } from "@/server/webmail/http";
 import { webmail, webmailCookieName } from "@/server/webmail/instance";
-import { prefillAddress, webmailBasePath } from "@/server/webmail/paths";
+import { webmailBasePath } from "@/server/webmail/paths";
 
 export const metadata: Metadata = { title: "Sign in to webmail" };
 
 /**
  * Webmail sign-in (ADR-0018): mailbox address + mailbox password, exchanged once by the BFF for server-held
- * tokens. The console links here with `?address=` to pre-fill the address only (never a credential).
+ * tokens. Nothing in the URL pre-fills the address: a sign-in link carrying someone's email address is the shape of a
+ * phishing link, so browsers' phishing checks flag it (and anyone could craft one pointing at our page).
  */
 export default async function WebmailSignInPage({
   searchParams,
@@ -32,7 +33,6 @@ export default async function WebmailSignInPage({
   const id = jar.get(webmailCookieName())?.value;
   if (id && (await webmail().store.read(id))) redirect(base === "" ? "/" : base);
   const params = await searchParams;
-  const address = prefillAddress(params.address);
   const blocked = params.reason === "unavailable" || jar.get(NOTICE_COOKIE)?.value === "unavailable";
   return (
     <AuthSplit area="Webmail">
@@ -48,11 +48,7 @@ export default async function WebmailSignInPage({
           {BLOCKED_MESSAGE} {BLOCKED_HELP}
         </p>
       )}
-      <WebmailSignInForm
-        home={base === "" ? "/" : base}
-        defaultAddress={address}
-        domain={platform().freeAddressDomain}
-      />
+      <WebmailSignInForm home={base === "" ? "/" : base} domain={platform().freeAddressDomain} />
       <p className="am-micro">Remote images stay blocked until you choose to load them.</p>
       <LegalConsent verb="signing in" />
     </AuthSplit>

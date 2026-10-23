@@ -84,18 +84,12 @@ describe("signed-out webmail visits", () => {
 });
 
 describe("webmail paths", async () => {
-  const { prefillAddress, webmailBasePath } = await import("./webmail/paths");
+  const { webmailBasePath } = await import("./webmail/paths");
   it("serves the webmail at the root of its origin, under /webmail elsewhere", () => {
     expect(webmailBasePath("mail.anhourmail.com", true)).toBe("");
     expect(webmailBasePath("localhost:43300", false, "43300")).toBe("");
     expect(webmailBasePath("localhost:43200", false, "43300")).toBe("/webmail");
     expect(webmailBasePath(null, true)).toBe("/webmail");
-  });
-  it("pre-fills only a plausible address", () => {
-    expect(prefillAddress(" Owner@Example.test ")).toBe("owner@example.test");
-    expect(prefillAddress("<script>@x.y")).toBe("");
-    expect(prefillAddress(["a@b.c"])).toBe("");
-    expect(prefillAddress(undefined)).toBe("");
   });
 });
 
