@@ -8,7 +8,12 @@ import type { AppPassword, AppPasswordRepository } from "@anhourmail/core/app-pa
 import type { Invite, InviteRepository, PeopleRepository } from "@anhourmail/core/people";
 import type { AccountSummary, PlatformAccountRepository, StaffRepository } from "@anhourmail/core/platform";
 import type { CatchAllRepository, CustomerDomain, DomainRepository } from "@anhourmail/core/domains";
-import { type Mailbox, type MailboxRepository, MAILBOX_STATUSES } from "@anhourmail/core/mailboxes";
+import {
+  type Mailbox,
+  type MailboxPasswordRepository,
+  type MailboxRepository,
+  MAILBOX_STATUSES,
+} from "@anhourmail/core/mailboxes";
 import type {
   DomainState,
   MailDirectoryRepository,
@@ -67,6 +72,13 @@ export type MemoryState = {
   webmailPreferences: { mailboxId: string; prefs: Record<string, unknown>; updatedAt: Date }[];
   forwardingTargets: ForwardingTarget[];
   appPasswords: AppPassword[];
+  /** Mailbox password tracking (Postgres: `mailbox.pending_password_hash`, `mailbox.password_credential_id`). */
+  mailboxPasswords: {
+    mailboxId: string;
+    pendingHash: string | null;
+    credentialId: string | null;
+    grant?: string | null;
+  }[];
   /** Catch-all per domain (Postgres: `customer_domain.catch_all_mailbox_id`). */
   catchAll: { domainId: string; mailboxId: string }[];
   /** Step-up markers by console session (Postgres: better-auth verification rows `step-up-<session id>`). */
@@ -98,6 +110,7 @@ export const emptyState = (): MemoryState => ({
   webmailPreferences: [],
   forwardingTargets: [],
   appPasswords: [],
+  mailboxPasswords: [],
   catchAll: [],
   stepUps: [],
   passwordSetTokens: [],
@@ -228,6 +241,16 @@ function repositories(s: MemoryState): Repositories {
     get: async (id) => clone(s.jobs.find((j) => j.id === id) ?? null),
   };
 
+  const passwordOf = (mailboxId: string) => s.mailboxPasswords.find((p) => p.mailboxId === mailboxId);
+  const passwordRow = (mailboxId: string) => {
+    let p = passwordOf(mailboxId);
+    if (!p) {
+      p = { mailboxId, pendingHash: null, credentialId: null };
+      s.mailboxPasswords.push(p);
+    }
+    return p;
+  };
+
   const directory: MailDirectoryRepository = {
     getDomain: async (id) => {
       const d = s.domains.find((x) => x.id === id);
@@ -248,7 +271,26 @@ function repositories(s: MemoryState): Repositories {
           .filter((a) => a.mailboxId === m.id)
           .sort((a, b) => a.address.localeCompare(b.address))
           .map((a) => ({ address: a.address, kind: a.kind, enabled: a.enabled, description: a.description })),
+        pendingPasswordHash: passwordOf(m.id)?.pendingHash ?? null,
+        pendingPasswordGrant: passwordOf(m.id)?.grant ?? null,
+        passwordCredentialId: passwordOf(m.id)?.credentialId ?? null,
       });
+    },
+    passwordApplied: async (id, applied, credentialId) => {
+      if (!s.mailboxes.some((m) => m.id === id)) return;
+      const p = passwordRow(id);
+      p.credentialId = credentialId;
+      if (applied !== null && p.pendingHash === applied) {
+        p.pendingHash = null;
+        p.grant = null;
+      }
+    },
+    clearPendingPassword: async (id) => {
+      const p = passwordOf(id);
+      if (p) {
+        p.pendingHash = null;
+        p.grant = null;
+      }
     },
     markDomain: async (id, update) => {
       const d = s.domains.find((x) => x.id === id);
@@ -325,6 +367,16 @@ function repositories(s: MemoryState): Repositories {
       ),
   };
 
+  const mailboxPasswords: MailboxPasswordRepository = {
+    setPending: async (mailboxId, passwordHash, grant) => {
+      if (!s.mailboxes.some((m) => m.id === mailboxId)) return;
+      const row = passwordRow(mailboxId);
+      row.pendingHash = passwordHash;
+      row.grant = grant;
+    },
+    pending: async (mailboxId) => (passwordOf(mailboxId)?.pendingHash ?? null) !== null,
+  };
+
   const mailboxes: MailboxRepository = {
     listByAccount: async (accountId) =>
       clone(s.mailboxes.filter((m) => m.accountId === accountId).sort((a, b) => a.address.localeCompare(b.address))),
@@ -365,6 +417,7 @@ function repositories(s: MemoryState): Repositories {
       s.webmailPreferences = s.webmailPreferences.filter((p) => p.mailboxId !== id);
       s.forwardingTargets = s.forwardingTargets.filter((t) => t.mailboxId !== id);
       s.appPasswords = s.appPasswords.filter((p) => p.mailboxId !== id); // ON DELETE CASCADE
+      s.mailboxPasswords = s.mailboxPasswords.filter((p) => p.mailboxId !== id); // columns of the row
       s.catchAll = s.catchAll.filter((c) => c.mailboxId !== id); // ON DELETE SET NULL
       return true;
     },
@@ -653,7 +706,17 @@ function repositories(s: MemoryState): Repositories {
       s.mailboxes.flatMap((m) =>
         m.stalwartId === null
           ? []
-          : [{ id: m.id, accountId: m.accountId, address: m.address, stalwartId: m.stalwartId, status: m.status }],
+          : [
+              {
+                id: m.id,
+                accountId: m.accountId,
+                address: m.address,
+                stalwartId: m.stalwartId,
+                status: m.status,
+                passwordCredentialId: passwordOf(m.id)?.credentialId ?? null,
+                passwordPending: (passwordOf(m.id)?.pendingHash ?? null) !== null,
+              },
+            ],
       ),
   };
 
@@ -720,6 +783,7 @@ function repositories(s: MemoryState): Repositories {
     directory,
     domains,
     mailboxes,
+    mailboxPasswords,
     aliases,
     people,
     invites,

@@ -9,7 +9,13 @@ import type { AliasKind, AliasRepository, MailAlias } from "@anhourmail/core/ali
 import type { Invite, InviteRepository, InviteStatus, MemberRecord, PeopleRepository } from "@anhourmail/core/people";
 import type { AccountSummary, PlatformAccountRepository, StaffRepository } from "@anhourmail/core/platform";
 import type { CustomerDomain, DomainRepository, DomainStatus } from "@anhourmail/core/domains";
-import { type Mailbox, type MailboxRepository, MAILBOX_STATUSES, type MailboxStatus } from "@anhourmail/core/mailboxes";
+import {
+  type Mailbox,
+  type MailboxPasswordRepository,
+  type MailboxRepository,
+  MAILBOX_STATUSES,
+  type MailboxStatus,
+} from "@anhourmail/core/mailboxes";
 import type {
   DesiredMailbox,
   DomainState,
@@ -416,7 +422,35 @@ class PgMailDirectoryRepository implements MailDirectoryRepository {
         enabled: a.enabled,
         description: a.description,
       })),
+      pendingPasswordHash: m.pendingPasswordHash,
+      pendingPasswordGrant: m.pendingPasswordGrant,
+      passwordCredentialId: m.passwordCredentialId,
     };
+  }
+
+  async passwordApplied(id: string, applied: string | null, credentialId: string): Promise<void> {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return;
+    await this.x
+      .update(mailbox)
+      .set({
+        passwordCredentialId: credentialId,
+        // Only the hash that was applied: a newer one set meanwhile stays for its own job.
+        ...(applied === null
+          ? {}
+          : {
+              pendingPasswordHash: sql`case when ${mailbox.pendingPasswordHash} = ${applied} then null else ${mailbox.pendingPasswordHash} end`,
+              pendingPasswordGrant: sql`case when ${mailbox.pendingPasswordHash} = ${applied} then null else ${mailbox.pendingPasswordGrant} end`,
+            }),
+      })
+      .where(eq(mailbox.id, id));
+  }
+
+  async clearPendingPassword(id: string): Promise<void> {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return;
+    await this.x
+      .update(mailbox)
+      .set({ pendingPasswordHash: null, pendingPasswordGrant: null })
+      .where(eq(mailbox.id, id));
   }
 
   async markDomain(id: string, update: { stalwartId?: string; lastError: string | null }): Promise<void> {
@@ -592,6 +626,25 @@ function toMailbox(r: typeof mailbox.$inferSelect): Mailbox {
     purgeAfter: r.purgeAfter,
     createdAt: r.createdAt,
   };
+}
+
+class PgMailboxPasswordRepository implements MailboxPasswordRepository {
+  constructor(private readonly x: Executor) {}
+
+  async setPending(mailboxId: string, passwordHash: string, grant: string | null): Promise<void> {
+    await this.x
+      .update(mailbox)
+      .set({ pendingPasswordHash: passwordHash, pendingPasswordGrant: grant })
+      .where(eq(mailbox.id, mailboxId));
+  }
+
+  async pending(mailboxId: string): Promise<boolean> {
+    const [r] = await this.x
+      .select({ pending: sql<boolean>`${mailbox.pendingPasswordHash} is not null` })
+      .from(mailbox)
+      .where(eq(mailbox.id, mailboxId));
+    return r?.pending ?? false;
+  }
 }
 
 class PgMailboxRepository implements MailboxRepository {
@@ -1080,6 +1133,7 @@ const repositories = (x: Executor): Repositories => ({
   directory: new PgMailDirectoryRepository(x),
   domains: new PgDomainRepository(x),
   mailboxes: new PgMailboxRepository(x),
+  mailboxPasswords: new PgMailboxPasswordRepository(x),
   aliases: new PgAliasRepository(x),
   people: new PgPeopleRepository(x),
   invites: new PgInviteRepository(x),

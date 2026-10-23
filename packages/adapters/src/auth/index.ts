@@ -297,7 +297,7 @@ export async function sessionUser(auth: Auth, headers: Headers): Promise<Session
 export const authRouteHandlers = (auth: Auth) => toNextJsHandler(auth);
 
 /** Password hashing for server-side account creation (seed). Same scheme as sign-in. */
-export { hashPassword, needsRehash, verifyPassword } from "./password";
+export { hashPassword, mailboxPasswordHasher, needsRehash, verifyPassword } from "./password";
 export { hashRecoveryCode, newRecoveryCodes, recoveryCodesLeft } from "./recovery-codes";
 export type { Sealer } from "./sealed-adapter";
 export type { AuthSecurityEvent, SecurityHooks } from "./security-plugin";

@@ -35,3 +35,9 @@ export function needsRehash(stored: string): boolean {
   if (!m) return true;
   return Number(m[1]) < ARGON2_PARAMS.memoryCost || Number(m[2]) < ARGON2_PARAMS.timeCost;
 }
+
+/**
+ * Mailbox passwords (core `PasswordHasher`): the same argon2id parameters, as the PHC string Stalwart is given (it
+ * verifies it itself; we never keep it once the worker has applied it — 07-security.md "Password storage").
+ */
+export const mailboxPasswordHasher = { hash: hashPassword } as const;

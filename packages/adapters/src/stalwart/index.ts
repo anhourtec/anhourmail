@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * MailServer port → Stalwart (ADR-0001: driven through its JMAP management API, never forked).
- * New mailboxes get a random, unusable argon2id password: people reach mail through webmail sign-in and app
- * passwords, so no mailbox password is ever chosen, sent or stored by the control plane (CLAUDE.md rule 23).
+ * Mailbox passwords reach Stalwart only as salted argon2id PHC strings hashed by the control plane (CLAUDE.md rule
+ * 23): the one chosen at creation (`initialPasswordHash`) or by a reset or change (`setMailboxPassword`). A mailbox
+ * created without one gets a random, unusable password nobody knows.
  */
 import { randomBytes } from "node:crypto";
 
@@ -70,6 +71,7 @@ export function stalwartAppPasswordInventory(mgmt: StalwartManagement): AppPassw
         })),
         apiKeys: inv.apiKeys,
         passwords: inv.passwords.length,
+        passwordIds: inv.passwords.map((p) => p.id),
       };
     },
   };
@@ -137,18 +139,22 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
       await mgmt.revokeAppPasswordCredential(externalId, credentialId, createdAt);
     },
 
-    async ensureMailbox({ externalId: known, address, quotaBytes, suspended, aliases }) {
+    async ensureMailbox({ externalId: known, initialPasswordHash, address, quotaBytes, suspended, aliases }) {
       const [local, domain] = split(address);
       // A new mailbox never takes over an account that already exists on the mail server: it may hold someone's
       // mail from before (e.g. a domain that changed hands). That needs a person to look at it.
       if (known === null && (await mgmt.listUsers()).some((u) => u.address === `${local}@${domain}`)) {
         throw new Error("address already exists on the mail server; not adopting it");
       }
+      if (initialPasswordHash !== null && !initialPasswordHash.startsWith("$argon2id$")) {
+        throw new Error("mailbox passwords reach the mail server only as argon2id hashes");
+      }
       const externalId = await mgmt.upsertUser({
         name: local,
         domain,
-        // Used only when the account is new (resetPassword is false): a random secret nobody knows.
-        password: await hashPassword(randomBytes(32).toString("base64url")),
+        // Used only when the account is new (resetPassword is false): the password chosen at creation (its hash), or
+        // a random secret nobody knows.
+        password: initialPasswordHash ?? (await hashPassword(randomBytes(32).toString("base64url"))),
         quotaBytes,
         // Suspension disables sign-in, sending and delivery; credentials and mail are kept (SUSPENDED_PERMISSIONS).
         suspended,
@@ -166,7 +172,17 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
             };
           }),
       });
-      return { externalId };
+      return { externalId, created: known === null, passwordCredentialId: await mgmt.passwordCredentialId(externalId) };
+    },
+
+    async setMailboxPassword({ externalId, address, passwordHash, grant }) {
+      // Only the account we created, and only while it still has this address (as for destroying it).
+      const account = await mgmt.getUser(externalId);
+      const [local, domain] = split(address);
+      if (account?.address !== `${local}@${domain}`) {
+        throw new Error("mail server account no longer matches this mailbox; not setting its password");
+      }
+      return mgmt.replacePassword(externalId, passwordHash, { grant });
     },
 
     async destroyMailbox({ externalId, address }) {

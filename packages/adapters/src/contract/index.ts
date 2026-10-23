@@ -481,6 +481,72 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
       }
     });
 
+    it("mailbox passwords: a waiting hash, compare-and-clear when applied, recorded credential, reconciler view", async () => {
+      const { uow, cleanup, seedMail } = await factory();
+      try {
+        const tag = randomUUID().slice(0, 8);
+        const domain = `pw-${tag}.test`;
+        const { mailboxId } = await seedMail({ domain, address: `a@${domain}`, alias: `b@${domain}`, quotaBytes: 1 });
+        const other = await seedMail({
+          domain: `pw2-${tag}.test`,
+          address: `x@pw2-${tag}.test`,
+          alias: `y@pw2-${tag}.test`,
+          quotaBytes: 1,
+        });
+        const h1 = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdDE$aGFzaDE";
+        const h2 = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdDI$aGFzaDI";
+        expect(await uow.run((r) => r.mailboxPasswords.pending(mailboxId))).toBe(false);
+        expect(await uow.run((r) => r.directory.getMailbox(mailboxId))).toMatchObject({
+          pendingPasswordHash: null,
+          passwordCredentialId: null,
+        });
+        await uow.run((r) => r.mailboxPasswords.setPending(mailboxId, h1, null));
+        expect(await uow.run((r) => r.mailboxPasswords.pending(mailboxId))).toBe(true);
+        expect(await uow.run((r) => r.mailboxPasswords.pending(other.mailboxId))).toBe(false);
+        expect((await uow.run((r) => r.directory.getMailbox(mailboxId)))?.pendingPasswordHash).toBe(h1);
+        // A newer password set meanwhile survives the older one being applied.
+        await uow.run((r) => r.mailboxPasswords.setPending(mailboxId, h2, "g2"));
+        await uow.run((r) => r.directory.passwordApplied(mailboxId, h1, "b"));
+        expect(await uow.run((r) => r.directory.getMailbox(mailboxId))).toMatchObject({
+          pendingPasswordHash: h2,
+          pendingPasswordGrant: "g2",
+          passwordCredentialId: "b",
+        });
+        await uow.run((r) =>
+          r.directory.markMailbox(mailboxId, { status: "active", stalwartId: `s-${tag}`, lastError: null }),
+        );
+        expect(
+          (await uow.run((r) => r.appPasswords.mailboxesOnServer())).find((x) => x.id === mailboxId),
+        ).toMatchObject({
+          passwordCredentialId: "b",
+          passwordPending: true,
+        });
+        await uow.run((r) => r.directory.passwordApplied(mailboxId, h2, "c"));
+        expect(await uow.run((r) => r.directory.getMailbox(mailboxId))).toMatchObject({
+          pendingPasswordHash: null,
+          pendingPasswordGrant: null,
+          passwordCredentialId: "c",
+        });
+        // Recording only (no hash applied) leaves a waiting one alone; clearing drops it.
+        await uow.run((r) => r.mailboxPasswords.setPending(mailboxId, h1, null));
+        await uow.run((r) => r.directory.passwordApplied(mailboxId, null, "d"));
+        expect(await uow.run((r) => r.directory.getMailbox(mailboxId))).toMatchObject({
+          pendingPasswordHash: h1,
+          passwordCredentialId: "d",
+        });
+        await uow.run((r) => r.directory.clearPendingPassword(mailboxId));
+        expect(await uow.run((r) => r.mailboxPasswords.pending(mailboxId))).toBe(false);
+        expect((await uow.run((r) => r.directory.getMailbox(other.mailboxId)))?.passwordCredentialId).toBeNull();
+        // Unknown and malformed ids are no-ops.
+        await uow.run(async (r) => {
+          await r.directory.passwordApplied("not-a-uuid", null, "x");
+          await r.directory.clearPendingPassword("not-a-uuid");
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("people: account-scoped list with names and join dates, conditional role change and removal", async () => {
       const { uow, cleanup, createUser } = await factory();
       try {
@@ -929,6 +995,8 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
           address,
           stalwartId: `s-${tag}`,
           status: "active",
+          passwordCredentialId: null,
+          passwordPending: false,
         });
         await uow.run((r) => r.appPasswords.deleteRevoked(phone.id));
         expect((await uow.run((r) => r.appPasswords.listByMailbox(mailboxId))).map((p) => p.name)).toEqual([

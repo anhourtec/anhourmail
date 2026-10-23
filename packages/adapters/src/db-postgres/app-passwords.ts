@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 
 import type { AppPassword, AppPasswordRepository } from "@anhourmail/core/app-passwords";
 import type { CatchAllRepository } from "@anhourmail/core/domains";
@@ -116,7 +116,15 @@ export class PgAppPasswordRepository implements AppPasswordRepository {
   }
 
   async mailboxesOnServer(): Promise<
-    { id: string; accountId: string; address: string; stalwartId: string; status: string }[]
+    {
+      id: string;
+      accountId: string;
+      address: string;
+      stalwartId: string;
+      status: string;
+      passwordCredentialId: string | null;
+      passwordPending: boolean;
+    }[]
   > {
     const rows = await this.x
       .select({
@@ -125,6 +133,8 @@ export class PgAppPasswordRepository implements AppPasswordRepository {
         address: mailbox.address,
         stalwartId: mailbox.stalwartId,
         status: mailbox.status,
+        passwordCredentialId: mailbox.passwordCredentialId,
+        passwordPending: sql<boolean>`${mailbox.pendingPasswordHash} is not null`,
       })
       .from(mailbox)
       .where(isNotNull(mailbox.stalwartId));

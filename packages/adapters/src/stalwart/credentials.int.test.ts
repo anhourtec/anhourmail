@@ -149,6 +149,7 @@ describe("the credential split on Stalwart", () => {
     customer.id = (
       await mail.ensureMailbox({
         externalId: null,
+        initialPasswordHash: null,
         address: `owner@${domain}`,
         quotaBytes: 50 * 1024 * 1024,
         suspended: false,
@@ -159,6 +160,7 @@ describe("the credential split on Stalwart", () => {
     expect(listed).toMatchObject({ suspended: false, sieveLocked: true });
     await mail.ensureMailbox({
       externalId: customer.id,
+      initialPasswordHash: null,
       address: `owner@${domain}`,
       quotaBytes: 1e8,
       suspended: true,
@@ -167,6 +169,7 @@ describe("the credential split on Stalwart", () => {
     expect((await mail.listMailboxes()).find((m) => m.address === `owner@${domain}`)?.suspended).toBe(true);
     await mail.ensureMailbox({
       externalId: customer.id,
+      initialPasswordHash: null,
       address: `owner@${domain}`,
       quotaBytes: 1e8,
       suspended: false,

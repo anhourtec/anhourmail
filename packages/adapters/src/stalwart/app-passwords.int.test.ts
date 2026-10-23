@@ -257,6 +257,11 @@ describe("app passwords on Stalwart", () => {
       resetPassword: true,
       quotaBytes: 50 * 1024 * 1024,
     });
+    // Set outside the control plane, so record it as the expected one (else the reconciler reports it as replaced).
+    await db
+      .update(schema.mailbox)
+      .set({ passwordCredentialId: await mgmt.passwordCredentialId(stalwartId) })
+      .where(eq(schema.mailbox.id, m.id));
     const granted = (await (
       await fetch(`${stalwartUrl}/api/account`, { headers: { Authorization: basic(mailboxPassword) } })
     ).json()) as { permissions: string[] | Record<string, unknown> };
