@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { isSystemLocalPart } from "@anhourmail/shared/addresses";
+
 import { turnOffCatchAllFor } from "../domains/catch-all";
 import { mutation } from "../mutation";
 import type { Deps, RequestMeta } from "../ports";
@@ -213,7 +215,9 @@ export type DriftReport = {
 
 /**
  * Compares desired state with the mail server. Reports drift and audits it; NEVER deletes anything — unknown
- * mailboxes may hold mail (CLAUDE.md rule 26). `ignoreDomains` excludes infrastructure domains (e.g. dev.test).
+ * mailboxes may hold mail (CLAUDE.md rule 26). `ignoreDomains` excludes infrastructure domains (e.g. dev.test); the
+ * platform domain is never excluded wholesale: only its system accounts are expected there (customers' free addresses
+ * live on it).
  */
 export async function reconcile(
   deps: Deps,
@@ -239,9 +243,18 @@ export async function reconcile(
   const known = desired.mailboxes.filter(
     (m) => m.status === "active" || m.status === "suspended" || m.status === "deleting" || m.provisioned,
   );
-  // Platform domains (free-tier and staff) have mailboxes but no customer-domain row: they are desired too.
-  const wantDomains = new Set([...desired.domains, ...known.map((m) => domainOf(m.address))]);
+  // Platform domains (free-tier and staff) have mailboxes but no customer-domain row: they are desired too, and the
+  // deployment's platform domain always is (ADR-0021: it belongs to no account).
+  const wantDomains = new Set([...desired.domains, ...known.map((m) => domainOf(m.address)), deps.platform.domain]);
   const knownAddresses = new Set(known.map((m) => m.address));
+  // An account we don't know about is drift, except: anything on an infrastructure domain (`ignoreDomains`, e.g. the
+  // dev mail domain) — but on the platform domain, which holds customers' free addresses, only the system accounts
+  // (svc-*, no-reply, postmaster, …) are expected; any other unknown account there is reported like anywhere else.
+  const expectedUnknown = (address: string) => {
+    const domain = domainOf(address);
+    if (domain === deps.platform.domain) return isSystemLocalPart(address.slice(0, address.lastIndexOf("@")));
+    return ignore.has(domain);
+  };
 
   const report: DriftReport = {
     missingOnMailServer: {
@@ -250,7 +263,7 @@ export async function reconcile(
     },
     unknownOnMailServer: {
       domains: domains.filter((d) => !wantDomains.has(d) && !ignore.has(d)),
-      mailboxes: mailboxes.map((m) => m.address).filter((a) => !knownAddresses.has(a) && !ignore.has(domainOf(a))),
+      mailboxes: mailboxes.map((m) => m.address).filter((a) => !knownAddresses.has(a) && !expectedUnknown(a)),
     },
     quotaMismatch: required.flatMap((m) => {
       const actual = haveMailboxes.get(m.address);

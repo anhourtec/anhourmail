@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { randomUUID } from "node:crypto";
 
+import { isReservedPlatformLocalPart } from "@anhourmail/shared/addresses";
 import { ALIAS_CEILING, PLANS, type PlanId } from "@anhourmail/shared/plans";
 
 import { type Actor, authorize, can } from "../actor";
 import { ConflictError, NotFoundError, PlanLimitError, ValidationError } from "../errors";
 import type { Mailbox } from "../mailboxes/entity";
 import { isReservedLocalPart, normaliseLocalPart } from "../mailboxes/entity";
+import { onPlatformDomain, platformAddressFree } from "../mailboxes/platform";
 import { assertDomainHeld } from "../mailboxes/service";
 import { mutation } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
@@ -169,7 +171,14 @@ export async function createAlias(
       for (let attempt = 0; attempt < 3 && address === ""; attempt++) {
         const candidate = next();
         await repos.mailboxes.lockAddress(candidate);
-        if (!(await repos.mailboxes.addressTaken(candidate))) address = candidate;
+        // On the platform domain a name retired from another account is never handed out again (ADR-0021).
+        // …and a random name that happens to read as a reserved one is skipped there too.
+        const onPlatform = onPlatformDomain(candidate, deps.platform);
+        const local = candidate.slice(0, candidate.lastIndexOf("@"));
+        const free = onPlatform
+          ? !isReservedPlatformLocalPart(local) && (await platformAddressFree(repos, candidate, accountId))
+          : !(await repos.mailboxes.addressTaken(candidate));
+        if (free) address = candidate;
         else if (kind === "alias") break;
       }
       if (address === "") throw new ConflictError("That address is already in use.");
@@ -250,6 +259,10 @@ export async function deleteAlias(
     async (repos) => {
       const { alias, mailbox } = await scopedAlias(repos, actor, accountId, id);
       await repos.aliases.delete(alias.id);
+      // A deleted platform-domain address (a masked alias there) is never handed to another account (ADR-0021).
+      if (onPlatformDomain(alias.address, deps.platform)) {
+        await repos.platformAddresses.retire(alias.address, accountId, deps.clock.now());
+      }
       await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: mailbox.id, runAfter: deps.clock.now() });
       return { result: { id: alias.id }, target: { label: alias.address }, meta: { mailbox: mailbox.address } };
     },

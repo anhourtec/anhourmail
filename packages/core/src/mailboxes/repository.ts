@@ -43,3 +43,15 @@ export type MailboxPasswordRepository = {
   /** Whether a password is waiting for the worker. */
   pending(mailboxId: string): Promise<boolean>;
 };
+
+/**
+ * Platform-domain addresses that were in use and are gone (a purged mailbox, a deleted masked alias): never handed to
+ * a different account (ADR-0021). Kept forever, with no link to the account row, so deleting an account doesn't free
+ * its addresses either. Addresses are lowercase.
+ */
+export type PlatformAddressRepository = {
+  /** The account that last held this address, or null if it was never retired. */
+  retiredFrom(address: string): Promise<string | null>;
+  /** Records that `accountId` held `address` until now; the first record for an address wins (idempotent). */
+  retire(address: string, accountId: string, at: Date): Promise<void>;
+};

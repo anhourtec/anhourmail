@@ -441,6 +441,44 @@ describe("reconcile", () => {
     expect(report.unknownOnMailServer.domains).not.toContain("platform.test");
   });
 
+  it("the platform domain is always desired; on it only system accounts are expected, even when it is ignored", async () => {
+    const { d } = setup();
+    d.uow.state.mailboxes[0]!.status = "active";
+    const platform = d.platform.domain;
+    d.uow.state.mailboxes.push({
+      id: "free1",
+      accountId: "a1",
+      userId: null,
+      createdAt: new Date(0),
+      address: `jane@${platform}`,
+      quotaBytes: 10,
+      status: "active",
+      stalwartId: "s-free1",
+      lastError: null,
+      purgeAfter: null,
+    });
+    const mail = fakeMailServer();
+    await mail.ensureDomain("example.test");
+    await mail.ensureMailbox(ensureArgs("owner@example.test", 1000));
+    await mail.ensureDomain(platform);
+    await mail.ensureDomain("dev.test");
+    await mail.ensureMailbox(ensureArgs("alice@dev.test", 5)); // dev mailboxes: the whole domain is ignored
+    // A customer's free address (known) and the system accounts: not drift.
+    await mail.ensureMailbox(ensureArgs(`jane@${platform}`, 10));
+    for (const local of ["svc-provision", "svc-ops", "svc-audit", "no-reply", "postmaster", "dmarc-reports"]) {
+      await mail.ensureMailbox(ensureArgs(`${local}@${platform}`, 5));
+    }
+    const clean = await reconcile(d, mail, { ignoreDomains: ["dev.test", platform] });
+    expect(clean.unknownOnMailServer).toEqual({ domains: [], mailboxes: [] });
+    expect(clean.clean).toBe(true);
+    // Anyone else on the platform domain is reported, ignored or not (never deleted).
+    await mail.ensureMailbox(ensureArgs(`squatter@${platform}`, 5));
+    const drift = await reconcile(d, mail, { ignoreDomains: ["dev.test", platform] });
+    expect(drift.unknownOnMailServer.mailboxes).toEqual([`squatter@${platform}`]);
+    expect(drift.clean).toBe(false);
+    expect(mail.boxes.some((b) => b.address === `squatter@${platform}`)).toBe(true);
+  });
+
   it("doesn't report deleting mailboxes as missing or unknown, nor stray quota on them", async () => {
     const { d } = setup();
     const base = { accountId: "a1", userId: null, createdAt: new Date(0), lastError: null };

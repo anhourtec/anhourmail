@@ -152,14 +152,23 @@ describe("mailboxes service", () => {
     await expect(setMailboxQuota(d, owner, ACCOUNT_A, m.id, {}, req)).rejects.toThrow(ValidationError);
   });
 
-  it("lists the form options: active domains, members and room left", async () => {
+  it("lists the form options: active domains, the platform domain's allowance, members and room left", async () => {
     const d = setup();
     expect(await mailboxOptions(d, userAdmin, ACCOUNT_A)).toEqual({
       domains: [{ id: DOMAIN_A, name: "family.ca" }],
+      platform: {
+        id: "platform",
+        domain: "platform-mail.test",
+        used: 0,
+        max: null,
+        allowed: true,
+        emailVerified: true,
+      },
       members: [
         { userId: "member", email: "member@example.ca" },
         { userId: "owner", email: "owner@example.ca" },
       ],
+      customDomains: true,
       maxQuotaGb: 30,
       remaining: 10,
     });

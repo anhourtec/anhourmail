@@ -6,12 +6,28 @@ import { MAILBOX_DELETE_GRACE_DAYS, MAX_MAILBOXES, PLANS } from "@anhourmail/sha
 import { type Actor, authorize, can } from "../actor";
 import { maskEmail } from "../audit/record";
 import { turnOffCatchAllFor } from "../domains/catch-all";
-import { ConflictError, ForbiddenError, NotFoundError, PlanLimitError, ValidationError } from "../errors";
-import { mutation, type MutationOutcome } from "../mutation";
+import {
+  ConflictError,
+  EmailUnverifiedError,
+  ForbiddenError,
+  NotFoundError,
+  PlanLimitError,
+  ValidationError,
+} from "../errors";
+import { authorizeAudited, mutation, type MutationOutcome } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 import type { MailServer } from "../provisioning/ports";
 import { GB, type Mailbox, type MailboxStatus, normaliseLocalPart } from "./entity";
 import { hashMailboxPassword, mailboxPassword, type PasswordHasher } from "./password-hash";
+import {
+  assertCustomerPlatform,
+  assertPlatformAllowance,
+  normalisePlatformLocalPart,
+  onPlatformDomain,
+  PLATFORM_DOMAIN_ID,
+  platformAddressFree,
+  platformAllowance,
+} from "./platform";
 
 /** What the console and API show; mail-server ids and errors stay server-side. */
 export type MailboxView = {
@@ -91,6 +107,11 @@ async function planQuota(repos: Repositories, accountId: string): Promise<number
   return PLANS[account.plan].storageGb * GB;
 }
 
+async function planIncludesDomains(repos: Repositories, accountId: string): Promise<boolean> {
+  const account = await repos.accounts.get(accountId);
+  return account !== null && PLANS[account.plan].customDomains;
+}
+
 function parseQuota(input: unknown, max: number): number {
   if (input === undefined || input === null || input === "") return max;
   const gb = typeof input === "number" ? input : Number(input);
@@ -135,24 +156,43 @@ export async function getMailbox(
   });
 }
 
-/** What the create form needs: the account's active domains, its members and the quota bounds (`mailbox.manage`). */
+/**
+ * What the create form needs (`mailbox.manage`): the account's active domains, the platform domain's free-address
+ * allowance, its members and the quota bounds. `platform.allowed` is false when the plan's free addresses are used up
+ * (or the mailbox ceiling is reached); `emailVerified` is whether this person may claim one.
+ */
 export async function mailboxOptions(deps: Deps, actor: Actor, accountId: string) {
   authorize(actor, "mailbox.manage", accountId);
-  return deps.uow.run(async (r) => ({
-    domains: (await r.domains.listByAccount(accountId))
-      .filter((d) => d.status === "active")
-      .map((d) => ({ id: d.id, name: d.name })),
-    members: (await r.access.members(accountId)).map((m) => ({ userId: m.userId, email: m.email })),
-    maxQuotaGb: (await planQuota(r, accountId)) / GB,
-    remaining: MAX_MAILBOXES - (await r.mailboxes.count(accountId)),
-  }));
+  return deps.uow.run(async (r) => {
+    const allowance = await platformAllowance(r, deps.platform, accountId);
+    return {
+      domains: (await r.domains.listByAccount(accountId))
+        .filter((d) => d.status === "active")
+        .map((d) => ({ id: d.id, name: d.name })),
+      platform: {
+        id: PLATFORM_DOMAIN_ID,
+        domain: deps.platform.freeAddressDomain,
+        used: allowance.used,
+        max: allowance.max,
+        allowed: allowance.remaining > 0,
+        emailVerified: actor.kind === "user" && (await r.access.emailVerified(actor.userId)),
+      },
+      members: (await r.access.members(accountId)).map((m) => ({ userId: m.userId, email: m.email })),
+      /** The plan includes custom domains (where more mailboxes can live). */
+      customDomains: await planIncludesDomains(r, accountId),
+      maxQuotaGb: (await planQuota(r, accountId)) / GB,
+      remaining: MAX_MAILBOXES - (await r.mailboxes.count(accountId)),
+    };
+  });
 }
 
 /**
- * Creates a mailbox on one of the account's active domains, optionally for one of its members, with the password
- * its person signs in with (checked against the mailbox password rules and hashed here to argon2id; only the hash
- * goes to the worker, which sets it when it creates the account on the mail server — the password is never stored,
- * queued, logged or audited). Refused during a staff act-as session: staff never choose a customer's password.
+ * Creates a mailbox on one of the account's active domains, or on the platform domain (`domainId: "platform"`: a free
+ * address, ADR-0021), optionally for one of its members, with the password its person signs in with (checked against
+ * the mailbox password rules and hashed here to argon2id; only the hash goes to the worker, which sets it when it
+ * creates the account on the mail server — the password is never stored, queued, logged or audited). Refused during a
+ * staff act-as session: staff never choose a customer's password. A platform address also needs the person's email
+ * confirmed, a name by the platform rules that no account holds or held, and room in the plan's allowance.
  */
 export async function createMailbox(
   deps: Deps,
@@ -167,13 +207,26 @@ export async function createMailbox(
     actor,
     req,
     { action: "mailbox.created", permission: "mailbox.manage", accountId, target: { type: "mailbox" } },
-    async (repos): Promise<MutationOutcome<MailboxView | "act_as">> => {
+    async (repos): Promise<MutationOutcome<MailboxView | "act_as" | "email_unverified">> => {
       if (actor.kind === "user" && actor.actingAs) return { result: "act_as", denied: { code: "act_as" } };
       await repos.accounts.lock(accountId); // the mailbox ceiling holds under concurrent creates
-      const local = normaliseLocalPart(input.localPart);
-      const domainId = typeof input.domainId === "string" ? input.domainId : "";
-      const domain = isId(domainId) ? await repos.domains.get(accountId, domainId) : null;
-      if (domain?.status !== "active") throw new ValidationError("Choose one of your active domains.");
+      const onPlatform = input.domainId === PLATFORM_DOMAIN_ID;
+      let domainName: string;
+      let local: string;
+      if (onPlatform) {
+        assertCustomerPlatform(deps.platform);
+        if (actor.kind === "user" && !(await repos.access.emailVerified(actor.userId))) {
+          return { result: "email_unverified", denied: { code: "email_unverified" } };
+        }
+        local = normalisePlatformLocalPart(input.localPart);
+        domainName = deps.platform.domain;
+      } else {
+        local = normaliseLocalPart(input.localPart);
+        const domainId = typeof input.domainId === "string" ? input.domainId : "";
+        const domain = isId(domainId) ? await repos.domains.get(accountId, domainId) : null;
+        if (domain?.status !== "active") throw new ValidationError("Choose one of your active domains.");
+        domainName = domain.name;
+      }
       let userId: string | null = null;
       if (input.ownerUserId !== undefined && input.ownerUserId !== null && input.ownerUserId !== "") {
         const members = await repos.access.members(accountId);
@@ -182,39 +235,124 @@ export async function createMailbox(
         userId = owner.userId;
       }
       const quotaBytes = parseQuota(input.quotaGb, await planQuota(repos, accountId));
+      if (onPlatform) await assertPlatformAllowance(repos, deps.platform, accountId);
       if ((await repos.mailboxes.count(accountId)) >= MAX_MAILBOXES) {
         throw new PlanLimitError(`An account can have up to ${String(MAX_MAILBOXES)} mailboxes.`);
       }
-      const address = `${local}@${domain.name}`;
+      const address = `${local}@${domainName}`;
       const password = mailboxPassword(input.password, address);
       await repos.mailboxes.lockAddress(address); // mailboxes and aliases share one address space
-      if (await repos.mailboxes.addressTaken(address)) throw new ConflictError("That address is already in use.");
-      const mailbox: Mailbox = {
-        id: randomUUID(),
-        accountId,
-        userId,
-        address,
-        status: "provisioning",
-        quotaBytes,
-        stalwartId: null,
-        lastError: null,
-        purgeAfter: null,
-        createdAt: deps.clock.now(),
-      };
+      const free = onPlatform
+        ? await platformAddressFree(repos, address, accountId)
+        : !(await repos.mailboxes.addressTaken(address));
+      if (!free) throw new ConflictError("That address is already in use.");
+      const mailbox = newMailbox(deps, accountId, userId, address, quotaBytes);
       await repos.mailboxes.insert(mailbox);
       // The worker sets it when it creates the account (`MailServer.ensureMailbox` `initialPasswordHash`).
       await repos.mailboxPasswords.setPending(mailbox.id, await hashMailboxPassword(hasher, password), null);
       await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: mailbox.id, runAfter: deps.clock.now() });
-      const [v] = await views(repos, accountId, [mailbox]);
-      if (!v) throw new NotFoundError();
+      const v = await viewOf(repos, accountId, mailbox);
       return {
         result: v,
         target: { id: mailbox.id, label: address },
-        meta: { quotaGb: quotaBytes / GB, owner: v.owner ? maskEmail(v.owner.email) : null },
+        meta: {
+          quotaGb: quotaBytes / GB,
+          owner: v.owner ? maskEmail(v.owner.email) : null,
+          ...(onPlatform ? { platformAddress: true } : {}),
+        },
       };
     },
   );
   if (out === "act_as") throw new ForbiddenError("Mailboxes can't be created while acting as someone.");
+  if (out === "email_unverified") throw new EmailUnverifiedError();
+  return out;
+}
+
+function newMailbox(deps: Deps, accountId: string, userId: string | null, address: string, quotaBytes: number) {
+  const mailbox: Mailbox = {
+    id: randomUUID(),
+    accountId,
+    userId,
+    address,
+    status: "provisioning",
+    quotaBytes,
+    stalwartId: null,
+    lastError: null,
+    purgeAfter: null,
+    createdAt: deps.clock.now(),
+  };
+  return mailbox;
+}
+
+const STAFF_CREATE = { action: "mailbox.created", permission: "platform.mailbox.create" } as const;
+
+/**
+ * Staff (Global Administrator, `platform.mailbox.create`): creates a free platform-domain address in a customer
+ * account, optionally for one of its people, from the Platform → account page. Same name rules, allowance and
+ * no-reuse check as the customer's own path; no email-confirmation requirement (staff vouch for it). It is created
+ * **without a usable password** — staff never choose a customer's mailbox password — and the account's Owner or User
+ * Administrator sets one from the mailbox panel. Audited as `mailbox.created` by staff in the account's own log, so
+ * its admins see it (rule 49). Refused while acting as someone (act-as is a customer's view, not a staff tool).
+ * Missing permission → 403 (audited in the platform log, never in the account's); unknown account → 404.
+ */
+export async function staffCreatePlatformMailbox(
+  deps: Deps,
+  actor: Actor,
+  accountId: string,
+  input: { localPart?: unknown; ownerUserId?: unknown },
+  req: RequestMeta,
+): Promise<MailboxView> {
+  // Refusals before the account is known go to the platform log: a probe can't write into an account's log.
+  const platformSpec = { ...STAFF_CREATE, accountId: null, target: { type: "mailbox" } };
+  await authorizeAudited(deps, actor, req, platformSpec);
+  const account = isId(accountId) ? await deps.uow.run((r) => r.accounts.get(accountId)) : null;
+  if (!account) {
+    await mutation(deps, actor, req, platformSpec, async () => ({
+      result: undefined,
+      denied: { code: "not_found" },
+    }));
+    throw new NotFoundError();
+  }
+  const out = await mutation(
+    deps,
+    actor,
+    req,
+    { ...STAFF_CREATE, accountId, target: { type: "mailbox" }, staffPath: true },
+    async (repos): Promise<MutationOutcome<MailboxView | "act_as">> => {
+      if (actor.kind === "user" && actor.actingAs) return { result: "act_as", denied: { code: "act_as" } };
+      assertCustomerPlatform(deps.platform);
+      await repos.accounts.lock(accountId);
+      const local = normalisePlatformLocalPart(input.localPart);
+      let userId: string | null = null;
+      if (input.ownerUserId !== undefined && input.ownerUserId !== null && input.ownerUserId !== "") {
+        const owner = (await repos.access.members(accountId)).find((m) => m.userId === input.ownerUserId);
+        if (!owner) throw new ValidationError("Choose someone in this account.");
+        userId = owner.userId;
+      }
+      await assertPlatformAllowance(repos, deps.platform, accountId);
+      const address = `${local}@${deps.platform.domain}`;
+      await repos.mailboxes.lockAddress(address);
+      if (!(await platformAddressFree(repos, address, accountId))) {
+        throw new ConflictError("That address is already in use.");
+      }
+      const mailbox = newMailbox(deps, accountId, userId, address, await planQuota(repos, accountId));
+      await repos.mailboxes.insert(mailbox);
+      // No password waiting: the worker gives the account a random one nobody knows until the account sets its own.
+      await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: mailbox.id, runAfter: deps.clock.now() });
+      const v = await viewOf(repos, accountId, mailbox);
+      return {
+        result: v,
+        target: { id: mailbox.id, label: address },
+        meta: {
+          quotaGb: mailbox.quotaBytes / GB,
+          owner: v.owner ? maskEmail(v.owner.email) : null,
+          platformAddress: true,
+          passwordSetBy: "account",
+        },
+      };
+    },
+  );
+  if (out === "act_as") throw new ForbiddenError("Staff can't create mailboxes while acting as someone.");
   return out;
 }
 
@@ -444,7 +582,8 @@ export async function purgeDueMailboxes(
           if (current?.status !== "deleting" || current.purgeAfter === null || current.purgeAfter > now) {
             throw new ConflictError("The mailbox changed before it could be removed."); // e.g. restored meanwhile
           }
-          const aliases = (await repos.aliases.listByAccount(m.accountId)).filter((a) => a.mailboxId === m.id).length;
+          const own = (await repos.aliases.listByAccount(m.accountId)).filter((a) => a.mailboxId === m.id);
+          const aliases = own.length;
           // Delete the row first (conditional: still deleting and due), which also locks it until this unit of work
           // ends: a restore arriving now waits, then finds nothing to restore (409) instead of reporting success for
           // a mailbox whose mail is being destroyed. If the mail server refuses, everything rolls back.
@@ -452,7 +591,19 @@ export async function purgeDueMailboxes(
             throw new ConflictError("The mailbox changed before it could be removed.");
           }
           await mail.destroyMailbox({ externalId: current.stalwartId, address: current.address });
-          return { result: undefined, meta: { aliases, purgeAfter: current.purgeAfter.toISOString() } };
+          // Its platform-domain addresses (the mailbox and its masked aliases) never go to another account (ADR-0021).
+          const retired = [current.address, ...own.map((a) => a.address)].filter((a) =>
+            onPlatformDomain(a, deps.platform),
+          );
+          for (const a of retired) await repos.platformAddresses.retire(a, m.accountId, now);
+          return {
+            result: undefined,
+            meta: {
+              aliases,
+              purgeAfter: current.purgeAfter.toISOString(),
+              ...(retired.length > 0 ? { retiredPlatformAddresses: retired.length } : {}),
+            },
+          };
         },
       );
       out.purged += 1;

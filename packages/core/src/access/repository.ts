@@ -6,6 +6,11 @@ export type AccessRepository = {
   platformRoles(userId: string): Promise<PlatformRole[]>;
   memberships(userId: string): Promise<{ accountId: string; role: AccountRole }[]>;
   isSuspended(userId: string): Promise<boolean>;
+  /**
+   * Whether the person has proved they receive mail at their sign-in address (the identity layer's verification
+   * link, an accepted invite, or a login staff created). Free platform addresses need it (ADR-0021).
+   */
+  emailVerified(userId: string): Promise<boolean>;
   /** Display names for accounts, keyed by id (unknown ids are omitted). */
   accountNames(accountIds: readonly string[]): Promise<Record<string, string>>;
   /** People in an account with their sign-in email and role, by email. */
