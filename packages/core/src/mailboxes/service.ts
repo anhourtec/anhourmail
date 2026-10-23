@@ -501,7 +501,7 @@ export async function resumeMailbox(
 ): Promise<MailboxView> {
   return lifecycle(deps, actor, accountId, id, req, "mailbox.unsuspended", async (repos, m) => {
     if (m.status !== "suspended") throw new ConflictError("This mailbox isn't suspended.");
-    await assertNotHeld(repos, accountId, m.id);
+    await assertNotHeld(repos, accountId, m.id, m.userId);
     await assertDomainHeld(repos, accountId, m.address);
     return { next: await moveTo(deps, repos, m, "provisioning", null) };
   });
@@ -557,22 +557,29 @@ export async function restoreMailbox(
     if (m.purgeAfter !== null && m.purgeAfter <= deps.clock.now()) {
       throw new ConflictError("This mailbox's grace period has ended, so it can't be restored.");
     }
-    await assertNotHeld(repos, accountId, m.id);
+    await assertNotHeld(repos, accountId, m.id, m.userId);
     await assertDomainHeld(repos, accountId, m.address);
     return { next: await moveTo(deps, repos, m, "provisioning", null) };
   });
 }
 
 /**
- * A mailbox Anhourtec staff suspended (with its account or its person) resumes only when staff lift it, and nothing in
- * a suspended account resumes. The account row lock serialises this with a staff account suspension (which takes it
- * too), so a resume can't slip in while the suspension is being applied.
+ * A mailbox Anhourtec staff suspended (with its account or its person) resumes only when staff lift it, nothing in
+ * a suspended account resumes, and nothing assigned to a suspended person resumes — even a mailbox the account had
+ * suspended itself before the person was (it carries no hold). The account row lock serialises this with a staff
+ * account suspension (which takes it too), so a resume can't slip in while the suspension is being applied.
  */
-async function assertNotHeld(repos: Repositories, accountId: string, mailboxId: string): Promise<void> {
+async function assertNotHeld(
+  repos: Repositories,
+  accountId: string,
+  mailboxId: string,
+  userId: string | null,
+): Promise<void> {
   await repos.accounts.lock(accountId);
   if (
     (await repos.suspensions.account(accountId)) !== null ||
-    (await repos.suspensions.holds([mailboxId])).length > 0
+    (await repos.suspensions.holds([mailboxId])).length > 0 ||
+    (userId !== null && (await repos.suspensions.person(userId)) !== null)
   ) {
     throw new ConflictError("Anhourtec suspended this mailbox. It comes back when the suspension is lifted.");
   }

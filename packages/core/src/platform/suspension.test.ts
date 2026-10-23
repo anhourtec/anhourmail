@@ -281,6 +281,21 @@ describe("suspendPerson", () => {
     await expect(liftPersonSuspension(d, GA, "member-a", SESSION, req)).rejects.toMatchObject({ code: "conflict" });
   });
 
+  it("a mailbox the account suspended itself can't be resumed while its person is suspended", async () => {
+    const d = world();
+    const own = d.uow.state.mailboxes.find((m) => m.id === M_PERSON);
+    if (!own) throw new Error("fixture");
+    own.status = "suspended";
+    await suspendPerson(d, GA, "member-a", { reason: "spam" }, SESSION, req);
+    expect(d.uow.state.mailboxHolds.filter((h) => h.mailboxId === M_PERSON)).toEqual([]);
+    const owner = user({ id: "owner-a", account: [[ACCOUNT_A, "owner"]] });
+    await expect(resumeMailbox(d, owner, ACCOUNT_A, M_PERSON, req)).rejects.toThrow(/Anhourtec suspended/);
+    await liftPersonSuspension(d, GA, "member-a", SESSION, req);
+    expect(status(d, M_PERSON)).toBe("suspended");
+    await resumeMailbox(d, owner, ACCOUNT_A, M_PERSON, req);
+    expect(status(d, M_PERSON)).toBe("provisioning");
+  });
+
   it("lifting a person's suspension doesn't resume a mailbox the account deleted meanwhile", async () => {
     const d = world();
     await suspendPerson(d, GA, "member-a", { reason: "spam" }, SESSION, req);
