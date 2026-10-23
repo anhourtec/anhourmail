@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { type Actor, authorize } from "../actor";
+import { type Actor, authorize, can } from "../actor";
 import type { Deps } from "../ports";
 import { verifyChain } from "./hash";
 import { isAuditArea, partialIp } from "./labels";
@@ -72,16 +72,24 @@ function toQuery(scope: AuditScope, f: AuditFilters, limit: number): AuditQuery 
   return q;
 }
 
-/** Views never carry a full IP (the network part only) or the client's user agent. */
-const forView = (e: AuditEntry): AuditEntry => ({ ...e, ip: partialIp(e.ip), userAgent: null });
+/**
+ * What a view shows of an entry's request: never the client's user agent; the IP in full only in the platform log
+ * (Global Administrator, `platform.audit.full_ip`, watching sign-ups and abuse — `fullIp`), the network part elsewhere (account
+ * logs, the person's own Security activity and platform readers without `platform.audit.full_ip`: `203.0.113.x`, IPv6
+ * `/48`). Decided here, by scope and permission,
+ * never by the page that renders it.
+ */
+const forView =
+  (fullIp: boolean) =>
+  (e: AuditEntry): AuditEntry => ({ ...e, ip: fullIp ? e.ip : partialIp(e.ip), userAgent: null });
 
 /** One page, newest first, and the `before` cursor for the next (older) page. */
 export type AuditPage = { entries: AuditEntry[]; nextBefore: number | null };
 
-async function page(deps: Deps, scope: AuditScope, f: AuditFilters): Promise<AuditPage> {
+async function page(deps: Deps, scope: AuditScope, f: AuditFilters, fullIp = false): Promise<AuditPage> {
   const limit = clampLimit(f.limit);
   const rows = await deps.uow.run((r) => r.audit.list(toQuery(scope, f, limit + 1)));
-  const entries = rows.slice(0, limit).map(forView);
+  const entries = rows.slice(0, limit).map(forView(fullIp && scope === "platform"));
   const last = entries.at(-1);
   return { entries, nextBefore: rows.length > limit && last ? last.seq : null };
 }
@@ -106,14 +114,16 @@ export async function accountAuditPage(
   return page(deps, `account:${accountId}`, filters);
 }
 
-/** Platform audit for Global Admin and Reports Reader. */
+/** Platform audit for Global Admin and Reports Reader; full IP addresses only with `platform.audit.full_ip`. */
 export async function listPlatformAudit(deps: Deps, actor: Actor, filters: AuditFilters = {}): Promise<AuditEntry[]> {
   return (await platformAuditPage(deps, actor, filters)).entries;
 }
 
 export async function platformAuditPage(deps: Deps, actor: Actor, filters: AuditFilters = {}): Promise<AuditPage> {
   authorize(actor, "platform.audit.read");
-  return page(deps, "platform", filters);
+  // The full stored address only with `platform.audit.full_ip` (Global Administrator), to watch open sign-ups for
+  // abuse; other readers (Reports Reader) get the network part like everyone else.
+  return page(deps, "platform", filters, can(actor, "platform.audit.full_ip"));
 }
 
 /** Scheduled integrity check (system actor only). Returns the first break, or null when the chain is intact. */

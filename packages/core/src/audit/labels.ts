@@ -105,6 +105,8 @@ const EXPLICIT: Partial<Record<AuditAction, string>> = {
   "auth.passkey_removed": "Passkey removed",
   "auth.recovery_codes_regenerated": "New recovery codes created",
   "auth.identity_confirmed": "Confirmed it's you",
+  "auth.email_verification_sent": "Email confirmation link sent",
+  "auth.email_verified": "Email address confirmed",
   "account.created": "Account created",
   "account.deleted": "Account deleted",
   "account.updated": "Account settings changed",

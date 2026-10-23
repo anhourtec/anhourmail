@@ -28,6 +28,8 @@ export const AUDIT_ACTIONS = [
   "auth.passkey_removed",
   "auth.recovery_codes_regenerated",
   "auth.identity_confirmed",
+  "auth.email_verification_sent",
+  "auth.email_verified",
   // account and people
   "account.created",
   "account.deleted",

@@ -175,6 +175,41 @@ describe("audit visibility", () => {
     expect(await listPlatformAudit(d, user({ platform: ["reports_reader"] }), { limit: 500 })).toHaveLength(1);
     await expect(listPlatformAudit(d, user({ platform: ["support_admin"] }))).rejects.toThrow(ForbiddenError);
   });
+
+  it("IPs: the platform log shows the full address to Global Administrators only; account logs only the network part; never the UA", async () => {
+    const d = deps();
+    const withIp = (scope: AuditEntryInput["scope"], ip: string): AuditEntryInput => ({
+      ...input(scope),
+      ip,
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64) Firefox/131.0",
+    });
+    await d.uow.run((r) => r.audit.append(withIp("platform", "203.0.113.57"), new Date()));
+    await d.uow.run((r) => r.audit.append(withIp("platform", "2001:db8:1:2:3:4:5:6"), new Date()));
+    await d.uow.run((r) => r.audit.append(withIp(`account:${ACCOUNT_A}`, "198.51.100.23"), new Date()));
+    const full = await platformAuditPage(d, user({ platform: ["global_admin"] }));
+    expect(full.entries.map((e) => [e.ip, e.userAgent])).toEqual([
+      ["2001:db8:1:2:3:4:5:6", null],
+      ["203.0.113.57", null],
+    ]);
+    // A Reports Reader reads the platform log but without `platform.audit.full_ip`: the network part only.
+    const partial = await platformAuditPage(d, user({ platform: ["reports_reader"] }));
+    expect(partial.entries.map((e) => [e.ip, e.userAgent])).toEqual([
+      ["2001:db8:1::/48", null],
+      ["203.0.113.x", null],
+    ]);
+    // Staff without the permission get nothing; a Global Administrator who is also an Owner sees the account log
+    // like any Owner: the network part only.
+    await expect(platformAuditPage(d, user({ platform: ["support_admin"] }))).rejects.toThrow(ForbiddenError);
+    const both = user({ platform: ["global_admin"], account: [[ACCOUNT_A, "owner"]] });
+    for (const reader of [both, user({ account: [[ACCOUNT_A, "owner"]] })]) {
+      const page = await accountAuditPage(d, reader, ACCOUNT_A);
+      expect(page.entries.map((e) => [e.ip, e.userAgent])).toEqual([["198.51.100.x", null]]);
+    }
+    await expect(accountAuditPage(d, user({ platform: ["global_admin"] }), ACCOUNT_A)).rejects.toThrow(NotFoundError);
+    await expect(accountAuditPage(d, user({ account: [[ACCOUNT_B, "owner"]] }), ACCOUNT_A)).rejects.toThrow(
+      NotFoundError,
+    );
+  });
 });
 
 describe("audit labels", () => {
