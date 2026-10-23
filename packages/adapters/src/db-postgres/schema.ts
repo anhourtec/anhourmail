@@ -273,6 +273,15 @@ export const mailbox = pgTable(
     quotaBytes: bigint("quota_bytes", { mode: "number" }).notNull(),
     /** Set while `deleting`: the scheduled purge removes the mailbox after this (grace period). */
     purgeAfter: timestamp("purge_after", { withTimezone: true }),
+    /**
+     * A new mailbox password waiting for the worker: a salted argon2id PHC string, never the password (rule 23). Set
+     * at creation and by a reset or change; cleared once the mail server has it, or when its job gives up.
+     */
+    pendingPasswordHash: text("pending_password_hash"),
+    /** The web app's HMAC grant for replacing the password with exactly that hash (verified by the management proxy). */
+    pendingPasswordGrant: text("pending_password_grant"),
+    /** The mail server's id for the mailbox's Password credential as we last set it (reconciler; 07-security.md). */
+    passwordCredentialId: text("password_credential_id"),
     createdAt: createdAt(),
   },
   (t) => [

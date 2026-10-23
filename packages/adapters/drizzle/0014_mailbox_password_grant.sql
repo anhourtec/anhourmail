@@ -1,0 +1,1 @@
+ALTER TABLE "mailbox" ADD COLUMN "pending_password_grant" text;
