@@ -99,3 +99,13 @@ Where things live and what to change for a task. Update in the same change as an
 | `scripts/ci-local.sh`                                                                | `npm run ci:local`: the CI jobs on a clean clone, own Compose project and ports                                                                          |
 | `scripts/third-party-notices.mjs`                                                    | `THIRD_PARTY_NOTICES.md` + `packages/shared/src/credits.generated.ts`                                                                                    |
 | `infra/stalwart/dev-plan.ts`                                                         | Dev Stalwart: relay to Mailpit, Pyzor off, 587 listener, pinned WebUI bundle, dev.test                                                                   |
+
+### Webmail reading (2026-10-23)
+
+| Path                                                   | What                                                                                                          |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `apps/web/src/app/webmail/message/[emailId]/original/` | "Show original" page (own tab): summary table, SPF/DKIM/DMARC, raw source as text                             |
+| `apps/web/src/server/webmail/original.ts`              | Loads the source for the signed-in mailbox; parses only our own `Authentication-Results` (`MAIL_AUTHSERV_ID`) |
+| `apps/web/src/components/webmail/original-actions.tsx` | Download original / copy to clipboard                                                                         |
+| `apps/web/src/components/webmail/conversation.ts`      | Conversation view helpers: default-expanded messages, "to me" labels, quote folding                           |
+| `apps/web/src/components/webmail/sync.ts`              | Automatic refresh (30 s while visible, on focus/online, backoff), new-mail detection and chime                |
