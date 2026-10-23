@@ -46,6 +46,7 @@ import {
   toVcards,
 } from "./contacts";
 import {
+  type Address,
   BODY_PROPERTIES,
   type BodyExtras,
   type BodyPart,
@@ -102,6 +103,21 @@ export class WebmailRefusedError extends Error {
 export class GrantRefusedError extends Error {
   override readonly name = "GrantRefusedError";
 }
+
+/** "Show original": summary fields from the mail server plus the source as text (first part when `cut`). */
+export type OriginalMessage = {
+  id: string;
+  messageId: string | null;
+  receivedAt: string | null;
+  sentAt: string | null;
+  from: Address[];
+  to: Address[];
+  cc: Address[];
+  subject: string;
+  size: number;
+  text: string;
+  cut: boolean;
+};
 
 export type OAuthTokens = { accessToken: string; refreshToken: string | null; expiresAt: number };
 
@@ -675,6 +691,76 @@ export class WebmailService {
     const e = ((r.get("g")?.list ?? []) as { blobId: string; size: number }[])[0];
     if (!e) return null;
     return this.download(sessionId, accountId, e.blobId, "message.eml");
+  }
+
+  /**
+   * "Show original": the message's summary fields and its source as text (first `maxBytes`), or null when the id
+   * isn't a message of the signed-in mailbox. The source is read in full only up to the cap; the rest is cancelled.
+   */
+  async original(sessionId: string, emailId: string, maxBytes: number): Promise<OriginalMessage | null> {
+    let accountId = "";
+    const r = await this.#call(sessionId, (s) => {
+      accountId = s.accountId;
+      return [
+        [
+          "Email/get",
+          {
+            accountId: s.accountId,
+            ids: [emailId],
+            properties: ["blobId", "size", "receivedAt", "sentAt", "messageId", "from", "to", "cc", "subject"],
+          },
+          "g",
+        ],
+      ];
+    });
+    const e = (
+      (r.get("g")?.list ?? []) as {
+        blobId: string;
+        size: number;
+        receivedAt: string | null;
+        sentAt: string | null;
+        messageId: string[] | null;
+        from: Address[] | null;
+        to: Address[] | null;
+        cc: Address[] | null;
+        subject: string | null;
+      }[]
+    )[0];
+    if (!e) return null;
+    const res = await this.download(sessionId, accountId, e.blobId, "message.eml");
+    if (!res.ok || !res.body) {
+      await res.body?.cancel();
+      return null;
+    }
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    let cut = false;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      size += value.byteLength;
+      if (size >= maxBytes) {
+        cut = size > maxBytes || e.size > maxBytes;
+        await reader.cancel();
+        break;
+      }
+    }
+    const text = Buffer.concat(chunks).subarray(0, maxBytes).toString("utf8");
+    return {
+      id: emailId,
+      messageId: e.messageId?.[0] ?? null,
+      receivedAt: e.receivedAt,
+      sentAt: e.sentAt,
+      from: e.from ?? [],
+      to: e.to ?? [],
+      cc: e.cc ?? [],
+      subject: e.subject ?? "",
+      size: e.size,
+      text,
+      cut,
+    };
   }
 
   /** Server-built JMAP request for the signed-in account (no allow-list: the BFF wrote it). */

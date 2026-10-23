@@ -37,6 +37,9 @@ const schema = z.object({
   REDIS_URL: z.string().min(1),
   // Stalwart's HTTP base (internal network in production): the webmail BFF's OAuth and JMAP upstream.
   STALWART_URL: httpUrl.optional(),
+  // Comma-separated authserv-ids our mail server stamps on Authentication-Results (its hostname). "Show original"
+  // trusts only these. Unset = the platform's MX hosts (and the dev server's hostname outside production).
+  MAIL_AUTHSERV_ID: z.string().optional(),
   // Secrets-at-rest key ring, "id:base64(32 bytes)[,…]" (first = active). Required in production; dev derives one.
   SECRETS_KEYRING: z.string().optional(),
   // Mailbox password grants (ADR-0020 "Mailbox passwords"): the HMAC key shared only with the management proxy, which
