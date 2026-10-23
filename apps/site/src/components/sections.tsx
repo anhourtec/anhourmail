@@ -22,7 +22,7 @@ import {
   VenetianMaskIcon,
 } from "lucide-react";
 
-import { ADDONS, BILLING, formatPrice, PLAN_ORDER, PLANS, PRODUCT_DOMAIN } from "@anhourmail/shared";
+import { ADDONS, BILLING, formatPrice, PLAN_ORDER, PLANS, PRODUCT_DOMAIN, storageText } from "@anhourmail/shared";
 import { Breadcrumbs, type Crumb } from "@anhourmail/ui/page-header";
 
 import { PROTOCOL_LIST } from "@/lib/ia";
@@ -259,12 +259,12 @@ export function PlanCards() {
               </p>
               <p className="am-small -mt-3">
                 {p.price
-                  ? `or ${formatPrice(p.price.CAD, "CAD")} CAD per ${BILLING.interval}`
+                  ? `Per account · covers everyone in it · or ${formatPrice(p.price.CAD, "CAD")} CAD`
                   : "One free account per person"}
               </p>
               <ul className="flex flex-col gap-2.5 border-t pt-5 text-sm">
                 {[
-                  `${p.storageGb} GB per mailbox`,
+                  p.includedMailboxes === 1 ? `${String(p.storagePoolGb)} GB storage` : storageText(p).pool,
                   p.includedMailboxes === 1 ? "1 mailbox" : `${String(p.includedMailboxes)} mailboxes included`,
                   p.customDomains ? "Bring your own domains" : `An @${PRODUCT_DOMAIN} address`,
                   p.aliases === null ? "Unlimited aliases" : `${p.aliases} aliases`,

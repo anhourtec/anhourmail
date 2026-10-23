@@ -7,13 +7,13 @@ import { CheckIcon, MinusIcon } from "lucide-react";
 import {
   ADDONS,
   BILLING,
-  fairUseText,
   formatPrice,
   MAX_MAILBOXES,
   PLAN_ORDER,
   PLANS,
   PRODUCT_DOMAIN,
   type Plan,
+  storageText,
 } from "@anhourmail/shared";
 
 import { Reveal } from "@/components/reveal";
@@ -28,20 +28,30 @@ export const metadata: Metadata = {
 
 type RowValue = string | boolean;
 const ROWS: readonly { label: string; value: (p: Plan) => RowValue }[] = [
-  { label: "Storage per mailbox", value: (p) => `${String(p.storageGb)} GB` },
+  {
+    label: "Price",
+    value: (p) =>
+      p.price
+        ? `${p.payWhatYouWant ? "From " : ""}${formatPrice(p.price.USD, "USD")}/${BILLING.interval} per account · covers everyone in it`
+        : "Free",
+  },
+  {
+    label: "Storage",
+    value: (p) => (p.includedMailboxes === 1 ? `${String(p.storagePoolGb)} GB` : storageText(p).pool),
+  },
+  {
+    label: "More storage",
+    value: (p) =>
+      p.storageBlockGb === null || p.storageBlockPrice === null
+        ? false
+        : `+${String(p.storageBlockGb)} GB for ${formatPrice(p.storageBlockPrice.USD, "USD")}/${BILLING.interval} (coming with billing)`,
+  },
   {
     label: "Mailboxes included",
     value: (p) =>
       p.extraMailboxPrice
-        ? `${String(p.includedMailboxes)}, then ${formatPrice(p.extraMailboxPrice.USD, "USD")}/${BILLING.interval} each`
+        ? `${String(p.includedMailboxes)}, then ${formatPrice(p.extraMailboxPrice.USD, "USD")}/${BILLING.interval} each (coming with billing)`
         : String(p.includedMailboxes),
-  },
-  {
-    label: "Storage per account",
-    value: (p) =>
-      p.fairUseStorageGb === null || p.extraStoragePricePerGb === null
-        ? `${String(p.storageGb)} GB`
-        : `Fair use ${String(p.fairUseStorageGb)} GB, then ${formatPrice(p.extraStoragePricePerGb.USD, "USD")}/GB/${BILLING.interval}`,
   },
   // Free: its own allowance; paid plans: as many as their mailboxes (ADR-0021).
   {
@@ -78,8 +88,8 @@ const FAQ = [
   },
   { q: "Do prices include tax?", a: "No. Sales tax is added at checkout where it applies." },
   {
-    q: "Is there a storage limit on paid plans?",
-    a: `No hard limit on the account. Each mailbox holds up to ${String(PLANS.plus.storageGb)} GB, and an account can store ${String(PLANS.plus.fairUseStorageGb)} GB in total under fair use; storage beyond that is ${PLANS.plus.extraStoragePricePerGb ? formatPrice(PLANS.plus.extraStoragePricePerGb.USD, "USD") : ""} per GB per ${BILLING.interval}. We let you know before anything is charged.`,
+    q: "How does storage work on paid plans?",
+    a: `${PLANS.plus.name} and ${PLANS.supporter.name} include ${String(PLANS.plus.storagePoolGb)} GB shared by the whole account: you decide how much each mailbox gets, and the shares never add up to more than the account has. Need more? Storage blocks of +${String(PLANS.plus.storageBlockGb ?? 0)} GB for ${PLANS.plus.storageBlockPrice ? formatPrice(PLANS.plus.storageBlockPrice.USD, "USD") : ""} per ${BILLING.interval} come with billing. Nothing is ever charged automatically.`,
   },
   {
     q: `Can I have more than ${String(PLANS.plus.includedMailboxes)} mailboxes?`,
@@ -118,13 +128,12 @@ export default function PricingPage() {
           </Reveal>
           <h2 className="sr-only">Plans</h2>
           <PlanCards />
-          {fairUseText(PLANS.plus) && (
-            <Reveal>
-              <p className="am-small text-center">
-                {PLANS.plus.name} and {PLANS.supporter.name}: {fairUseText(PLANS.plus)}.
-              </p>
-            </Reveal>
-          )}
+          <Reveal>
+            <p className="am-small text-center">
+              {PLANS.plus.name} and {PLANS.supporter.name}: {storageText(PLANS.plus).pool}.{" "}
+              {storageText(PLANS.plus).block}. {storageText(PLANS.plus).extraMailbox}.
+            </p>
+          </Reveal>
         </div>
       </section>
       <section className="am-site-section pt-0">

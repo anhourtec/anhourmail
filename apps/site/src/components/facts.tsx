@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import {
+  ACCOUNT_POLICY,
   ADDONS,
   APP_PASSWORDS_PER_MAILBOX,
   BREACHED_PASSWORD,
@@ -14,7 +15,6 @@ import {
   INVITE_EMAILS_PER_DAY,
   INVITE_TTL_DAYS,
   EMAIL_VERIFICATION_HOURS,
-  fairUseText,
   MAILBOX_DELETE_GRACE_DAYS,
   MAX_MAILBOXES,
   MAX_PEOPLE,
@@ -27,6 +27,7 @@ import {
   SECOND_STEP_LIMITS,
   STEP_UP_MINUTES,
   SUPPORT_EMAIL,
+  storageText,
   SUSPENSION_REASONS,
   TOTP,
   TRUST_TIERS,
@@ -62,13 +63,20 @@ const VALUES = {
   freePlatformAddresses: String(PLANS.free.platformMailboxes ?? MAX_MAILBOXES),
   maxMailboxes: String(MAX_MAILBOXES),
   emailVerificationHours: String(EMAIL_VERIFICATION_HOURS),
-  freeStorage: `${PLANS.free.storageGb} GB`,
-  plusStorage: `${PLANS.plus.storageGb} GB`,
+  freeStorage: `${String(PLANS.free.storagePoolGb)} GB`,
+  plusStorage: `${String(PLANS.plus.storagePoolGb)} GB`,
   includedMailboxes: String(PLANS.plus.includedMailboxes),
-  fairUseStorage: `${String(PLANS.plus.fairUseStorageGb ?? 0)} GB`,
-  extraStoragePrice: PLANS.plus.extraStoragePricePerGb ? formatPrice(PLANS.plus.extraStoragePricePerGb.USD, "USD") : "",
+  storageBlock: `${String(PLANS.plus.storageBlockGb ?? 0)} GB`,
+  storageBlockPrice: PLANS.plus.storageBlockPrice ? formatPrice(PLANS.plus.storageBlockPrice.USD, "USD") : "",
   extraMailboxPrice: PLANS.plus.extraMailboxPrice ? formatPrice(PLANS.plus.extraMailboxPrice.USD, "USD") : "",
-  paidFairUse: fairUseText(PLANS.plus) ?? "",
+  // Published now, enforced in Phase 6 (packages/shared/src/plans.ts ACCOUNT_POLICY).
+  freeDailyExternal: String(ACCOUNT_POLICY.externalRecipientsPerDay.free),
+  paidDailyExternal: String(ACCOUNT_POLICY.externalRecipientsPerDay.paid),
+  newAccountDays: String(ACCOUNT_POLICY.newAccountDays),
+  sendMessageSize: `${String(ACCOUNT_POLICY.sendMessageMb)} MB`,
+  receiveMessageSize: `${String(ACCOUNT_POLICY.receiveMessageMb)} MB`,
+  freeInactivityMonths: String(ACCOUNT_POLICY.freeInactivityMonths),
+  inactiveMailKeptDays: String(ACCOUNT_POLICY.inactiveMailKeptDays),
   plusPriceUsd: PLANS.plus.price ? formatPrice(PLANS.plus.price.USD, "USD") : "",
   plusPriceCad: PLANS.plus.price ? formatPrice(PLANS.plus.price.CAD, "CAD") : "",
   supporterMinUsd: PLANS.supporter.price ? formatPrice(PLANS.supporter.price.USD, "USD") : "",
@@ -203,7 +211,7 @@ export function PlanTable() {
           <tr className="border-b text-left text-fd-muted-foreground">
             <th className="py-2 pr-4 font-medium">Plan</th>
             <th className="py-2 pr-4 font-medium">Price per year</th>
-            <th className="py-2 pr-4 font-medium">Storage per mailbox</th>
+            <th className="py-2 pr-4 font-medium">Storage per account</th>
             <th className="py-2 pr-4 font-medium">Mailboxes included</th>
             <th className="py-2 pr-4 font-medium">@{PRODUCT_DOMAIN} addresses</th>
             <th className="py-2 pr-4 font-medium">Custom domains</th>
@@ -221,7 +229,7 @@ export function PlanTable() {
               <tr key={id} className="border-b last:border-0">
                 <td className="py-2 pr-4 font-medium">{p.name}</td>
                 <td className="py-2 pr-4">{price}</td>
-                <td className="py-2 pr-4">{p.storageGb} GB</td>
+                <td className="py-2 pr-4">{p.storagePoolGb} GB</td>
                 <td className="py-2 pr-4">{p.includedMailboxes}</td>
                 <td className="py-2 pr-4">{p.platformMailboxes ?? `Up to ${String(MAX_MAILBOXES)}`}</td>
                 <td className="py-2 pr-4">{p.customDomains ? "Yes" : "No"}</td>
@@ -232,11 +240,10 @@ export function PlanTable() {
           })}
         </tbody>
       </table>
-      {fairUseText(PLANS.plus) && (
-        <p className="mt-2 text-fd-muted-foreground text-sm">
-          {PLANS.plus.name} and {PLANS.supporter.name}: {fairUseText(PLANS.plus)}.
-        </p>
-      )}
+      <p className="mt-2 text-fd-muted-foreground text-sm">
+        {PLANS.plus.name} and {PLANS.supporter.name}: {storageText(PLANS.plus).pool}. {storageText(PLANS.plus).block}.{" "}
+        {storageText(PLANS.plus).extraMailbox}.
+      </p>
     </div>
   );
 }

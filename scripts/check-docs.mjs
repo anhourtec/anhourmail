@@ -72,7 +72,7 @@ function sharedFacts() {
   const amounts = new Set();
   for (const m of src.matchAll(/\b(USD|CAD):\s*(\d+)/g)) amounts.add(Number(m[2]) / 100);
 
-  const storage = new Set([...src.matchAll(/storageGb:\s*(\d+)/g)].map((m) => Number(m[1])));
+  const storage = new Set([...src.matchAll(/storage(?:Pool|Block)Gb:\s*(\d+)/g)].map((m) => Number(m[1])));
 
   const limits = new Set();
   for (const m of src.matchAll(/\b(messagesPerDay|messagesPerHour|recipientsPerMessage):\s*(\d+)/g)) {
