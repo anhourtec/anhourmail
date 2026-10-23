@@ -36,8 +36,11 @@ export class StalwartTransport {
   readonly #authHeader: string;
   readonly #timeoutMs: number;
   readonly #fetch: typeof fetch;
+  /** `bearer` for an API key, `basic` for the dev recovery admin. */
+  readonly authType: StalwartAuth["type"];
 
   constructor(opts: StalwartClientOptions) {
+    this.authType = opts.auth.type;
     this.#baseUrl = opts.baseUrl.replace(/\/+$/, "");
     this.#authHeader =
       opts.auth.type === "basic"
@@ -51,6 +54,21 @@ export class StalwartTransport {
   async ready(): Promise<void> {
     const res = await this.#fetch(`${this.#baseUrl}/healthz/ready`, { signal: AbortSignal.timeout(this.#timeoutMs) });
     if (!res.ok) throw new StalwartError(`Stalwart not ready (HTTP ${res.status})`, "http");
+  }
+
+  /**
+   * The permissions this credential actually has (`GET /api/account`: for an API key, its own set capped by its
+   * account's role). Used by the start-up scope check (`keys.ts` `credentialScopeProblems`).
+   */
+  async credentialPermissions(): Promise<string[]> {
+    const res = await this.#fetch(`${this.#baseUrl}/api/account`, {
+      headers: { Authorization: this.#authHeader },
+      signal: AbortSignal.timeout(this.#timeoutMs),
+    });
+    if (!res.ok) throw new StalwartError(`Stalwart account HTTP ${res.status}`, "http", { status: res.status });
+    const json = (await res.json()) as { permissions?: unknown };
+    if (!Array.isArray(json.permissions)) throw new StalwartError("Stalwart account returned no permissions", "http");
+    return json.permissions.filter((p): p is string => typeof p === "string");
   }
 
   /** Runs method calls in one request and returns responses keyed by call id. Method-level errors throw. */

@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: MIT
 import { StalwartTransport } from "./client";
+import {
+  credentialEnvProblems,
+  credentialScopeProblems,
+  SERVICE_CREDENTIALS,
+  type StalwartCredentialRole,
+} from "./keys";
 import { StalwartManagement } from "./management";
 
 export {
@@ -29,6 +35,29 @@ export {
   type UserInput,
 } from "./management";
 export {
+  AUDIT_KEY_PERMISSIONS,
+  CREDENTIAL_ROLES,
+  credentialEnvProblems,
+  credentialScopeProblems,
+  CUSTOMER_EFFECTIVE_PERMISSIONS,
+  LEGACY_KEY_ENV,
+  LEGACY_SERVICE_ACCOUNT,
+  OPERATIONS_KEY_PERMISSIONS,
+  PROVISIONING_KEY_PERMISSIONS,
+  SERVICE_CREDENTIALS,
+  type ServiceCredential,
+  type StalwartCredentialRole,
+  USER_ROLE_PERMISSIONS,
+} from "./keys";
+export {
+  ensureServiceAccount,
+  ensureServiceRole,
+  issueServiceKey,
+  listServiceKeys,
+  serviceAccountProblems,
+  serviceRoleDescription,
+} from "./service-accounts";
+export {
   OAuthDeniedError,
   OAuthThrottledError,
   type OAuthClientInput,
@@ -48,27 +77,91 @@ export {
   SENDER_IDENTITY_SIEVE,
 } from "./sender";
 
-const globalForStalwart = globalThis as unknown as { amStalwart?: StalwartManagement };
+const globalForStalwart = globalThis as unknown as {
+  amStalwart?: Partial<Record<StalwartCredentialRole | "devAdmin", StalwartManagement>>;
+};
+
+function devAdminAuth(env: Record<string, string | undefined>) {
+  const username = env.STALWART_DEV_ADMIN_USER;
+  const password = env.STALWART_DEV_ADMIN_PASSWORD;
+  return username && password ? ({ type: "basic", username, password } as const) : null;
+}
+
+function baseUrl(env: Record<string, string | undefined>): string {
+  const url = env.STALWART_URL;
+  if (!url) throw new Error("STALWART_URL is not set");
+  return url;
+}
 
 /**
- * The shared management client, configured from the environment:
- * STALWART_URL plus STALWART_API_KEY (production), or STALWART_DEV_ADMIN_USER / _PASSWORD (dev only).
+ * The management client for one credential (`keys.ts`), configured from the environment: its own key
+ * (`STALWART_PROVISIONING_KEY`, `STALWART_OPERATIONS_KEY` or `STALWART_AUDIT_KEY`), or — outside production only —
+ * the dev recovery admin (`STALWART_DEV_ADMIN_USER` / `_PASSWORD`), which stands in for all three in development.
  */
-export function stalwart(): StalwartManagement {
-  if (!globalForStalwart.amStalwart) {
-    const baseUrl = process.env.STALWART_URL;
-    if (!baseUrl) throw new Error("STALWART_URL is not set");
-    const token = process.env.STALWART_API_KEY;
-    const username = process.env.STALWART_DEV_ADMIN_USER;
-    const password = process.env.STALWART_DEV_ADMIN_PASSWORD;
-    const auth =
-      token !== undefined && token !== ""
-        ? ({ type: "bearer", token } as const)
-        : username && password
-          ? ({ type: "basic", username, password } as const)
-          : null;
-    if (!auth) throw new Error("Set STALWART_API_KEY (or the dev admin credentials)");
-    globalForStalwart.amStalwart = new StalwartManagement(new StalwartTransport({ baseUrl, auth }));
-  }
-  return globalForStalwart.amStalwart;
+function forRole(role: StalwartCredentialRole): StalwartManagement {
+  const cache = (globalForStalwart.amStalwart ??= {});
+  const cached = cache[role];
+  if (cached) return cached;
+  const env = process.env;
+  const c = SERVICE_CREDENTIALS[role];
+  const problems = credentialEnvProblems([role], {
+    NODE_ENV: env.NODE_ENV,
+    [c.env]: env[c.env],
+    STALWART_API_KEY: env.STALWART_API_KEY,
+  });
+  if (problems.length > 0) throw new Error(`Stalwart credential refused: ${problems.join("; ")}`);
+  const token = env[c.env]?.trim();
+  const auth =
+    token !== undefined && token !== ""
+      ? ({ type: "bearer", token } as const)
+      : env.NODE_ENV === "production"
+        ? null
+        : devAdminAuth(env);
+  if (!auth) throw new Error(`Set ${c.env} (or, in development, the dev admin credentials)`);
+  const made = new StalwartManagement(new StalwartTransport({ baseUrl: baseUrl(env), auth }));
+  cache[role] = made;
+  return made;
+}
+
+/** Worker and scheduler: domains, accounts, DKIM; no owner access to any mailbox. */
+export const stalwartProvisioning = (): StalwartManagement => forRole("provisioning");
+/** Web: app passwords and the managed Sieve script; no account or domain changes. */
+export const stalwartOperations = (): StalwartManagement => forRole("operations");
+/** Scheduler: reads managed Sieve scripts for the reconciler, nothing else. */
+export const stalwartAudit = (): StalwartManagement => forRole("audit");
+
+/** Whether this process has a credential for `role` (its key, or the dev admin outside production). */
+export function hasStalwartCredential(role: StalwartCredentialRole): boolean {
+  const key = process.env[SERVICE_CREDENTIALS[role].env];
+  if (key !== undefined && key.trim() !== "") return true;
+  return process.env.NODE_ENV !== "production" && devAdminAuth(process.env) !== null;
+}
+
+/**
+ * Development tooling only (seed, `stack:verify`, e2e fixtures, integration-test set-up): the dev recovery admin, with
+ * every permission. Refused in production, where it is never configured.
+ */
+export function stalwartDevAdmin(): StalwartManagement {
+  if (process.env.NODE_ENV === "production") throw new Error("The dev admin is never used in production");
+  const cache = (globalForStalwart.amStalwart ??= {});
+  if (cache.devAdmin) return cache.devAdmin;
+  const auth = devAdminAuth(process.env);
+  if (!auth) throw new Error("Set STALWART_DEV_ADMIN_USER and STALWART_DEV_ADMIN_PASSWORD");
+  cache.devAdmin = new StalwartManagement(new StalwartTransport({ baseUrl: baseUrl(process.env), auth }));
+  return cache.devAdmin;
+}
+
+/**
+ * Start-up scope check: asks Stalwart what `mgmt`'s key can do and throws unless it is exactly the documented set
+ * (`credentialScopeProblems`) — a provisioning key that can impersonate, or an operations key that can write accounts,
+ * stops the process. Skipped for the dev admin (it holds everything by design). Returns which kind was checked.
+ */
+export async function verifyStalwartCredential(
+  role: StalwartCredentialRole,
+  mgmt: StalwartManagement,
+): Promise<"key" | "dev-admin"> {
+  if (mgmt.transport.authType === "basic") return "dev-admin";
+  const problems = credentialScopeProblems(role, await mgmt.credentialPermissions());
+  if (problems.length > 0) throw new Error(`Stalwart credential refused: ${problems.join("; ")}`);
+  return "key";
 }

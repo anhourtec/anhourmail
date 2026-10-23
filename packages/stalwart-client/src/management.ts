@@ -406,8 +406,8 @@ export class StalwartManagement {
 
   /**
    * Creates an app password on `accountId` (the account's Stalwart id) limited to `scopes`, with the self-service
-   * permissions always off (`appPasswordPermissions`). The management credential needs `sysAppPassword*` and
-   * `impersonate` (owner access to other accounts; no mail read without the `jmap*` permissions — verified). Returns
+   * permissions always off (`appPasswordPermissions`). Needs the operations key: `sysAppPassword*` and `impersonate`
+   * (owner access to other accounts; no mail read without the `jmap*` permissions — verified). Returns
    * the secret, which Stalwart shows only this once: the caller hands it to the person and never stores it.
    */
   async createAppPassword(
@@ -444,32 +444,88 @@ export class StalwartManagement {
     return list.map((a) => ({ id: a.id, description: a.description ?? "", createdAt: new Date(a.createdAt ?? 0) }));
   }
 
-  /** Revokes one app password. Ids are reused after a revocation, so callers match `createdAt` first. */
+  /**
+   * Revokes one app password with owner access (the operations key; the web app's clean-up when recording a new one
+   * fails). Ids are reused after a revocation, so callers match `createdAt` first. Jobs use
+   * `revokeAppPasswordCredential`.
+   */
   async destroyAppPassword(accountId: string, id: string): Promise<void> {
     await this.transport.set("x:AppPassword", { accountId, destroy: [id] });
   }
 
   /**
    * Every app password of an account with its `permissions` value, and how many API keys it has (for the
-   * reconciler; never secrets). Needs `sysAppPasswordGet` and `sysApiKeyGet` on the management key.
+   * reconciler; never secrets). Read from `x:Account.credentials`, so it needs only `sysAccountGet` — no owner access
+   * to the mailbox (the provisioning key; verified on v0.16.27: id, description, `createdAt` and `permissions` are
+   * listed, secrets as `****`). Throws when the account doesn't exist.
    */
   async credentialInventory(accountId: string): Promise<{
     appPasswords: { id: string; createdAt: Date; permissions: unknown }[];
     apiKeys: number;
+    /** Password credentials (the mailbox sign-in password). A mailbox has exactly one; Stalwart refuses a second. */
+    passwords: { id: string }[];
   }> {
-    const [apps, keys] = await Promise.all([
-      this.transport.getAll<{ id: string; createdAt?: string; permissions?: unknown }>(
-        "x:AppPassword",
-        ["createdAt", "permissions"],
-        null,
-        accountId,
-      ),
-      this.transport.getAll<{ id: string }>("x:ApiKey", ["description"], null, accountId),
-    ]);
+    const credentials = await this.#credentials(accountId);
     return {
-      appPasswords: apps.map((a) => ({ id: a.id, createdAt: new Date(a.createdAt ?? 0), permissions: a.permissions })),
-      apiKeys: keys.length,
+      appPasswords: credentials
+        .filter((c) => c.type === "AppPassword")
+        .map((c) => ({ id: c.id, createdAt: c.createdAt, permissions: c.permissions })),
+      apiKeys: credentials.filter((c) => c.type === "ApiKey").length,
+      passwords: credentials.filter((c) => c.type === "Password").map((c) => ({ id: c.id })),
     };
+  }
+
+  /**
+   * Revokes one app password through `x:Account.credentials` (`sysAccountUpdate`, no owner access to the mailbox):
+   * only the entry with this credential id **and** creation time (Stalwart reuses ids), removed with a patch of its
+   * list position so every other credential stays. Returns false when it is already gone. Positions can move if a
+   * credential is added or removed in between, so the list is read again afterwards and anything else missing is an
+   * error (the reconciler would report it as missing on the mail server).
+   */
+  async revokeAppPasswordCredential(accountId: string, credentialId: string, createdAt: Date): Promise<boolean> {
+    const before = await this.#credentials(accountId);
+    const target = before.find(
+      (c) =>
+        c.type === "AppPassword" &&
+        c.id === credentialId &&
+        Math.abs(c.createdAt.getTime() - createdAt.getTime()) < 1000,
+    );
+    if (!target) return false;
+    await this.transport.set("x:Account", { update: { [accountId]: { [`credentials/${target.index}`]: null } } });
+    const after = await this.#credentials(accountId);
+    const key = (c: { type: string; id: string; createdAt: Date }) =>
+      `${c.type}:${c.id}:${String(c.createdAt.getTime())}`;
+    const left = new Set(after.map(key));
+    if (left.has(key(target))) throw new StalwartError("App password is still there after revocation", "set");
+    if (before.some((c) => c !== target && !left.has(key(c)))) {
+      throw new StalwartError("Another credential disappeared during the revocation", "set");
+    }
+    return true;
+  }
+
+  async #credentials(
+    accountId: string,
+  ): Promise<{ index: string; type: string; id: string; createdAt: Date; permissions: unknown }[]> {
+    const [account] = await this.transport.getAll<{
+      id: string;
+      credentials?: Record<
+        string,
+        { "@type"?: string; credentialId?: string; createdAt?: string; permissions?: unknown }
+      >;
+    }>("x:Account", ["credentials"], [accountId]);
+    if (!account) throw new StalwartError(`Account ${accountId} not found`, "method");
+    return Object.entries(account.credentials ?? {}).map(([index, c]) => ({
+      index,
+      type: c["@type"] ?? "",
+      id: c.credentialId ?? "",
+      createdAt: new Date(c.createdAt ?? 0),
+      permissions: c.permissions,
+    }));
+  }
+
+  /** What this client's credential can do (`GET /api/account`; see `keys.ts`). */
+  credentialPermissions(): Promise<string[]> {
+    return this.transport.credentialPermissions();
   }
 
   /** Recompiles listeners, MTA routing and expressions. Directory changes apply without it. */
@@ -480,8 +536,9 @@ export class StalwartManagement {
   // ---- managed Sieve script (the webmail's automatic replies, forwarding and junk rules) ---------------------
   //
   // Customer mailboxes can't write their own Sieve (CUSTOMER_PERMISSIONS), so the one script we own is written and
-  // read here with management credentials, standard JMAP (`urn:ietf:params:jmap:sieve`). `accountId` is the
-  // mailbox's JMAP account id (equal to its x:Account id, verified on v0.16.27).
+  // read here with management credentials, standard JMAP (`urn:ietf:params:jmap:sieve`): written by the web app with
+  // the operations key, read by the reconciler with the audit key (both need `impersonate`; the provisioning key has
+  // no access). `accountId` is the mailbox's JMAP account id (equal to its x:Account id, verified on v0.16.27).
 
   /** The mailbox's managed script `name` (its text and whether it's the active one), or null when it has none. */
   async getSieveScript(accountId: string, name: string): Promise<{ content: string; active: boolean } | null> {
@@ -495,9 +552,9 @@ export class StalwartManagement {
   }
 
   /**
-   * Makes the managed script `name` the active one again if something switched it off (a user can deactivate
-   * scripts; `mailbox.ensure` and the backfill call this). No-op when it doesn't exist or is already active; no
-   * other script is deleted.
+   * Makes the managed script `name` the active one again if something switched it off, without rewriting it. Needs
+   * owner access and `jmapSieveScriptUpdate` (the operations key; nothing in the worker can). No-op when it doesn't
+   * exist or is already active; no other script is deleted.
    */
   async activateSieveScript(accountId: string, name: string): Promise<boolean> {
     const res = await this.transport.rawCall(SIEVE_USING, [
