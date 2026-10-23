@@ -63,6 +63,12 @@ export const PERMISSIONS = {
       "Create a free platform-domain address in any customer account (no password: the account sets it; never while acting as)",
     critical: true,
   },
+  "platform.account.suspend": {
+    scope: "platform",
+    description:
+      "Suspend a customer account or a person and lift it (fresh step-up, reason required; never while acting as)",
+    critical: true,
+  },
   "platform.invites.manage": { scope: "platform", description: "Send and resend invites" },
   "platform.mailflow.read": { scope: "platform", description: "Read mail-flow logs (metadata only)" },
   "platform.abuse.manage": { scope: "platform", description: "Work the abuse queue, restrict, suspend" },
@@ -200,6 +206,7 @@ export const PLATFORM_GRANTS: Readonly<Record<PlatformRole, readonly PlatformPer
     "platform.accounts.actAs",
     "platform.users.resetCredentials",
     "platform.mailbox.create",
+    "platform.account.suspend",
     "platform.invites.manage",
     "platform.mailflow.read",
     "platform.abuse.manage",

@@ -86,3 +86,14 @@ export class StepUpRequiredError extends DomainError {
     super("Confirm it's you first: enter your password or a code.", "step_up_required");
   }
 }
+
+/**
+ * Anhourtec staff suspended this customer account (`platform.account.suspend`). Its people can still sign in, but every
+ * account permission answers HTTP 403 with this code, so the console can show the suspension notice instead.
+ */
+export class AccountSuspendedError extends ForbiddenError {
+  override readonly code = "account_suspended";
+  constructor() {
+    super("This account is suspended. Its mail is kept; see the notice in the console for how to appeal.");
+  }
+}

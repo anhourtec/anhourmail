@@ -24,6 +24,15 @@ export type MutationOutcome<T> = {
   meta?: Record<string, unknown>;
   /** Business-level refusal that still commits nothing but is audited as denied (e.g. a bot check). */
   denied?: { code: string };
+  /**
+   * The same action recorded again in other scopes, in the same unit of work, each with its own meta: e.g. a staff
+   * suspension in the platform log (with the internal note) and in each affected account's log (without it, rule 49).
+   */
+  copies?: {
+    accountId: string | null;
+    target?: { id?: string | null; label?: string | null };
+    meta: Record<string, unknown>;
+  }[];
 };
 
 /**
@@ -97,6 +106,21 @@ export async function mutation<T>(
       };
       entry.meta = redactMeta(out.meta ?? {});
       await repos.audit.append(entry, deps.clock.now());
+      for (const copy of out.copies ?? []) {
+        const copySpec = { ...spec, accountId: copy.accountId };
+        await repos.audit.append(
+          {
+            ...auditBase(actor, req, copySpec, entry.result, entry.errorCode, scopeOf(copySpec)),
+            target: {
+              type: spec.target.type,
+              id: copy.target?.id ?? entry.target.id,
+              label: copy.target?.label ?? entry.target.label,
+            },
+            meta: redactMeta(copy.meta),
+          },
+          deps.clock.now(),
+        );
+      }
       return out.result;
     });
   } catch (err) {

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { SUPPORT_EMAIL } from "@anhourmail/shared/platform";
 import { isSignInPolicy, type SignInMethod, type SignInPolicy } from "@anhourmail/shared/security";
 
 import { type Actor, authorize, can, type UserActor } from "../actor";
@@ -185,12 +186,19 @@ export async function requiredEnrolment(repos: Repositories, userId: string): Pr
   return missingFactor(policy, await repos.security.factors(userId));
 }
 
-/** The refusal for a session signed in with `method`, from the person's strictest account requirement (null = ok). */
+/** Shown when Anhourtec staff suspended the person's console sign-in (`platform.account.suspend`). */
+export const PERSON_SUSPENDED_MESSAGE = `Your AnhourMail sign-in is suspended. Your mail is kept. If you think this is a mistake, email ${SUPPORT_EMAIL}.`;
+
+/**
+ * The refusal for a session signed in with `method` (null = ok): a staff suspension of the person first, then their
+ * strictest account requirement. The identity layer refuses such a sign-in, and an open session ends on its next use.
+ */
 export async function sessionRefusalFor(
   repos: Repositories,
   userId: string,
   method: SignInMethod | null,
 ): Promise<string | null> {
+  if (await repos.access.isSuspended(userId)) return PERSON_SUSPENDED_MESSAGE;
   const policy = strictestPolicy(await repos.security.policies(userId));
   if (policy === "none") return null;
   return sessionRefusal(policy, await repos.security.factors(userId), method);

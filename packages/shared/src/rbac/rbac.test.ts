@@ -128,6 +128,11 @@ describe("permission matrix invariants", () => {
     expect(isCritical("platform.mailbox.create")).toBe(true);
   });
 
+  it("suspending accounts and people is the Global Administrator's only (critical)", () => {
+    expect(PLATFORM_ROLES.filter((r) => platformRoleCan(r, "platform.account.suspend"))).toEqual(["global_admin"]);
+    expect(isCritical("platform.account.suspend")).toBe(true);
+  });
+
   it("full IPs in the platform audit are the Global Administrator's only (critical)", () => {
     expect(PLATFORM_ROLES.filter((r) => platformRoleCan(r, "platform.audit.full_ip"))).toEqual(["global_admin"]);
     expect(platformRoleCan("reports_reader", "platform.audit.read")).toBe(true);

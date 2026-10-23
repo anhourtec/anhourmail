@@ -20,6 +20,25 @@ export const DEFAULT_PLATFORM_DOMAIN = PRODUCT_DOMAIN;
 /** Company domain. Staff mail only — never customer or free accounts (ADR-0006). */
 export const COMPANY_DOMAIN = "anhourtec.com";
 
+/** Where customers write for help and to appeal a suspension (emails, notice pages, public docs, the site). */
+export const SUPPORT_EMAIL = `support@${COMPANY_DOMAIN}`;
+
+/**
+ * Why staff suspended an account or a person (`platform.account.suspend`). The category is shown to the customer in
+ * plain words; staff's internal note never is.
+ */
+export const SUSPENSION_REASONS = {
+  spam: "Sending spam",
+  abuse: "Abuse of the service",
+  phishing: "Phishing or impersonation",
+  payment: "A payment problem",
+  legal: "A legal requirement",
+  other: "A breach of our terms",
+} as const;
+export type SuspensionReason = keyof typeof SUSPENSION_REASONS;
+export const isSuspensionReason = (v: unknown): v is SuspensionReason =>
+  typeof v === "string" && Object.hasOwn(SUSPENSION_REASONS, v);
+
 export const BRAND = {
   product: "AnhourMail",
   company: "Anhourtec",

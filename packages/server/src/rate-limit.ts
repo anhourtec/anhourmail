@@ -54,6 +54,9 @@ export const LIMITS = {
   platformAddressCheckIp: { limit: 120, windowSec: 600, by: "ip", failMode: "closed" },
   platformMailboxAccount: { limit: 3, windowSec: 86_400, by: "caller", failMode: "closed" },
   platformMailboxIp: { limit: 5, windowSec: 86_400, by: "ip", failMode: "closed" },
+  // Staff suspend / lift (`platform.account.suspend`): each one emails customers and queues mail-server jobs for every
+  // mailbox in scope. Fail closed (it changes who can sign in).
+  staffSuspend: { limit: 30, windowSec: 3600, by: "caller", failMode: "closed" },
   // "Send the confirmation link again": each call emails the person's sign-in address.
   emailVerification: { limit: 5, windowSec: 3600, by: "caller", failMode: "closed" },
   // Each call emails an outside address (forwarding confirmation); a per-mailbox daily cap applies in the service.

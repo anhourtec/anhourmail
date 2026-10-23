@@ -9,7 +9,13 @@ import {
 } from "@anhourmail/shared/rbac";
 import type { SignInMethod } from "@anhourmail/shared/security";
 
-import { EnrolmentRequiredError, ForbiddenError, NotFoundError, UnauthenticatedError } from "./errors";
+import {
+  AccountSuspendedError,
+  EnrolmentRequiredError,
+  ForbiddenError,
+  NotFoundError,
+  UnauthenticatedError,
+} from "./errors";
 
 /** Who is asking. Built by the app from the session; services never trust client-supplied roles. */
 export type Membership = { accountId: string; role: AccountRole };
@@ -32,6 +38,11 @@ export type UserActor = {
   mustEnrol?: "two_factor" | "passkey";
   /** How the current console session was signed in (shared/security.ts), when known. */
   signInMethod?: SignInMethod;
+  /**
+   * Their accounts that Anhourtec staff suspended (`platform.account.suspend`): every account permission there answers
+   * `AccountSuspendedError` (403 `account_suspended`) until it is lifted. Platform and `self` permissions are unaffected.
+   */
+  suspendedAccountIds?: readonly string[];
 };
 
 export type Actor = { kind: "anonymous" } | UserActor | { kind: "system"; name: string };
@@ -60,17 +71,30 @@ function granted(actor: Actor, permission: Permission, accountId?: string): bool
 const gated = (actor: Actor, permission: Permission): actor is UserActor & { mustEnrol: "two_factor" | "passkey" } =>
   actor.kind === "user" && actor.mustEnrol !== undefined && PERMISSIONS[permission].scope !== "self";
 
+/** True when the permission is an account one in an account staff have suspended. */
+const accountSuspended = (actor: Actor, permission: Permission, accountId?: string): boolean =>
+  actor.kind === "user" &&
+  accountId !== undefined &&
+  PERMISSIONS[permission].scope === "account" &&
+  (actor.suspendedAccountIds?.includes(accountId) ?? false);
+
 export function can(actor: Actor, permission: Permission, accountId?: string): boolean {
-  return granted(actor, permission, accountId) && !gated(actor, permission);
+  return (
+    granted(actor, permission, accountId) &&
+    !gated(actor, permission) &&
+    !accountSuspended(actor, permission, accountId)
+  );
 }
 
 /**
  * The service-layer gate (CLAUDE.md rules 5, 25): 401 when signed out, 404 when the account isn't the
  * actor's (never confirm it exists), 403 when the role lacks the permission, and 403 `enrolment_required` when the
- * role allows it but one of their accounts requires a sign-in factor they haven't set up.
+ * role allows it but one of their accounts requires a sign-in factor they haven't set up; 403 `account_suspended` when
+ * the account is suspended by staff.
  */
 export function authorize(actor: Actor, permission: Permission, accountId?: string): void {
   if (granted(actor, permission, accountId)) {
+    if (accountSuspended(actor, permission, accountId)) throw new AccountSuspendedError();
     if (gated(actor, permission)) throw new EnrolmentRequiredError(actor.mustEnrol);
     return;
   }
