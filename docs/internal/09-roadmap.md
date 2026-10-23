@@ -145,6 +145,31 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
 - Only after personal-mail deliverability is proven (≥ 8 weeks post-launch with complaints < 0.1 %). Separate bulk IP pool + warm-up, bulk subdomain onboarding, lists/consent/imports, campaign sender in the worker, RFC 8058 one-click unsubscribe, bounce/complaint processing and suppression, Trust & Safety review queue, pricing tiers (`11-bulk-sending.md`, ADR-0015).
 - **Exit:** a reviewed test sender reaches the big free mailbox providers' inboxes from the bulk pool with DMARC alignment; one-click unsubscribe suppresses within seconds; automatic pause triggers in staging at the configured thresholds; zero tracking pixels or rewritten links in sent mail (tested).
 
+## Phase 8.1 — Migration: import mail and contacts (future)
+
+Make switching painless for whole accounts, not just one mailbox. Runs as worker jobs (rule 26), one job per
+mailbox, resumable, with progress in the console and a summary email when done.
+
+- **Mail import over IMAP from any provider:** source host, port, username and an app password; folders mapped onto
+  ours (Inbox, Sent, Drafts, Junk, Trash, custom folders kept), flags and dates preserved, duplicates skipped by
+  Message-ID, attachments and size limits respected against the account's storage pool. Source credentials are
+  encrypted at rest and wiped when the job ends (rule 23).
+- **One-click import from the largest hosted mail providers (OAuth):** sign in with the old provider instead of an
+  app password; uses their sign-in and mail APIs (or IMAP with an OAuth token) with read-only scopes. Tokens are
+  held encrypted, never logged, revoked and deleted when the job ends.
+- **Contacts import:** from the same providers over OAuth (their contacts APIs) and from CardDAV, plus vCard and CSV
+  upload; merged into the mailbox's address book with duplicate detection by email address.
+- **Calendar import (later):** CalDAV and `.ics` upload.
+- **Account-wide migration for admins:** a CSV of mailboxes (old address → new mailbox, source credentials or OAuth
+  per user) run as a batch with per-mailbox status, retries and a report.
+- **Ongoing sync during cut-over:** repeat the import incrementally (new mail only) until the domain's MX points at
+  us, then stop.
+- **Forwarding helper:** step-by-step instructions to set forwarding on the old account during the switch.
+- Not SMTP: SMTP only delivers new mail; existing mail moves over IMAP or the provider's API.
+- Safety: per-account rate limits and concurrency caps so imports never slow the mail server; imports never count
+  toward sending limits; no mail content in logs or audit (only counts, sizes and status).
+- Public docs: a migration guide per source (these may name the source provider, as user-facing setup text).
+
 ## Later
 
 Resource mailboxes (rooms/equipment) with calendars, calendar/contacts delegation, CalDAV/CardDAV UI, Sieve editor (v1.1), per-user encryption at rest, crypto payments, second MX, separate outbound IP pool for free vs paid (earlier if free opens wider), PGP.
