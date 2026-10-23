@@ -60,7 +60,7 @@ export function InviteForm({
 
   return (
     <form onSubmit={onSubmit} className="flex max-w-2xl flex-col gap-5" noValidate>
-      <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,16rem)]">
+      <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_11rem]">
         <label className="flex flex-col gap-1.5">
           <span className="am-h4">Email</span>
           <input

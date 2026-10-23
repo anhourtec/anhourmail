@@ -52,7 +52,7 @@ export function AddDomainForm({ accountId }: { accountId: string }) {
           spellCheck={false}
           required
           aria-describedby={error ? "domain-error" : "domain-hint"}
-          className={`${inputClass} font-mono sm:max-w-sm`}
+          className={`${inputClass} min-w-0 font-mono sm:flex-1`}
         />
         <button type="submit" disabled={pending} className={primaryButtonClass}>
           <Plus className="size-4" aria-hidden />
