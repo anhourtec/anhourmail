@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { PRODUCT_DOMAIN } from "@anhourmail/shared";
+import { PRODUCT_DOMAIN, SUPPORT_EMAIL } from "@anhourmail/shared";
 
 /** The public legal pages. Drafts until counsel signs off; the banner on each page says so. */
 export const LEGAL_UPDATED = "2026-10-21";
@@ -8,7 +8,7 @@ export const LEGAL_CONTACTS = {
   privacy: `privacy@${PRODUCT_DOMAIN}`,
   abuse: `abuse@${PRODUCT_DOMAIN}`,
   legal: `legal@${PRODUCT_DOMAIN}`,
-  support: `support@${PRODUCT_DOMAIN}`,
+  support: SUPPORT_EMAIL,
 } as const;
 
 export const LEGAL_PAGES = [

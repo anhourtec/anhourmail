@@ -2,6 +2,7 @@
 import {
   ADDONS,
   APP_PASSWORDS_PER_MAILBOX,
+  BREACHED_PASSWORD,
   BILLING,
   CARDDAV,
   BULK_MAIL,
@@ -13,6 +14,7 @@ import {
   INVITE_EMAILS_PER_DAY,
   INVITE_TTL_DAYS,
   EMAIL_VERIFICATION_HOURS,
+  fairUseText,
   MAILBOX_DELETE_GRACE_DAYS,
   MAX_MAILBOXES,
   MAX_PEOPLE,
@@ -24,6 +26,8 @@ import {
   RECOVERY_CODES,
   SECOND_STEP_LIMITS,
   STEP_UP_MINUTES,
+  SUPPORT_EMAIL,
+  SUSPENSION_REASONS,
   TOTP,
   TRUST_TIERS,
   TRUSTED_DEVICE_DAYS,
@@ -60,6 +64,11 @@ const VALUES = {
   emailVerificationHours: String(EMAIL_VERIFICATION_HOURS),
   freeStorage: `${PLANS.free.storageGb} GB`,
   plusStorage: `${PLANS.plus.storageGb} GB`,
+  includedMailboxes: String(PLANS.plus.includedMailboxes),
+  fairUseStorage: `${String(PLANS.plus.fairUseStorageGb ?? 0)} GB`,
+  extraStoragePrice: PLANS.plus.extraStoragePricePerGb ? formatPrice(PLANS.plus.extraStoragePricePerGb.USD, "USD") : "",
+  extraMailboxPrice: PLANS.plus.extraMailboxPrice ? formatPrice(PLANS.plus.extraMailboxPrice.USD, "USD") : "",
+  paidFairUse: fairUseText(PLANS.plus) ?? "",
   plusPriceUsd: PLANS.plus.price ? formatPrice(PLANS.plus.price.USD, "USD") : "",
   plusPriceCad: PLANS.plus.price ? formatPrice(PLANS.plus.price.CAD, "CAD") : "",
   supporterMinUsd: PLANS.supporter.price ? formatPrice(PLANS.supporter.price.USD, "USD") : "",
@@ -81,7 +90,11 @@ const VALUES = {
   secondStepLockMinutes: String(SECOND_STEP_LIMITS.lockMinutes),
   // App passwords (packages/shared/src/security.ts)
   appPasswordsPerMailbox: String(APP_PASSWORDS_PER_MAILBOX),
+  // Breached-password check (packages/shared/src/security.ts)
+  breachedPasswordMessage: BREACHED_PASSWORD.message,
   stepUpMinutes: String(STEP_UP_MINUTES),
+  // Where to write for help and to appeal a suspension (packages/shared/src/platform.ts)
+  supportEmail: SUPPORT_EMAIL,
 } as const;
 
 export type FactKey = keyof typeof VALUES;
@@ -89,7 +102,7 @@ export type FactKey = keyof typeof VALUES;
 /** Inline fact, e.g. `<Value of="imapHost" />`. Hostnames render in mono. */
 export function Value({ of, copy = false }: { of: FactKey; copy?: boolean }) {
   const v = VALUES[of];
-  const mono = of.endsWith("Host") || of.endsWith("Url") || of === "productDomain";
+  const mono = of.endsWith("Host") || of.endsWith("Url") || of === "productDomain" || of === "supportEmail";
   return (
     <span className="inline-flex items-center gap-0.5 align-baseline">
       {mono ? <code>{v}</code> : <span>{v}</span>}
@@ -190,7 +203,8 @@ export function PlanTable() {
           <tr className="border-b text-left text-fd-muted-foreground">
             <th className="py-2 pr-4 font-medium">Plan</th>
             <th className="py-2 pr-4 font-medium">Price per year</th>
-            <th className="py-2 pr-4 font-medium">Storage</th>
+            <th className="py-2 pr-4 font-medium">Storage per mailbox</th>
+            <th className="py-2 pr-4 font-medium">Mailboxes included</th>
             <th className="py-2 pr-4 font-medium">@{PRODUCT_DOMAIN} addresses</th>
             <th className="py-2 pr-4 font-medium">Custom domains</th>
             <th className="py-2 pr-4 font-medium">Aliases</th>
@@ -208,6 +222,7 @@ export function PlanTable() {
                 <td className="py-2 pr-4 font-medium">{p.name}</td>
                 <td className="py-2 pr-4">{price}</td>
                 <td className="py-2 pr-4">{p.storageGb} GB</td>
+                <td className="py-2 pr-4">{p.includedMailboxes}</td>
                 <td className="py-2 pr-4">{p.platformMailboxes ?? `Up to ${String(MAX_MAILBOXES)}`}</td>
                 <td className="py-2 pr-4">{p.customDomains ? "Yes" : "No"}</td>
                 <td className="py-2 pr-4">{unlimited(p.aliases)}</td>
@@ -217,6 +232,11 @@ export function PlanTable() {
           })}
         </tbody>
       </table>
+      {fairUseText(PLANS.plus) && (
+        <p className="mt-2 text-fd-muted-foreground text-sm">
+          {PLANS.plus.name} and {PLANS.supporter.name}: {fairUseText(PLANS.plus)}.
+        </p>
+      )}
     </div>
   );
 }
@@ -253,5 +273,16 @@ export function SendLimitsTable() {
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** The reason categories a suspension notice can give, in the words customers see (`SUSPENSION_REASONS`). */
+export function SuspensionReasonList() {
+  return (
+    <ul>
+      {Object.values(SUSPENSION_REASONS).map((label) => (
+        <li key={label}>{label}</li>
+      ))}
+    </ul>
   );
 }

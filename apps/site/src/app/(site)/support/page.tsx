@@ -42,7 +42,15 @@ const CARDS: readonly { icon: typeof LifeBuoyIcon; title: string; body: ReactNod
   {
     icon: LifeBuoyIcon,
     title: "Help with your account",
-    body: <>Write to {mail(LEGAL_CONTACTS.support)}. We answer every message.</>,
+    body: (
+      <>
+        Write to {mail(LEGAL_CONTACTS.support)}. We answer every message, including appeals if your account was{" "}
+        <Link href="/docs/account-suspended" className="underline underline-offset-2">
+          suspended
+        </Link>
+        .
+      </>
+    ),
   },
   {
     icon: ShieldAlertIcon,

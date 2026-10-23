@@ -2,7 +2,7 @@
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import type { MDXComponents } from "mdx/types";
 
-import { ClientSettingsTable, DnsRecordTable, PlanTable, SendLimitsTable, Value } from "./facts";
+import { ClientSettingsTable, DnsRecordTable, PlanTable, SendLimitsTable, SuspensionReasonList, Value } from "./facts";
 
 /** Components available in every docs page without imports. */
 export function getMDXComponents(components?: MDXComponents): MDXComponents {
@@ -13,6 +13,7 @@ export function getMDXComponents(components?: MDXComponents): MDXComponents {
     DnsRecordTable,
     PlanTable,
     SendLimitsTable,
+    SuspensionReasonList,
     ...components,
   };
 }
