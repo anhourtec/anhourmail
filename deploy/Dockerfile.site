@@ -31,6 +31,8 @@ WORKDIR /app
 RUN addgroup -S app -g 10001 && adduser -S app -u 10001 -G app
 COPY --from=build --chown=app:app /repo/apps/site/.next/standalone ./
 COPY --from=build --chown=app:app /repo/apps/site/.next/static ./apps/site/.next/static
+# Next's standalone output leaves out public/ (logos, icons, web manifest); copy it beside the server.
+COPY --from=build --chown=app:app /repo/apps/site/public ./apps/site/public
 USER app
 EXPOSE 3000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
