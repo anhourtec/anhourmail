@@ -19,11 +19,14 @@ export function MailboxPasswordField({
   onChange,
   label = "Password",
   autoFocus = false,
+  forSelf = false,
 }: {
   value: string;
   onChange: (next: string) => void;
   label?: string;
   autoFocus?: boolean;
+  /** The person setting it is the one who'll use it (claiming their own address), so no "give it to them" advice. */
+  forSelf?: boolean;
 }) {
   const id = useId();
   const [generated, setGenerated] = useState<string | null>(null);
@@ -69,7 +72,9 @@ export function MailboxPasswordField({
       {generated !== null && generated === value && (
         <div role="status" className="flex flex-col gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2.5">
           <p className="am-small text-foreground">
-            Copy it now and give it to the person safely. It isn&apos;t shown again once you save.
+            {forSelf
+              ? "Copy it now and keep it somewhere safe, like a password manager. It isn't shown again once you save."
+              : "Copy it now and give it to the person safely. It isn't shown again once you save."}
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <code className="am-code break-all text-[15px] text-foreground" data-testid="generated-password">

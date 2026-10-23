@@ -5,23 +5,34 @@ import { Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { type SyntheticEvent, useState } from "react";
 
+import { PLATFORM_ADDRESS } from "@anhourmail/shared/addresses";
+
 import { callApi } from "../api";
 import { inputClass, primaryButtonClass } from "../ui-classes";
 import { MailboxPasswordField } from "./mailbox-password-field";
 
 type Options = {
   domains: { id: string; name: string }[];
+  /** The platform domain (free addresses; ADR-0021): offered while the plan has room for another. */
+  platform: { id: string; domain: string; used: number; max: number | null; allowed: boolean };
   members: { userId: string; email: string }[];
   maxQuotaGb: number;
 };
 
 /**
- * New mailbox (in the "Add a mailbox" panel): local part @ one of the account's active domains, optionally for a
- * member, with a quota and the password its person signs in to the webmail with (typed or generated, shown once).
- * The panel stays open after creating one, so several can be added in a row.
+ * New mailbox (in the "Add a mailbox" panel): local part @ one of the account's active domains or the platform domain
+ * (a free address, with its own naming rules and the plan's allowance), optionally for a member, with a quota and the
+ * password its person signs in to the webmail with (typed or generated, shown once). The panel stays open after
+ * creating one, so several can be added in a row.
  */
 export function CreateMailboxForm({ accountId, options }: { accountId: string; options: Options }) {
   const router = useRouter();
+  const choices = [
+    ...options.domains.map((d) => ({ id: d.id, name: d.name, free: false })),
+    ...(options.platform.allowed ? [{ id: options.platform.id, name: options.platform.domain, free: true }] : []),
+  ];
+  const [domainId, setDomainId] = useState(choices[0]?.id ?? "");
+  const onPlatform = domainId === options.platform.id;
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<string | null>(null);
@@ -86,14 +97,36 @@ export function CreateMailboxForm({ accountId, options }: { accountId: string; o
           <label htmlFor="mbx-domain" className="sr-only">
             Domain
           </label>
-          <select id="mbx-domain" name="domainId" className={`${inputClass} font-mono sm:max-w-64`}>
-            {options.domains.map((d) => (
+          <select
+            id="mbx-domain"
+            name="domainId"
+            value={domainId}
+            onChange={(e) => {
+              setDomainId(e.target.value);
+            }}
+            className={`${inputClass} font-mono sm:max-w-64`}
+          >
+            {choices.map((d) => (
               <option key={d.id} value={d.id}>
-                {d.name}
+                {d.free ? `${d.name} (free address)` : d.name}
               </option>
             ))}
           </select>
         </div>
+        {onPlatform && (
+          <p className="am-micro">
+            Free addresses at <span className="am-code">{options.platform.domain}</span>: {PLATFORM_ADDRESS.min}–
+            {PLATFORM_ADDRESS.max} characters, first come, first served.
+            {options.platform.max !== null &&
+              ` This plan includes ${options.platform.max === 1 ? "one free address" : `${String(options.platform.max)} free addresses`}.`}
+          </p>
+        )}
+        {!options.platform.allowed && options.platform.max !== null && (
+          <p className="am-micro">
+            This plan&apos;s free <span className="am-code">@{options.platform.domain}</span>{" "}
+            {options.platform.max === 1 ? "address is" : "addresses are"} already in use.
+          </p>
+        )}
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="flex flex-col gap-1.5">

@@ -9,6 +9,7 @@ import { MAILBOX_DELETE_GRACE_DAYS } from "@anhourmail/shared/plans";
 import { PageHeader } from "@anhourmail/ui/page-header";
 
 import { UrlFlyout } from "@/components/console/flyout";
+import { ClaimPlatformAddress } from "@/components/mailboxes/claim-platform-address";
 import { CreateMailboxForm } from "@/components/mailboxes/create-mailbox-form";
 import { MailboxList } from "@/components/mailboxes/mailbox-list";
 import { MailboxPanel } from "@/components/mailboxes/mailbox-panel";
@@ -57,8 +58,11 @@ export default async function MailboxesPage({
   }
   const { mailboxes, options, open, appPasswords } = data;
   const path = `/accounts/${accountId}/mailboxes`;
-  const canAdd = options !== null && options.domains.length > 0 && options.remaining > 0;
+  const canAdd = options !== null && options.remaining > 0 && (options.domains.length > 0 || options.platform.allowed);
   const creating = canAdd && param(sp, "new") === "1" ? options : null;
+  // The free platform address (ADR-0021): offered until the account has one, while the plan has room.
+  const canClaim = options !== null && options.platform.used === 0 && options.platform.allowed;
+  const claiming = canClaim && param(sp, "claim") === "1" ? options : null;
 
   return (
     <>
@@ -67,19 +71,41 @@ export default async function MailboxesPage({
         description="Each mailbox is an address with its own storage. Aliases point more addresses at it."
         breadcrumbs={crumbs}
       />
-      {options?.domains.length === 0 && (
-        <p className="am-body rounded-lg border px-4 py-3">
-          Mailboxes live on your own domain.{" "}
+      {canClaim && (
+        <div className="flex flex-col gap-2 rounded-lg border border-l-4 border-l-primary bg-card px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 flex-col gap-1">
+            <h2 className="am-h4">Get your free @{options.platform.domain} address</h2>
+            <p className="am-small">
+              Pick a name and a password, and it&apos;s yours to use in the webmail and mail apps.
+            </p>
+          </div>
           <Link
-            href={`/accounts/${accountId}/domains?new=1`}
-            className="text-primary underline-offset-2 hover:underline"
+            href={`${path}?claim=1`}
+            className="w-fit shrink-0 text-[14px] text-primary underline-offset-2 hover:underline"
           >
-            Add and verify a domain
-          </Link>{" "}
-          first.
+            Choose your address
+          </Link>
+        </div>
+      )}
+      {options?.domains.length === 0 && !options.platform.allowed && options.remaining > 0 && (
+        <p className="am-body rounded-lg border px-4 py-3">
+          {options.customDomains ? (
+            <>
+              More mailboxes live on your own domain.{" "}
+              <Link
+                href={`/accounts/${accountId}/domains?new=1`}
+                className="text-primary underline-offset-2 hover:underline"
+              >
+                Add and verify a domain
+              </Link>{" "}
+              first.
+            </>
+          ) : (
+            "More mailboxes come with your own domain, on the Plus and Supporter plans."
+          )}
         </p>
       )}
-      {options && options.domains.length > 0 && options.remaining <= 0 && (
+      {options && options.remaining <= 0 && (
         <p className="am-small">This account has the most mailboxes it can have.</p>
       )}
       <MailboxList
@@ -117,12 +143,41 @@ export default async function MailboxesPage({
           />
         </UrlFlyout>
       )}
+      {claiming && (
+        <UrlFlyout label={`Get your free @${claiming.platform.domain} address`} closeHref={path} size="md">
+          <div className="flex flex-col gap-6">
+            <div className="flex flex-col gap-1.5">
+              <h2 className="am-h2">Get your free @{claiming.platform.domain} address</h2>
+              <p className="am-small">
+                Names are first come, first served, and a name that was used before isn&apos;t given out again.
+              </p>
+            </div>
+            <ClaimPlatformAddress
+              accountId={accountId}
+              domain={claiming.platform.domain}
+              ownerUserId={actor.userId}
+              emailVerified={claiming.platform.emailVerified}
+              email={actor.email}
+              webmailUrl={env().WEBMAIL_URL}
+            />
+          </div>
+        </UrlFlyout>
+      )}
       {creating && (
         <UrlFlyout label="Add a mailbox" closeHref={path} size="md">
           <div className="flex flex-col gap-6">
             <div className="flex flex-col gap-1.5">
               <h2 className="am-h2">Add a mailbox</h2>
-              <p className="am-small">An address on one of your domains, with its own storage and password.</p>
+              <p className="am-small">
+                An address on one of your domains
+                {creating.platform.allowed ? (
+                  <>
+                    {" "}
+                    or at <span className="am-code">{creating.platform.domain}</span>
+                  </>
+                ) : null}
+                , with its own storage and password.
+              </p>
             </div>
             <CreateMailboxForm accountId={accountId} options={creating} />
           </div>

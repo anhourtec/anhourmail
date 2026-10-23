@@ -27,6 +27,7 @@ import {
 import { domainAllowance, listDomains } from "@anhourmail/core/domains";
 import { listMailboxes } from "@anhourmail/core/mailboxes";
 import { listPeople } from "@anhourmail/core/people";
+import { MAX_MAILBOXES } from "@anhourmail/shared/plans";
 import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 
 import { CommandBar, CommandLink } from "@/components/console/command-bar";
@@ -39,6 +40,7 @@ import { MailboxStatus } from "@/components/mailboxes/mailbox-status";
 import { accountNames, requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
 import { env } from "@/server/env";
+import { platform } from "@/server/platform";
 
 export const metadata: Metadata = { title: "Console" };
 
@@ -129,10 +131,31 @@ async function accountOverview(actor: UserActor, accountId: string) {
 
 type Overview = Awaited<ReturnType<typeof accountOverview>>;
 
+/** The account has no free platform address yet, and may create one (`mailbox.manage`, room under the ceiling). */
+function canClaimFree(actor: UserActor, accountId: string, o: Overview, freeDomain: string): boolean {
+  return (
+    o.mailboxes !== null &&
+    can(actor, "mailbox.manage", accountId) &&
+    o.mailboxes.length < MAX_MAILBOXES &&
+    !o.mailboxes.some((m) => m.address.endsWith(`@${freeDomain}`))
+  );
+}
+
 /** Recommendation cards from the account's real state (nothing invented; each links to the one action). */
-function recommendations(actor: UserActor, accountId: string, o: Overview): Card[] {
+function recommendations(actor: UserActor, accountId: string, o: Overview, freeDomain: string): Card[] {
   const base = `/accounts/${accountId}`;
   const cards: Card[] = [];
+  if (canClaimFree(actor, accountId, o, freeDomain)) {
+    cards.push({
+      id: "free-address",
+      icon: AtSign,
+      title: `Get your free @${freeDomain} address`,
+      text: "Pick a name and a password. Use it in the webmail and in any mail app.",
+      href: `${base}/mailboxes?claim=1`,
+      action: "Choose your address",
+      tone: "info",
+    });
+  }
   const failing = o.mailboxes?.find((m) => m.status === "failed" || m.applyFailed);
   if (failing && can(actor, "mailbox.manage", accountId)) {
     cards.push({
@@ -437,7 +460,8 @@ export default async function ConsoleHome() {
   );
   const platformAudit = can(actor, "platform.audit.read") ? await listPlatformAudit(deps, actor, { limit: 8 }) : null;
   const first = overviews[0];
-  const cards = first ? recommendations(actor, first.accountId, first.o) : [];
+  const freeDomain = platform().freeAddressDomain;
+  const cards = first ? recommendations(actor, first.accountId, first.o, freeDomain) : [];
   const base = current ? `/accounts/${current}` : "";
   const staff = actor.platformRoles.length > 0;
   const webmail =
@@ -448,6 +472,8 @@ export default async function ConsoleHome() {
   const quick: { href: string; icon: React.ReactNode; label: string; external?: boolean }[] = [];
   if (current && first) {
     const { o } = first;
+    if (canClaimFree(actor, current, o, freeDomain))
+      quick.push({ href: `${base}/mailboxes?claim=1`, icon: <AtSign />, label: "Get your free address" });
     if (can(actor, "mailbox.manage", current) && o.domains?.some((d) => d.status === "active"))
       quick.push({ href: `${base}/mailboxes?new=1`, icon: <Inbox />, label: "Add a mailbox" });
     if (can(actor, "member.manage", current) && o.people?.limits.addPeople)

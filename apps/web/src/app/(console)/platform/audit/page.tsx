@@ -49,7 +49,7 @@ export default async function PlatformAuditPage({
         </CommandLink>
       </CommandBar>
       <AuditFilters action={path} areas={AREA_OPTIONS} actors={ACTORS} current={current} />
-      <AuditTable rows={auditRows(page.entries)} />
+      <AuditTable rows={auditRows(page.entries)} ipKind={can(actor, "platform.audit.full_ip") ? "full" : "network"} />
       <AuditPager path={path} filters={current} paged={paged} nextBefore={page.nextBefore} />
     </>
   );

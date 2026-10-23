@@ -40,9 +40,10 @@ function Actor({ row }: { row: AuditRow }) {
 
 /**
  * Read-only audit list (newest first, paged on the server, so not re-sortable here); a row's details button opens
- * the whole entry in a flyout panel (meta is redacted when it is written).
+ * the whole entry in a flyout panel (meta is redacted when it is written). `ipKind` only labels the address: whether
+ * it is the full address (the platform log) or its network part (account logs) is decided by the audit service.
  */
-export function AuditTable({ rows }: { rows: AuditRow[] }) {
+export function AuditTable({ rows, ipKind = "network" }: { rows: AuditRow[]; ipKind?: "full" | "network" }) {
   const [open, setOpen] = useState<AuditRow | null>(null);
   const opener = useRef<HTMLButtonElement | null>(null);
 
@@ -124,6 +125,7 @@ export function AuditTable({ rows }: { rows: AuditRow[] }) {
       {open && (
         <AuditDrawer
           row={open}
+          ipKind={ipKind}
           onClose={() => {
             setOpen(null);
             opener.current?.focus();
@@ -144,7 +146,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 /** The whole entry in a flyout panel (no browser dialogs): Escape, Close or the dimmed list closes it. */
-function AuditDrawer({ row, onClose }: { row: AuditRow; onClose: () => void }) {
+function AuditDrawer({ row, ipKind, onClose }: { row: AuditRow; ipKind: "full" | "network"; onClose: () => void }) {
   return (
     <Flyout label={row.actionLabel} onClose={onClose} size="md">
       <div className="flex flex-col gap-6">
@@ -175,7 +177,7 @@ function AuditDrawer({ row, onClose }: { row: AuditRow; onClose: () => void }) {
               </span>
             </span>
           </Field>
-          <Field label="IP (network only)">
+          <Field label={ipKind === "full" ? "IP address" : "IP (network only)"}>
             <code className="am-code">{row.ip ?? "—"}</code>
           </Field>
           {row.requestId && (

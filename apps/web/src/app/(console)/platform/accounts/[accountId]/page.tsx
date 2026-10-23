@@ -17,8 +17,10 @@ import { DetailTabs, Field, FieldGrid } from "@/components/console/flyout";
 import { StatusText, type Tone } from "@/components/console/status-text";
 import { CopyValue } from "@/components/copy-value";
 import { MailboxStatus } from "@/components/mailboxes/mailbox-status";
+import { StaffCreateAddress } from "@/components/platform/staff-create-address";
 import { requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
+import { platform } from "@/server/platform";
 import { clientIp } from "@anhourmail/server/client-ip";
 
 export const metadata: Metadata = { title: "Customer account" };
@@ -122,7 +124,17 @@ export default async function CustomerAccountPage({ params }: { params: Promise<
       </ul>
     );
 
-  const mailboxesTab =
+  // Staff create a free platform address here (Global Administrator; never while acting as someone).
+  const staffCreate =
+    can(actor, "platform.mailbox.create") && actor.actingAs === undefined ? (
+      <StaffCreateAddress
+        accountId={summary.id}
+        domain={platform().freeAddressDomain}
+        people={people.map((p) => ({ userId: p.userId, email: p.email }))}
+      />
+    ) : null;
+
+  const mailboxList =
     mailboxes.length === 0 ? (
       <ListEmpty>No mailboxes.</ListEmpty>
     ) : (
@@ -188,7 +200,16 @@ export default async function CustomerAccountPage({ params }: { params: Promise<
         tabs={[
           { id: "people", label: `People (${String(people.length)})`, content: peopleTab },
           { id: "domains", label: `Domains (${String(domains.length)})`, content: domainsTab },
-          { id: "mailboxes", label: `Mailboxes (${String(mailboxes.length)})`, content: mailboxesTab },
+          {
+            id: "mailboxes",
+            label: `Mailboxes (${String(mailboxes.length)})`,
+            content: (
+              <>
+                {staffCreate}
+                {mailboxList}
+              </>
+            ),
+          },
         ]}
       />
     </>
