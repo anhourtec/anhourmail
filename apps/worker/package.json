@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "dev:scheduler": "tsx watch --env-file-if-exists=../../.env src/scheduler.ts",
     "job:reconcile": "tsx src/jobs/reconcile.ts",
+    "job:service-accounts": "tsx src/jobs/service-accounts.ts",
     "start": "tsx src/worker.ts",
     "job:domain-recheck": "tsx src/jobs/domain-recheck.ts",
     "job:mailbox-purge": "tsx src/jobs/mailbox-purge.ts",

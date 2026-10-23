@@ -19,6 +19,12 @@ function production(overrides: Record<string, string | undefined> = {}) {
     TRUST_PROXY: "true",
     SECRETS_KEYRING: `k1:${Buffer.alloc(32, 1).toString("base64")}`,
     PLATFORM_DOMAIN: undefined,
+    STALWART_OPERATIONS_KEY: "operations-key",
+    STALWART_PROVISIONING_KEY: undefined,
+    STALWART_AUDIT_KEY: undefined,
+    STALWART_API_KEY: undefined,
+    STALWART_DEV_ADMIN_USER: undefined,
+    STALWART_DEV_ADMIN_PASSWORD: undefined,
     ...overrides,
   };
   for (const [k, v] of Object.entries(base)) vi.stubEnv(k, v);
@@ -85,5 +91,32 @@ describe("PLATFORM_DOMAIN", () => {
       TRUST_PROXY: "true",
     });
     expect(env().PLATFORM_DOMAIN).toBe("anhourmail.com");
+  });
+});
+
+describe("Stalwart credentials (ADR-0020 credential split)", () => {
+  const onDomain = { PLATFORM_DOMAIN: "anhourmail.com" };
+
+  it("starts with the operations key only", () => {
+    production(onDomain);
+    expect(env().NODE_ENV).toBe("production");
+  });
+
+  it("refuses to start without it, or with a key that can create accounts or read scripts", () => {
+    production({ ...onDomain, STALWART_OPERATIONS_KEY: undefined });
+    expect(() => env()).toThrow(/STALWART_OPERATIONS_KEY must be set in production/);
+    production({ ...onDomain, STALWART_PROVISIONING_KEY: "p" });
+    expect(() => env()).toThrow(/STALWART_PROVISIONING_KEY must not be given to this process/);
+    production({ ...onDomain, STALWART_AUDIT_KEY: "a" });
+    expect(() => env()).toThrow(/STALWART_AUDIT_KEY must not be given to this process/);
+    production({ ...onDomain, STALWART_DEV_ADMIN_USER: "admin" });
+    expect(() => env()).toThrow(/STALWART_DEV_ADMIN_USER is for development only/);
+  });
+
+  it("refuses the legacy single key in any mode", () => {
+    production({ ...onDomain, STALWART_API_KEY: "old" });
+    expect(() => env()).toThrow(/STALWART_API_KEY is no longer used/);
+    production({ NODE_ENV: "development", APP_URL: "http://localhost:43200", STALWART_API_KEY: "old" });
+    expect(() => env()).toThrow(/STALWART_API_KEY is no longer used/);
   });
 });

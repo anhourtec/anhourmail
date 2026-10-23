@@ -9,18 +9,48 @@ import { writeFileSync } from "node:fs";
 
 import { log } from "@anhourmail/server/log";
 
-type Job = { name: string; script: string; everyMs: number; timeoutMs: number; enabled: boolean };
+import { checkStalwartSettings, verifyStalwartCredentials } from "./stalwart";
+
+type Job = {
+  name: string;
+  script: string;
+  everyMs: number;
+  timeoutMs: number;
+  enabled: boolean;
+  /**
+   * Stalwart keys this job's process needs beyond the base (provisioning). Only `job:reconcile` reads managed Sieve
+   * scripts, so only it gets the audit key (ADR-0020 "Credential split"): the scheduler strips `STALWART_AUDIT_KEY`
+   * from the environment every other job inherits.
+   */
+  stalwartKeys?: readonly "audit"[];
+};
 
 export const JOBS: readonly Job[] = [
   // Section 11: verify every audit hash chain and alert on breaks.
   { name: "audit-verify", script: "job:audit-verify", everyMs: 6 * 3600_000, timeoutMs: 10 * 60_000, enabled: true },
-  // Rule 26: desired state vs Stalwart; reports drift, never deletes.
-  { name: "reconcile", script: "job:reconcile", everyMs: 3600_000, timeoutMs: 10 * 60_000, enabled: true },
+  // Rule 26: desired state vs Stalwart; reports drift, never deletes. The only job that reads managed scripts.
+  {
+    name: "reconcile",
+    script: "job:reconcile",
+    everyMs: 3600_000,
+    timeoutMs: 10 * 60_000,
+    enabled: true,
+    stalwartKeys: ["audit"],
+  },
+  // ADR-0020: the service accounts hold API keys only — a cheap check, every minute.
+  { name: "service-accounts", script: "job:service-accounts", everyMs: 60_000, timeoutMs: 60_000, enabled: true },
   // Pending customer domains: activate them once their DNS checks out (docs: "re-checks automatically").
   { name: "domain-recheck", script: "job:domain-recheck", everyMs: 5 * 60_000, timeoutMs: 4 * 60_000, enabled: true },
   // Deleted mailboxes past their grace period: remove the Stalwart account, then the rows (audited).
   { name: "mailbox-purge", script: "job:mailbox-purge", everyMs: 3600_000, timeoutMs: 10 * 60_000, enabled: true },
 ];
+
+/** The environment a job's process gets: the audit key only for jobs that declare it (`stalwartKeys`). */
+function jobEnv(job: Job): NodeJS.ProcessEnv {
+  if (job.stalwartKeys?.includes("audit")) return process.env;
+  const { STALWART_AUDIT_KEY: _audit, ...rest } = process.env;
+  return rest;
+}
 
 const HEARTBEAT = process.env.SCHEDULER_HEARTBEAT ?? "/tmp/scheduler-heartbeat";
 const l = log.child({ component: "scheduler" });
@@ -37,7 +67,7 @@ function runJob(job: Job): Promise<number> {
     const started = Date.now();
     const child = spawn("npm", ["run", "--silent", job.script], {
       stdio: ["ignore", "inherit", "inherit"],
-      env: process.env,
+      env: jobEnv(job),
     });
     const timer = setTimeout(() => {
       l.error("job timed out", { job: job.name, timeoutMs: job.timeoutMs });
@@ -77,4 +107,10 @@ async function loop(): Promise<void> {
 process.on("SIGTERM", () => {
   state.stopping = true;
 });
-if (process.env.SCHEDULER_DRY_RUN !== "true") await loop();
+if (process.env.SCHEDULER_DRY_RUN !== "true") {
+  // The jobs it spawns inherit this environment: the provisioning key and the read-only audit key, nothing else, each
+  // exactly its documented set (ADR-0020 "Credential split").
+  checkStalwartSettings("scheduler");
+  await verifyStalwartCredentials("scheduler");
+  await loop();
+}

@@ -10,6 +10,7 @@ import { runNextJob } from "@anhourmail/core/provisioning";
 import { log } from "@anhourmail/server/log";
 
 import { runtime } from "./runtime";
+import { verifyStalwartCredentials } from "./stalwart";
 
 const HEARTBEAT = process.env.WORKER_HEARTBEAT ?? "/tmp/worker-heartbeat";
 const IDLE_MS = Number(process.env.WORKER_IDLE_MS ?? "2000");
@@ -24,7 +25,9 @@ process.on("SIGINT", () => {
   state.stopping = true;
 });
 
-const { deps, mail, close } = runtime();
+const { deps, mail, close } = runtime("worker");
+// The provisioning key must be exactly its documented set (no `impersonate`): refuse to start otherwise.
+await verifyStalwartCredentials("worker");
 const beat = () => {
   writeFileSync(HEARTBEAT, new Date().toISOString());
 };

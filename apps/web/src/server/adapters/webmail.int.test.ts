@@ -13,7 +13,7 @@ import { createDb, pgMailboxStatusLookup } from "@anhourmail/adapters/postgres";
 import { createKeyRing } from "@anhourmail/server/keyring";
 import { runWithRequestContext } from "@anhourmail/server/request-context";
 import { memorySlidingQuota } from "@anhourmail/server/rate-limit";
-import { stalwart } from "@anhourmail/stalwart-client";
+import { stalwartDevAdmin } from "@anhourmail/stalwart-client";
 
 import { demoPassword } from "../../../../../tests/support/demo-credentials";
 import { ContactInput } from "../webmail/contacts";
@@ -48,11 +48,11 @@ const asClient = <T>(ip: string, fn: () => Promise<T>): Promise<T> =>
   runWithRequestContext({ requestId: `int-${ip}`, clientIp: ip }, fn);
 
 type Blocked = { id: string; address: string };
-const blocked = () => stalwart().transport.getAll<Blocked>("x:BlockedIp", ["address"]);
+const blocked = () => stalwartDevAdmin().transport.getAll<Blocked>("x:BlockedIp", ["address"]);
 /** Bans that existed before this file ran: everything else a test address got is removed afterwards. */
 let bansBefore = new Set<string>();
 beforeAll(async () => {
-  recipientId = await stalwart().upsertUser({
+  recipientId = await stalwartDevAdmin().upsertUser({
     name: RECIPIENT_NAME,
     domain: "dev.test",
     password: await hashPassword(RECIPIENT_PASSWORD),
@@ -61,14 +61,16 @@ beforeAll(async () => {
   bansBefore = new Set((await blocked()).map((b) => b.id));
 });
 afterAll(async () => {
-  if (recipientId) await stalwart().destroy("x:Account", recipientId);
+  if (recipientId) await stalwartDevAdmin().destroy("x:Account", recipientId);
   // Stalwart bans an address failing on an account that just took many failures at once, so even a single
   // deliberate wrong password can leave a ban. Remove the ones this file's test addresses got (documentation
   // range only), so a later run picking the same address isn't refused.
   const ours = (await blocked()).filter((b) => !bansBefore.has(b.id) && isTestIp(b.address));
   if (ours.length > 0) {
-    await stalwart().transport.set("x:BlockedIp", { destroy: ours.map((b) => b.id) });
-    await stalwart().transport.call([["x:Action/set", { create: { r: { "@type": "ReloadBlockedIps" } } }, "r"]]);
+    await stalwartDevAdmin().transport.set("x:BlockedIp", { destroy: ours.map((b) => b.id) });
+    await stalwartDevAdmin().transport.call([
+      ["x:Action/set", { create: { r: { "@type": "ReloadBlockedIps" } } }, "r"],
+    ]);
   }
 });
 

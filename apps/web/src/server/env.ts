@@ -5,6 +5,8 @@ import { z } from "zod";
 
 import { isPlatformDomain, parsePlatformDomain, productionPlatformProblems } from "@anhourmail/shared/platform";
 
+import { stalwartSettingsProblems } from "./adapters/stalwart-settings";
+
 /** An http(s) URL: these become links and origins, so no other scheme is accepted in any mode. */
 const httpUrl = z.url({ protocol: /^https?$/ });
 
@@ -43,6 +45,11 @@ const schema = z.object({
 const PLACEHOLDER_SECRETS = new Set(["dev-only-better-auth-secret-change-me-0123456789"]);
 
 const checked = schema.superRefine((e, ctx) => {
+  // Stalwart: only the operations key here; in production never the provisioning or audit key, nor the dev admin
+  // (ADR-0020 "Credential split"). Read from the raw environment: these settings aren't part of `Env`.
+  for (const message of stalwartSettingsProblems({ ...process.env, NODE_ENV: e.NODE_ENV })) {
+    ctx.addIssue({ code: "custom", path: ["STALWART"], message });
+  }
   if (e.NODE_ENV !== "production") return;
   if (PLACEHOLDER_SECRETS.has(e.BETTER_AUTH_SECRET)) {
     ctx.addIssue({ code: "custom", path: ["BETTER_AUTH_SECRET"], message: "Placeholder secret refused in production" });

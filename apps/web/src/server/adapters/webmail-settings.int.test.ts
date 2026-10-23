@@ -17,7 +17,7 @@ import { systemClock } from "@anhourmail/core";
 import { WebmailSettingsService } from "@anhourmail/core/webmail";
 import { memorySlidingQuota } from "@anhourmail/server/rate-limit";
 import { createKeyRing } from "@anhourmail/server/keyring";
-import { stalwart } from "@anhourmail/stalwart-client";
+import { stalwartDevAdmin } from "@anhourmail/stalwart-client";
 import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 
 import { memoryKv, WebmailSessionStore } from "../webmail/session-store";
@@ -45,7 +45,7 @@ const target = box("target");
 
 beforeAll(async () => {
   for (const b of [owner, sender, target]) {
-    b.id = await stalwart().upsertUser({
+    b.id = await stalwartDevAdmin().upsertUser({
       name: b.name,
       domain: "dev.test",
       password: await hashPassword(b.password),
@@ -56,7 +56,7 @@ beforeAll(async () => {
   }
 });
 afterAll(async () => {
-  for (const b of [owner, sender, target]) if (b.id) await stalwart().destroy("x:Account", b.id);
+  for (const b of [owner, sender, target]) if (b.id) await stalwartDevAdmin().destroy("x:Account", b.id);
 });
 
 /** The control-plane settings service the mail service asks for the confirmed forwarding target (set below). */
@@ -70,8 +70,8 @@ function mailService() {
     access: { allowed: async () => true },
     quota: memorySlidingQuota(),
     sieve: {
-      read: (accountId) => stalwart().getSieveScript(accountId, MANAGED_SCRIPT),
-      write: (accountId, script) => stalwart().putSieveScript(accountId, MANAGED_SCRIPT, script),
+      read: (accountId) => stalwartDevAdmin().getSieveScript(accountId, MANAGED_SCRIPT),
+      write: (accountId, script) => stalwartDevAdmin().putSieveScript(accountId, MANAGED_SCRIPT, script),
     },
     confirmedForward: async (address) => {
       const f = await confirmedSource?.forwarding(address);
@@ -255,20 +255,16 @@ describe("webmail settings on the dev Stalwart", () => {
     expect(refused.methodResponses[0]?.[0]).toBe("error");
     expect(refused.methodResponses[0]?.[1].type).toBe("forbidden");
     expect((await settings.overview(ownerSession)).rulesState).toBe("active");
-    // Switched off some other way (here by hand with the management credential): shown as inactive, and a save turns
-    // it back on.
+    // Switched off some other way (here by hand with the dev admin): shown as inactive, and a save turns it back on.
+    // (Only the web app's operations key can: the worker has no owner access; the reconciler reports it.)
     const deactivate = () =>
-      stalwart().transport.rawCall(
+      stalwartDevAdmin().transport.rawCall(
         ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:sieve"],
         [["SieveScript/set", { accountId: account, onSuccessDeactivateScript: true }, "s"]],
       );
     await deactivate();
     expect((await settings.overview(ownerSession)).rulesState).toBe("inactive");
     await settings.saveJunk(ownerSession, account, { blocked: [], safe: [], trustedOnly: false }, req);
-    expect((await settings.overview(ownerSession)).rulesState).toBe("active");
-    // The same re-activation runs on every mailbox.ensure (provisioning, reconcile, backfill).
-    await deactivate();
-    expect(await stalwart().activateSieveScript(account, MANAGED_SCRIPT)).toBe(true);
     expect((await settings.overview(ownerSession)).rulesState).toBe("active");
   }, 60_000);
 
