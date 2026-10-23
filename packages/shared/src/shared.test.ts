@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import { customerDomainRecords, DKIM_SELECTORS, dkimTarget, VERIFY_PREFIX } from "./dns";
-import { ADDONS, BILLING, formatPrice, PLAN_ORDER, PLANS } from "./plans";
+import { ADDONS, BILLING, fairUseText, formatPrice, MAX_MAILBOXES, PLAN_ORDER, PLANS } from "./plans";
 import {
   CARDDAV,
   CLIENT_ENDPOINTS,
@@ -40,6 +40,42 @@ describe("plans", () => {
     }
     expect(PLANS.supporter.payWhatYouWant).toBe(true);
     expect(BILLING.trialDays).toBe(0);
+  });
+
+  it("match the 2026-10-23 pricing decision: storage per mailbox, prices, fair use and extras", () => {
+    expect(PLAN_ORDER.map((id) => PLANS[id].storageGb)).toEqual([1, 10, 10]);
+    expect(PLANS.plus.price).toEqual({ USD: 900, CAD: 1200 });
+    expect(PLANS.supporter.price).toEqual({ USD: 2000, CAD: 2700 });
+    expect(PLANS.free).toMatchObject({
+      includedMailboxes: 1,
+      platformMailboxes: 1,
+      extraMailboxPrice: null,
+      fairUseStorageGb: null,
+      extraStoragePricePerGb: null,
+    });
+    for (const id of ["plus", "supporter"] as const) {
+      expect(PLANS[id]).toMatchObject({
+        includedMailboxes: 10,
+        extraMailboxPrice: { USD: 100, CAD: 140 },
+        fairUseStorageGb: 30,
+        extraStoragePricePerGb: { USD: 100, CAD: 140 },
+      });
+    }
+    // Until billing can sell extra mailboxes, the creation ceiling is exactly what paid plans include.
+    expect(MAX_MAILBOXES).toBe(PLANS.plus.includedMailboxes);
+  });
+
+  it("renders the fair-use line from the facts (none for Free)", () => {
+    expect(fairUseText(PLANS.plus)).toBe(
+      "No hard limits — fair use 30 GB per account, then $1/GB/year; extra mailboxes $1/year each",
+    );
+    expect(fairUseText(PLANS.supporter, "CAD")).toMatch(
+      /^No hard limits — fair use 30 GB per account, then .*1\.40\/GB\/year; extra mailboxes .*1\.40\/year each$/,
+    );
+    expect(fairUseText(PLANS.free)).toBeNull();
+    expect(fairUseText({ ...PLANS.plus, extraMailboxPrice: null })).toBe(
+      "No hard limits — fair use 30 GB per account, then $1/GB/year",
+    );
   });
 
   it("formats prices per currency", () => {

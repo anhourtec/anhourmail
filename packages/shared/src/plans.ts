@@ -18,7 +18,22 @@ export type Plan = {
   /** Fixed annual price, or the minimum for pay-what-you-want. `null` = free. */
   price: Price | null;
   payWhatYouWant: boolean;
+  /**
+   * Storage per mailbox, in GB (2026-10-23: Free 1, Plus and Supporter 10). Lowering it doesn't shrink existing
+   * mailboxes by itself: `job:quota-cap` brings them down, never below the mail they already hold.
+   */
   storageGb: number;
+  /** Mailboxes the price includes (Free: its one address; paid plans: `MAX_MAILBOXES`). */
+  includedMailboxes: number;
+  /** Per extra mailbox beyond `includedMailboxes`, per year; null = none can be added. Sold once billing opens. */
+  extraMailboxPrice: Price | null;
+  /**
+   * Fair use: storage the whole account stores (all its mailboxes) before extra storage is charged; null = none (the
+   * plan's own small quota is the limit). Not a hard limit: nothing stops at this number.
+   */
+  fairUseStorageGb: number | null;
+  /** Per GB per year stored beyond `fairUseStorageGb`; null when the plan has no fair-use allowance. */
+  extraStoragePricePerGb: Price | null;
   customDomains: boolean;
   /**
    * Mailboxes on the platform domain (`name@anhourmail.com`) per account. A number caps them on their own (Free: one
@@ -36,6 +51,13 @@ export type Plan = {
 
 const GB = 1;
 
+/** Paid plans (2026-10-23): an extra mailbox beyond the ten included, per year. */
+const EXTRA_MAILBOX_PRICE: Price = { USD: 100, CAD: 140 };
+/** Paid plans: storage a whole account stores before extra storage is charged (fair use, not a hard limit). */
+const FAIR_USE_STORAGE_GB = 30;
+/** Paid plans: per GB per year stored beyond the fair-use allowance. */
+const EXTRA_STORAGE_PRICE_PER_GB: Price = { USD: 100, CAD: 140 };
+
 export const PLANS: Readonly<Record<PlanId, Plan>> = {
   free: {
     id: "free",
@@ -43,7 +65,11 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     tagline: "An @anhourmail.com address with private-by-default webmail.",
     price: null,
     payWhatYouWant: false,
-    storageGb: 10 * GB,
+    storageGb: 1 * GB,
+    includedMailboxes: 1,
+    extraMailboxPrice: null,
+    fairUseStorageGb: null,
+    extraStoragePricePerGb: null,
     customDomains: false,
     platformMailboxes: 1,
     addPeople: false,
@@ -56,9 +82,13 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     id: "plus",
     name: "Plus",
     tagline: "Bring your own domains, unlimited aliases and more room.",
-    price: { USD: 1200, CAD: 1500 },
+    price: { USD: 900, CAD: 1200 },
     payWhatYouWant: false,
-    storageGb: 30 * GB,
+    storageGb: 10 * GB,
+    includedMailboxes: 10,
+    extraMailboxPrice: EXTRA_MAILBOX_PRICE,
+    fairUseStorageGb: FAIR_USE_STORAGE_GB,
+    extraStoragePricePerGb: EXTRA_STORAGE_PRICE_PER_GB,
     customDomains: true,
     platformMailboxes: null,
     addPeople: true,
@@ -71,9 +101,13 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     id: "supporter",
     name: "Supporter",
     tagline: "Everything in Plus. Pay what you want and fund the free tier.",
-    price: { USD: 2400, CAD: 3000 },
+    price: { USD: 2000, CAD: 2700 },
     payWhatYouWant: true,
-    storageGb: 30 * GB,
+    storageGb: 10 * GB,
+    includedMailboxes: 10,
+    extraMailboxPrice: EXTRA_MAILBOX_PRICE,
+    fairUseStorageGb: FAIR_USE_STORAGE_GB,
+    extraStoragePricePerGb: EXTRA_STORAGE_PRICE_PER_GB,
     customDomains: true,
     platformMailboxes: null,
     addPeople: true,
@@ -88,8 +122,9 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
 export const MAX_CUSTOM_DOMAINS = 20;
 
 /**
- * Mailboxes per account; each gets up to the plan's `storageGb` (placeholder until pricing is decided — see
- * docs/internal/06-pricing-and-billing.md).
+ * Mailboxes an account can create today: the ten paid plans include (`includedMailboxes`); each gets up to the plan's
+ * `storageGb`. Extra mailboxes (`extraMailboxPrice`) can't be added until billing exists (Phase 5), so this stays the
+ * ceiling until then (docs/internal/06-pricing-and-billing.md).
  */
 export const MAX_MAILBOXES = 10;
 
@@ -169,4 +204,17 @@ export function formatPrice(amountMinor: number, currency: Currency): string {
     currencyDisplay: "symbol",
     minimumFractionDigits: amountMinor % 100 === 0 ? 0 : 2,
   }).format(amountMinor / 100);
+}
+
+/**
+ * The paid plans' fair-use line for the pricing page and docs: "No hard limits — fair use 30 GB per account, then
+ * $1/GB/year; extra mailboxes $1/year each". Null for a plan without a fair-use allowance (Free).
+ */
+export function fairUseText(plan: Plan, currency: Currency = "USD"): string | null {
+  if (plan.fairUseStorageGb === null || plan.extraStoragePricePerGb === null) return null;
+  const storage = `fair use ${String(plan.fairUseStorageGb)} GB per account, then ${formatPrice(plan.extraStoragePricePerGb[currency], currency)}/GB/${BILLING.interval}`;
+  const mailboxes = plan.extraMailboxPrice
+    ? `; extra mailboxes ${formatPrice(plan.extraMailboxPrice[currency], currency)}/${BILLING.interval} each`
+    : "";
+  return `No hard limits — ${storage}${mailboxes}`;
 }
