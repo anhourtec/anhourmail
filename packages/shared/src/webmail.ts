@@ -59,6 +59,10 @@ export type WebmailPreferences = {
   /** "inbox", "priority" or "folder:<JMAP mailbox id>". */
   startIn: string;
   emptyTrashOnSignOut: boolean;
+  /** A short chime when new mail reaches the Inbox while the webmail is open. */
+  newMailSound: boolean;
+  /** A desktop notification (sender and "New message", never the content) for new Inbox mail. */
+  desktopNotifications: boolean;
 };
 
 export const DEFAULT_PREFERENCES: Readonly<WebmailPreferences> = {
@@ -85,6 +89,8 @@ export const DEFAULT_PREFERENCES: Readonly<WebmailPreferences> = {
   shortcuts: true,
   startIn: "inbox",
   emptyTrashOnSignOut: false,
+  newMailSound: true,
+  desktopNotifications: false,
 };
 
 const TIME_ZONE = /^[A-Za-z][A-Za-z0-9_+-]{0,30}(?:\/[A-Za-z0-9_+-]{1,30}){0,2}$/;
@@ -121,6 +127,8 @@ const CHECKS: { [K in keyof WebmailPreferences]: Check } = {
   shortcuts: bool,
   startIn: (v) => typeof v === "string" && START_IN.test(v),
   emptyTrashOnSignOut: bool,
+  newMailSound: bool,
+  desktopNotifications: bool,
 };
 
 const KEYS = Object.keys(CHECKS) as (keyof WebmailPreferences)[];

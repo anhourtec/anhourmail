@@ -230,6 +230,30 @@ export function ReadingPanel({ prefs, onChange }: { prefs: WebmailPreferences; o
           }}
         />
       </Group>
+      <Group title="New mail">
+        <Toggle
+          label="Play a sound for new mail"
+          description="A short chime when new mail reaches your Inbox while the webmail is open."
+          checked={prefs.newMailSound}
+          onChange={(newMailSound) => {
+            onChange({ newMailSound });
+          }}
+        />
+        <Toggle
+          label="Desktop notifications"
+          description="Shows who sent new Inbox mail, never what it says. Your browser asks for permission first."
+          checked={prefs.desktopNotifications}
+          onChange={(desktopNotifications) => {
+            if (!desktopNotifications || typeof Notification === "undefined") {
+              onChange({ desktopNotifications: false });
+              return;
+            }
+            void Notification.requestPermission().then((p) => {
+              onChange({ desktopNotifications: p === "granted" });
+            });
+          }}
+        />
+      </Group>
       <Group title="Privacy">
         <Note label="Remote images are blocked">
           Images a sender links to never load, so they can't see when or where you opened their mail. Pictures sent as
