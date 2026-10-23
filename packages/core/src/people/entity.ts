@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { AccountRole } from "@anhourmail/shared/rbac";
 import { ACCOUNT_ROLES } from "@anhourmail/shared/rbac";
+import { nameProblem } from "@anhourmail/shared/names";
 
 import { ValidationError } from "../errors";
 
@@ -55,10 +56,10 @@ export function loginNames(input: { firstName?: unknown; lastName?: unknown }): 
 } {
   const firstName = clean(input.firstName, 60);
   if (firstName === "") throw new ValidationError("Enter your first name.");
-  let control = false;
   const lastName = clean(input.lastName, 60);
-  for (const ch of firstName + lastName) control ||= ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127;
-  if (control) throw new ValidationError("Names can't contain control characters.");
+  // The shared name rules (control and text-direction characters, `@`, web addresses), as at sign-up.
+  const problem = nameProblem(firstName) ?? nameProblem(lastName);
+  if (problem) throw new ValidationError(problem);
   return {
     firstName,
     lastName: lastName === "" ? null : lastName,

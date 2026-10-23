@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { env, resetEnvForTests } from "./env";
+import { breachedPasswordMode, env, resetEnvForTests } from "./env";
 import { platform } from "./platform";
 
 /** A production configuration that passes every check, on the product domain. */
@@ -126,5 +126,26 @@ describe("Stalwart credentials (ADR-0020 credential split)", () => {
     expect(() => env()).toThrow(/STALWART_API_KEY is no longer used/);
     production({ NODE_ENV: "development", APP_URL: "http://localhost:43200", STALWART_API_KEY: "old" });
     expect(() => env()).toThrow(/STALWART_API_KEY is no longer used/);
+  });
+});
+
+describe("BREACHED_PASSWORD_CHECK", () => {
+  it("defaults to on, except under NODE_ENV=test", () => {
+    expect(breachedPasswordMode({ NODE_ENV: "production", BREACHED_PASSWORD_CHECK: undefined })).toBe("on");
+    expect(breachedPasswordMode({ NODE_ENV: "development", BREACHED_PASSWORD_CHECK: undefined })).toBe("on");
+    expect(breachedPasswordMode({ NODE_ENV: "test", BREACHED_PASSWORD_CHECK: undefined })).toBe("off");
+    expect(breachedPasswordMode({ NODE_ENV: "development", BREACHED_PASSWORD_CHECK: "fake" })).toBe("fake");
+    expect(breachedPasswordMode({ NODE_ENV: "production", BREACHED_PASSWORD_CHECK: "off" })).toBe("off");
+  });
+
+  it("production accepts on and off, and refuses the fake", () => {
+    production({ PLATFORM_DOMAIN: "anhourmail.com", BREACHED_PASSWORD_CHECK: "on" });
+    expect(env().BREACHED_PASSWORD_CHECK).toBe("on");
+    production({ PLATFORM_DOMAIN: "anhourmail.com", BREACHED_PASSWORD_CHECK: "off" });
+    expect(env().BREACHED_PASSWORD_CHECK).toBe("off");
+    production({ PLATFORM_DOMAIN: "anhourmail.com", BREACHED_PASSWORD_CHECK: "fake" });
+    expect(() => env()).toThrow(/BREACHED_PASSWORD_CHECK/);
+    production({ PLATFORM_DOMAIN: "anhourmail.com", BREACHED_PASSWORD_CHECK: "maybe" });
+    expect(() => env()).toThrow();
   });
 });

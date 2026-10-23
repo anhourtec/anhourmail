@@ -4,6 +4,8 @@
 import Link from "next/link";
 import { type SyntheticEvent, useState } from "react";
 
+import { BREACHED_PASSWORD } from "@anhourmail/shared/security";
+
 import { useHydrated } from "@/components/use-hydrated";
 
 import { PasswordInput } from "@/components/password-input";
@@ -39,6 +41,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
       if (res.ok) setDone(true);
       else if (res.status === 429) setError("Too many attempts. Wait a minute and try again.");
       else if (json?.code === "FACTOR_REQUIRED" && json.message) setError(json.message);
+      else if (json?.code === BREACHED_PASSWORD.authCode) setError(BREACHED_PASSWORD.message);
       else setError("This reset link is invalid or has expired. Ask for a new one.");
     } catch {
       setError("Couldn't reach the server. Check your connection and try again.");

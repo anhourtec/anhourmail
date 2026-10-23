@@ -16,7 +16,9 @@ import {
   ACCOUNT_A,
   ACCOUNT_B,
   anonymous,
+  BREACHED_PW,
   deps as makeDeps,
+  fakeBreaches,
   fakeHasher,
   fixedClock,
   MAILBOX_PW,
@@ -115,7 +117,7 @@ describe("creating a free platform address", () => {
     const { d } = setup();
     const m = await claim(d, owner, ACCOUNT_A, "Jane.Doe", { ownerUserId: "owner" });
     expect(m).toMatchObject({ address: `jane.doe@${PLATFORM}`, status: "provisioning", owner: { userId: "owner" } });
-    expect(m.quotaBytes).toBe(10 * 1024 ** 3);
+    expect(m.quotaBytes).toBe(1024 ** 3); // Free: 1 GB per mailbox
     const s = d.uow.state;
     expect(s.jobs).toMatchObject([{ kind: "mailbox.ensure", subjectId: m.id }]);
     expect(s.mailboxPasswords.find((p) => p.mailboxId === m.id)?.pendingHash).toBe(await fakeHasher.hash(MAILBOX_PW));
@@ -150,7 +152,9 @@ describe("creating a free platform address", () => {
     const { d } = setup("plus");
     for (let i = 0; i < MAX_MAILBOXES; i++) await claim(d, owner, ACCOUNT_A, `name${String(i)}`);
     await expect(claim(d, owner, ACCOUNT_A, "onemore")).rejects.toThrow(
-      new PlanLimitError(`An account can have up to ${String(MAX_MAILBOXES)} mailboxes.`),
+      new PlanLimitError(
+        `Your plan includes ${String(MAX_MAILBOXES)} mailboxes. More mailboxes come with billing, which isn't open yet.`,
+      ),
     );
     expect((await mailboxOptions(d, owner, ACCOUNT_A)).platform).toMatchObject({
       used: MAX_MAILBOXES,
@@ -460,5 +464,23 @@ describe("staff create a platform address in a customer account", () => {
     );
     expect(d.uow.state.mailboxes).toHaveLength(0);
     expect(d.uow.state.audit.at(-1)).toMatchObject({ result: "denied", errorCode: "act_as" });
+  });
+});
+
+describe("breached passwords on a free address", () => {
+  it("claiming a free address with a breached password is refused and claims nothing", async () => {
+    const { d } = setup();
+    const hasher = { ...fakeHasher, breaches: fakeBreaches([BREACHED_PW]) };
+    await expect(
+      createMailbox(
+        d,
+        owner,
+        ACCOUNT_A,
+        { localPart: "jane", domainId: PLATFORM_DOMAIN_ID, password: BREACHED_PW },
+        req,
+        hasher,
+      ),
+    ).rejects.toMatchObject({ code: "password_breached" });
+    expect(d.uow.state.mailboxes).toHaveLength(0);
   });
 });

@@ -1,13 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { randomUUID } from "node:crypto";
 
-import { and, desc, eq, gte, inArray, lt, lte, or, type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, lt, lte, or, type SQL, sql } from "drizzle-orm";
 
 import { type AccessRepository, ConflictError, type Repositories, type UnitOfWork } from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
 import type { AliasKind, AliasRepository, MailAlias } from "@anhourmail/core/aliases";
 import type { Invite, InviteRepository, InviteStatus, MemberRecord, PeopleRepository } from "@anhourmail/core/people";
-import type { AccountSummary, PlatformAccountRepository, StaffRepository } from "@anhourmail/core/platform";
+import type {
+  AccountSummary,
+  MailboxHoldKind,
+  PlatformAccountRepository,
+  StaffRepository,
+  SuspensionRecord,
+  SuspensionRepository,
+} from "@anhourmail/core/platform";
 import type { CustomerDomain, DomainRepository, DomainStatus } from "@anhourmail/core/domains";
 import {
   type Mailbox,
@@ -15,6 +22,7 @@ import {
   type MailboxRepository,
   MAILBOX_STATUSES,
   type MailboxStatus,
+  type MailboxStorageRepository,
   type PlatformAddressRepository,
 } from "@anhourmail/core/mailboxes";
 import type {
@@ -34,6 +42,7 @@ import {
   GENESIS_HASH,
   hashEntry,
 } from "@anhourmail/core/audit";
+import { isSuspensionReason } from "@anhourmail/shared/platform";
 import { PLAN_ORDER, type PlanId } from "@anhourmail/shared/plans";
 import { ACCOUNT_ROLES, type AccountRole, PLATFORM_ROLES, type PlatformRole } from "@anhourmail/shared/rbac";
 
@@ -53,6 +62,7 @@ import {
   inviteSend,
   mailAlias,
   mailbox,
+  mailboxStaffHold,
   platformRoleAssignment,
   provisioningJob,
   retiredPlatformAddress,
@@ -657,6 +667,66 @@ class PgMailboxPasswordRepository implements MailboxPasswordRepository {
   }
 }
 
+class PgMailboxStorageRepository implements MailboxStorageRepository {
+  constructor(private readonly x: Executor) {}
+
+  async targets(): Promise<{ id: string; address: string; stalwartId: string }[]> {
+    const rows = await this.x
+      .select({ id: mailbox.id, address: mailbox.address, stalwartId: mailbox.stalwartId })
+      .from(mailbox)
+      .where(isNotNull(mailbox.stalwartId))
+      .orderBy(mailbox.id);
+    return rows.flatMap((r) =>
+      r.stalwartId === null ? [] : [{ id: r.id, address: r.address, stalwartId: r.stalwartId }],
+    );
+  }
+
+  async record(entries: readonly { id: string; stalwartId: string; usedBytes: number }[], at: Date): Promise<number> {
+    let written = 0;
+    // One statement per mailbox inside the batch's transaction; only while it is still on the same account.
+    for (const e of entries) {
+      const rows = await this.x
+        .update(mailbox)
+        .set({ storageUsedBytes: e.usedBytes, storageCheckedAt: at })
+        .where(and(eq(mailbox.id, e.id), eq(mailbox.stalwartId, e.stalwartId)))
+        .returning({ id: mailbox.id });
+      written += rows.length;
+    }
+    return written;
+  }
+
+  async byAccount(
+    accountId: string,
+  ): Promise<{ mailboxId: string; usedBytes: number | null; checkedAt: Date | null }[]> {
+    const rows = await this.x
+      .select({ mailboxId: mailbox.id, usedBytes: mailbox.storageUsedBytes, checkedAt: mailbox.storageCheckedAt })
+      .from(mailbox)
+      .where(eq(mailbox.accountId, accountId));
+    return rows;
+  }
+
+  async quotas(): Promise<
+    { id: string; accountId: string; address: string; stalwartId: string | null; quotaBytes: number; plan: PlanId }[]
+  > {
+    const rows = await this.x
+      .select({
+        id: mailbox.id,
+        accountId: mailbox.accountId,
+        address: mailbox.address,
+        stalwartId: mailbox.stalwartId,
+        quotaBytes: mailbox.quotaBytes,
+        plan: customerAccount.plan,
+      })
+      .from(mailbox)
+      .innerJoin(customerAccount, eq(customerAccount.id, mailbox.accountId))
+      .orderBy(mailbox.id);
+    return rows.map((r) => ({
+      ...r,
+      plan: (PLAN_ORDER as readonly string[]).includes(r.plan) ? (r.plan as PlanId) : "free",
+    }));
+  }
+}
+
 class PgPlatformAddressRepository implements PlatformAddressRepository {
   constructor(private readonly x: Executor) {}
 
@@ -1154,7 +1224,125 @@ class PgStaffRepository implements StaffRepository {
   }
 }
 
+const toSuspension = (r: {
+  reason: string | null;
+  note: string | null;
+  at: Date | null;
+  by: string | null;
+}): SuspensionRecord | null =>
+  r.reason !== null && isSuspensionReason(r.reason) && r.at !== null
+    ? { reason: r.reason, note: r.note, at: r.at, byUserId: r.by }
+    : null;
+
+const HOLD_KINDS: readonly MailboxHoldKind[] = ["account", "person"];
+
+class PgSuspensionRepository implements SuspensionRepository {
+  constructor(private readonly x: Executor) {}
+
+  async account(accountId: string): Promise<SuspensionRecord | null> {
+    if (!isId(accountId)) return null;
+    const [r] = await this.x
+      .select({
+        reason: customerAccount.suspensionReason,
+        note: customerAccount.suspensionNote,
+        at: customerAccount.suspendedAt,
+        by: customerAccount.suspendedBy,
+      })
+      .from(customerAccount)
+      .where(eq(customerAccount.id, accountId));
+    return r ? toSuspension(r) : null;
+  }
+
+  async setAccount(accountId: string, record: SuspensionRecord | null): Promise<void> {
+    await this.x
+      .update(customerAccount)
+      .set({
+        status: record ? "suspended" : "active",
+        suspensionReason: record?.reason ?? null,
+        suspensionNote: record?.note ?? null,
+        suspendedAt: record?.at ?? null,
+        suspendedBy: record?.byUserId ?? null,
+      })
+      .where(eq(customerAccount.id, accountId));
+  }
+
+  async personInfo(userId: string): Promise<{ email: string; name: string } | null> {
+    const [r] = await this.x
+      .select({ email: authUser.email, name: authUser.name })
+      .from(authUser)
+      .where(eq(authUser.id, userId));
+    return r ?? null;
+  }
+
+  async person(userId: string): Promise<SuspensionRecord | null> {
+    const [r] = await this.x
+      .select({
+        reason: userProfile.suspensionReason,
+        note: userProfile.suspensionNote,
+        at: userProfile.suspendedAt,
+        by: userProfile.suspendedBy,
+      })
+      .from(userProfile)
+      .where(eq(userProfile.userId, userId));
+    return r ? toSuspension(r) : null;
+  }
+
+  async setPerson(userId: string, record: SuspensionRecord | null): Promise<void> {
+    const values = {
+      suspended: record !== null,
+      suspensionReason: record?.reason ?? null,
+      suspensionNote: record?.note ?? null,
+      suspendedAt: record?.at ?? null,
+      suspendedBy: record?.byUserId ?? null,
+      updatedAt: new Date(),
+    };
+    await this.x
+      .insert(userProfile)
+      .values({ userId, ...values })
+      .onConflictDoUpdate({ target: userProfile.userId, set: values });
+  }
+
+  async suspendedAccountsOf(userId: string): Promise<string[]> {
+    const rows = await this.x
+      .select({ id: accountMembership.accountId })
+      .from(accountMembership)
+      .innerJoin(customerAccount, eq(customerAccount.id, accountMembership.accountId))
+      .where(and(eq(accountMembership.userId, userId), isNotNull(customerAccount.suspendedAt)));
+    return rows.map((r) => r.id);
+  }
+
+  async mailboxesOf(userId: string): Promise<Mailbox[]> {
+    const rows = await this.x.select().from(mailbox).where(eq(mailbox.userId, userId)).orderBy(mailbox.address);
+    return rows.map(toMailbox);
+  }
+
+  async holds(mailboxIds: readonly string[]): Promise<{ mailboxId: string; kind: MailboxHoldKind }[]> {
+    const ids = mailboxIds.filter(isId);
+    if (ids.length === 0) return [];
+    const rows = await this.x
+      .select({ mailboxId: mailboxStaffHold.mailboxId, kind: mailboxStaffHold.kind })
+      .from(mailboxStaffHold)
+      .where(inArray(mailboxStaffHold.mailboxId, ids));
+    return rows.flatMap((r) =>
+      (HOLD_KINDS as readonly string[]).includes(r.kind)
+        ? [{ mailboxId: r.mailboxId, kind: r.kind as MailboxHoldKind }]
+        : [],
+    );
+  }
+
+  async addHold(mailboxId: string, kind: MailboxHoldKind): Promise<void> {
+    await this.x.insert(mailboxStaffHold).values({ mailboxId, kind }).onConflictDoNothing();
+  }
+
+  async removeHold(mailboxId: string, kind: MailboxHoldKind): Promise<void> {
+    await this.x
+      .delete(mailboxStaffHold)
+      .where(and(eq(mailboxStaffHold.mailboxId, mailboxId), eq(mailboxStaffHold.kind, kind)));
+  }
+}
+
 const repositories = (x: Executor): Repositories => ({
+  suspensions: new PgSuspensionRepository(x),
   audit: new PgAuditRepository(x),
   access: new PgAccessRepository(x),
   accounts: new PgAccountRepository(x),
@@ -1164,6 +1352,7 @@ const repositories = (x: Executor): Repositories => ({
   mailboxes: new PgMailboxRepository(x),
   mailboxPasswords: new PgMailboxPasswordRepository(x),
   platformAddresses: new PgPlatformAddressRepository(x),
+  mailboxStorage: new PgMailboxStorageRepository(x),
   aliases: new PgAliasRepository(x),
   people: new PgPeopleRepository(x),
   invites: new PgInviteRepository(x),

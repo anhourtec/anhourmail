@@ -4,8 +4,9 @@ import Link from "next/link";
 
 import { can } from "@anhourmail/core";
 import { listMailboxAppPasswords } from "@anhourmail/core/app-passwords";
-import { GB, getMailbox, listMailboxes, mailboxOptions } from "@anhourmail/core/mailboxes";
-import { MAILBOX_DELETE_GRACE_DAYS } from "@anhourmail/shared/plans";
+import { getMailbox, listMailboxes, mailboxOptions } from "@anhourmail/core/mailboxes";
+import { MAILBOX_DELETE_GRACE_DAYS, MAX_MAILBOXES } from "@anhourmail/shared/plans";
+import { storageCheckedAgo } from "@anhourmail/shared/storage";
 import { PageHeader } from "@anhourmail/ui/page-header";
 
 import { UrlFlyout } from "@/components/console/flyout";
@@ -46,6 +47,8 @@ export default async function MailboxesPage({
     options: canManage ? await mailboxOptions(deps, actor, accountId) : null,
     open: openId ? await getMailbox(deps, actor, accountId, openId) : null,
     appPasswords: openId ? await listMailboxAppPasswords(deps, actor, accountId, openId) : null,
+    // When the page was read, for "Updated 5 minutes ago" (storage is measured every ~10 minutes).
+    now: new Date(),
   }));
   const crumbs = [{ label: "Home", href: "/" }, { label: "Mailboxes" }];
   if (!data) {
@@ -106,7 +109,10 @@ export default async function MailboxesPage({
         </p>
       )}
       {options && options.remaining <= 0 && (
-        <p className="am-small">This account has the most mailboxes it can have.</p>
+        <p className="am-small">
+          This account has all <span className="am-num">{MAX_MAILBOXES}</span> mailboxes its plan includes. More
+          mailboxes come with billing, which isn&apos;t open yet.
+        </p>
       )}
       <MailboxList
         accountId={accountId}
@@ -114,7 +120,8 @@ export default async function MailboxesPage({
           id: m.id,
           address: m.address,
           ownerEmail: m.owner?.email ?? null,
-          quotaGb: m.quotaBytes / GB,
+          quotaBytes: m.quotaBytes,
+          usedBytes: m.storageUsedBytes,
           status: m.status,
           applyFailed: m.applyFailed,
           restorableUntil: m.status === "deleting" && m.purgeAfter ? dateFmt.format(new Date(m.purgeAfter)) : null,
@@ -139,6 +146,7 @@ export default async function MailboxesPage({
             }
             graceDays={MAILBOX_DELETE_GRACE_DAYS}
             appPasswords={appPasswords}
+            storageCheckedAgo={storageCheckedAgo(open.storageCheckedAt, data.now)}
             tab={param(sp, "tab")}
           />
         </UrlFlyout>

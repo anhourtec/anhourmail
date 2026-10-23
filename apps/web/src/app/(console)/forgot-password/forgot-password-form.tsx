@@ -28,7 +28,7 @@ export function ForgotPasswordForm() {
       const res = await fetch("/api/auth/request-password-reset", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, redirectTo: `${window.location.origin}/reset-password` }),
+        body: JSON.stringify({ email, redirectTo: "/reset-password" }),
       });
       // Same answer whether or not an account exists; only a malformed request or the rate limit is reported.
       if (res.status === 429) setError("Too many attempts. Wait a minute and try again.");

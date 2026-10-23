@@ -155,6 +155,11 @@ export const userProfile = pgTable("user_profile", {
     .references(() => authUser.id, { onDelete: "cascade" }),
   state: text("state").notNull().default("free"),
   suspended: boolean("suspended").notNull().default(false),
+  /** Staff suspension of the console sign-in (`platform.account.suspend`): reason category, staff-only note, when, who. */
+  suspensionReason: text("suspension_reason"),
+  suspensionNote: text("suspension_note"),
+  suspendedAt: timestamp("suspended_at", { withTimezone: true }),
+  suspendedBy: text("suspended_by"),
   trustTier: text("trust_tier").notNull().default("new"),
   updatedAt: updatedAt(),
 });
@@ -165,6 +170,14 @@ export const customerAccount = pgTable("customer_account", {
   name: text("name").notNull(),
   plan: text("plan").notNull().default("free"),
   status: text("status").notNull().default("active"),
+  /**
+   * Staff suspension (`platform.account.suspend`; status `suspended` while set): reason category, staff-only note
+   * (never shown to the customer), when and by whom.
+   */
+  suspensionReason: text("suspension_reason"),
+  suspensionNote: text("suspension_note"),
+  suspendedAt: timestamp("suspended_at", { withTimezone: true }),
+  suspendedBy: text("suspended_by"),
   /** What everyone in the account must use to sign in: none | two_factor | passkey (shared/security.ts). */
   signInPolicy: text("sign_in_policy").notNull().default("none"),
   createdAt: createdAt(),
@@ -282,6 +295,13 @@ export const mailbox = pgTable(
     pendingPasswordGrant: text("pending_password_grant"),
     /** The mail server's id for the mailbox's Password credential as we last set it (reconciler; 07-security.md). */
     passwordCredentialId: text("password_credential_id"),
+    /**
+     * Storage used at the last measurement (`job:storage-usage`, from the mail server's `usedDiskQuota`): a size only,
+     * never anything about the mail (rule 24). Null until measured; a failed measurement keeps the last good value.
+     */
+    storageUsedBytes: bigint("storage_used_bytes", { mode: "number" }),
+    /** When `storage_used_bytes` was measured. */
+    storageCheckedAt: timestamp("storage_checked_at", { withTimezone: true }),
     createdAt: createdAt(),
   },
   (t) => [
@@ -290,6 +310,22 @@ export const mailbox = pgTable(
       .on(t.purgeAfter)
       .where(sql`status = 'deleting'`),
   ],
+);
+
+/**
+ * Mailboxes a staff suspension suspended (kind `account` or `person`): lifting resumes exactly these, and only once no
+ * hold is left. A mailbox the account suspended itself never gets one.
+ */
+export const mailboxStaffHold = pgTable(
+  "mailbox_staff_hold",
+  {
+    mailboxId: uuid("mailbox_id")
+      .notNull()
+      .references(() => mailbox.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.mailboxId, t.kind] })],
 );
 
 export const mailAlias = pgTable(

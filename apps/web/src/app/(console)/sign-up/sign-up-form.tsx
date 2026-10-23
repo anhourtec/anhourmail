@@ -4,6 +4,8 @@
 import { useRouter } from "next/navigation";
 import { type SyntheticEvent, useState } from "react";
 
+import { BREACHED_PASSWORD } from "@anhourmail/shared/security";
+
 import { useHydrated } from "@/components/use-hydrated";
 
 import { PasswordInput } from "@/components/password-input";
@@ -63,8 +65,12 @@ export function SignUpForm() {
         router.refresh();
         return;
       }
+      const json = (await res.json().catch(() => null)) as { code?: string; message?: string } | null;
       if (res.status === 429) setError("Too many attempts. Wait a minute and try again.");
       else if (res.status === 403) setError("Sign-up isn't available right now.");
+      else if (json?.code === BREACHED_PASSWORD.authCode) setError(BREACHED_PASSWORD.message);
+      // The shared name rules' own sentence (no control characters, @ or web addresses in names).
+      else if (json?.code === "INVALID_NAME" && json.message) setError(json.message);
       else if (res.status === 422 || res.status === 400) {
         setError("We couldn't create that account. Check your details, or sign in if you already have one.");
       } else setError("Something went wrong. Try again in a moment.");

@@ -84,7 +84,9 @@ export async function assertPlatformAllowance(repos: Repositories, platform: Pla
         : `This plan includes ${String(max)} free @${platform.domain} addresses.`,
     );
   }
-  throw new PlanLimitError(`An account can have up to ${String(MAX_MAILBOXES)} mailboxes.`);
+  throw new PlanLimitError(
+    `Your plan includes ${String(MAX_MAILBOXES)} mailboxes. More mailboxes come with billing, which isn't open yet.`,
+  );
 }
 
 export type PlatformAddressCheck = {

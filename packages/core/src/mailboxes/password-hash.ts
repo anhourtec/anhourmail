@@ -2,15 +2,19 @@
 import { MAILBOX_PASSWORD_PHC, mailboxPasswordProblem } from "@anhourmail/shared/security";
 
 import { ValidationError } from "../errors";
+import type { BreachedPasswords } from "../security/breached-passwords";
 
 /**
  * Hashes a mailbox password (adapter: argon2id at the OWASP baseline, `@anhourmail/adapters/auth`) and, in the web
  * app, signs the grant that lets the management proxy accept the worker's replacement of an existing account's
  * password (`grant`: HMAC with a key only the web app and the proxy hold; null where no key is configured, e.g. dev).
+ * `breaches` checks a new password against the breached-password corpus before it is hashed (fail open; unset = no
+ * check, as in most unit tests). Services ask it before opening their unit of work, so the lookup never holds a lock.
  */
 export type PasswordHasher = {
   hash(password: string): Promise<string>;
   grant?: (input: { externalId: string; passwordHash: string }) => string | null;
+  breaches?: BreachedPasswords;
 };
 
 /** Checks `input` against the mailbox password rules (`@anhourmail/shared/security`) for `address`; the password. */

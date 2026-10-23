@@ -86,6 +86,21 @@ export const APP_PASSWORDS_PER_MAILBOX = 5;
 /** App password names people choose ("Phone", "Work laptop"). */
 export const APP_PASSWORD_NAME_MAX = 40;
 
+// --- breached passwords (docs/internal/07-security.md "Breached-password check") -----------------------------------
+
+/**
+ * Every new console or mailbox password is checked against the public breached-password corpus, server-side, with the
+ * k-anonymity range lookup (only the first five characters of the password's SHA-1 hash leave our server). A match is
+ * refused with this message and error code (console API: `PASSWORD_BREACHED`, as better-auth spells its codes).
+ */
+export const BREACHED_PASSWORD = {
+  code: "password_breached",
+  authCode: "PASSWORD_BREACHED",
+  message: "This password has appeared in a data breach. Choose a different one.",
+  /** The lookup gives up after this long and lets the password through (fail open; the check is advisory). */
+  timeoutMs: 2000,
+} as const;
+
 // --- mailbox passwords (webmail and mail apps; docs/internal/07-security.md "Mailbox passwords") ------------------
 
 /**

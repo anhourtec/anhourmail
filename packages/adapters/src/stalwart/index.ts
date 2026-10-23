@@ -8,6 +8,7 @@
 import { randomBytes } from "node:crypto";
 
 import type { AppPasswordInventory, AppPasswordIssuer } from "@anhourmail/core/app-passwords";
+import type { MailboxUsageReader } from "@anhourmail/core/mailboxes";
 import type { MailServer, ServiceAccountInventory } from "@anhourmail/core/provisioning";
 import type { ManagedScriptReader } from "@anhourmail/core/webmail";
 import { MANAGED_SIEVE_SCRIPT } from "@anhourmail/shared/webmail";
@@ -113,6 +114,22 @@ export function stalwartServiceAccounts(mgmt: StalwartManagement, domains: reado
 
 /** The service accounts that must exist (`SERVICE_CREDENTIALS`): what `reconcileServiceAccounts` checks for. */
 export const expectedServiceAccounts = (): string[] => Object.values(SERVICE_CREDENTIALS).map((c) => c.account);
+
+/**
+ * Mailbox sizes for `job:storage-usage`, with the provisioning key (`x:Account/get` name + `usedDiskQuota` only; no
+ * owner access to any mailbox).
+ */
+export function stalwartMailboxUsage(mgmt: StalwartManagement): MailboxUsageReader {
+  return {
+    async usage(externalIds) {
+      return (await mgmt.accountUsage(externalIds)).map((a) => ({
+        externalId: a.id,
+        localPart: a.name,
+        usedBytes: a.usedBytes,
+      }));
+    },
+  };
+}
 
 /** Reads a mailbox's managed Sieve script and whether it is active, with the scheduler's audit key (reconciler). */
 export function stalwartManagedScripts(mgmt: StalwartManagement): ManagedScriptReader {

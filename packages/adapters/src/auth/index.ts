@@ -13,11 +13,14 @@ import {
   TOTP,
   TRUSTED_DEVICE_DAYS,
 } from "@anhourmail/shared/security";
+import { nameProblem } from "@anhourmail/shared/names";
 import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError, getSessionFromCtx } from "better-auth/api";
 import { toNextJsHandler } from "better-auth/next-js";
 import { twoFactor } from "better-auth/plugins/two-factor";
+
+import type { BreachedPasswords } from "@anhourmail/core/security";
 
 import type { Db } from "../db-postgres/client";
 import {
@@ -28,7 +31,9 @@ import {
   authUser,
   authVerification,
 } from "../db-postgres/schema";
+import { breachedPasswordPlugin } from "./breached-plugin";
 import { hashPassword, verifyPassword } from "./password";
+import { redirectGuardPlugin } from "./redirect-guard";
 import { hashedBackupCodeStore, newRecoveryCodes } from "./recovery-codes";
 import { type Sealer, sealTwoFactorSecrets } from "./sealed-adapter";
 import { type SecurityHooks, securityPlugin } from "./security-plugin";
@@ -72,7 +77,12 @@ export type AuthOptions = {
   trustProxy: boolean;
   /** Auditing and checks around sign-in factors (`security-plugin.ts`). */
   security: SecurityHooks;
+  /** Refuses new passwords seen in data breaches (`breached-plugin.ts`; fail open). */
+  breachedPasswords: BreachedPasswords;
 };
+
+/** Console password length (better-auth's own checks; the breached-password check skips anything outside it). */
+export const CONSOLE_PASSWORD = { min: 12, max: 128 } as const;
 
 /** Passkeys must prove the person, not just the device (PIN, fingerprint or face): a passkey signs in on its own. */
 function requireUserVerified(verified: boolean): void {
@@ -107,7 +117,8 @@ export function createAuth(opts: AuthOptions) {
     emailAndPassword: {
       enabled: true,
       disableSignUp: opts.signUp === "closed",
-      minPasswordLength: 12,
+      minPasswordLength: CONSOLE_PASSWORD.min,
+      maxPasswordLength: CONSOLE_PASSWORD.max,
       // Salted argon2id (OWASP baseline) instead of the library default (docs/internal/07-security.md).
       password: { hash: hashPassword, verify: verifyPassword },
       resetPasswordTokenExpiresIn: 60 * 60,
@@ -173,6 +184,7 @@ export function createAuth(opts: AuthOptions) {
           before: async (user) => {
             const names = normaliseNames(user);
             if (!names) throw new APIError("BAD_REQUEST", { message: "First name is required." });
+            refuseBadNames(names);
             return { data: { ...user, ...names } };
           },
           after: async (user) => {
@@ -195,6 +207,7 @@ export function createAuth(opts: AuthOptions) {
               name: "name" in data ? d.name : "x",
             });
             if (!names) throw new APIError("BAD_REQUEST", { message: "First name is required." });
+            refuseBadNames(names);
             return {
               data: {
                 ...data,
@@ -208,6 +221,8 @@ export function createAuth(opts: AuthOptions) {
       },
     },
     plugins: [
+      // First: off-site redirect targets are refused before any endpoint (or other plugin) sees them.
+      redirectGuardPlugin([opts.baseURL, ...opts.trustedOrigins]),
       twoFactor({
         issuer: "AnhourMail",
         totpOptions: { digits: TOTP.digits, period: TOTP.periodSeconds },
@@ -243,6 +258,7 @@ export function createAuth(opts: AuthOptions) {
           },
         },
       }),
+      breachedPasswordPlugin(opts.breachedPasswords, CONSOLE_PASSWORD),
       // Last, so its after-hooks see the two plugins' final answers.
       securityPlugin(opts.security),
     ],
@@ -306,6 +322,17 @@ export function normaliseNames(input: { firstName?: unknown; lastName?: unknown;
     lastName: lastName === "" ? null : lastName,
     name: display !== "" ? display : [firstName, lastName].filter(Boolean).join(" "),
   };
+}
+
+/**
+ * The shared name rules (`@anhourmail/shared/names`: no control or text-direction characters, no `@`, nothing that looks
+ * like a web address) on every name a person sets, at sign-up and on profile edits. 400 `INVALID_NAME` with the rule.
+ */
+export function refuseBadNames(names: { firstName: string; lastName: string | null; name: string }): void {
+  for (const n of [names.firstName, names.lastName ?? "", names.name]) {
+    const problem = nameProblem(n);
+    if (problem) throw new APIError("BAD_REQUEST", { code: "INVALID_NAME", message: problem });
+  }
 }
 
 export type SessionUser = {

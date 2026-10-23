@@ -5,7 +5,9 @@ import {
   ACCOUNT_A,
   ACCOUNT_B,
   anonymous,
+  BREACHED_PW,
   deps as makeDeps,
+  fakeBreaches,
   fakeHasher,
   fixedClock,
   MAILBOX_PW,
@@ -267,6 +269,101 @@ describe("changing one's own mailbox password (webmail)", () => {
       ValidationError,
     );
     expect(d.uow.state.jobs).toHaveLength(0);
+  });
+});
+
+describe("breached mailbox passwords", () => {
+  const screened = (breaches: ReturnType<typeof fakeBreaches>) => ({ ...fakeHasher, breaches });
+
+  it("an admin reset refuses a breached password (400 password_breached, audited as failed) and queues nothing", async () => {
+    const { d } = setup();
+    const breaches = fakeBreaches([BREACHED_PW]);
+    const call = (password: string) =>
+      resetMailboxPassword(
+        d,
+        screened(breaches),
+        owner,
+        ACCOUNT_A,
+        MBX_MEMBER,
+        { password },
+        { sessionId: SESSION },
+        req,
+      );
+    await expect(call(BREACHED_PW)).rejects.toMatchObject({
+      code: "password_breached",
+      message: "This password has appeared in a data breach. Choose a different one.",
+    });
+    expect(d.uow.state.jobs).toHaveLength(0);
+    expect(d.uow.state.mailboxPasswords).toHaveLength(0);
+    expect(d.uow.state.audit.at(-1)).toMatchObject({ result: "failed", errorCode: "password_breached" });
+    expect(JSON.stringify(d.uow.state.audit)).not.toContain(BREACHED_PW);
+    await expect(call(MAILBOX_PW)).resolves.toMatchObject({ address: "kid@family.ca" });
+  });
+
+  it("the rules come first: a short password gets the length message even if it is breached", async () => {
+    const { d } = setup();
+    const breaches = fakeBreaches(["short"]);
+    await expect(
+      resetMailboxPassword(
+        d,
+        screened(breaches),
+        owner,
+        ACCOUNT_A,
+        MBX_MEMBER,
+        { password: "short" },
+        { sessionId: SESSION },
+        req,
+      ),
+    ).rejects.toThrow(/at least 12/);
+  });
+
+  it("never asks the check for someone without the permission (403) and still answers 404 out of scope", async () => {
+    const { d } = setup();
+    const breaches = fakeBreaches([BREACHED_PW]);
+    const call = (actor: UserActor, mailboxId: string) =>
+      resetMailboxPassword(
+        d,
+        screened(breaches),
+        actor,
+        ACCOUNT_A,
+        mailboxId,
+        { password: BREACHED_PW },
+        { sessionId: SESSION },
+        req,
+      );
+    await expect(call(member, MBX_MEMBER)).rejects.toThrow(ForbiddenError);
+    await expect(call(ownerB, MBX_MEMBER)).rejects.toThrow(NotFoundError);
+    expect(breaches.asked).toEqual([]);
+  });
+
+  it("fails open: the check unavailable (unknown) lets the password through", async () => {
+    const { d } = setup();
+    const breaches = fakeBreaches([BREACHED_PW], "unknown");
+    await expect(
+      resetMailboxPassword(
+        d,
+        screened(breaches),
+        owner,
+        ACCOUNT_A,
+        MBX_MEMBER,
+        { password: BREACHED_PW },
+        { sessionId: SESSION },
+        req,
+      ),
+    ).resolves.toMatchObject({ address: "kid@family.ca" });
+    expect(breaches.asked).toEqual([BREACHED_PW]);
+  });
+
+  it("the webmail's own change refuses a breached password and accepts a clean one", async () => {
+    const { d } = setup();
+    const hasher = screened(fakeBreaches([BREACHED_PW]));
+    await expect(
+      changeOwnMailboxPassword(d, hasher, "kid@family.ca", { password: BREACHED_PW }, req),
+    ).rejects.toMatchObject({ code: "password_breached" });
+    expect(d.uow.state.jobs).toHaveLength(0);
+    await expect(
+      changeOwnMailboxPassword(d, hasher, "kid@family.ca", { password: MAILBOX_PW }, req),
+    ).resolves.toBeTruthy();
   });
 });
 

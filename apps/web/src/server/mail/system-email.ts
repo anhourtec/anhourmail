@@ -49,7 +49,11 @@ export function emailVerificationEmail(input: { to: string; url: string; hours: 
   });
 }
 
-/** An invite to join an account. The link is single-use, bound to this address, and expires after `days`. */
+/**
+ * An invite to join an account. The link is single-use, bound to this address, and expires after `days`. The inviter's
+ * display name and the account name are chosen by people, not by us, so they are never part of a sentence: they are
+ * shown as quoted mono facts, which reads as data and can't pose as our own wording (XSS audit run-28 C2).
+ */
 export function inviteEmail(input: {
   to: string;
   accountName: string;
@@ -67,8 +71,12 @@ export function inviteEmail(input: {
     preheader: `Accept within ${String(input.days)} days. The link works once, for this address only.`,
     greeting: "Hi,",
     lines: [
-      `${input.inviter} invited you to join ${input.accountName} on AnhourMail as ${input.role}.`,
+      `You've been invited to join an account on AnhourMail as ${input.role}.`,
       `The link works once, for this address only, for ${String(input.days)} days.`,
+    ],
+    facts: [
+      { label: "Account:", value: input.accountName },
+      { label: "Invited by:", value: input.inviter },
     ],
     action: { label: "Accept the invite", url: input.url },
     note: "If you weren't expecting this, ignore this email — nothing happens unless you accept.",

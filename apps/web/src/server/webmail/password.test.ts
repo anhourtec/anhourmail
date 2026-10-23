@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { PasswordJobState } from "@anhourmail/core/mailboxes";
+import { BreachedPasswordError } from "@anhourmail/core/security";
 import { setLogSinkForTests } from "@anhourmail/server/log";
 
 import { changeWebmailPassword, type PasswordChangeDeps } from "./password";
@@ -102,6 +103,18 @@ describe("changing the webmail password", () => {
       ).rejects.toBeInstanceOf(WebmailRefusedError);
     }
     expect(t.log).toEqual([]);
+  });
+
+  it("a breached new password is refused after the current one checks out; nothing is applied or announced", async () => {
+    const t = setup();
+    t.d.change = async () => {
+      t.log.push("change refused");
+      throw new BreachedPasswordError();
+    };
+    await expect(
+      changeWebmailPassword(t.d, "sid", { current: CURRENT, next: NEXT, account: "acc1" }, meta),
+    ).rejects.toMatchObject({ code: "password_breached" });
+    expect(t.log).toEqual(["check kid@family.ca", "change refused"]);
   });
 
   it("says when the change is still applying, and when it failed (the old password still works)", async () => {

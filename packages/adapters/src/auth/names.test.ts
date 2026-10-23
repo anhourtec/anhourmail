@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 
-import { normaliseNames } from ".";
+import { normaliseNames, refuseBadNames } from ".";
 
 describe("sign-up name rules", () => {
   it("requires a first name", () => {
@@ -29,5 +29,33 @@ describe("sign-up name rules", () => {
     const long = normaliseNames({ firstName: "a".repeat(100), name: "b".repeat(200) });
     expect(long?.firstName).toHaveLength(60);
     expect(long?.name).toHaveLength(80);
+  });
+});
+
+describe("shared name rules at sign-up and profile edits", () => {
+  const names = (over: Partial<{ firstName: string; lastName: string | null; name: string }>) => ({
+    firstName: "Ada",
+    lastName: null,
+    name: "Ada",
+    ...over,
+  });
+
+  it("refuses control and text-direction characters, @ and web addresses in any of the three names", () => {
+    for (const bad of [
+      names({ firstName: "Ada\u202eevil" }),
+      names({ lastName: "x@y" }),
+      names({ name: "Visit evil.example" }),
+      names({ name: "https://evil.example" }),
+    ]) {
+      expect(() => {
+        refuseBadNames(bad);
+      }).toThrow(/Names can't contain/);
+    }
+  });
+
+  it("accepts ordinary names", () => {
+    expect(() => {
+      refuseBadNames(names({ firstName: "Zoë", lastName: "O'Brien", name: "Zoë O'Brien" }));
+    }).not.toThrow();
   });
 });

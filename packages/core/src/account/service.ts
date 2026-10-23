@@ -1,13 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { nameProblem } from "@anhourmail/shared/names";
+
 import type { Actor } from "../actor";
 import { maskEmail } from "../audit/record";
 import { mutation } from "../mutation";
 import type { Deps, RequestMeta } from "../ports";
 
-/** Name shown for a new personal account: the person's name, else the local part of their email. */
+/**
+ * Name shown for a new personal account: the person's name, else the local part of their email; "My account" when
+ * that would break the shared name rules (`@anhourmail/shared/names`) — account names appear in invite emails and in
+ * other people's consoles.
+ */
 export function personalAccountName(name: string, email: string): string {
-  const trimmed = name.trim();
-  return trimmed !== "" ? trimmed.slice(0, 80) : (email.split("@")[0] ?? "My account");
+  const trimmed = name.trim().slice(0, 80);
+  const candidate = trimmed !== "" ? trimmed : (email.split("@")[0] ?? "");
+  return candidate === "" || nameProblem(candidate) ? "My account" : candidate;
 }
 
 /**

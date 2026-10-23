@@ -91,6 +91,10 @@ version. CI builds all three on every push (`.cicd/build.sh`).
   client once with exactly one redirect URI, `https://mail.anhourmail.com/oauth/callback` (`upsertOAuthClient` in
   `packages/stalwart-client`, client id `anhourmail-webmail`).
 - `SIGNUP_MODE` defaults to `closed`; set `open` only while access is limited to the IP allow-list.
+- `BREACHED_PASSWORD_CHECK` defaults to `on`: the **web** container checks new console and mailbox passwords against
+  the public Pwned Passwords range API (`https://api.pwnedpasswords.com`, HTTPS egress needed; only the first five
+  characters of the password's SHA-1 hash are sent). Without egress every check fails open with a
+  `breached-password check unavailable` warning in the log. `off` turns it off; `fake` is refused in production.
 - **Stalwart management keys — one per job, each only in its own containers** (ADR-0020 "Credential split"; exact
   sets in `packages/stalwart-client/src/keys.ts`, created by `ensureServiceAccount` / `issueServiceKey` from the same
   package). Each is a `Replace`-typed API key with an `allowedIps` list of the management network and an expiry, owned

@@ -47,6 +47,7 @@ beforeEach(() => {
     mailer,
     dns: { lookup: async () => [] },
     passwords: { hash: async () => "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA" },
+    breaches: { check: () => Promise.resolve("unknown") },
   });
   logged.length = 0;
   setLogSinkForTests((line) => logged.push(line));
@@ -64,7 +65,8 @@ describe("sendInviteEmail", () => {
     const [m] = mailer.sent;
     expect(m?.to).toBe("new@example.test");
     expect(m?.subject).toBe("You've been invited to an AnhourMail account");
-    expect(m?.text).toContain("Sam invited you to join Family A");
+    expect(m?.text).toContain('Account: "Family A"');
+    expect(m?.text).toContain('Invited by: "Sam"');
     expect(m?.text).toContain(`http://localhost:43200/invite/${"T".repeat(43)}`);
     expect(m?.text).toContain("as User Administrator");
     expect(m?.text).toContain("for 7 days");
@@ -74,7 +76,7 @@ describe("sendInviteEmail", () => {
 
   it("falls back to the inviter's email, and reports a failed send without logging the token", async () => {
     await sendInviteEmail(sent, { email: "sam@example.test" });
-    expect(mailer.sent[0]?.text).toContain("sam@example.test invited you");
+    expect(mailer.sent[0]?.text).toContain('Invited by: "sam@example.test"');
     mailer.send = async () => {
       throw new Error("smtp down");
     };

@@ -10,6 +10,7 @@ import { log } from "@anhourmail/server/log";
 import { callerKey, checkRateLimit, LIMITS, type LimitName } from "@anhourmail/server/rate-limit";
 import { type RequestContext, requestIdFrom, runWithRequestContext } from "@anhourmail/server/request-context";
 
+import { API_CSP } from "../console-csp";
 import { container } from "../container";
 import { env } from "../env";
 
@@ -30,6 +31,7 @@ const STATUS: Record<string, number> = {
   enrolment_required: 403,
   step_up_required: 403,
   email_unverified: 403,
+  account_suspended: 403,
   rate_limited: 429,
 };
 
@@ -156,7 +158,7 @@ export function route(handler: Handler, opts: RouteOptions = {}) {
       res.headers.set("X-Request-Id", requestId);
       // API responses are data, never pages: a strict CSP unless the route set its own (e.g. a sandboxed print view).
       if (!res.headers.has("Content-Security-Policy")) {
-        res.headers.set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+        res.headers.set("Content-Security-Policy", API_CSP);
       }
       res.headers.set("Cache-Control", "no-store");
       const status = res.status;

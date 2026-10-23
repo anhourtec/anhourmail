@@ -34,5 +34,10 @@ describe("provisionSignUp", () => {
   it("names the account from the email when the name is blank", () => {
     expect(personalAccountName("  ", "river@example.com")).toBe("river");
     expect(personalAccountName("x".repeat(100), "a@b.c")).toHaveLength(80);
+    // Account names follow the shared name rules: anything else becomes "My account".
+    expect(personalAccountName("Visit evil.example", "river@example.com")).toBe("My account");
+    expect(personalAccountName("Kim\u202e", "river@example.com")).toBe("My account");
+    expect(personalAccountName("", "jane.doe@example.com")).toBe("My account");
+    expect(personalAccountName("", "@example.com")).toBe("My account");
   });
 });

@@ -5,7 +5,9 @@ import {
   ACCOUNT_A,
   ACCOUNT_B,
   anonymous,
+  BREACHED_PW,
   deps as makeDeps,
+  fakeBreaches,
   fakeHasher,
   fixedClock,
   MAILBOX_PW,
@@ -101,8 +103,8 @@ describe("mailboxes service", () => {
   it("defaults the quota to the plan's storage and keeps it within 1 GB … plan storage", async () => {
     const d = setup();
     const m = await create(d, owner, ACCOUNT_A, { localPart: "a", domainId: DOMAIN_A });
-    expect(m.quotaBytes).toBe(30 * GB);
-    for (const quotaGb of [0, 31, 2.5, "x"]) {
+    expect(m.quotaBytes).toBe(10 * GB);
+    for (const quotaGb of [0, 11, 2.5, "x"]) {
       await expect(create(d, owner, ACCOUNT_A, { localPart: "b", domainId: DOMAIN_A, quotaGb })).rejects.toThrow(
         ValidationError,
       );
@@ -144,11 +146,11 @@ describe("mailboxes service", () => {
   it("changes the quota (audited, re-provisioned) and shows the bound", async () => {
     const d = setup();
     const m = await create(d, owner, ACCOUNT_A, { localPart: "a", domainId: DOMAIN_A });
-    const out = await setMailboxQuota(d, userAdmin, ACCOUNT_A, m.id, { quotaGb: "12" }, req);
-    expect(out.quotaBytes).toBe(12 * GB);
-    expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "mailbox.quota_changed", meta: { fromGb: 30, toGb: 12 } });
+    const out = await setMailboxQuota(d, userAdmin, ACCOUNT_A, m.id, { quotaGb: "7" }, req);
+    expect(out.quotaBytes).toBe(7 * GB);
+    expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "mailbox.quota_changed", meta: { fromGb: 10, toGb: 7 } });
     expect(d.uow.state.jobs.filter((j) => j.subjectId === m.id)).toHaveLength(1); // queued job reused
-    expect((await getMailbox(d, domainAdmin, ACCOUNT_A, m.id)).maxQuotaBytes).toBe(30 * GB);
+    expect((await getMailbox(d, domainAdmin, ACCOUNT_A, m.id)).maxQuotaBytes).toBe(10 * GB);
     await expect(setMailboxQuota(d, owner, ACCOUNT_A, m.id, {}, req)).rejects.toThrow(ValidationError);
   });
 
@@ -169,7 +171,7 @@ describe("mailboxes service", () => {
         { userId: "owner", email: "owner@example.ca" },
       ],
       customDomains: true,
-      maxQuotaGb: 30,
+      maxQuotaGb: 10,
       remaining: 10,
     });
   });
@@ -229,5 +231,26 @@ describe("mailboxes service", () => {
     const m = await create(d, owner, ACCOUNT_A, { localPart: "a", domainId: DOMAIN_A });
     d.uow.state.domains.find((x) => x.id === DOMAIN_A)!.status = "removing";
     await expect(setMailboxQuota(d, owner, ACCOUNT_A, m.id, { quotaGb: 2 }, req)).rejects.toThrow(ConflictError);
+  });
+});
+
+describe("breached passwords on a new mailbox", () => {
+  it("refuses a breached password after the other checks; nothing is created; a clean one works", async () => {
+    const d = setup();
+    const breaches = fakeBreaches([BREACHED_PW]);
+    const hasher = { ...fakeHasher, breaches };
+    const make = (password: string) =>
+      createMailbox(d, owner, ACCOUNT_A, { localPart: "kid", domainId: DOMAIN_A, password }, req, hasher);
+    await expect(make(BREACHED_PW)).rejects.toMatchObject({ code: "password_breached" });
+    expect(d.uow.state.mailboxes).toHaveLength(0);
+    expect(d.uow.state.jobs).toHaveLength(0);
+    expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "mailbox.created", result: "failed" });
+    await expect(make(MAILBOX_PW)).resolves.toMatchObject({ address: "kid@family.ca" });
+    // Someone without the permission never causes a lookup (403 as before).
+    const asked = breaches.asked.length;
+    await expect(
+      createMailbox(d, member, ACCOUNT_A, { localPart: "x", domainId: DOMAIN_A, password: BREACHED_PW }, req, hasher),
+    ).rejects.toThrow(ForbiddenError);
+    expect(breaches.asked).toHaveLength(asked);
   });
 });

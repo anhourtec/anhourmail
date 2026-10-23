@@ -175,6 +175,8 @@ export function auth(): Auth {
       relyingParty: { id: consoleUrl.hostname, name: "AnhourMail", origin: consoleUrl.origin },
       trustProxy: e.TRUST_PROXY === "true",
       security: securityHooks,
+      // Sign-up, reset (incl. a new administrator's set-password link) and change: breached passwords are refused.
+      breachedPasswords: container().breaches,
       sendPasswordReset: async ({ email, name, url }) => {
         // Only called for addresses that have an account, so a delivery failure must not change the HTTP answer
         // (a 5xx only for real accounts would reveal them): log it and carry on.

@@ -6,13 +6,21 @@ import type { AccountRepository } from "@anhourmail/core/account";
 import type { AliasRepository, MailAlias } from "@anhourmail/core/aliases";
 import type { AppPassword, AppPasswordRepository } from "@anhourmail/core/app-passwords";
 import type { Invite, InviteRepository, PeopleRepository } from "@anhourmail/core/people";
-import type { AccountSummary, PlatformAccountRepository, StaffRepository } from "@anhourmail/core/platform";
+import type {
+  AccountSummary,
+  MailboxHoldKind,
+  PlatformAccountRepository,
+  StaffRepository,
+  SuspensionRecord,
+  SuspensionRepository,
+} from "@anhourmail/core/platform";
 import type { CatchAllRepository, CustomerDomain, DomainRepository } from "@anhourmail/core/domains";
 import {
   type Mailbox,
   type MailboxPasswordRepository,
   type MailboxRepository,
   MAILBOX_STATUSES,
+  type MailboxStorageRepository,
   type PlatformAddressRepository,
 } from "@anhourmail/core/mailboxes";
 import type {
@@ -86,10 +94,17 @@ export type MemoryState = {
   }[];
   /** Catch-all per domain (Postgres: `customer_domain.catch_all_mailbox_id`). */
   catchAll: { domainId: string; mailboxId: string }[];
+  /** Last storage measurement (Postgres: `mailbox.storage_used_bytes`, `mailbox.storage_checked_at`). */
+  mailboxStorage: { mailboxId: string; usedBytes: number; checkedAt: Date }[];
   /** Step-up markers by console session (Postgres: better-auth verification rows `step-up-<session id>`). */
   stepUps: { userId: string; sessionId: string; expiresAt: Date }[];
   /** One-time set-password tokens (Postgres: better-auth `reset-password:<token>` verification rows). */
   passwordSetTokens: { userId: string; token: string; expiresAt: Date }[];
+  /** Staff suspensions (Postgres: columns on `customer_account` and `user_profile`). */
+  accountSuspensions: Record<string, SuspensionRecord>;
+  personSuspensions: Record<string, SuspensionRecord>;
+  /** Mailboxes a staff suspension holds suspended (Postgres: `mailbox_staff_hold`). */
+  mailboxHolds: { mailboxId: string; kind: MailboxHoldKind }[];
 };
 
 export const emptyState = (): MemoryState => ({
@@ -119,8 +134,12 @@ export const emptyState = (): MemoryState => ({
   appPasswords: [],
   mailboxPasswords: [],
   catchAll: [],
+  mailboxStorage: [],
   stepUps: [],
   passwordSetTokens: [],
+  accountSuspensions: {},
+  personSuspensions: {},
+  mailboxHolds: [],
 });
 
 const EPOCH = new Date(0);
@@ -386,6 +405,46 @@ function repositories(s: MemoryState): Repositories {
     },
   };
 
+  const mailboxStorage: MailboxStorageRepository = {
+    targets: async () =>
+      s.mailboxes.flatMap((m) =>
+        m.stalwartId === null ? [] : [{ id: m.id, address: m.address, stalwartId: m.stalwartId }],
+      ),
+    record: async (entries, at) => {
+      let written = 0;
+      for (const e of entries) {
+        if (!s.mailboxes.some((m) => m.id === e.id && m.stalwartId === e.stalwartId)) continue;
+        s.mailboxStorage = s.mailboxStorage.filter((x) => x.mailboxId !== e.id);
+        s.mailboxStorage.push({ mailboxId: e.id, usedBytes: e.usedBytes, checkedAt: clone(at) });
+        written += 1;
+      }
+      return written;
+    },
+    byAccount: async (accountId) =>
+      s.mailboxes
+        .filter((m) => m.accountId === accountId)
+        .map((m) => {
+          const x = s.mailboxStorage.find((y) => y.mailboxId === m.id);
+          return { mailboxId: m.id, usedBytes: x?.usedBytes ?? null, checkedAt: x ? clone(x.checkedAt) : null };
+        }),
+    quotas: async () =>
+      s.mailboxes.flatMap((m) => {
+        const account = s.accounts.find((a) => a.id === m.accountId);
+        return account
+          ? [
+              {
+                id: m.id,
+                accountId: m.accountId,
+                address: m.address,
+                stalwartId: m.stalwartId,
+                quotaBytes: m.quotaBytes,
+                plan: account.plan,
+              },
+            ]
+          : [];
+      }),
+  };
+
   const mailboxPasswords: MailboxPasswordRepository = {
     setPending: async (mailboxId, passwordHash, grant) => {
       if (!s.mailboxes.some((m) => m.id === mailboxId)) return;
@@ -437,6 +496,7 @@ function repositories(s: MemoryState): Repositories {
       s.forwardingTargets = s.forwardingTargets.filter((t) => t.mailboxId !== id);
       s.appPasswords = s.appPasswords.filter((p) => p.mailboxId !== id); // ON DELETE CASCADE
       s.mailboxPasswords = s.mailboxPasswords.filter((p) => p.mailboxId !== id); // columns of the row
+      s.mailboxStorage = s.mailboxStorage.filter((x) => x.mailboxId !== id); // columns of the row
       s.catchAll = s.catchAll.filter((c) => c.mailboxId !== id); // ON DELETE SET NULL
       return true;
     },
@@ -791,7 +851,43 @@ function repositories(s: MemoryState): Repositories {
     },
   };
 
+  const suspensions: SuspensionRepository = {
+    account: async (accountId) => clone(s.accountSuspensions[accountId] ?? null),
+    setAccount: async (accountId, record) => {
+      if (record) s.accountSuspensions[accountId] = clone(record);
+      else Reflect.deleteProperty(s.accountSuspensions, accountId);
+      const a = s.accounts.find((x) => x.id === accountId);
+      if (a) a.status = record ? "suspended" : "active";
+    },
+    personInfo: async (userId) => {
+      const email = s.userEmails[userId];
+      return email === undefined ? null : { email, name: s.userNames[userId] ?? "" };
+    },
+    person: async (userId) => clone(s.personSuspensions[userId] ?? null),
+    setPerson: async (userId, record) => {
+      if (record) s.personSuspensions[userId] = clone(record);
+      else Reflect.deleteProperty(s.personSuspensions, userId);
+      s.suspended = s.suspended.filter((u) => u !== userId);
+      if (record) s.suspended.push(userId);
+    },
+    suspendedAccountsOf: async (userId) =>
+      s.memberships
+        .filter((m) => m.userId === userId && s.accountSuspensions[m.accountId] !== undefined)
+        .map((m) => m.accountId),
+    mailboxesOf: async (userId) => clone(s.mailboxes.filter((m) => m.userId === userId)),
+    holds: async (ids) => clone(s.mailboxHolds.filter((h) => ids.includes(h.mailboxId))),
+    addHold: async (mailboxId, kind) => {
+      if (!s.mailboxHolds.some((h) => h.mailboxId === mailboxId && h.kind === kind)) {
+        s.mailboxHolds.push({ mailboxId, kind });
+      }
+    },
+    removeHold: async (mailboxId, kind) => {
+      s.mailboxHolds = s.mailboxHolds.filter((h) => !(h.mailboxId === mailboxId && h.kind === kind));
+    },
+  };
+
   return {
+    suspensions,
     webmailSettings,
     appPasswords,
     catchAll,
@@ -804,6 +900,7 @@ function repositories(s: MemoryState): Repositories {
     mailboxes,
     mailboxPasswords,
     platformAddresses,
+    mailboxStorage,
     aliases,
     people,
     invites,
@@ -832,3 +929,5 @@ export class MemoryUnitOfWork implements UnitOfWork {
     return next;
   }
 }
+
+export { KNOWN_BREACHED_PASSWORDS, memoryBreachedPasswords, type MemoryBreachedPasswords } from "./breached-passwords";

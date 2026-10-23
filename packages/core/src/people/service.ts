@@ -7,6 +7,7 @@ import { maskEmail } from "../audit/record";
 import { ConflictError, ForbiddenError, NotFoundError, PlanLimitError, ValidationError } from "../errors";
 import { mutation } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
+import { assertNotBreached, type BreachedPasswords } from "../security/breached-passwords";
 import { hashToken, isTokenShaped, newToken } from "../tokens";
 import { checkPassword, type Invite, isAccountRole, loginNames, type MemberRecord, normaliseEmail } from "./entity";
 
@@ -453,13 +454,26 @@ export async function lookupInvite(deps: Deps, token: unknown): Promise<InviteLo
   });
 }
 
+/** The console login an invite creates for someone signed out: checked names, and the password checked then hashed. */
+async function newLogin(
+  input: { firstName?: unknown; lastName?: unknown; password?: unknown },
+  hashPassword: (password: string) => Promise<string>,
+  breaches: BreachedPasswords | undefined,
+) {
+  const names = loginNames(input);
+  const password = checkPassword(input.password);
+  await assertNotBreached(breaches, password);
+  return { ...names, passwordHash: await hashPassword(password) };
+}
+
 const INVALID_INVITE = "This invite has expired, been used or been revoked. Ask for a new one.";
 
 /**
  * Accepts an invite with the link's token. Signed in: the session's email must be the invited address. Signed out:
  * creates a console login for the invited address (the emailed link proved it) with the given names and password —
  * refused when that address already has a login (sign in instead). Either way the person joins with the invited role,
- * and the link is used up. `hashPassword` comes from the identity adapter (argon2id).
+ * and the link is used up. `hashPassword` comes from the identity adapter (argon2id); `breaches` refuses a new password
+ * found in the breached-password corpus (fail open; unset = no check).
  */
 export async function acceptInvite(
   deps: Deps,
@@ -467,6 +481,7 @@ export async function acceptInvite(
   input: { token?: unknown; firstName?: unknown; lastName?: unknown; password?: unknown },
   req: RequestMeta,
   hashPassword: (password: string) => Promise<string>,
+  breaches?: BreachedPasswords,
 ): Promise<{ accountId: string; email: string; newLogin: boolean }> {
   if (!isTokenShaped(input.token)) {
     throw new ValidationError("This invite link is incomplete. Open it from the email again.");
@@ -477,7 +492,7 @@ export async function acceptInvite(
 
   const user = actor.kind === "user" ? actor : null;
   // Signed out: validate and hash before the unit of work (argon2id is slow; never inside a transaction).
-  const login = user ? null : { ...loginNames(input), passwordHash: await hashPassword(checkPassword(input.password)) };
+  const login = user ? null : await newLogin(input, hashPassword, breaches);
 
   // Signed in as someone else: refused and recorded in the platform log (staff-only), like any probe from outside
   // the account — a non-member's address never lands in the inviting account's log.

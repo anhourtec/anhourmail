@@ -481,6 +481,74 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
       }
     });
 
+    it("mailbox storage: targets on the mail server, record only on the same account, scoped reads", async () => {
+      const { uow, cleanup, seedMail } = await factory();
+      try {
+        const tag = randomUUID().slice(0, 8);
+        const domain = `st-${tag}.test`;
+        const { mailboxId } = await seedMail({ domain, address: `a@${domain}`, alias: `b@${domain}`, quotaBytes: 1 });
+        const other = await seedMail({
+          domain: `st2-${tag}.test`,
+          address: `x@st2-${tag}.test`,
+          alias: `y@st2-${tag}.test`,
+          quotaBytes: 1,
+        });
+        const accountId = (await uow.run((r) => r.directory.getMailbox(mailboxId)))?.accountId ?? "";
+        const otherAccount = (await uow.run((r) => r.directory.getMailbox(other.mailboxId)))?.accountId ?? "";
+        // Never measured: null, and not a target until the mail server has it.
+        expect(await uow.run((r) => r.mailboxStorage.byAccount(accountId))).toEqual([
+          { mailboxId, usedBytes: null, checkedAt: null },
+        ]);
+        await uow.run((r) =>
+          r.directory.markMailbox(mailboxId, { status: "active", stalwartId: `s-${tag}`, lastError: null }),
+        );
+        await uow.run((r) =>
+          r.directory.markMailbox(other.mailboxId, { status: "active", stalwartId: `t-${tag}`, lastError: null }),
+        );
+        const targets = await uow.run((r) => r.mailboxStorage.targets());
+        expect(targets).toContainEqual({ id: mailboxId, address: `a@${domain}`, stalwartId: `s-${tag}` });
+        const at = new Date("2026-10-23T10:00:00Z");
+        // A stale account id (re-created meanwhile) isn't written; the right one is, beyond 32 bits.
+        const big = 5 * 1024 ** 3 + 7;
+        expect(
+          await uow.run((r) =>
+            r.mailboxStorage.record(
+              [
+                { id: mailboxId, stalwartId: `s-${tag}`, usedBytes: big },
+                { id: other.mailboxId, stalwartId: "gone", usedBytes: 1 },
+              ],
+              at,
+            ),
+          ),
+        ).toBe(1);
+        expect(await uow.run((r) => r.mailboxStorage.byAccount(accountId))).toEqual([
+          { mailboxId, usedBytes: big, checkedAt: at },
+        ]);
+        // The other account sees only its own mailbox, still unmeasured.
+        expect(await uow.run((r) => r.mailboxStorage.byAccount(otherAccount))).toEqual([
+          { mailboxId: other.mailboxId, usedBytes: null, checkedAt: null },
+        ]);
+        // A later measurement replaces it; zero is a real value.
+        const later = new Date("2026-10-23T10:10:00Z");
+        await uow.run((r) => r.mailboxStorage.record([{ id: mailboxId, stalwartId: `s-${tag}`, usedBytes: 0 }], later));
+        expect(await uow.run((r) => r.mailboxStorage.byAccount(accountId))).toEqual([
+          { mailboxId, usedBytes: 0, checkedAt: later },
+        ]);
+        expect(await uow.run((r) => r.mailboxStorage.record([], later))).toBe(0);
+        // Quotas with the account's plan, for capping to the plan.
+        const quotas = await uow.run((r) => r.mailboxStorage.quotas());
+        expect(quotas.find((q) => q.id === mailboxId)).toMatchObject({
+          accountId,
+          address: `a@${domain}`,
+          stalwartId: `s-${tag}`,
+          quotaBytes: 1,
+        });
+        expect(["free", "plus", "supporter"]).toContain(quotas.find((q) => q.id === other.mailboxId)?.plan);
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("mailbox passwords: a waiting hash, compare-and-clear when applied, recorded credential, reconciler view", async () => {
       const { uow, cleanup, seedMail } = await factory();
       try {
@@ -1115,6 +1183,71 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         expect(await uow.run((r) => r.security.stepUpFresh(lee, s1, now))).toBe(false);
         expect(await uow.run((r) => r.security.stepUpFresh(sam, randomUUID(), now))).toBe(false);
         expect(await uow.run((r) => r.security.stepUpFresh(sam, s1, new Date(now.getTime() + 61_000)))).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("suspensions: account and person records with status, holds per mailbox and kind, the person's mailboxes", async () => {
+      const { uow, cleanup, createUser } = await factory();
+      try {
+        const email = `suspend-${randomUUID()}@example.test`;
+        const userId = await createUser(email);
+        const at = new Date("2026-10-23T10:00:00Z");
+        const { accountId, mailboxId } = await uow.run(async (r) => {
+          const { id } = await r.accounts.create({ name: `Suspend ${randomUUID()}`, plan: "plus" });
+          await r.accounts.addMember({ accountId: id, userId, role: "member" });
+          const mid = randomUUID();
+          await r.mailboxes.insert({
+            id: mid,
+            accountId: id,
+            userId,
+            address: `s-${randomUUID()}@suspend.test`,
+            status: "active",
+            quotaBytes: 1024,
+            stalwartId: null,
+            lastError: null,
+            purgeAfter: null,
+            createdAt: at,
+          });
+          return { accountId: id, mailboxId: mid };
+        });
+        expect(await uow.run((r) => r.suspensions.account(accountId))).toBeNull();
+        expect(await uow.run((r) => r.suspensions.personInfo(userId))).toMatchObject({ email });
+        expect(await uow.run((r) => r.suspensions.personInfo(`missing-${randomUUID()}`))).toBeNull();
+
+        const record = { reason: "spam" as const, note: "internal", at, byUserId: null };
+        await uow.run((r) => r.suspensions.setAccount(accountId, record));
+        expect(await uow.run((r) => r.suspensions.account(accountId))).toEqual(record);
+        expect((await uow.run((r) => r.accounts.get(accountId)))?.status).toBe("suspended");
+        expect(await uow.run((r) => r.suspensions.suspendedAccountsOf(userId))).toEqual([accountId]);
+
+        await uow.run((r) => r.suspensions.setPerson(userId, { ...record, reason: "abuse", note: null }));
+        expect((await uow.run((r) => r.suspensions.person(userId)))?.reason).toBe("abuse");
+        expect(await uow.run((r) => r.access.isSuspended(userId))).toBe(true);
+        expect((await uow.run((r) => r.suspensions.mailboxesOf(userId))).map((m) => m.id)).toEqual([mailboxId]);
+
+        await uow.run(async (r) => {
+          await r.suspensions.addHold(mailboxId, "account");
+          await r.suspensions.addHold(mailboxId, "account"); // idempotent
+          await r.suspensions.addHold(mailboxId, "person");
+        });
+        const kinds = (await uow.run((r) => r.suspensions.holds([mailboxId, randomUUID(), "junk"])))
+          .map((h) => h.kind)
+          .sort();
+        expect(kinds).toEqual(["account", "person"]);
+        await uow.run((r) => r.suspensions.removeHold(mailboxId, "account"));
+        expect(await uow.run((r) => r.suspensions.holds([mailboxId]))).toEqual([{ mailboxId, kind: "person" }]);
+
+        await uow.run(async (r) => {
+          await r.suspensions.setAccount(accountId, null);
+          await r.suspensions.setPerson(userId, null);
+        });
+        expect(await uow.run((r) => r.suspensions.account(accountId))).toBeNull();
+        expect((await uow.run((r) => r.accounts.get(accountId)))?.status).toBe("active");
+        expect(await uow.run((r) => r.suspensions.person(userId))).toBeNull();
+        expect(await uow.run((r) => r.access.isSuspended(userId))).toBe(false);
+        expect(await uow.run((r) => r.suspensions.suspendedAccountsOf(userId))).toEqual([]);
       } finally {
         await cleanup();
       }

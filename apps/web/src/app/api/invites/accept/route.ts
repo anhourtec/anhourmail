@@ -9,7 +9,7 @@ import { ok, readJson, route } from "@/server/http/route";
 /**
  * Accept an invite with the token from its link (in the body, never the URL, so it isn't logged). Signed in: joins as
  * the session's person, whose email must be the invited one. Signed out: creates the console login for the invited
- * address first (names + password). Guessing tokens is rate-limited per IP and fails closed (`auth` tier).
+ * address first (names + a password, refused when it has appeared in a data breach). Guessing tokens is rate-limited per IP and fails closed (`auth` tier).
  */
 export const POST = route(
   async ({ req, meta }) => {
@@ -20,6 +20,7 @@ export const POST = route(
       { token: body.token, firstName: body.firstName, lastName: body.lastName, password: body.password },
       meta,
       hashPassword,
+      container().breaches,
     );
     return ok(out);
   },

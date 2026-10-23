@@ -51,5 +51,20 @@ export const fakeHasher = {
   grant: ({ externalId }: { externalId: string; passwordHash: string }): string => `grant-for-${externalId}`,
 };
 
+/** A breached-password check (core `BreachedPasswords`) for service tests: lists what it was asked, never the network. */
+export function fakeBreaches(breached: string[], verdictWhenListed: "breached" | "unknown" = "breached") {
+  const asked: string[] = [];
+  return {
+    asked,
+    check: (password: string): Promise<"breached" | "clean" | "unknown"> => {
+      asked.push(password);
+      return Promise.resolve(breached.includes(password) ? verdictWhenListed : "clean");
+    },
+  };
+}
+
+/** A password that passes the mailbox password rules but appears in the breached-password corpus (`fakeBreaches`). */
+export const BREACHED_PW = "password1234";
+
 /** A password that passes the mailbox password rules. */
 export const MAILBOX_PW = "correct horse battery staple";

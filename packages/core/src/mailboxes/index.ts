@@ -3,5 +3,7 @@ export * from "./entity";
 export * from "./password";
 export * from "./password-hash";
 export * from "./platform";
+export * from "./quota-cap";
 export type * from "./repository";
 export * from "./service";
+export * from "./storage";

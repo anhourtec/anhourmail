@@ -6,6 +6,10 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 step() { printf '\n==> %s\n' "$*"; }
 
+# CI never calls third-party services: the breached-password check answers from its fixed list (no network). Apps
+# started by these scripts inherit it (an exported variable wins over .env).
+export BREACHED_PASSWORD_CHECK="${BREACHED_PASSWORD_CHECK:-fake}"
+
 # CI uses the committed dev placeholders; real secrets never live in the repo.
 ensure_env() {
   if [[ ! -f .env ]]; then

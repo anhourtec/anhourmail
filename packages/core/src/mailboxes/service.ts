@@ -16,6 +16,7 @@ import {
 } from "../errors";
 import { authorizeAudited, mutation, type MutationOutcome } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
+import { BreachedPasswordError, passwordBreached } from "../security/breached-passwords";
 import type { MailServer } from "../provisioning/ports";
 import { GB, type Mailbox, type MailboxStatus, normaliseLocalPart } from "./entity";
 import { hashMailboxPassword, mailboxPassword, type PasswordHasher } from "./password-hash";
@@ -44,6 +45,10 @@ export type MailboxView = {
    */
   applyFailed: boolean;
   createdAt: Date;
+  /** Storage used at the last measurement (`job:storage-usage`, every ~10 minutes); null until measured once. */
+  storageUsedBytes: number | null;
+  /** When it was measured (null: never). */
+  storageCheckedAt: Date | null;
 };
 
 const isId = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
@@ -56,6 +61,7 @@ async function scoped(repos: Repositories, accountId: string, id: string): Promi
 
 async function views(repos: Repositories, accountId: string, list: Mailbox[]): Promise<MailboxView[]> {
   const members = new Map((await repos.access.members(accountId)).map((m) => [m.userId, m.email] as const));
+  const storage = new Map((await repos.mailboxStorage.byAccount(accountId)).map((x) => [x.mailboxId, x] as const));
   return list.map((m) => ({
     id: m.id,
     address: m.address,
@@ -65,6 +71,8 @@ async function views(repos: Repositories, accountId: string, list: Mailbox[]): P
     purgeAfter: m.purgeAfter,
     applyFailed: m.lastError !== null,
     createdAt: m.createdAt,
+    storageUsedBytes: storage.get(m.id)?.usedBytes ?? null,
+    storageCheckedAt: storage.get(m.id)?.checkedAt ?? null,
   }));
 }
 
@@ -202,6 +210,9 @@ export async function createMailbox(
   req: RequestMeta,
   hasher: PasswordHasher,
 ): Promise<MailboxView> {
+  // The breached-password lookup runs before the unit of work (never while holding the account lock), only for someone
+  // who may create mailboxes here; its answer is used once the password has passed the rules.
+  const breached = can(actor, "mailbox.manage", accountId) && (await passwordBreached(hasher.breaches, input.password));
   const out = await mutation(
     deps,
     actor,
@@ -237,10 +248,13 @@ export async function createMailbox(
       const quotaBytes = parseQuota(input.quotaGb, await planQuota(repos, accountId));
       if (onPlatform) await assertPlatformAllowance(repos, deps.platform, accountId);
       if ((await repos.mailboxes.count(accountId)) >= MAX_MAILBOXES) {
-        throw new PlanLimitError(`An account can have up to ${String(MAX_MAILBOXES)} mailboxes.`);
+        throw new PlanLimitError(
+          `Your plan includes ${String(MAX_MAILBOXES)} mailboxes. More mailboxes come with billing, which isn't open yet.`,
+        );
       }
       const address = `${local}@${domainName}`;
       const password = mailboxPassword(input.password, address);
+      if (breached) throw new BreachedPasswordError();
       await repos.mailboxes.lockAddress(address); // mailboxes and aliases share one address space
       const free = onPlatform
         ? await platformAddressFree(repos, address, accountId)
@@ -487,6 +501,7 @@ export async function resumeMailbox(
 ): Promise<MailboxView> {
   return lifecycle(deps, actor, accountId, id, req, "mailbox.unsuspended", async (repos, m) => {
     if (m.status !== "suspended") throw new ConflictError("This mailbox isn't suspended.");
+    await assertNotHeld(repos, accountId, m.id);
     await assertDomainHeld(repos, accountId, m.address);
     return { next: await moveTo(deps, repos, m, "provisioning", null) };
   });
@@ -542,9 +557,25 @@ export async function restoreMailbox(
     if (m.purgeAfter !== null && m.purgeAfter <= deps.clock.now()) {
       throw new ConflictError("This mailbox's grace period has ended, so it can't be restored.");
     }
+    await assertNotHeld(repos, accountId, m.id);
     await assertDomainHeld(repos, accountId, m.address);
     return { next: await moveTo(deps, repos, m, "provisioning", null) };
   });
+}
+
+/**
+ * A mailbox Anhourtec staff suspended (with its account or its person) resumes only when staff lift it, and nothing in
+ * a suspended account resumes. The account row lock serialises this with a staff account suspension (which takes it
+ * too), so a resume can't slip in while the suspension is being applied.
+ */
+async function assertNotHeld(repos: Repositories, accountId: string, mailboxId: string): Promise<void> {
+  await repos.accounts.lock(accountId);
+  if (
+    (await repos.suspensions.account(accountId)) !== null ||
+    (await repos.suspensions.holds([mailboxId])).length > 0
+  ) {
+    throw new ConflictError("Anhourtec suspended this mailbox. It comes back when the suspension is lifted.");
+  }
 }
 
 const PURGE = { kind: "system", name: "mailbox-purge" } as const;

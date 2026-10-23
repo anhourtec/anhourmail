@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./addresses": "./src/addresses.ts",
+    "./names": "./src/names.ts",
     "./platform": "./src/platform.ts",
     "./plans": "./src/plans.ts",
     "./sending": "./src/sending.ts",
@@ -15,6 +16,7 @@
     "./credits": "./src/credits.generated.ts",
     "./rbac": "./src/rbac/index.ts",
     "./security": "./src/security.ts",
+    "./storage": "./src/storage.ts",
     "./webmail": "./src/webmail.ts"
   },
   "scripts": {

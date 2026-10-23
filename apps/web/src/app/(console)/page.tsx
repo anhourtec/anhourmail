@@ -29,6 +29,7 @@ import { listMailboxes } from "@anhourmail/core/mailboxes";
 import { listPeople } from "@anhourmail/core/people";
 import { MAX_MAILBOXES } from "@anhourmail/shared/plans";
 import { ROLE_LABELS } from "@anhourmail/shared/rbac";
+import { accountStorage, formatBytes, storageSummary } from "@anhourmail/shared/storage";
 
 import { CommandBar, CommandLink } from "@/components/console/command-bar";
 import { DetailTabs } from "@/components/console/flyout";
@@ -37,6 +38,7 @@ import { firstName } from "@/components/console/greeting-text";
 import { StatusText, type Tone } from "@/components/console/status-text";
 import { ConsoleShell } from "@/components/console-shell";
 import { MailboxStatus } from "@/components/mailboxes/mailbox-status";
+import { UsageBar } from "@/components/mailboxes/storage-usage";
 import { accountNames, requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
 import { env } from "@/server/env";
@@ -106,6 +108,37 @@ function MiniList({
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * The account's storage: used across its mailboxes (last measurement, every ~10 minutes) of their quotas added up.
+ * Only for people who can see mailboxes.
+ */
+function AccountStorage({
+  mailboxes,
+}: {
+  mailboxes: readonly { quotaBytes: number; storageUsedBytes: number | null }[];
+}) {
+  const total = accountStorage(mailboxes);
+  const s = storageSummary(total.usedBytes, total.quotaBytes);
+  const count = `${String(total.mailboxes)} ${total.mailboxes === 1 ? "mailbox" : "mailboxes"}`;
+  return (
+    <div className="flex max-w-md flex-col gap-1.5">
+      <p className="text-[14px]">
+        <span className="font-medium">Storage</span>{" "}
+        {s.used === null ? (
+          <span className="text-muted-foreground">not measured yet across {count}</span>
+        ) : (
+          <>
+            <span className="am-num">{s.used}</span> used of{" "}
+            <span className="am-num">{formatBytes(total.quotaBytes)}</span>{" "}
+            <span className="text-muted-foreground">across {count}</span>
+          </>
+        )}
+      </p>
+      {s.used !== null && <UsageBar fraction={s.fraction} level={s.level} />}
+    </div>
   );
 }
 
@@ -543,6 +576,7 @@ export default async function ConsoleHome() {
                 </h3>
                 <span className="am-small">{ROLE_LABELS[`account:${role}`]}</span>
               </div>
+              {o.mailboxes && o.mailboxes.length > 0 && <AccountStorage mailboxes={o.mailboxes} />}
               <AccountTabs actor={actor} accountId={accountId} o={o} />
             </div>
           ))}

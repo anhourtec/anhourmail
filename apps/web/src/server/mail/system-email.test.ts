@@ -115,9 +115,14 @@ describe("every system email uses the shared layout", () => {
     expect(reset?.text).toContain("If you didn't ask, ignore this email");
     expect(reset?.text).toContain("Reset your password: https://app.example.test/reset?token=t");
     expect(invite?.subject).toBe("You've been invited to an AnhourMail account");
-    expect(invite?.text).toContain("Kim invited you to join Family <A> on AnhourMail as Member.");
+    expect(invite?.text).toContain("You've been invited to join an account on AnhourMail as Member.");
+    // People-chosen names are quoted facts, never part of our sentences (run-28 C2).
+    expect(invite?.text).toContain('Account: "Family <A>"');
+    expect(invite?.text).toContain('Invited by: "Kim"');
+    expect(invite?.text).not.toContain("Kim invited you");
     expect(invite?.text).toContain("for 7 days");
-    expect(invite?.html).toContain("Family &#60;A&#62;");
+    expect(invite?.html).toMatch(/<code class="am-code"[^>]*>&quot;Family &#60;A&#62;&quot;<\/code>/);
+    expect(invite?.html).toMatch(/<code class="am-code"[^>]*>&quot;Kim&quot;<\/code>/);
     // Inviter-chosen text stays out of what inbox previews show.
     expect(invite?.html).not.toMatch(/display:none[^>]*>[^<]*Family/);
     expect(forwarding?.text).toContain("for 24 hours");

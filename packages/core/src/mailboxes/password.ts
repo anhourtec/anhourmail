@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import type { Actor } from "../actor";
+import { type Actor, can } from "../actor";
 import { maskEmail } from "../audit/record";
 import { ConflictError, ForbiddenError, NotFoundError, StepUpRequiredError } from "../errors";
 import { mutation, type MutationOutcome } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
+import { BreachedPasswordError, passwordBreached } from "../security/breached-passwords";
 import type { Mailbox } from "./entity";
 import { hashMailboxPassword, mailboxPassword, type PasswordHasher } from "./password-hash";
 import { lifecycleLocked } from "./service";
@@ -65,6 +66,10 @@ export async function resetMailboxPassword(
   session: { sessionId: string | null },
   req: RequestMeta,
 ): Promise<MailboxPasswordReset> {
+  // Asked before the unit of work (a network lookup never holds a lock), and only for someone who may reset passwords
+  // in this account; the answer is used once the password has passed the rules.
+  const breached =
+    can(actor, "mailbox.password.reset", accountId) && (await passwordBreached(hasher.breaches, input.password));
   const out = await mutation(
     deps,
     actor,
@@ -89,6 +94,7 @@ export async function resetMailboxPassword(
       if (actor.actingAs) return refuse("act_as");
       assertSettable(m);
       const password = mailboxPassword(input.password, m.address);
+      if (breached) throw new BreachedPasswordError();
       if (
         !session.sessionId ||
         !(await repos.security.stepUpFresh(actor.userId, session.sessionId, deps.clock.now()))
@@ -134,6 +140,7 @@ export async function changeOwnMailboxPassword(
   const found = await deps.uow.run((r) => r.webmailSettings.mailboxByAddress(key));
   if (!found) throw new NotFoundError();
   const actor: Actor = { kind: "system", name: found.address };
+  const breached = await passwordBreached(hasher.breaches, input.password); // before the unit of work (no lock held)
   return mutation(
     deps,
     actor,
@@ -151,6 +158,7 @@ export async function changeOwnMailboxPassword(
         throw new ConflictError("This mailbox can't change its password right now.");
       }
       const password = mailboxPassword(input.password, m.address);
+      if (breached) throw new BreachedPasswordError();
       const job = await queuePassword(deps, repos, hasher, m, password);
       // The person's console identity (if the mailbox belongs to someone) gets the change notice.
       const owner = m.userId

@@ -17,6 +17,7 @@ import { factorRemovalRefusal, sessionRefusalFor } from "@anhourmail/core/securi
 import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 
 import { createDb, schema } from "../db-postgres/client";
+import { KNOWN_BREACHED_PASSWORDS, memoryBreachedPasswords } from "../memory/breached-passwords";
 import { PgUnitOfWork } from "../db-postgres/repositories";
 import { type AuthSecurityEvent, createAuth, hashPassword, hashRecoveryCode, totpAt } from ".";
 
@@ -60,13 +61,14 @@ const auth = createAuth({
     },
     sessionRefusal: (userId, method) => deps.uow.run((r) => sessionRefusalFor(r, userId, method)),
   },
+  breachedPasswords: memoryBreachedPasswords(),
 });
 
 /** A tiny cookie-keeping client for the auth handler. */
-function client() {
+function client(a: typeof auth = auth) {
   const jar = new Map<string, string>();
   return async (method: "GET" | "POST", path: string, body?: unknown) => {
-    const res = await auth.handler(
+    const res = await a.handler(
       new Request(`${ORIGIN}/api/auth${path}`, {
         method,
         headers: {
@@ -459,6 +461,184 @@ describe("console sign-in factors at rest", () => {
     } finally {
       for (const u of [victim, solo]) await db.delete(schema.authUser).where(eq(schema.authUser.id, u.id));
       await db.delete(schema.customerAccount).where(eq(schema.customerAccount.id, accountId));
+    }
+  });
+});
+
+describe("breached passwords (fake check, no network)", () => {
+  const breached = KNOWN_BREACHED_PASSWORDS[0] ?? "";
+  const check = memoryBreachedPasswords();
+  const openAuth = createAuth({
+    db,
+    secret: randomBytes(32).toString("base64url"),
+    baseURL: ORIGIN,
+    trustedOrigins: [ORIGIN],
+    secureCookies: false,
+    signUp: "open",
+    sendPasswordReset: async ({ url }) => {
+      resetUrl = url;
+    },
+    sealer: createKeyRing([{ id: "int", key: randomBytes(32) }]),
+    relyingParty: { id: "localhost", name: "AnhourMail", origin: ORIGIN },
+    trustProxy: false,
+    security: {
+      onEvent: async () => undefined,
+      removalRefusal: async () => null,
+      factors: async () => ({ totp: false, passkeys: 0 }),
+      factorAdded: async () => undefined,
+      codes: { claim: async () => true },
+      passwordChanged: async () => undefined,
+      sessionRefusal: async () => null,
+    },
+    breachedPasswords: check,
+  });
+
+  it("refuses a breached password at sign-up and creates nothing; accepts it while the service is down", async () => {
+    const email = `int-breach-${randomUUID()}@example.com`;
+    const call = client(openAuth);
+    const refused = await call("POST", "/sign-up/email", { email, password: breached, firstName: "Int", name: "Int" });
+    expect(refused.status).toBe(400);
+    expect(refused.json).toMatchObject({
+      code: "PASSWORD_BREACHED",
+      message: "This password has appeared in a data breach. Choose a different one.",
+    });
+    expect(await db.select().from(schema.authUser).where(eq(schema.authUser.email, email))).toEqual([]);
+    // A short password gets the length message, not a lookup.
+    const before = check.calls;
+    expect(
+      (await call("POST", "/sign-up/email", { email, password: "short", firstName: "Int", name: "Int" })).json?.code,
+    ).toBe("PASSWORD_TOO_SHORT");
+    expect(check.calls).toBe(before);
+
+    check.unavailable = true;
+    try {
+      const ok = await call("POST", "/sign-up/email", { email, password: breached, firstName: "Int", name: "Int" });
+      expect(ok.status).toBe(200);
+    } finally {
+      check.unavailable = false;
+      await db.delete(schema.authUser).where(eq(schema.authUser.email, email));
+    }
+  });
+
+  it("refuses a breached new password on change and on reset; the reset link still works afterwards", async () => {
+    const email = `int-breach-pw-${randomUUID()}@example.com`;
+    const password = `${randomBytes(12).toString("base64url")}-It1`;
+    const userId = randomUUID();
+    await db.insert(schema.authUser).values({ id: userId, name: "Int", email, emailVerified: true });
+    await db.insert(schema.authAccount).values({
+      id: randomUUID(),
+      accountId: userId,
+      providerId: "credential",
+      userId,
+      password: await hashPassword(password),
+    });
+    try {
+      const call = client(openAuth);
+      expect((await call("POST", "/sign-in/email", { email, password })).status).toBe(200);
+      const changed = await call("POST", "/change-password", { currentPassword: password, newPassword: breached });
+      expect(changed.status).toBe(400);
+      expect(changed.json?.code).toBe("PASSWORD_BREACHED");
+
+      expect((await call("POST", "/request-password-reset", { email, redirectTo: "/reset-password" })).status).toBe(
+        200,
+      );
+      const token = /reset-password\/([^?]+)/.exec(resetUrl)?.[1] ?? "";
+      const reset = await call("POST", "/reset-password", { token, newPassword: breached });
+      expect(reset.status).toBe(400);
+      expect(reset.json?.code).toBe("PASSWORD_BREACHED");
+      expect((await call("POST", "/reset-password", { token, newPassword: `${password}-2` })).status).toBe(200);
+      // The stored hash is the accepted password's, never the refused one's.
+      expect((await client(openAuth)("POST", "/sign-in/email", { email, password: `${password}-2` })).status).toBe(200);
+    } finally {
+      await db.delete(schema.authUser).where(eq(schema.authUser.id, userId));
+    }
+  });
+});
+
+describe("names and redirect targets at the identity endpoints (XSS audit run-28 N2, N3)", () => {
+  const openAuth = createAuth({
+    db,
+    secret: randomBytes(32).toString("base64url"),
+    baseURL: ORIGIN,
+    trustedOrigins: [ORIGIN],
+    secureCookies: false,
+    signUp: "open",
+    sendPasswordReset: async ({ url }) => {
+      resetUrl = url;
+    },
+    sealer: createKeyRing([{ id: "int", key: randomBytes(32) }]),
+    relyingParty: { id: "localhost", name: "AnhourMail", origin: ORIGIN },
+    trustProxy: false,
+    security: {
+      onEvent: async () => undefined,
+      removalRefusal: async () => null,
+      factors: async () => ({ totp: false, passkeys: 0 }),
+      factorAdded: async () => undefined,
+      codes: { claim: async () => true },
+      passwordChanged: async () => undefined,
+      sessionRefusal: async () => null,
+    },
+    breachedPasswords: memoryBreachedPasswords(),
+    emailVerification: { expiresInSec: 3600, send: async () => undefined, onVerified: async () => undefined },
+  });
+
+  it("refuses names with web addresses, @ or text-direction controls at sign-up (400 INVALID_NAME), creating nothing", async () => {
+    const password = `${randomBytes(12).toString("base64url")}-Nm1`;
+    for (const [firstName, name] of [
+      ["Visit evil.example", "Kim"],
+      ["Kim", "support@bank"],
+      ["Kim\u202eexe.txt", "Kim"],
+      ["Kim", "https://evil.example"],
+    ] as const) {
+      const email = `int-name-${randomUUID()}@example.com`;
+      const res = await client(openAuth)("POST", "/sign-up/email", { email, password, firstName, name });
+      expect(res.status).toBe(400);
+      expect(res.json?.code).toBe("INVALID_NAME");
+      expect(await db.select().from(schema.authUser).where(eq(schema.authUser.email, email))).toEqual([]);
+    }
+  });
+
+  const EVIL = ["https://evil.example", "//evil.example", "/\\evil.example", "https:evil.example"];
+  const raw = (method: "GET" | "POST", path: string, body?: unknown) =>
+    openAuth.handler(
+      new Request(`${ORIGIN}/api/auth${path}`, {
+        method,
+        redirect: "manual",
+        headers: { origin: ORIGIN, "content-type": "application/json" },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
+  const leavesOrigin = (res: Response) => {
+    const location = res.headers.get("location");
+    if (!location) return false;
+    return new URL(location, ORIGIN).origin !== ORIGIN;
+  };
+
+  it("request-password-reset refuses an off-site redirectTo, and no link to it is emailed", async () => {
+    const email = `int-redirect-${randomUUID()}@example.com`;
+    const userId = randomUUID();
+    await db.insert(schema.authUser).values({ id: userId, name: "Int", email, emailVerified: true });
+    try {
+      for (const target of EVIL) {
+        resetUrl = "";
+        const res = await raw("POST", "/request-password-reset", { email, redirectTo: target });
+        expect(res.status).toBe(403);
+        expect(resetUrl).toBe("");
+      }
+    } finally {
+      await db.delete(schema.authUser).where(eq(schema.authUser.id, userId));
+    }
+  });
+
+  it("the emailed reset link and the email confirmation link never redirect off-site", async () => {
+    for (const target of EVIL) {
+      const q = encodeURIComponent(target);
+      const reset = await raw("GET", `/reset-password/not-a-real-token?callbackURL=${q}`);
+      expect(leavesOrigin(reset)).toBe(false);
+      expect(reset.status).toBeGreaterThanOrEqual(400);
+      const verify = await raw("GET", `/verify-email?token=not-a-token&callbackURL=${q}`);
+      expect(leavesOrigin(verify)).toBe(false);
+      expect(verify.status).toBeGreaterThanOrEqual(400);
     }
   });
 });

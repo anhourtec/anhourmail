@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { INVITE_EMAILS_PER_DAY, MAX_PEOPLE } from "@anhourmail/shared/plans";
 
-import { ACCOUNT_A, ACCOUNT_B, deps, fixedClock, req, user } from "../__tests__/helpers";
+import { ACCOUNT_A, ACCOUNT_B, BREACHED_PW, deps, fakeBreaches, fixedClock, req, user } from "../__tests__/helpers";
 import type { Actor } from "../actor";
 import { ConflictError, ForbiddenError, NotFoundError, PlanLimitError, ValidationError } from "../errors";
 import { hashToken } from "../tokens";
@@ -70,6 +70,10 @@ describe("entity rules", () => {
     expect(loginNames({ firstName: "Ada" }).lastName).toBeNull();
     expect(() => loginNames({ firstName: " " })).toThrow("first name");
     expect(() => loginNames({ firstName: "A\u0007" })).toThrow("control");
+    // The shared name rules: text-direction controls, @ and web addresses too (invite emails show these names).
+    expect(() => loginNames({ firstName: "Kim\u202e" })).toThrow("control");
+    expect(() => loginNames({ firstName: "Kim", lastName: "x@y" })).toThrow("@");
+    expect(() => loginNames({ firstName: "Visit evil.example" })).toThrow("web addresses");
     expect(() => checkPassword("short")).toThrow("at least 12");
     expect(() => checkPassword("x".repeat(129))).toThrow("at most 128");
     expect(checkPassword("long-enough-pass")).toBe("long-enough-pass");
@@ -413,6 +417,25 @@ describe("lookupInvite and acceptInvite", () => {
         fakeHash,
       ),
     ).rejects.toThrow(NotFoundError);
+  });
+
+  it("signed out: a breached password is refused before anything is written; the link still works", async () => {
+    const { d, s, as } = world();
+    const sent = await invitePerson(d, as("owner"), ACCOUNT_A, { email: "new@a.test", role: "member" }, req);
+    const breaches = fakeBreaches([BREACHED_PW]);
+    const accept = (password: string) =>
+      acceptInvite(
+        d,
+        { kind: "anonymous" },
+        { token: sent.token, firstName: "New", password },
+        req,
+        fakeHash,
+        breaches,
+      );
+    await expect(accept(BREACHED_PW)).rejects.toMatchObject({ code: "password_breached" });
+    expect(s.logins).toHaveLength(0);
+    expect(JSON.stringify(s.audit)).not.toContain(BREACHED_PW);
+    await expect(accept("correct horse battery")).resolves.toMatchObject({ newLogin: true });
   });
 
   it("signed out with an existing login for the address: sign in instead (409)", async () => {

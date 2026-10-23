@@ -43,6 +43,10 @@ const schema = z.object({
   // accepts the worker's replacement of an existing account's password only with a grant made here. Never in the
   // worker. Required in production (32+ characters); unset in dev (no proxy).
   MAILBOX_PASSWORD_GRANT_KEY: z.string().optional(),
+  // New console and mailbox passwords are checked against the breached-password corpus (k-anonymity range API;
+  // 07-security.md "Breached-password check"): on | off | fake (dev/CI: a fixed list, no network). Unset = on, except
+  // under NODE_ENV=test (off). Production refuses `fake`.
+  BREACHED_PASSWORD_CHECK: z.enum(["on", "off", "fake"]).optional(),
 });
 
 /** Values from .env.example that must never reach production. */
@@ -55,6 +59,13 @@ const checked = schema.superRefine((e, ctx) => {
     ctx.addIssue({ code: "custom", path: ["STALWART"], message });
   }
   if (e.NODE_ENV !== "production") return;
+  if (e.BREACHED_PASSWORD_CHECK === "fake") {
+    ctx.addIssue({
+      code: "custom",
+      path: ["BREACHED_PASSWORD_CHECK"],
+      message: "The fake breached-password check is for development and CI only: use on (or off) in production",
+    });
+  }
   if (PLACEHOLDER_SECRETS.has(e.BETTER_AUTH_SECRET)) {
     ctx.addIssue({ code: "custom", path: ["BETTER_AUTH_SECRET"], message: "Placeholder secret refused in production" });
   }
@@ -95,6 +106,11 @@ const checked = schema.superRefine((e, ctx) => {
 });
 
 export type Env = z.infer<typeof schema>;
+
+/** The breached-password check mode in effect: as set, else on (off under NODE_ENV=test, so unit tests never call out). */
+export function breachedPasswordMode(e: Pick<Env, "NODE_ENV" | "BREACHED_PASSWORD_CHECK">): "on" | "off" | "fake" {
+  return e.BREACHED_PASSWORD_CHECK ?? (e.NODE_ENV === "test" ? "off" : "on");
+}
 let cached: Env | null = null;
 
 /** Validated environment, read lazily so builds don't need runtime secrets. */

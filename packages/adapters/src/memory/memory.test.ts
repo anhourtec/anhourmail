@@ -17,6 +17,7 @@ describeAdapterContract("memory", async () => {
       const domainId = randomUUID();
       const mailboxId = randomUUID();
       const accountId = randomUUID(); // one account for the domain, the mailbox and its alias (as in Postgres)
+      uow.state.accounts.push({ id: accountId, name: domain, plan: "free" });
       uow.state.domains.push({
         id: domainId,
         accountId,

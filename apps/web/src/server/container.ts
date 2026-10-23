@@ -7,11 +7,13 @@ import { db, domainVerifyTokens, PgUnitOfWork } from "@anhourmail/adapters/postg
 import { type Deps, systemClock } from "@anhourmail/core";
 import type { DnsResolver } from "@anhourmail/core/domains";
 import type { PasswordHasher } from "@anhourmail/core/mailboxes";
+import type { BreachedPasswords } from "@anhourmail/core/security";
 import { type Counter, redisCounter } from "@anhourmail/server/rate-limit";
 import { redis } from "@anhourmail/server/redis";
 
+import { breachedPasswords } from "./adapters/breached-passwords";
 import { mailboxPasswords } from "./adapters/mailbox-passwords";
-import { env } from "./env";
+import { breachedPasswordMode, env } from "./env";
 import { platform } from "./platform";
 
 /**
@@ -25,6 +27,8 @@ export type Container = {
   dns: DnsResolver;
   /** Mailbox passwords → argon2id PHC strings (the only form they are kept or queued in; rule 23). */
   passwords: PasswordHasher;
+  /** New console passwords (sign-up, reset, invite logins) are checked with the same breached-password check. */
+  breaches: BreachedPasswords;
 };
 
 let override: Container | null = null;
@@ -32,7 +36,9 @@ let real: Container | null = null;
 
 export function container(): Container {
   if (override) return override;
-  real ??= {
+  if (real) return real;
+  const breaches = breachedPasswords(breachedPasswordMode(env()));
+  real = {
     deps: { uow: new PgUnitOfWork(db()), clock: systemClock, platform: platform() },
     counter: redisCounter(redis()),
     mailer: createMailer({ url: env().MAIL_TRANSPORT_URL, from: env().MAIL_FROM }),
@@ -41,7 +47,8 @@ export function container(): Container {
       env().NODE_ENV === "production"
         ? systemResolver()
         : devResolver(systemResolver(), (name) => domainVerifyTokens(db(), name), platform()),
-    passwords: mailboxPasswords(env().MAILBOX_PASSWORD_GRANT_KEY),
+    passwords: mailboxPasswords(env().MAILBOX_PASSWORD_GRANT_KEY, breaches),
+    breaches,
   };
   return real;
 }

@@ -16,7 +16,7 @@ export const metadata: Metadata = {
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  // Set by src/proxy.ts on webmail pages (nonce CSP); the theme script must carry it.
+  // Set by src/proxy.ts on every console and webmail page (nonce CSP); the theme script must carry it.
   const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
     <html lang="en-CA" className={brandFontVars} suppressHydrationWarning>
