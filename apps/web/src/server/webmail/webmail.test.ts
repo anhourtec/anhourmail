@@ -469,6 +469,46 @@ describe("WebmailService", () => {
     await expect(unreachable.svc.signIn("a@x.test", "right")).rejects.toBeInstanceOf(WebmailUnavailableError);
   });
 
+  it("checks a password with the mail server without keeping a session, and maps refusals and outages", async () => {
+    const t = setup();
+    await t.svc.checkPassword("a@x.test", "right");
+    expect(t.kv.size()).toBe(0);
+    await expect(t.svc.checkPassword("a@x.test", "wrong")).rejects.toBeInstanceOf(WebmailSignInError);
+    const busy = setup({ oauth: { signIn: () => Promise.reject(new WebmailBusyError("throttled")) } });
+    await expect(busy.svc.checkPassword("a@x.test", "right")).rejects.toBeInstanceOf(WebmailBusyError);
+    const down = setup({ oauth: { signIn: () => Promise.reject(new Error("ECONNREFUSED")) } });
+    await expect(down.svc.checkPassword("a@x.test", "right")).rejects.toBeInstanceOf(WebmailUnavailableError);
+  });
+
+  it("moves the session to a new id with fresh tokens after a password change, active mailbox or not", async () => {
+    let n = 0;
+    const t = setup({
+      oauth: {
+        signIn: async (name, secret) => {
+          if (secret !== "right" && secret !== "new-one") throw new GrantRefusedError("no");
+          n += 1;
+          return { accessToken: `at-${name}-${String(n)}`, refreshToken: `rt-${String(n)}`, expiresAt: 9e12 };
+        },
+      },
+    });
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const renewed = await t.svc.renewMailbox(sessionId, "a@x.test", "new-one");
+    expect(renewed).not.toBe(sessionId);
+    expect(await t.store.read(sessionId)).toBeNull(); // the old id (and any copied cookie) no longer works
+    expect(await t.svc.session(renewed)).toMatchObject({ username: "a@x.test", accessToken: "at-a@x.test-2" });
+    // Not the active one: its entry among the others is renewed, the active one is left alone.
+    const s = await t.store.read(renewed);
+    if (!s) throw new Error("no session");
+    await t.store.write(renewed, { ...s, username: "b@x.test", others: [{ ...s, accessToken: "old" }] });
+    const again = await t.svc.renewMailbox(renewed, "a@x.test", "new-one");
+    const after = await t.store.read(again);
+    expect(after?.username).toBe("b@x.test");
+    expect(after?.createdAt).toBe(s.createdAt); // the absolute lifetime doesn't restart
+    expect(after?.others?.[0]).toMatchObject({ username: "a@x.test", accessToken: "at-a@x.test-3" });
+    await expect(t.svc.renewMailbox(again, "a@x.test", "wrong")).rejects.toBeInstanceOf(WebmailSignInError);
+    await expect(t.svc.renewMailbox(sessionId, "a@x.test", "new-one")).rejects.toBeInstanceOf(WebmailSignedOutError);
+  });
+
   it("refuses a suspended or deleted mailbox at sign-in, even with the right password", async () => {
     const t = setup({ allowed: () => false });
     await expect(t.svc.signIn("a@x.test", "right")).rejects.toBeInstanceOf(WebmailBlockedError);

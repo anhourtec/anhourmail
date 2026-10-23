@@ -182,6 +182,15 @@ export const ROUTES: readonly RouteSpec[] = [
     accountParam: "accountId",
     probeStatus: 404,
   },
+  // Mailbox passwords (07-security.md "Mailbox passwords"): an admin's reset needs its own critical permission.
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/mailboxes/:mailboxId/password",
+    file: "app/api/accounts/[accountId]/mailboxes/[mailboxId]/password/route.ts",
+    guard: "mailbox.password.reset",
+    accountParam: "accountId",
+    probeStatus: 404,
+  },
   // App passwords (docs/internal/07-security.md "App passwords"): own mailboxes; others' are read with mailbox.read
   // and revoked with mailbox.manage, which every holder pairs with app_password.manage.own.
   {
@@ -438,6 +447,12 @@ export const ROUTES: readonly RouteSpec[] = [
   },
   // Webmail settings (docs/internal/05-webmail.md "Settings"): the session's own mailbox only.
   { method: "GET", path: "/api/webmail/settings", file: "app/api/webmail/settings/route.ts", guard: "webmail" },
+  {
+    method: "POST",
+    path: "/api/webmail/settings/password",
+    file: "app/api/webmail/settings/password/route.ts",
+    guard: "webmail",
+  },
   {
     method: "PATCH",
     path: "/api/webmail/settings/preferences",

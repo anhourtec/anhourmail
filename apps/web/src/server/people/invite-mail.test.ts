@@ -46,6 +46,7 @@ beforeEach(() => {
     counter: memoryCounter(),
     mailer,
     dns: { lookup: async () => [] },
+    passwords: { hash: async () => "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA" },
   });
   logged.length = 0;
   setLogSinkForTests((line) => logged.push(line));

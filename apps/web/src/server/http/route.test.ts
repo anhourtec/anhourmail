@@ -34,6 +34,7 @@ beforeEach(() => {
     counter: memoryCounter(),
     mailer: memoryMailer(),
     dns: noDns,
+    passwords: { hash: async () => "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA" },
   });
   setLogSinkForTests(() => undefined);
 });
@@ -128,6 +129,7 @@ describe("security hardening (audit 2026-10-21)", () => {
     vi.stubEnv("PLATFORM_DOMAIN", "example.test");
     vi.stubEnv("BETTER_AUTH_SECRET", "y".repeat(48));
     vi.stubEnv("SECRETS_KEYRING", `k1:${Buffer.alloc(32, 1).toString("base64")}`);
+    vi.stubEnv("MAILBOX_PASSWORD_GRANT_KEY", "g".repeat(48));
     vi.stubEnv("STALWART_OPERATIONS_KEY", "operations-key");
     resetEnvForTests();
     const res = await route(async () => ok(true), { limit: "publicForm" })(

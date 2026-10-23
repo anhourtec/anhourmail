@@ -255,6 +255,43 @@ export class WebmailService {
     return { sessionId, session };
   }
 
+  /**
+   * Checks a mailbox password with the mail server (a sign-in whose tokens are dropped at once): before a password
+   * change, so a session cookie alone can't change the password. Wrong password → `WebmailSignInError`; throttling →
+   * `WebmailBusyError`; anything else → `WebmailUnavailableError`. The password is used once, never kept or logged.
+   */
+  async checkPassword(address: string, password: string): Promise<void> {
+    try {
+      await this.#d.oauth.signIn(address, password);
+    } catch (err) {
+      if (err instanceof GrantRefusedError) throw new WebmailSignInError("sign-in refused");
+      if (err instanceof WebmailBusyError) throw err;
+      log.warn("webmail password check: Stalwart unavailable", { component: "webmail", err });
+      throw new WebmailUnavailableError("mail server unavailable");
+    }
+  }
+
+  /**
+   * After the mailbox's password changed (the mail server revoked every token it had issued): signs `address` in
+   * again with the new password and moves this session to a **new session id** with the fresh tokens (the old id is
+   * deleted, so a copied cookie stops working too), keeping its other mailboxes and its absolute lifetime. The person
+   * who changed it stays signed in; every other session of that mailbox ends. Returns the new session id.
+   */
+  async renewMailbox(sessionId: string, address: string, password: string): Promise<string> {
+    const fresh = await this.#authenticate(address, password);
+    const cur = await this.#d.store.read(sessionId);
+    if (!cur) throw new WebmailSignedOutError("signed out");
+    const { version: _version, ...rest } = cur;
+    const next: WebmailSession =
+      rest.username === fresh.username
+        ? { ...rest, ...fresh }
+        : { ...rest, others: (rest.others ?? []).map((m) => (m.username === fresh.username ? fresh : m)) };
+    const newId = await this.#d.store.create(next);
+    this.#refreshing.delete(sessionId);
+    await this.#d.store.destroy(sessionId);
+    return newId;
+  }
+
   /** The mailboxes signed in to this session, the active one first. */
   async mailboxes(sessionId: string): Promise<{ active: string; others: string[] } | null> {
     const s = await this.session(sessionId);

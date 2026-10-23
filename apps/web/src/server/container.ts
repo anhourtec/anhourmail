@@ -6,9 +6,11 @@ import { devResolver, systemResolver } from "@anhourmail/adapters/dns";
 import { db, domainVerifyTokens, PgUnitOfWork } from "@anhourmail/adapters/postgres";
 import { type Deps, systemClock } from "@anhourmail/core";
 import type { DnsResolver } from "@anhourmail/core/domains";
+import type { PasswordHasher } from "@anhourmail/core/mailboxes";
 import { type Counter, redisCounter } from "@anhourmail/server/rate-limit";
 import { redis } from "@anhourmail/server/redis";
 
+import { mailboxPasswords } from "./adapters/mailbox-passwords";
 import { env } from "./env";
 import { platform } from "./platform";
 
@@ -16,7 +18,14 @@ import { platform } from "./platform";
  * Composition root: the only place the app picks adapters (ADR-0008). Tests swap in memory adapters with
  * `setContainerForTests`.
  */
-export type Container = { deps: Deps; counter: Counter; mailer: Mailer; dns: DnsResolver };
+export type Container = {
+  deps: Deps;
+  counter: Counter;
+  mailer: Mailer;
+  dns: DnsResolver;
+  /** Mailbox passwords → argon2id PHC strings (the only form they are kept or queued in; rule 23). */
+  passwords: PasswordHasher;
+};
 
 let override: Container | null = null;
 let real: Container | null = null;
@@ -32,6 +41,7 @@ export function container(): Container {
       env().NODE_ENV === "production"
         ? systemResolver()
         : devResolver(systemResolver(), (name) => domainVerifyTokens(db(), name), platform()),
+    passwords: mailboxPasswords(env().MAILBOX_PASSWORD_GRANT_KEY),
   };
   return real;
 }

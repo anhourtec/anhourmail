@@ -18,6 +18,7 @@ function production(overrides: Record<string, string | undefined> = {}) {
     MAIL_FROM: "AnhourMail <no-reply@anhourmail.com>",
     TRUST_PROXY: "true",
     SECRETS_KEYRING: `k1:${Buffer.alloc(32, 1).toString("base64")}`,
+    MAILBOX_PASSWORD_GRANT_KEY: "g".repeat(48),
     PLATFORM_DOMAIN: undefined,
     STALWART_OPERATIONS_KEY: "operations-key",
     STALWART_PROVISIONING_KEY: undefined,
@@ -111,6 +112,13 @@ describe("Stalwart credentials (ADR-0020 credential split)", () => {
     expect(() => env()).toThrow(/STALWART_AUDIT_KEY must not be given to this process/);
     production({ ...onDomain, STALWART_DEV_ADMIN_USER: "admin" });
     expect(() => env()).toThrow(/STALWART_DEV_ADMIN_USER is for development only/);
+  });
+
+  it("requires the mailbox password grant key (32+ characters) in production", () => {
+    for (const key of [undefined, "", "short"]) {
+      production({ ...onDomain, MAILBOX_PASSWORD_GRANT_KEY: key });
+      expect(() => env()).toThrow(/MAILBOX_PASSWORD_GRANT_KEY/);
+    }
   });
 
   it("refuses the legacy single key in any mode", () => {

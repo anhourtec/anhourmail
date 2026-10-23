@@ -39,6 +39,10 @@ const schema = z.object({
   STALWART_URL: httpUrl.optional(),
   // Secrets-at-rest key ring, "id:base64(32 bytes)[,…]" (first = active). Required in production; dev derives one.
   SECRETS_KEYRING: z.string().optional(),
+  // Mailbox password grants (ADR-0020 "Mailbox passwords"): the HMAC key shared only with the management proxy, which
+  // accepts the worker's replacement of an existing account's password only with a grant made here. Never in the
+  // worker. Required in production (32+ characters); unset in dev (no proxy).
+  MAILBOX_PASSWORD_GRANT_KEY: z.string().optional(),
 });
 
 /** Values from .env.example that must never reach production. */
@@ -61,6 +65,13 @@ const checked = schema.superRefine((e, ctx) => {
       code: "custom",
       path: ["TRUST_PROXY"],
       message: "Production runs behind our proxy: set TRUST_PROXY=true",
+    });
+  }
+  if ((e.MAILBOX_PASSWORD_GRANT_KEY ?? "").trim().length < 32) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["MAILBOX_PASSWORD_GRANT_KEY"],
+      message: "Set MAILBOX_PASSWORD_GRANT_KEY (32+ characters, shared only with the management proxy) in production",
     });
   }
   if (!e.SECRETS_KEYRING || e.SECRETS_KEYRING.trim() === "") {
