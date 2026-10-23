@@ -45,6 +45,9 @@ export const LIMITS = {
   webmailUpload: { limit: 60, windowSec: 600, by: "caller", failMode: "closed" },
   // The settings window reads preferences, identities, quota and the managed Sieve script at once.
   webmailSettings: { limit: 60, windowSec: 60, by: "caller", failMode: "open" },
+  // Mailbox passwords: an admin's reset (console) and a person's own change (webmail). Each one hashes with argon2id
+  // and ends the mailbox's webmail sessions; fail closed (the change sets a credential).
+  mailboxPassword: { limit: 10, windowSec: 3600, by: "caller", failMode: "closed" },
   // Each call emails an outside address (forwarding confirmation); a per-mailbox daily cap applies in the service.
   forwardingVerify: { limit: 10, windowSec: 3600, by: "caller", failMode: "closed" },
 } as const satisfies Record<string, RateLimit>;

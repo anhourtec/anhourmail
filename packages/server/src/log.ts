@@ -92,6 +92,11 @@ export const REDACT_KEYS: readonly string[] = [
   "stalwartadminpassword",
   "stalwartapikey",
   "masterpassword",
+  // Mailbox passwords: the typed ones and the argon2id hash waiting for the worker (07-security.md)
+  "mailboxpassword",
+  "passwordhash",
+  "pendingpasswordhash",
+  "initialpasswordhash",
   "recoverycode",
   "recoverycodes",
   // Console sign-in factors: authenticator codes and WebAuthn material
