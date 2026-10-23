@@ -1,8 +1,43 @@
 # 09 — Roadmap
 
-Last updated: 2026-10-22. Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
+Last updated: 2026-10-23. Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
 
-## Phase 0 — Research, docs, scaffold (this phase)
+## Path to production (as of 2026-10-23)
+
+Where we are: Phases 0–2 done; Phase 3 control plane and Phase 4 webmail built for local dev (see the phase status
+lines below and the handoff's "Current state"); the private staging setup (`anhourmail-ops`) is rehearsed end to
+end locally — three scoped Stalwart keys behind an internal management proxy, NGINX path/host guards, backups,
+key rotation, smoke checks. The order below is the shortest route to a public launch; each step keeps the phase exit
+criteria further down.
+
+1. **Pre-staging on one VM (now).** Deploy `anhourmail-ops` topology A on the chosen provider (`deploy.md`):
+   real DNS, ACME certificates, rDNS, inbound and outbound mail with a real external mailbox, mail-tester score,
+   DMARC/TLS-RPT reports arriving, first encrypted off-box backup and a restore drill. Things only a real host can
+   prove: certificates, DNS/PTR, port 25, DOCKER-USER firewall rules, backup upload.
+   **Exit:** smoke 100% on the real host; a customer domain verified and mailboxes sending and receiving externally;
+   mail-tester ≥ 9/10; restore drill passes; `security-reviewer` pass on the deployed config.
+2. **Close the product gaps a beta needs** (Phases 3–4 remainder): free `@anhourmail.com` sign-up with SMS/OTP
+   verification (provider to choose), console → webmail session handoff, data export and account deletion,
+   act-as (staff, audited, visible to account admins), remote-image proxy, push sync in the webmail, webmail
+   settings part 2 (rules, templates), and the leftover open items in the handoff (alias admin-lock, daily alias
+   creation cap, provisioning-queue lock token, unknown-recipient rejection at SMTP time).
+3. **Billing** (Phase 5): Stripe Checkout/Portal/Tax, webhooks, plan changes and the account lifecycle, paid-user
+   invite codes; pricing decision (open item 3) and Supporter minimum confirmed.
+4. **Abuse controls, monitoring, backups** (Phase 6): trust tiers stored and enforced, fail-closed outbound counters,
+   Stalwart throttles pushed from the control plane, `x:WebHook` event ingestion (sign-ins, bounces), abuse queue and
+   `abuse@` workflow, metrics and alerting, scheduled backups with a monthly restore drill, LUKS on the mail volume,
+   DNSSEC + DANE, MTA-STS `enforce` after clean TLS-RPT. Free-tier launch posture decided.
+5. **Production host and dogfood** (Phase 7): topology B (app VM + mail VM), IP and /24 screening, postmaster and
+   feedback-loop registration, 4-week warm-up, staff mail on AnhourMail.
+6. **Closed beta, then launch** (Phases 8–9): independent penetration test, full `standard` security audit, counsel
+   review of legal pages and the AGPL image question, DMARC `quarantine` → `reject`.
+
+**Security residuals carried forward** (accepted for pre-staging, revisit before beta): the operations key in the web
+container can still do its own job through the proxy (app passwords on customers, managed Sieve) — detected by the
+reconcilers, not prevented; Stalwart Community lets any account-writing key set passwords, so the proxy is the
+control — keep it in front of every management caller; address-book sharing is still allowed.
+
+## Phase 0 — Research, docs, scaffold
 
 - Research in `research/`; internal docs, ADRs, roles, audit; agent definitions; repo scaffold with ports-and-adapters, an example vertical slice, RBAC matrix stubs, audit module, CI workflow.
 - Dev stack: Postgres, Redis, Stalwart v0.16.27, Mailpit; `dev.test` seeded; mail between mailboxes visible via JMAP; nothing relays outside Mailpit.
@@ -49,11 +84,17 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
 ## Phase 3 — Control plane
 
 - better-auth (email + password, TOTP, WebAuthn security keys/passkeys, recovery codes; admins can require a passkey), accounts, memberships and roles, act-as, domains with guided DNS and live per-record verification, mailboxes, aliases, catch-all, masked aliases (ADR-0009), app passwords (issued by the control plane, scoped per protocol; ADR-0020), quotas, audit UI, Security activity page, data export and account deletion. Collaboration (Plus/Supporter): shared mailboxes/groups, static distribution lists with members-only posting, full-access delegation, forwarding (`10-collaboration.md`).
+- **Status (2026-10-23):** built for local dev — domains, mailboxes (lifecycle, passwords), aliases and masked
+  aliases, people/invites/roles, audit log, staff pages, sign-in security (TOTP, recovery codes, passkeys), app
+  passwords, catch-all. Not built: act-as, data export/deletion, collaboration, free sign-up flow, quotas UI.
 - **Exit:** RBAC harness covers every route × role; cross-account tests return 404; audit entries asserted for every mutation; a custom domain goes from add to active in ≤ 15 min in staging; a non-member can neither post to a members-only list nor send with a shared mailbox's From (integration tests); the reconciler reports ACL/membership drift.
 
 ## Phase 4 — Webmail v1 on JMAP
 
 - `05-webmail.md` v1 scope, BFF proxy and push fan-out, sanitiser + sandbox, image proxy. Folders: nested, favourites, archive (Archive folder created at provisioning), empty Trash/Junk, BFF-enforced depth/count limits; one signature per identity (sanitised, mirrored to JMAP Identity).
+- **Status (2026-10-23):** built for local dev — sign in, read (all body types, sandboxed), compose/send/undo,
+  actions, search, several mailboxes, contacts, settings part 1 (incl. automatic replies, confirmed forwarding, junk,
+  managed Sieve). Not built: image proxy, push sync, session handoff, settings part 2, calendar.
 - **Exit:** performance budgets met in Playwright perf tests; XSS corpus (HTML email test suite) passes; Playwright MCP pass light/dark at 1440/390 as every role that can open webmail.
 
 ## Phase 5 — Billing
