@@ -62,6 +62,7 @@ if (mode === "create") {
     { totp: string; passkey: string; owner: string; member: string; pkOwner: string; pkMember: string }
   > = {};
   const passwords: Record<string, { owner: string; member: string }> = {};
+  const suspension: Record<string, { accountName: string; owner: string; member: string }> = {};
   for (const project of ["desktop", "mobile"]) {
     const [secAccount] = await db
       .insert(schema.customerAccount)
@@ -104,6 +105,19 @@ if (mode === "create") {
       { accountId: pwAccount.id, userId: pwMember.id, role: "member" },
     ]);
     passwords[project] = { owner: pwOwner.email, member: pwMember.email };
+    // Staff suspension journey: an account per project that staff suspend and restore (nobody else's sign-in changes).
+    const [suspAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} Suspension ${project}`, plan: "plus" })
+      .returning();
+    if (!suspAccount) throw new Error("suspension account not created");
+    const suspOwner = await addLogin(`susp-${project}-owner`);
+    const suspMember = await addLogin(`susp-${project}-member`);
+    await db.insert(schema.accountMembership).values([
+      { accountId: suspAccount.id, userId: suspOwner.id, role: "owner" },
+      { accountId: suspAccount.id, userId: suspMember.id, role: "member" },
+    ]);
+    suspension[project] = { accountName: suspAccount.name, owner: suspOwner.email, member: suspMember.email };
     security[project] = {
       totp: logins.totp.email,
       passkey: logins.passkey.email,
@@ -144,7 +158,11 @@ if (mode === "create") {
   mkdirSync("test-results", { recursive: true });
   writeFileSync(
     FILE,
-    JSON.stringify({ run, password, accountName: account.name, users, recipient, security, passwords }, null, 2),
+    JSON.stringify(
+      { run, password, accountName: account.name, users, recipient, security, passwords, suspension },
+      null,
+      2,
+    ),
     {
       mode: 0o600,
     },

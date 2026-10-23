@@ -5,7 +5,8 @@
  *
  *   1. Builds a throwaway tree: 2 customer accounts × every account role, every platform role, a free user and a
  *      suspended member (plus anonymous). Users are created directly (sign-up is closed), then each one signs in
- *      through the real HTTP sign-in endpoint.
+ *      through the real HTTP sign-in endpoint; the suspended member's sign-in must be refused (403), and an Owner of a
+ *      staff-suspended account gets 403 `account_suspended` on account routes but 200 on their own profile.
  *   2. For every route in apps/web/src/server/routes.ts × every persona, the expected status is DERIVED from the
  *      permission matrix via the core `authorize()` (401 / 403 / 404 / 2xx) — a new route or permission without
  *      a registry entry fails the unit test in routes.test.ts; a wrong guard fails here.
@@ -85,14 +86,18 @@ async function createUser(email: string, password: string, suspended = false): P
   return id;
 }
 
-async function signIn(email: string, password: string): Promise<string> {
-  const res = await fetch(`${WEB}/api/auth/sign-in/email`, {
+async function signInResponse(email: string, password: string): Promise<Response> {
+  return fetch(`${WEB}/api/auth/sign-in/email`, {
     method: "POST",
-    // A documentation-range client address (TRUST_PROXY in dev/CI): the sign-in's platform audit entry carries it,
-    // which the full-IP check below reads back.
     headers: { "content-type": "application/json", origin: WEB, "x-forwarded-for": HARNESS_IP },
     body: JSON.stringify({ email, password }),
   });
+}
+
+async function signIn(email: string, password: string): Promise<string> {
+  // A documentation-range client address (TRUST_PROXY in dev/CI): the sign-in's platform audit entry carries it,
+  // which the full-IP check below reads back.
+  const res = await signInResponse(email, password);
   const cookie = res.headers
     .getSetCookie()
     .map((c) => c.split(";")[0])
@@ -153,7 +158,51 @@ try {
   await addUser("free user", {});
   await addUser("suspended A owner", { account: [accountA.id, "owner"], suspended: true });
 
-  for (const p of personas) if (p.email) p.cookie = await signIn(p.email, password);
+  // A person staff suspended can't sign in at all (403 with the notice); every route then treats them as signed out.
+  for (const p of personas) {
+    if (!p.email) continue;
+    if (p.actor.kind === "user" && p.actor.suspended) {
+      const res = await signInResponse(p.email, password);
+      results.push({ route: "sign-in refused while suspended", persona: p.label, expected: 403, got: res.status });
+      p.actor = { kind: "anonymous" };
+      continue;
+    }
+    p.cookie = await signIn(p.email, password);
+  }
+
+  // ---- 1a. an account staff suspended: its Owner signs in, account routes answer 403 `account_suspended` ----------
+  {
+    const [suspendedAccount] = await db
+      .insert(schema.customerAccount)
+      .values({
+        name: `${run} account S`,
+        plan: "plus",
+        status: "suspended",
+        suspensionReason: "spam",
+        suspendedAt: new Date(),
+      })
+      .returning();
+    if (!suspendedAccount) throw new Error("suspended account not created");
+    const email = `${run}-s-owner@rbac.test`;
+    const userId = await createUser(email, password);
+    await db.insert(schema.accountMembership).values({ accountId: suspendedAccount.id, userId, role: "owner" });
+    const cookie = await signIn(email, password);
+    const get = (path: string) => fetch(`${WEB}${path}`, { headers: { cookie, origin: WEB } });
+    const mailboxes = await get(`/api/accounts/${suspendedAccount.id}/mailboxes`);
+    const code = ((await mailboxes.json()) as { error?: { code?: string } }).error?.code;
+    results.push({
+      route: "account routes while the account is suspended (account_suspended)",
+      persona: "S owner",
+      expected: 403,
+      got: code === "account_suspended" ? mailboxes.status : 0,
+    });
+    results.push({
+      route: "own profile while the account is suspended",
+      persona: "S owner",
+      expected: 200,
+      got: (await get("/api/me")).status,
+    });
+  }
 
   // ---- 1b. (right after the sign-ins, so they are among the newest entries) full IPs in the platform audit: `platform.audit.full_ip` (Global Administrator) only ----------------
   for (const p of personas.filter((x) => x.actor.kind === "user" && x.actor.platformRoles.length > 0)) {

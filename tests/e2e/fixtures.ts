@@ -13,6 +13,8 @@ export type E2eUsers = {
   /** Per browser project: logins for the sign-in security journeys (their own account for the requirement). */
   /** Per browser project: the mailbox passwords journey's own account (owner and member). */
   passwords: Record<string, { owner: string; member: string }>;
+  /** Per browser project: the staff suspension journey's own account (its name, owner and member). */
+  suspension: Record<string, { accountName: string; owner: string; member: string }>;
   security: Record<
     string,
     { totp: string; passkey: string; owner: string; member: string; pkOwner: string; pkMember: string }
@@ -27,10 +29,22 @@ export const urls = {
 
 export const e2eUsers = (): E2eUsers => JSON.parse(readFileSync("test-results/e2e-users.json", "utf8")) as E2eUsers;
 
-/** Fails the test on any console error or uncaught page error. */
+/**
+ * Fails the test on any console error, uncaught page error or Content-Security-Policy violation. Violations are
+ * reported from the page itself (`securitypolicyviolation`), so they count even when the browser logs none.
+ */
 export const test = base.extend<{ consoleErrors: string[] }>({
   consoleErrors: async ({ page }, use) => {
     const errors: string[] = [];
+    await page.exposeBinding("__reportCspViolation", (_source, text: string) => {
+      errors.push(text);
+    });
+    await page.addInitScript(() => {
+      document.addEventListener("securitypolicyviolation", (e) => {
+        const report = (window as unknown as { __reportCspViolation?: (text: string) => void }).__reportCspViolation;
+        report?.(`CSP violation: ${e.effectiveDirective} blocked ${e.blockedURI || "inline"} on ${e.documentURI}`);
+      });
+    });
     page.on("console", (m) => {
       if (m.type() === "error") errors.push(m.text());
     });

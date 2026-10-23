@@ -94,6 +94,21 @@ test("sign-up creates a personal Free account and lands on the console as its Ow
   expect(consoleErrors).toEqual([]);
 });
 
+test("sign-up refuses a password seen in a data breach, says so, and stays on the form", async ({ page }, testInfo) => {
+  const u = e2eUsers();
+  const who = `${u.run}-${testInfo.project.name}-breach`;
+  await page.goto(`${urls.app}/sign-up`);
+  await page.getByLabel("First name").fill(who);
+  await page.getByLabel("Email").fill(`${who}@e2e.test`);
+  // In the breached-password fake's list (CI) and in the real corpus (dev): refused either way, checked server-side.
+  await page.getByLabel("Password", { exact: true }).fill("password1234");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(
+    page.getByRole("alert").filter({ hasText: "This password has appeared in a data breach. Choose a different one." }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/\/sign-up$/);
+});
+
 test("sign-in links to sign-up and shows the legal consent", async ({ page }) => {
   await page.goto(`${urls.app}/sign-in`);
   await expect(page.getByText("By signing in, you agree to our")).toBeVisible();
