@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * Brings mailbox quotas down to their plan's per-mailbox storage after the plan's storage was reduced (2026-10-23:
- * Free 10 → 1 GB, Plus and Supporter 30 → 10 GB). Never pushes anyone over quota: Stalwart refuses incoming mail to a
- * full mailbox, so a mailbox already holding more than the new cap keeps enough room for what it holds (rounded up to
- * the next GB, never more than it had) and is reported. Mail is never deleted. Each change is a system action audited
- * in the mailbox's account (`mailbox.quota_changed`, so the account's admins see it), and reaches the mail server
- * through the provisioning queue (`mailbox.ensure` → `quotas.maxDiskQuota`).
+ * Brings each account's mailbox quotas within the account's storage pool (2026-10-23: storage became pooled per
+ * account — Free 1 GB, Plus and Supporter 10 GB — and the mail server enforces quotas per mailbox only, so the sum of
+ * an account's mailbox quotas must stay within the pool). An account whose mailboxes are given more than its pool has
+ * them scaled down proportionally, never below the mail each already holds (rounded up to the next GB): Stalwart
+ * refuses incoming mail to a full mailbox, so nobody is pushed over quota, and an account whose mail alone exceeds the
+ * pool is reported (`keptAbovePool`). Mail is never deleted. Each change is a system action audited in the mailbox's
+ * account (`mailbox.quota_changed`, reason `storage_pooled`, so the account's admins see it), and reaches the mail
+ * server through the provisioning queue (`mailbox.ensure` → `quotas.maxDiskQuota`).
  */
-import { PLANS } from "@anhourmail/shared/plans";
+import { accountPoolBytes, type PlanId } from "@anhourmail/shared/plans";
+import { minQuotaBytes } from "@anhourmail/shared/storage";
 
 import { mutation } from "../mutation";
 import type { Deps, RequestMeta } from "../ports";
@@ -17,40 +20,69 @@ import { type MailboxUsageReader, STORAGE_BATCH_SIZE } from "./storage";
 const SYSTEM = { kind: "system", name: "quota-cap" } as const;
 
 export type QuotaCapRun = {
-  /** Mailboxes whose quota was above their plan's storage. */
-  above: number;
-  /** Brought down to the plan's storage. */
-  capped: number;
-  /**
-   * Still above the plan's storage because of the mail they hold: lowered as far as that allows, or left as they are
-   * when they can't go lower (ids, for the operator).
-   */
-  keptAbovePlan: string[];
-  /** Not changed: the mail server couldn't tell us how much they hold, so the quota stays until a later run. */
+  /** Accounts whose mailboxes were given more than the account's pool. */
+  overPool: number;
+  /** Mailboxes whose quota was lowered. */
+  lowered: number;
+  /** Accounts still above their pool after the run, because of the mail their mailboxes hold (ids, for the operator). */
+  keptAbovePool: string[];
+  /** Accounts not changed: the mail server couldn't say how much one of their mailboxes holds (a later run retries). */
   unmeasured: number;
 };
 
+type Share = { id: string; quotaBytes: number; usedBytes: number };
+
 /**
- * The quota a mailbox should have: the plan's storage, or — when it already holds more — what it holds rounded up to
- * the next GB. Never more than it has now.
+ * New quotas for an over-assigned account: each mailbox's share of the pool in proportion to its current quota, in
+ * whole GB, never below what it holds (rounded up, at least 1 GB) and never above what it has now. Leftover whole GB
+ * go to the mailboxes that lost most to rounding; when the floors leave the total above the pool, the mailboxes with
+ * room to spare give up more. Accounts within their pool keep their quotas as they are.
  */
-export function cappedQuota(currentBytes: number, planBytes: number, usedBytes: number): number {
-  const room = Math.ceil(Math.max(0, usedBytes) / GB) * GB;
-  return Math.min(currentBytes, Math.max(planBytes, room));
+export function rebalancedQuotas(poolBytes: number, mailboxes: readonly Share[]): Map<string, number> {
+  const assigned = mailboxes.reduce((s, m) => s + m.quotaBytes, 0);
+  const out = new Map(mailboxes.map((m) => [m.id, m.quotaBytes] as const));
+  if (assigned <= poolBytes || assigned === 0) return out;
+  const rows = mailboxes.map((m) => {
+    const exact = (m.quotaBytes * poolBytes) / assigned;
+    const floor = Math.min(m.quotaBytes, minQuotaBytes(m.usedBytes));
+    const target = Math.min(m.quotaBytes, Math.max(floor, Math.floor(exact / GB) * GB));
+    return { id: m.id, cap: m.quotaBytes, floor, exact, target };
+  });
+  let total = rows.reduce((s, r) => s + r.target, 0);
+  while (total > poolBytes) {
+    const give = rows
+      .filter((r) => r.target - GB >= r.floor)
+      .sort((a, b) => b.target - b.exact - (a.target - a.exact) || b.target - a.target)[0];
+    if (!give) break;
+    give.target -= GB;
+    total -= GB;
+  }
+  while (poolBytes - total >= GB) {
+    const take = rows
+      .filter((r) => r.target + GB <= r.cap)
+      .sort((a, b) => b.exact - b.target - (a.exact - a.target))[0];
+    if (!take) break;
+    take.target += GB;
+    total += GB;
+  }
+  for (const r of rows) out.set(r.id, r.target);
+  return out;
 }
 
-/**
- * One run over every mailbox (idempotent: a mailbox at or below its plan's storage is left alone). Reads current sizes
- * from the mail server first (provisioning key), so a cap is never decided on a stale or missing measurement; a
- * mailbox that isn't on the mail server yet holds nothing.
- */
-export async function capQuotasToPlan(deps: Deps, reader: MailboxUsageReader): Promise<QuotaCapRun> {
-  const all = await deps.uow.run((r) => r.mailboxStorage.quotas());
-  const above = all.filter((m) => m.quotaBytes > PLANS[m.plan].storageGb * GB);
-  const run: QuotaCapRun = { above: above.length, capped: 0, keptAbovePlan: [], unmeasured: 0 };
+type Row = {
+  id: string;
+  accountId: string;
+  address: string;
+  stalwartId: string | null;
+  quotaBytes: number;
+  plan: PlanId;
+};
 
+/** Sizes of these mailboxes from the mail server (a mailbox not on it holds nothing); unanswered ones are left out. */
+async function measure(reader: MailboxUsageReader, list: readonly Row[]): Promise<Map<string, number>> {
   const used = new Map<string, number>();
-  const onServer = above.filter((m) => m.stalwartId !== null);
+  for (const m of list) if (m.stalwartId === null) used.set(m.id, 0);
+  const onServer = list.filter((m) => m.stalwartId !== null);
   for (let i = 0; i < onServer.length; i += STORAGE_BATCH_SIZE) {
     const batch = onServer.slice(i, i + STORAGE_BATCH_SIZE);
     try {
@@ -63,65 +95,94 @@ export async function capQuotasToPlan(deps: Deps, reader: MailboxUsageReader): P
         }
       }
     } catch {
-      // Left unmeasured: these keep their quota this run.
+      // Left unmeasured: their account keeps its quotas this run.
     }
   }
+  return used;
+}
 
+/**
+ * One run over every account (idempotent: an account within its pool is left alone). Reads current sizes from the
+ * mail server first (provisioning key), so a quota is never decided on a stale or missing measurement.
+ */
+export async function rebalanceStoragePools(deps: Deps, reader: MailboxUsageReader): Promise<QuotaCapRun> {
+  const all: Row[] = await deps.uow.run((r) => r.mailboxStorage.quotas());
+  const byAccount = new Map<string, Row[]>();
+  for (const m of all) byAccount.set(m.accountId, [...(byAccount.get(m.accountId) ?? []), m]);
+  const over = [...byAccount.values()].filter(
+    (list) => list.reduce((s, m) => s + m.quotaBytes, 0) > accountPoolBytes(list[0]?.plan ?? "free"),
+  );
+  const run: QuotaCapRun = { overPool: over.length, lowered: 0, keptAbovePool: [], unmeasured: 0 };
   const stamp = String(deps.clock.now().getTime());
-  for (const m of above) {
-    const usedBytes = m.stalwartId === null ? 0 : used.get(m.id);
-    if (usedBytes === undefined) {
+
+  for (const list of over) {
+    const first = list[0];
+    if (!first) continue;
+    const used = await measure(reader, list);
+    if (list.some((m) => !used.has(m.id))) {
       run.unmeasured += 1;
       continue;
     }
-    // Can't go any lower without pushing it over quota (it already holds about as much): reported, not changed.
-    if (cappedQuota(m.quotaBytes, PLANS[m.plan].storageGb * GB, usedBytes) >= m.quotaBytes) {
-      run.keptAbovePlan.push(m.id);
-      continue;
-    }
-    const req: RequestMeta = { requestId: `job-quota-cap-${stamp}`, ip: null, userAgent: null };
-    const outcome = await mutation(
-      deps,
-      SYSTEM,
-      req,
-      {
-        action: "mailbox.quota_changed",
-        permission: "mailbox.manage",
-        accountId: m.accountId,
-        target: { type: "mailbox", id: m.id },
-      },
-      async (repos) => {
-        // Read again inside the unit of work: the plan or the quota may have changed since the list was taken.
-        const now = await repos.mailboxes.get(m.accountId, m.id);
-        const account = await repos.accounts.get(m.accountId);
-        // Changed meanwhile (rare): recorded as a no-op rather than skipped, so the entry still explains the run.
-        const unchanged = { result: "unchanged" as const, meta: { reason: "plan_storage_reduced", unchanged: true } };
-        if (!now || !account) return unchanged;
-        const planBytes = PLANS[account.plan].storageGb * GB;
-        const quotaBytes = cappedQuota(now.quotaBytes, planBytes, usedBytes);
-        if (quotaBytes >= now.quotaBytes) return unchanged;
-        await repos.mailboxes.setQuota(now.id, quotaBytes);
-        if (now.stalwartId !== null) {
-          await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: now.id, runAfter: deps.clock.now() });
-          await repos.mailboxStorage.record([{ id: now.id, stalwartId: now.stalwartId, usedBytes }], deps.clock.now());
-        }
-        const abovePlan = quotaBytes > planBytes;
-        return {
-          result: abovePlan ? ("kept" as const) : ("capped" as const),
-          target: { label: now.address },
-          meta: {
-            fromGb: now.quotaBytes / GB,
-            toGb: quotaBytes / GB,
-            planGb: planBytes / GB,
-            usedBytes,
-            reason: "plan_storage_reduced",
-            abovePlan,
-          },
-        };
-      },
+    const poolBytes = accountPoolBytes(first.plan);
+    const targets = rebalancedQuotas(
+      poolBytes,
+      list.map((m) => ({ id: m.id, quotaBytes: m.quotaBytes, usedBytes: used.get(m.id) ?? 0 })),
     );
-    if (outcome === "capped") run.capped += 1;
-    if (outcome === "kept") run.keptAbovePlan.push(m.id);
+    let total = 0;
+    for (const m of list) {
+      const target = targets.get(m.id) ?? m.quotaBytes;
+      const usedBytes = used.get(m.id) ?? 0;
+      if (target >= m.quotaBytes) {
+        total += m.quotaBytes;
+        continue;
+      }
+      const req: RequestMeta = { requestId: `job-quota-cap-${stamp}`, ip: null, userAgent: null };
+      const outcome = await mutation(
+        deps,
+        SYSTEM,
+        req,
+        {
+          action: "mailbox.quota_changed",
+          permission: "mailbox.manage",
+          accountId: m.accountId,
+          target: { type: "mailbox", id: m.id },
+        },
+        async (repos) => {
+          await repos.accounts.lock(m.accountId); // serialises with the console's own storage changes
+          const now = await repos.mailboxes.get(m.accountId, m.id);
+          const account = await repos.accounts.get(m.accountId);
+          // Changed since the list was taken (rare): recorded as a no-op, so the entry still explains the run.
+          const unchanged = { result: "unchanged" as const, meta: { reason: "storage_pooled", unchanged: true } };
+          if (!now || account?.plan !== m.plan || now.quotaBytes !== m.quotaBytes) return unchanged;
+          await repos.mailboxes.setQuota(now.id, target);
+          if (now.stalwartId !== null) {
+            await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: now.id, runAfter: deps.clock.now() });
+            await repos.mailboxStorage.record(
+              [{ id: now.id, stalwartId: now.stalwartId, usedBytes }],
+              deps.clock.now(),
+            );
+          }
+          return {
+            result: "lowered" as const,
+            target: { label: now.address },
+            meta: {
+              fromGb: now.quotaBytes / GB,
+              toGb: target / GB,
+              poolGb: poolBytes / GB,
+              usedBytes,
+              reason: "storage_pooled",
+            },
+          };
+        },
+      );
+      if (outcome === "lowered") {
+        run.lowered += 1;
+        total += target;
+      } else {
+        total += m.quotaBytes;
+      }
+    }
+    if (total > poolBytes) run.keptAbovePool.push(first.accountId);
   }
   return run;
 }

@@ -10,7 +10,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { systemClock } from "@anhourmail/core";
-import { capQuotasToPlan, GB, measureStorage } from "@anhourmail/core/mailboxes";
+import { rebalanceStoragePools, GB, measureStorage } from "@anhourmail/core/mailboxes";
 import { runNextJob } from "@anhourmail/core/provisioning";
 import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 import { StalwartManagement, StalwartTransport } from "@anhourmail/stalwart-client";
@@ -118,8 +118,8 @@ describe("mailbox storage used against Stalwart", () => {
     expect((await measureStorage(deps, down)).failedBatches).toBeGreaterThan(0);
     expect((await row(m.id))?.storageUsedBytes).toBe(measured?.storageUsedBytes);
 
-    // Free is 1 GB per mailbox: the 30 GB quota comes down (it holds far less), and the worker applies it.
-    await capQuotasToPlan(deps, reader);
+    // Free's pool is 1 GB: the 30 GB quota comes down (it holds far less), and the worker applies it.
+    await rebalanceStoragePools(deps, reader);
     expect((await row(m.id))?.quotaBytes).toBe(1 * GB);
     const mail = stalwartMailServer(keys.provisioning);
     for (let i = 0; i < 20 && (await runNextJob(deps, mail)); i++);
