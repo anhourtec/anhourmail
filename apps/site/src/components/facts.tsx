@@ -12,8 +12,11 @@ import {
   HOSTS,
   INVITE_EMAILS_PER_DAY,
   INVITE_TTL_DAYS,
+  EMAIL_VERIFICATION_HOURS,
   MAILBOX_DELETE_GRACE_DAYS,
+  MAX_MAILBOXES,
   MAX_PEOPLE,
+  PLATFORM_ADDRESS,
   PLAN_ORDER,
   PLANS,
   PRODUCT_DOMAIN,
@@ -49,6 +52,12 @@ const VALUES = {
   inviteDays: String(INVITE_TTL_DAYS),
   inviteEmailsPerDay: String(INVITE_EMAILS_PER_DAY),
   maxPeople: String(MAX_PEOPLE),
+  // Free platform addresses (packages/shared/src/addresses.ts, plans.ts; ADR-0021)
+  platformAddressMin: String(PLATFORM_ADDRESS.min),
+  platformAddressMax: String(PLATFORM_ADDRESS.max),
+  freePlatformAddresses: String(PLANS.free.platformMailboxes ?? MAX_MAILBOXES),
+  maxMailboxes: String(MAX_MAILBOXES),
+  emailVerificationHours: String(EMAIL_VERIFICATION_HOURS),
   freeStorage: `${PLANS.free.storageGb} GB`,
   plusStorage: `${PLANS.plus.storageGb} GB`,
   plusPriceUsd: PLANS.plus.price ? formatPrice(PLANS.plus.price.USD, "USD") : "",
@@ -182,6 +191,7 @@ export function PlanTable() {
             <th className="py-2 pr-4 font-medium">Plan</th>
             <th className="py-2 pr-4 font-medium">Price per year</th>
             <th className="py-2 pr-4 font-medium">Storage</th>
+            <th className="py-2 pr-4 font-medium">@{PRODUCT_DOMAIN} addresses</th>
             <th className="py-2 pr-4 font-medium">Custom domains</th>
             <th className="py-2 pr-4 font-medium">Aliases</th>
             <th className="py-2 pr-4 font-medium">Masked aliases</th>
@@ -198,6 +208,7 @@ export function PlanTable() {
                 <td className="py-2 pr-4 font-medium">{p.name}</td>
                 <td className="py-2 pr-4">{price}</td>
                 <td className="py-2 pr-4">{p.storageGb} GB</td>
+                <td className="py-2 pr-4">{p.platformMailboxes ?? `Up to ${String(MAX_MAILBOXES)}`}</td>
                 <td className="py-2 pr-4">{p.customDomains ? "Yes" : "No"}</td>
                 <td className="py-2 pr-4">{unlimited(p.aliases)}</td>
                 <td className="py-2 pr-4">{unlimited(p.maskedAliases)}</td>

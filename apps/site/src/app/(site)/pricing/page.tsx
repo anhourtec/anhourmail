@@ -4,7 +4,7 @@ import Link from "next/link";
 
 import { CheckIcon, MinusIcon } from "lucide-react";
 
-import { ADDONS, BILLING, PLAN_ORDER, PLANS, PRODUCT_DOMAIN, type Plan } from "@anhourmail/shared";
+import { ADDONS, BILLING, MAX_MAILBOXES, PLAN_ORDER, PLANS, PRODUCT_DOMAIN, type Plan } from "@anhourmail/shared";
 
 import { Reveal } from "@/components/reveal";
 import { CtaBand, FaqList, PageHero, PlanCards, SectionHead } from "@/components/sections";
@@ -19,7 +19,11 @@ export const metadata: Metadata = {
 type RowValue = string | boolean;
 const ROWS: readonly { label: string; value: (p: Plan) => RowValue }[] = [
   { label: "Storage", value: (p) => `${String(p.storageGb)} GB` },
-  { label: `@${PRODUCT_DOMAIN} address`, value: () => true },
+  // Free: its own allowance; paid plans: as many as their mailboxes (ADR-0021).
+  {
+    label: `@${PRODUCT_DOMAIN} addresses`,
+    value: (p) => (p.platformMailboxes === null ? `Up to ${String(MAX_MAILBOXES)}` : String(p.platformMailboxes)),
+  },
   { label: "Your own domains", value: (p) => p.customDomains },
   { label: "Aliases", value: (p) => (p.aliases === null ? "Unlimited" : String(p.aliases)) },
   { label: "Masked aliases", value: (p) => (p.maskedAliases === null ? "Unlimited" : String(p.maskedAliases)) },

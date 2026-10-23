@@ -1,0 +1,54 @@
+---
+title: Your free address
+description: Get your free address at our domain, how names work, what you need first, and what each plan includes.
+---
+
+Every account can have an address at <Value of="productDomain" />, like `jane.doe@` followed by our domain. It's a
+full mailbox: use it in the [webmail](/docs/webmail) and in any [mail app](/docs/clients/imap-smtp-settings).
+
+## Get your address
+
+1. Sign up in the console at <Value of="appHost" />, then **confirm your email address**: we send a link to the
+   address you signed up with. It works for <Value of="emailVerificationHours" /> hours. If it has expired or didn't
+   arrive, choose **Send the link again** where the console asks for it.
+2. On the console's home page choose **Get your free address** (it's also on the **Mailboxes** page).
+3. Type the name you want. The console tells you as you type whether it's available.
+4. Set the **password** you'll sign in with: type one, or choose **Generate a strong password** and copy it. It's shown
+   only until you create the address.
+5. Choose **Get this address**. It's ready within a minute; then sign in to the webmail with the full address and that
+   password.
+
+Mail apps use [app passwords](/docs/clients/app-passwords) rather than this password.
+
+## Choosing a name
+
+- <Value of="platformAddressMin" /> to <Value of="platformAddressMax" /> characters: lowercase letters, numbers, dots,
+  hyphens and underscores. Capitals are fine to type; addresses are not case-sensitive.
+- Start and end with a letter or a number, and don't put two dots in a row.
+- Shorter names are held back for now.
+- Some names are reserved, such as `admin`, `support`, `postmaster`, `abuse`, `billing`, `security` and our own
+  names, so that nobody can pass themselves off as us. Look-alikes count too: `no.reply`, `post_master` or `admin2`
+  are refused, and so is any name containing our name.
+- Names are first come, first served. A name that was used once isn't given to anyone else, even after it's deleted:
+  mail meant for its old owner never reaches someone new. The account that had it can take it back.
+
+## What each plan includes
+
+- **Free:** <Value of="freePlatformAddresses" /> address at <Value of="productDomain" />.
+- **Plus and Supporter:** they count toward the account's mailboxes, up to <Value of="maxMailboxes" /> in all, next
+  to mailboxes on [your own domains](/docs/custom-domain). Add one from **Mailboxes → Add a mailbox** and choose our
+  domain in the list.
+
+<PlanTable />
+
+## Deleting your address
+
+You can restore a deleted address for <Value of="mailboxDeleteGraceDays" /> days, like any other mailbox (see
+[Mailboxes](/docs/mailboxes#delete-a-mailbox)); after that it and its mail are gone for good. The name stays retired:
+your account can take it again later, nobody else can.
+
+## If we created it for you
+
+Our staff can create your free address when you ask for help. They never choose its password: the account's owner
+sets it from the mailbox's **Password** tab. It's recorded in your account's [audit log](/docs/audit-log) as an
+Anhourtec staff action.
