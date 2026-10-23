@@ -45,6 +45,9 @@ built in the open; billing, abuse controls and the production deployment come ne
 
 **Works today (local development):**
 
+- **Free address** — every account can claim one free `you@anhourmail.com` address after confirming its email
+  (paid plans can hold more); names that would pass for system or staff addresses are reserved and a name is never
+  given out again.
 - **Console** — custom domains with guided DNS and live checks; mailboxes with a password set at creation (or
   generated), owner resets with step-up, storage, suspend, resume and delete with a 30-day restore window; aliases and masked aliases; people, invites and roles; an audit log;
   global search; staff pages for customer accounts; app passwords for mail apps (scoped to IMAP, SMTP, contacts
