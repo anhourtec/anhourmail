@@ -48,6 +48,14 @@ export const LIMITS = {
   // Mailbox passwords: an admin's reset (console) and a person's own change (webmail). Each one hashes with argon2id
   // and ends the mailbox's webmail sessions; fail closed (the change sets a credential).
   mailboxPassword: { limit: 10, windowSec: 3600, by: "caller", failMode: "closed" },
+  // Free platform addresses (ADR-0021; sign-up is open, so creation is the abuse surface): the availability check
+  // per caller, and creation per account and per client address on top of the route's own tier. All fail closed.
+  platformAddressCheck: { limit: 60, windowSec: 600, by: "caller", failMode: "closed" },
+  platformAddressCheckIp: { limit: 120, windowSec: 600, by: "ip", failMode: "closed" },
+  platformMailboxAccount: { limit: 3, windowSec: 86_400, by: "caller", failMode: "closed" },
+  platformMailboxIp: { limit: 5, windowSec: 86_400, by: "ip", failMode: "closed" },
+  // "Send the confirmation link again": each call emails the person's sign-in address.
+  emailVerification: { limit: 5, windowSec: 3600, by: "caller", failMode: "closed" },
   // Each call emails an outside address (forwarding confirmation); a per-mailbox daily cap applies in the service.
   forwardingVerify: { limit: 10, windowSec: 3600, by: "caller", failMode: "closed" },
 } as const satisfies Record<string, RateLimit>;

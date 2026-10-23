@@ -20,6 +20,11 @@ export type Plan = {
   payWhatYouWant: boolean;
   storageGb: number;
   customDomains: boolean;
+  /**
+   * Mailboxes on the platform domain (`name@anhourmail.com`) per account. A number caps them on their own (Free: one
+   * free address); `null` means they simply count toward `MAX_MAILBOXES` like any other mailbox (paid plans).
+   */
+  platformMailboxes: number | null;
   /** Other people can be invited into the account (family, a small group). Free accounts have one person. */
   addPeople: boolean;
   /** `null` = unlimited. */
@@ -40,6 +45,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     payWhatYouWant: false,
     storageGb: 10 * GB,
     customDomains: false,
+    platformMailboxes: 1,
     addPeople: false,
     aliases: 5,
     maskedAliases: 10,
@@ -54,6 +60,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     payWhatYouWant: false,
     storageGb: 30 * GB,
     customDomains: true,
+    platformMailboxes: null,
     addPeople: true,
     aliases: null,
     maskedAliases: null,
@@ -68,6 +75,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     payWhatYouWant: true,
     storageGb: 30 * GB,
     customDomains: true,
+    platformMailboxes: null,
     addPeople: true,
     aliases: null,
     maskedAliases: null,

@@ -44,6 +44,12 @@ export type SignInMethod = (typeof SIGN_IN_METHODS)[number];
 export const isSignInMethod = (v: unknown): v is SignInMethod =>
   typeof v === "string" && (SIGN_IN_METHODS as readonly string[]).includes(v);
 
+/**
+ * Hours a "confirm your email address" link works (sent at sign-up and on request from the console). Confirming it is
+ * what a free platform address needs (ADR-0021). The docs render it (`<Value of="emailVerificationHours" />`).
+ */
+export const EMAIL_VERIFICATION_HOURS = 24;
+
 /** Adding a passkey needs the person to have confirmed it's them (password or a code) this recently. */
 export const STEP_UP_MINUTES = 5;
 

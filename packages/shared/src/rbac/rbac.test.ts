@@ -121,4 +121,16 @@ describe("permission matrix invariants", () => {
     for (const r of ACCOUNT_ROLES) expect(accountRoleCan(r, "account.security.manage")).toBe(r === "owner");
     expect(isCritical("account.security.manage")).toBe(true);
   });
+
+  it("creating a platform-domain address in any account is the Global Administrator's only (critical)", () => {
+    const holders = PLATFORM_ROLES.filter((r) => platformRoleCan(r, "platform.mailbox.create"));
+    expect(holders).toEqual(["global_admin"]);
+    expect(isCritical("platform.mailbox.create")).toBe(true);
+  });
+
+  it("full IPs in the platform audit are the Global Administrator's only (critical)", () => {
+    expect(PLATFORM_ROLES.filter((r) => platformRoleCan(r, "platform.audit.full_ip"))).toEqual(["global_admin"]);
+    expect(platformRoleCan("reports_reader", "platform.audit.read")).toBe(true);
+    expect(isCritical("platform.audit.full_ip")).toBe(true);
+  });
 });

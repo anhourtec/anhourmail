@@ -57,12 +57,23 @@ export const PERMISSIONS = {
   "platform.accounts.read": { scope: "platform", description: "Look up customer accounts (never mail content)" },
   "platform.accounts.actAs": { scope: "platform", description: "Act as a customer, time-limited", critical: true },
   "platform.users.resetCredentials": { scope: "platform", description: "Reset a customer's password or 2FA" },
+  "platform.mailbox.create": {
+    scope: "platform",
+    description:
+      "Create a free platform-domain address in any customer account (no password: the account sets it; never while acting as)",
+    critical: true,
+  },
   "platform.invites.manage": { scope: "platform", description: "Send and resend invites" },
   "platform.mailflow.read": { scope: "platform", description: "Read mail-flow logs (metadata only)" },
   "platform.abuse.manage": { scope: "platform", description: "Work the abuse queue, restrict, suspend" },
   "platform.trust.manage": { scope: "platform", description: "Change trust tiers and sending limits", critical: true },
   "platform.billing.manage": { scope: "platform", description: "Plans, refunds, subscription state", critical: true },
   "platform.audit.read": { scope: "platform", description: "Read the platform audit log" },
+  "platform.audit.full_ip": {
+    scope: "platform",
+    description: "See full client IP addresses in the platform audit log (everyone else sees the network part)",
+    critical: true,
+  },
   "platform.reports.read": { scope: "platform", description: "Read dashboards and reports" },
 
   // --- account (inside one customer account)
@@ -188,12 +199,14 @@ export const PLATFORM_GRANTS: Readonly<Record<PlatformRole, readonly PlatformPer
     "platform.accounts.read",
     "platform.accounts.actAs",
     "platform.users.resetCredentials",
+    "platform.mailbox.create",
     "platform.invites.manage",
     "platform.mailflow.read",
     "platform.abuse.manage",
     "platform.trust.manage",
     "platform.billing.manage",
     "platform.audit.read",
+    "platform.audit.full_ip",
     "platform.reports.read",
   ],
   support_admin: [
