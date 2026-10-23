@@ -45,8 +45,8 @@ built in the open; billing, abuse controls and the production deployment come ne
 
 **Works today (local development):**
 
-- **Console** — custom domains with guided DNS and live checks; mailboxes with storage, suspend, resume and
-  delete with a 30-day restore window; aliases and masked aliases; people, invites and roles; an audit log;
+- **Console** — custom domains with guided DNS and live checks; mailboxes with a password set at creation (or
+  generated), owner resets with step-up, storage, suspend, resume and delete with a 30-day restore window; aliases and masked aliases; people, invites and roles; an audit log;
   global search; staff pages for customer accounts; app passwords for mail apps (scoped to IMAP, SMTP, contacts
   or mail over HTTPS, shown once); catch-all addresses on custom domains.
 - **Sign-in security** — two-factor sign-in with an authenticator app, recovery codes and passkeys; owners can
@@ -55,7 +55,7 @@ built in the open; billing, abuse controls and the production deployment come ne
   forwarded mail; HTML in a sandboxed frame with remote images blocked), writing, replying and forwarding with
   drafts and undo send, archive / delete / junk / move / pin, search, several mailboxes in one session, and
   contacts that also sync to phones and desktop apps over CardDAV, and settings for appearance, reading, writing
-  and signatures, automatic replies, confirmed forwarding and blocked senders.
+  and signatures, automatic replies, confirmed forwarding, blocked senders and changing the mailbox password.
 - **Engineering** — role-based access checked on every route, an append-only audit trail, rate limits on every
   endpoint, and a CI pipeline you can run locally with `npm run ci:local`.
 
