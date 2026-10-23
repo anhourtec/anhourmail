@@ -178,6 +178,8 @@ async function api<T>(path: string, init: RequestInit = {}, go: typeof fetch = p
   return body?.data as T;
 }
 
+const asState = (v: unknown): string => (typeof v === "string" ? v : "");
+
 /** `origin` "" (the default) means same-origin relative URLs, which is what the browser app uses. */
 export function createMailClient(origin = "") {
   /** Rows are conversations (keys are thread ids) or single messages (keys are email ids). */
@@ -410,6 +412,62 @@ export function createMailClient(origin = "") {
       return ((res.get("g")?.list ?? []) as Summary[]).sort((x, y) => x.receivedAt.localeCompare(y.receivedAt));
     },
 
+    /** A message's `Authentication-Results` headers, topmost first (for "mailed-by" and "signed-by"). */
+    async authHeaders(emailId: string): Promise<string[]> {
+      const a = await accountId();
+      const res = await call([
+        ["Email/get", { accountId: a, ids: [emailId], properties: ["header:Authentication-Results:all"] }, "g"],
+      ]);
+      const e = ((res.get("g")?.list ?? []) as Record<string, unknown>[])[0];
+      const v = e?.["header:Authentication-Results:all"];
+      return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+    },
+
+    /**
+     * The mail state for automatic refresh: with `since` null just the current state; otherwise what changed since
+     * then, with the newly created messages' summaries (for the new-mail sound). `reset` when the server can't say
+     * (the state is too old): the caller reloads everything.
+     */
+    async mailChanges(
+      since: string | null,
+    ): Promise<{ state: string; changed: boolean; created: Summary[]; reset: boolean }> {
+      const a = await accountId();
+      if (since === null) {
+        const res = await call([["Email/get", { accountId: a, ids: [], properties: ["id"] }, "g"]]);
+        return { state: asState(res.get("g")?.state), changed: false, created: [], reset: false };
+      }
+      try {
+        const res = await call([
+          ["Email/changes", { accountId: a, sinceState: since, maxChanges: 200 }, "c"],
+          [
+            "Email/get",
+            {
+              accountId: a,
+              "#ids": { resultOf: "c", name: "Email/changes", path: "/created" },
+              properties: SUMMARY,
+            },
+            "g",
+          ],
+        ]);
+        const c = res.get("c") ?? {};
+        const count = (k: string) => (Array.isArray(c[k]) ? (c[k] as unknown[]).length : 0);
+        const state = asState(c.newState) || since;
+        const changed = state !== since || count("created") + count("updated") + count("destroyed") > 0;
+        return {
+          state,
+          changed,
+          created: (res.get("g")?.list ?? []) as Summary[],
+          reset: c.hasMoreChanges === true,
+        };
+      } catch (err) {
+        if (err instanceof JmapError && err.type === "cannotCalculateChanges") {
+          const res = await call([["Email/get", { accountId: a, ids: [], properties: ["id"] }, "g"]]);
+          return { state: asState(res.get("g")?.state), changed: true, created: [], reset: true };
+        }
+        throw err;
+      }
+    },
+
     /** Sets or clears a keyword on messages. */
     async setKeyword(ids: string[], keyword: string, on: boolean): Promise<void> {
       await update(Object.fromEntries(ids.map((id) => [id, { [`keywords/${keyword}`]: on ? true : null }])));
@@ -445,6 +503,53 @@ export function createMailClient(origin = "") {
         ),
       );
       return before;
+    },
+
+    /**
+     * "Restore" from Trash: each message of these threads that is in Trash goes to the folder `target` picks for it
+     * (by its sender). Returns the previous memberships so it can be undone, and where messages went.
+     */
+    async restoreFromTrash(
+      threadIds: string[],
+      trashId: string,
+      target: (from: Address[] | null) => string | undefined,
+      keywords: Record<string, boolean | null> = {},
+    ): Promise<{ before: Record<string, Record<string, boolean>>; targets: string[] }> {
+      if (threadIds.length === 0) return { before: {}, targets: [] };
+      const a = await accountId();
+      const props = ["mailboxIds", "from"];
+      const res =
+        grouping === "messages"
+          ? await call([["Email/get", { accountId: a, ids: threadIds, properties: props }, "g"]])
+          : await call([
+              ["Thread/get", { accountId: a, ids: threadIds }, "t"],
+              [
+                "Email/get",
+                {
+                  accountId: a,
+                  "#ids": { resultOf: "t", name: "Thread/get", path: "/list/*/emailIds" },
+                  properties: props,
+                },
+                "g",
+              ],
+            ]);
+      const emails = (
+        (res.get("g")?.list ?? []) as { id: string; mailboxIds: Record<string, boolean>; from: Address[] | null }[]
+      ).filter((e) => e.mailboxIds[trashId]);
+      const kw = Object.fromEntries(Object.entries(keywords).map(([k, v]) => [`keywords/${k}`, v]));
+      const patches: Record<string, Record<string, unknown>> = {};
+      const targets = new Set<string>();
+      for (const e of emails) {
+        const to = target(e.from);
+        if (!to) continue;
+        targets.add(to);
+        patches[e.id] = { [`mailboxIds/${trashId}`]: null, [`mailboxIds/${to}`]: true, ...kw };
+      }
+      await update(patches);
+      return {
+        before: Object.fromEntries(emails.filter((e) => patches[e.id]).map((e) => [e.id, e.mailboxIds])),
+        targets: [...targets],
+      };
     },
 
     /** Puts messages back where they were (undo for a move). */

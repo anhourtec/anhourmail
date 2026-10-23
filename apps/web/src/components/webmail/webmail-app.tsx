@@ -3,6 +3,7 @@
 
 import {
   Archive,
+  ArchiveRestore,
   CheckCheck,
   Ellipsis,
   Flag,
@@ -16,6 +17,8 @@ import {
   RotateCw,
   Search,
   ShieldAlert,
+  ShieldCheck,
+  ShieldX,
   SlidersHorizontal,
   Trash2,
   X,
@@ -35,6 +38,7 @@ import { ContactsView } from "./contacts-view";
 import { AddMailboxDialog, ConfirmDialog, Modal } from "./dialogs";
 import {
   type ComposeMode,
+  displayName,
   folderLabel,
   folderTree,
   parseSearch,
@@ -59,6 +63,8 @@ import {
 } from "./mail-client";
 import { iconButtonClass, Menu, type MenuEntry } from "./menu";
 import { MessageList } from "./message-list";
+import { restoreTarget } from "./conversation";
+import { newMailToAnnounce, playChime, pollDelay, shouldPoll, tabTitle } from "./sync";
 import { Reader, type ReaderAction, type ReaderActions } from "./reader";
 import { type Mailboxes, Sidebar } from "./sidebar";
 import { ToastHost, useToasts } from "./toasts";
@@ -99,7 +105,7 @@ export const SHORTCUTS: [string, string][] = [
   ["r / a / f", "Reply / reply all / forward"],
   ["e", "Archive"],
   ["#", "Delete"],
-  ["!", "Report junk"],
+  ["!", "Report spam (in Junk: not spam)"],
   ["s", "Add to or remove from Priority"],
   ["p", "Pin or unpin"],
   ["x", "Select"],
@@ -131,6 +137,8 @@ type AppProps = {
   initialCollapsed: boolean;
   /** This mailbox's saved preferences (read on the server, so the first paint already follows them). */
   initialPreferences: WebmailPreferences;
+  /** Our mail server's authserv-ids (only its Authentication-Results are trusted in message details). */
+  authservIds?: string[];
 };
 
 export function WebmailApp(props: AppProps) {
@@ -141,7 +149,15 @@ export function WebmailApp(props: AppProps) {
   );
 }
 
-function Mailroom({ username, signInHref, helpHref, consoleHref, initialCollapsed, initialPreferences }: AppProps) {
+function Mailroom({
+  username,
+  signInHref,
+  helpHref,
+  consoleHref,
+  initialCollapsed,
+  initialPreferences,
+  authservIds = [],
+}: AppProps) {
   const client = useMemo(() => {
     const c = createMailClient();
     c.setGrouping(initialPreferences.grouping);
@@ -177,6 +193,11 @@ function Mailroom({ username, signInHref, helpHref, consoleHref, initialCollapse
   const [priorityCount, setPriorityCount] = useState(0);
   const [mailboxes, setMailboxes] = useState<Mailboxes>({ active: username, others: [] });
   const [identities, setIdentities] = useState<Identity[]>([]);
+  /** Your own addresses (lowercase): the mailbox and its sender identities. */
+  const mine = useMemo(
+    () => new Set([username, ...identities.map((i) => i.email)].map((e) => e.toLowerCase())),
+    [username, identities],
+  );
   const [contacts, setContacts] = useState<Address[]>([]);
   const [section, setSection] = useState<"mail" | "contacts">("mail");
   const [book, setBook] = useState<ContactsData | null>(null);
@@ -398,18 +419,85 @@ function Mailroom({ username, signInHref, helpHref, consoleHref, initialCollapse
     void reload({ keep: true });
   }, [loadFolders, reload]);
 
-  // Until push lands: refresh when the tab comes back, and a 5-minute safety resync.
+  // Automatic refresh (until push lands): one cheap Email/changes call every 30 s while the tab is visible, at once
+  // when it becomes visible, gains focus or comes back online, backing off after errors. Only a real change reloads.
+  const syncRefs = useRef({ refresh, signedOut, roles, mine, prefs });
   useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === "visible") refresh();
+    syncRefs.current = { refresh, signedOut, roles, mine, prefs };
+  });
+  useEffect(() => {
+    let state: string | null = null;
+    let failures = 0;
+    let timer: number | undefined;
+    let running = false;
+    const life = { stopped: false };
+    const stoppedNow = () => life.stopped;
+    const tick = async () => {
+      window.clearTimeout(timer);
+      if (life.stopped || running || !shouldPoll(document.visibilityState, navigator.onLine)) return;
+      running = true;
+      try {
+        const first = state === null;
+        const r = await client.mailChanges(state);
+        state = r.state;
+        failures = 0;
+        if (!first && r.changed) {
+          const ref = syncRefs.current;
+          ref.refresh();
+          const fresh = newMailToAnnounce(r.created, {
+            inboxId: ref.roles.inbox,
+            junkId: ref.roles.junk,
+            mine: ref.mine,
+            firstCheck: first,
+          });
+          if (fresh.length > 0) {
+            if (ref.prefs.newMailSound) playChime();
+            if (
+              ref.prefs.desktopNotifications &&
+              typeof Notification !== "undefined" &&
+              Notification.permission === "granted" &&
+              !document.hasFocus()
+            ) {
+              const who = fresh[0]?.from?.[0];
+              new Notification(who ? displayName(who) : "New message", {
+                body: fresh.length > 1 ? `${String(fresh.length)} new messages` : "New message",
+                tag: "anhourmail-new-mail",
+              });
+            }
+          }
+        }
+      } catch (err) {
+        if (err instanceof SignedOutError) {
+          syncRefs.current.signedOut();
+          return;
+        }
+        failures += 1;
+      } finally {
+        running = false;
+      }
+      // The page may have closed while the check was out.
+      if (!stoppedNow()) timer = window.setTimeout(() => void tick(), pollDelay(failures));
     };
-    document.addEventListener("visibilitychange", onVisible);
-    const t = window.setInterval(refresh, 5 * 60_000);
+    const wake = () => void tick();
+    document.addEventListener("visibilitychange", wake);
+    window.addEventListener("focus", wake);
+    window.addEventListener("online", wake);
+    void tick();
     return () => {
-      document.removeEventListener("visibilitychange", onVisible);
-      window.clearInterval(t);
+      life.stopped = true;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", wake);
+      window.removeEventListener("focus", wake);
+      window.removeEventListener("online", wake);
     };
-  }, [refresh]);
+  }, [client]);
+
+  // The tab title shows the view and how much unread mail the Inbox has.
+  const inboxUnread = folders?.find((f) => f.role === "inbox")?.unreadEmails ?? 0;
+  const viewName = currentFolder ? folderLabel(currentFolder) : view?.kind === "priority" ? "Priority" : null;
+  useEffect(() => {
+    document.title = tabTitle(viewName, inboxUnread);
+  }, [viewName, inboxUnread]);
 
   // ---- preferences --------------------------------------------------------------------------------------
 
@@ -658,8 +746,75 @@ function Mailroom({ username, signInHref, helpHref, consoleHref, initialCollapse
           deleteForever(threadIds);
           break;
         case "junk":
-          void moveThreads(threadIds, roles.junk, "Reported as junk.", { $junk: true, $notjunk: null });
+          void moveThreads(threadIds, roles.junk, "Reported as spam.", { $junk: true, $notjunk: null });
           break;
+        case "phishing":
+          void moveThreads(threadIds, roles.junk, "Reported as phishing.", {
+            $junk: true,
+            $notjunk: null,
+            $phishing: true,
+          });
+          break;
+        case "restore": {
+          // Each message goes back by its sender: your own to Sent, everything else to the Inbox.
+          const trashId = roles.trash;
+          if (!trashId || threadIds.length === 0) break;
+          dropThreads(new Set(threadIds));
+          void (async () => {
+            try {
+              const { before, targets } = await client.restoreFromTrash(threadIds, trashId, (from) =>
+                restoreTarget(from, mine, roles),
+              );
+              void loadFolders();
+              void reload({ keep: true });
+              const names = targets.map((id) => {
+                const f = folders?.find((x) => x.id === id);
+                return f ? folderLabel(f) : "Inbox";
+              });
+              toasts.show({
+                message: `Restored to ${names.join(" and ") || "Inbox"}.`,
+                action: {
+                  label: "Undo",
+                  onClick: () => {
+                    void client
+                      .restore(before)
+                      .then(() => {
+                        refresh();
+                      })
+                      .catch((err: unknown) => {
+                        fail(err);
+                      });
+                  },
+                },
+              });
+            } catch (err) {
+              fail(err);
+              void reload({ keep: true });
+            }
+          })();
+          break;
+        }
+        case "block": {
+          const address = action.address;
+          void (async () => {
+            try {
+              const s = await client.settings();
+              const junk = s.rules.junk;
+              if (!junk.blocked.includes(address)) {
+                await client.saveJunk(s.accountId, { ...junk, blocked: [...junk.blocked, address] });
+              }
+              if (currentFolder?.role === "junk") toasts.show({ message: `Blocked ${address}.` });
+              else
+                await moveThreads(threadIds, roles.junk, `Blocked ${address}. Moved to Junk.`, {
+                  $junk: true,
+                  $notjunk: null,
+                });
+            } catch (err) {
+              fail(err, "Couldn't block this sender. Try again.");
+            }
+          })();
+          break;
+        }
         case "notJunk":
           void moveThreads(threadIds, roles.inbox, "Moved to Inbox.", { $notjunk: true, $junk: null });
           break;
@@ -672,7 +827,21 @@ function Mailroom({ username, signInHref, helpHref, consoleHref, initialCollapse
           break;
       }
     },
-    [moveThreads, roles, currentFolder, deleteForever, folders],
+    [
+      moveThreads,
+      roles,
+      currentFolder,
+      deleteForever,
+      folders,
+      mine,
+      client,
+      toasts,
+      fail,
+      dropThreads,
+      loadFolders,
+      reload,
+      refresh,
+    ],
   );
 
   // ---- composing ----------------------------------------------------------------------------------------
@@ -1356,19 +1525,47 @@ function Mailroom({ username, signInHref, helpHref, consoleHref, initialCollapse
                   <X className="size-4" aria-hidden />
                 </button>
                 <span className="min-w-0 flex-1 truncate px-1 font-medium text-[13px]">{checked.size} selected</span>
-                {currentFolder?.role !== "archive" && (
-                  <Tooltip label="Archive" shortcut="e">
+                {currentFolder?.role === "trash" ? (
+                  <Tooltip label="Restore">
                     <button
                       type="button"
                       onClick={() => {
-                        act(t, { kind: "archive" });
+                        act(t, { kind: "restore" });
                       }}
-                      aria-label="Archive selected"
+                      aria-label="Restore selected"
                       className={iconButtonClass}
                     >
-                      <Archive className="size-4" aria-hidden />
+                      <ArchiveRestore className="size-4" aria-hidden />
                     </button>
                   </Tooltip>
+                ) : currentFolder?.role === "junk" ? (
+                  <Tooltip label="Not spam" shortcut="!">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        act(t, { kind: "notJunk" });
+                      }}
+                      aria-label="Not spam (selected)"
+                      className={iconButtonClass}
+                    >
+                      <ShieldCheck className="size-4" aria-hidden />
+                    </button>
+                  </Tooltip>
+                ) : (
+                  currentFolder?.role !== "archive" && (
+                    <Tooltip label="Archive" shortcut="e">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          act(t, { kind: "archive" });
+                        }}
+                        aria-label="Archive selected"
+                        className={iconButtonClass}
+                      >
+                        <Archive className="size-4" aria-hidden />
+                      </button>
+                    </Tooltip>
+                  )
                 )}
                 <Tooltip label="Delete" shortcut="#">
                   <button
@@ -1393,19 +1590,26 @@ function Mailroom({ username, signInHref, helpHref, consoleHref, initialCollapse
                     { label: "Unpin", icon: Pin, onSelect: () => void bulkKeyword(t, "$pinned", false) },
                     currentFolder?.role === "junk"
                       ? {
-                          label: "Not junk",
-                          icon: ShieldAlert,
+                          label: "Not spam",
+                          icon: ShieldCheck,
                           onSelect: () => {
                             act(t, { kind: "notJunk" });
                           },
                         }
                       : {
-                          label: "Report junk",
+                          label: "Report spam",
                           icon: ShieldAlert,
                           onSelect: () => {
                             act(t, { kind: "junk" });
                           },
                         },
+                    {
+                      label: "Report phishing",
+                      icon: ShieldX,
+                      onSelect: () => {
+                        act(t, { kind: "phishing" });
+                      },
+                    },
                     { separator: true },
                     { heading: "Move to" },
                     ...bulkMove,
@@ -1518,6 +1722,8 @@ function Mailroom({ username, signInHref, helpHref, consoleHref, initialCollapse
                 threadId={openRow?.threadId ?? openThread}
                 onlyEmailId={prefs.grouping === "messages" ? (openRow?.id ?? openThread) : undefined}
                 markRead={{ mode: prefs.markRead, delay: prefs.markReadDelay }}
+                mine={mine}
+                authservIds={authservIds}
                 defaultReply={prefs.defaultReply}
                 folders={folders ?? []}
                 currentFolder={currentFolder}

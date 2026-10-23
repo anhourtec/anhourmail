@@ -7,7 +7,9 @@ import { SIDEBAR_COOKIE, WebmailApp } from "@/components/webmail/webmail-app";
 import { env } from "@/server/env";
 import { settingsService, webmail, webmailCookieName } from "@/server/webmail/instance";
 import { DEFAULT_PREFERENCES } from "@anhourmail/shared/webmail";
+import { trustedAuthservIds } from "@/server/webmail/original";
 import { webmailBasePath } from "@/server/webmail/paths";
+import { platform } from "@/server/platform";
 import { WebmailBlockedError } from "@/server/webmail/service";
 
 export const metadata: Metadata = { title: "Webmail" };
@@ -51,6 +53,7 @@ export default async function WebmailPage() {
       consoleHref={mailbox ? `${app}/accounts/${mailbox.accountId}/aliases` : app}
       initialCollapsed={jar.get(SIDEBAR_COOKIE)?.value === "collapsed"}
       initialPreferences={preferences}
+      authservIds={trustedAuthservIds(env().MAIL_AUTHSERV_ID, platform().hosts.mx, env().NODE_ENV === "production")}
     />
   );
 }

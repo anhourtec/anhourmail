@@ -2,6 +2,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  ago as agoText,
+  messageDate,
   dateGroup,
   fileKind,
   fullDate,
@@ -152,5 +154,16 @@ describe("date style and date headers", () => {
     setDateStyle({ locale: "en-US", timeZone: "UTC", hourCycle: "h12" });
     expect(fullDate("2026-10-22T21:30:00Z")).toMatch(/Oct 22, 2026.*9:30\sPM/);
     expect(listDate("2026-10-22T21:30:00Z", new Date("2026-10-22T22:00:00Z"))).toMatch(/9:30\sPM/);
+  });
+});
+
+describe("conversation dates", () => {
+  it("writes the date with how long ago it was", () => {
+    const now = new Date("2026-10-23T12:00:00Z");
+    expect(agoText("2026-10-23T11:59:30Z", now)).toBe("just now");
+    expect(agoText("2026-10-18T12:00:00Z", now)).toBe("5 days ago");
+    expect(agoText("2026-06-23T12:00:00Z", now)).toBe("4 months ago");
+    expect(messageDate("2026-10-18T12:00:00Z", now)).toMatch(/\(5 days ago\)$/);
+    expect(messageDate("2025-10-18T12:00:00Z", now)).toMatch(/2025/);
   });
 });

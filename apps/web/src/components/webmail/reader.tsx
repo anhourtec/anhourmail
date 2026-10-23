@@ -3,9 +3,14 @@
 
 import {
   Archive,
+  ArchiveRestore,
   ArrowLeft,
+  Ban,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Download,
   EllipsisVertical,
   FileCode,
@@ -20,9 +25,9 @@ import {
   Printer,
   Reply,
   ReplyAll,
-  Send,
   ShieldAlert,
   ShieldCheck,
+  ShieldX,
   Trash2,
   UserPlus,
   X,
@@ -31,14 +36,15 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { Bone, ReaderSkeleton } from "@anhourmail/ui/skeletons";
 
+import { authResults, senderChecks } from "@/server/webmail/original";
 import type { Address, MessageView } from "@/server/webmail/view";
 
 import { Tooltip } from "@/components/tooltip";
 
-import { displayName, folderLabel, folderTree, fullDate, initials, subjectOf } from "./format";
+import { defaultExpanded, fromHere, isMine, recipientLabel, senderLabel } from "./conversation";
+import { displayName, folderLabel, folderTree, fullDate, initials, messageDate, subjectOf } from "./format";
 import type { Folder, MailClient, Summary } from "./mail-client";
 import { iconButtonClass, Menu, type MenuEntry } from "./menu";
-import { Modal } from "./dialogs";
 import { MessageContent } from "./message-body";
 import { SenderAvatar } from "./message-list";
 
@@ -47,7 +53,10 @@ export type ReaderAction =
   | { kind: "trash" }
   | { kind: "deleteForever" }
   | { kind: "junk" }
+  | { kind: "phishing" }
   | { kind: "notJunk" }
+  | { kind: "restore" }
+  | { kind: "block"; address: string }
   | { kind: "move"; to: string }
   | { kind: "reply" | "replyAll" | "forward"; message: MessageView; inline: boolean };
 
@@ -58,11 +67,13 @@ export type ReaderActions = {
   reply: (mode: "reply" | "replyAll" | "forward") => void;
 };
 
-function AddressLine({ label, list }: { label: string; list: Address[] }) {
-  if (list.length === 0) return null;
+/** Where the webmail's pages live on this origin ("" on the webmail host, "/webmail" on a dev bare host). */
+const pagesBase = () =>
+  typeof window !== "undefined" && window.location.pathname.startsWith("/webmail") ? "/webmail" : "";
+
+function AddressList({ list }: { list: Address[] }) {
   return (
-    <p className="truncate text-[12.5px] text-muted-foreground">
-      {label}{" "}
+    <>
       {list.map((a, i) => (
         <span key={`${a.email}-${String(i)}`}>
           {i > 0 && ", "}
@@ -70,7 +81,7 @@ function AddressLine({ label, list }: { label: string; list: Address[] }) {
           {a.name ? <span className="font-mono"> &lt;{a.email}&gt;</span> : null}
         </span>
       ))}
-    </p>
+    </>
   );
 }
 
@@ -84,10 +95,271 @@ function BodySkeleton() {
   );
 }
 
+/** "mailed-by" and "signed-by", from our mail server's own Authentication-Results (fetched when details open). */
+function SenderChecks({
+  client,
+  emailId,
+  authservIds,
+}: {
+  client: MailClient;
+  emailId: string;
+  authservIds: readonly string[];
+}) {
+  const [checks, setChecks] = useState<{ mailedBy: string | null; signedBy: string | null } | null>(null);
+  useEffect(() => {
+    let live = true;
+    client
+      .authHeaders(emailId)
+      .then((values) => {
+        if (!live) return;
+        const headers = values.map((value) => ({ name: "Authentication-Results", value: value.trim() }));
+        setChecks(senderChecks(authResults(headers, authservIds)));
+      })
+      .catch(() => {
+        if (live) setChecks({ mailedBy: null, signedBy: null });
+      });
+    return () => {
+      live = false;
+    };
+  }, [client, emailId, authservIds]);
+  if (!checks) {
+    return (
+      <>
+        <dt>mailed-by</dt>
+        <dd>
+          <Bone className="h-3 w-24" />
+        </dd>
+      </>
+    );
+  }
+  return (
+    <>
+      {checks.mailedBy && (
+        <>
+          <dt>mailed-by</dt>
+          <dd className="font-mono">{checks.mailedBy}</dd>
+        </>
+      )}
+      {checks.signedBy && (
+        <>
+          <dt>signed-by</dt>
+          <dd className="font-mono">{checks.signedBy}</dd>
+        </>
+      )}
+    </>
+  );
+}
+
+/** One expanded message of a conversation: sender card, recipients with details, actions, body. */
+function MessageCard({
+  summary,
+  view,
+  client,
+  mine,
+  authservIds,
+  paneHeight,
+  menu,
+  knownAddresses,
+  onAddContact,
+  onToggleFlag,
+  onReply,
+  onCollapse,
+  onComposeTo,
+  onViewFull,
+  collapsible,
+}: {
+  summary: Summary;
+  view: MessageView | "missing" | undefined;
+  client: MailClient;
+  mine: ReadonlySet<string>;
+  authservIds: readonly string[];
+  paneHeight: number;
+  menu: MenuEntry[];
+  knownAddresses: ReadonlySet<string>;
+  onAddContact: (person: Address) => void;
+  onToggleFlag: () => void;
+  onReply: () => void;
+  onCollapse: () => void;
+  onComposeTo: (address: string) => void;
+  onViewFull: () => void;
+  collapsible: boolean;
+}) {
+  const [details, setDetails] = useState(false);
+  const from = summary.from?.[0];
+  const own = isMine(from, mine);
+  const flagged = summary.keywords.$flagged === true;
+  const loaded = view && view !== "missing" ? view : null;
+  return (
+    <article aria-label={`Message from ${senderLabel(from, mine)}`} className="flex flex-col gap-4 px-3 py-3">
+      <div className="flex items-start gap-3">
+        <SenderAvatar email={from?.email} label={initials(from)} size="lg" />
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2">
+            {collapsible ? (
+              <button
+                type="button"
+                onClick={onCollapse}
+                aria-expanded
+                className="rounded font-medium text-[14px] hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {senderLabel(from, mine)}
+              </button>
+            ) : (
+              <span className="font-medium text-[14px]">{senderLabel(from, mine)}</span>
+            )}
+            {from && (
+              <span className="truncate font-mono text-[12.5px] text-muted-foreground">&lt;{from.email}&gt;</span>
+            )}
+            {from && !own && !knownAddresses.has(from.email.toLowerCase()) && (
+              <button
+                type="button"
+                onClick={() => {
+                  onAddContact(from);
+                }}
+                className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-[12px] text-primary hover:bg-accent"
+              >
+                <UserPlus className="size-3.5" aria-hidden /> Add to contacts
+              </button>
+            )}
+          </div>
+          {loaded ? (
+            <button
+              type="button"
+              aria-expanded={details}
+              onClick={() => {
+                setDetails((d) => !d);
+              }}
+              className="inline-flex w-fit items-center gap-0.5 rounded text-[12.5px] text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {recipientLabel(loaded.to, loaded.cc, mine)}
+              <ChevronDown className={`size-3.5 transition-transform ${details ? "rotate-180" : ""}`} aria-hidden />
+              <span className="sr-only">Show details</span>
+            </button>
+          ) : (
+            <Bone className="mt-1 h-3 w-32" />
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <span className="mr-1 hidden text-[12px] text-muted-foreground sm:inline">
+            {messageDate(summary.receivedAt)}
+          </span>
+          <Tooltip label={flagged ? "Remove from Priority" : "Add to Priority"}>
+            <button
+              type="button"
+              onClick={onToggleFlag}
+              aria-label="Priority"
+              aria-pressed={flagged}
+              className={iconButtonClass}
+            >
+              <Flag
+                className={`size-4 ${flagged ? "fill-current text-[rgb(var(--am-status-warning-bg))]" : ""}`}
+                aria-hidden
+              />
+            </button>
+          </Tooltip>
+          <Tooltip label="Reply">
+            <button type="button" onClick={onReply} disabled={!loaded} aria-label="Reply" className={iconButtonClass}>
+              <Reply className="size-4" aria-hidden />
+            </button>
+          </Tooltip>
+          <Menu label="Message actions" icon={EllipsisVertical} items={menu} />
+        </div>
+      </div>
+      <p className="-mt-3 pl-[3.25rem] text-[12px] text-muted-foreground sm:hidden">
+        {messageDate(summary.receivedAt)}
+      </p>
+
+      {details && loaded && (
+        <dl
+          aria-label="Message details"
+          className="ml-[3.25rem] grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-lg border bg-muted/40 px-3 py-2 text-[12.5px] [&>dt]:text-muted-foreground"
+        >
+          <dt>from</dt>
+          <dd className="break-words">
+            <AddressList list={loaded.from} />
+          </dd>
+          <dt>to</dt>
+          <dd className="break-words">
+            <AddressList list={loaded.to} />
+          </dd>
+          {loaded.cc.length > 0 && (
+            <>
+              <dt>cc</dt>
+              <dd className="break-words">
+                <AddressList list={loaded.cc} />
+              </dd>
+            </>
+          )}
+          <dt>date</dt>
+          <dd>{fullDate(loaded.sentAt ?? loaded.receivedAt)}</dd>
+          <dt>subject</dt>
+          <dd className="break-words">{subjectOf(loaded.subject)}</dd>
+          <SenderChecks client={client} emailId={summary.id} authservIds={authservIds} />
+        </dl>
+      )}
+
+      {view === undefined ? (
+        <BodySkeleton />
+      ) : view === "missing" ? (
+        <p className="am-small">This message is no longer here.</p>
+      ) : (
+        <MessageContent
+          view={view}
+          client={client}
+          paneHeight={paneHeight}
+          onCompose={onComposeTo}
+          onViewFull={onViewFull}
+        />
+      )}
+    </article>
+  );
+}
+
+/** An earlier message of a conversation, folded to one line; click to expand it. */
+function CollapsedRow({
+  summary,
+  mine,
+  onExpand,
+}: {
+  summary: Summary;
+  mine: ReadonlySet<string>;
+  onExpand: () => void;
+}) {
+  const from = summary.from?.[0];
+  const unread = summary.keywords.$seen !== true;
+  return (
+    <button
+      type="button"
+      aria-expanded={false}
+      onClick={onExpand}
+      className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+    >
+      <SenderAvatar email={from?.email} label={initials(from)} size="sm" />
+      <span className={`w-24 shrink-0 truncate text-[13px] sm:w-36 ${unread ? "font-medium" : ""}`}>
+        {senderLabel(from, mine)}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted-foreground">{summary.preview}</span>
+      {summary.hasAttachment && (
+        <Paperclip className="size-3.5 shrink-0 text-muted-foreground" aria-label="Has attachments" />
+      )}
+      {summary.keywords.$flagged === true && (
+        <Flag
+          className="size-3.5 shrink-0 fill-current text-[rgb(var(--am-status-warning-bg))]"
+          aria-label="Priority"
+        />
+      )}
+      <span className="hidden shrink-0 text-[12px] text-muted-foreground md:inline">
+        {messageDate(summary.receivedAt)}
+      </span>
+    </button>
+  );
+}
+
 /**
- * Reading pane for one conversation: toolbar, subject and date, the conversation strip (when there is more than one
- * message), the chosen message with its sender card, attachments, blocked-image notice and body, and an inline reply
- * box. Opening it marks the conversation read. On phones the main actions sit in a bottom bar.
+ * Reading pane for one conversation: toolbar, subject with folder chips, then every message oldest first — earlier
+ * ones folded to a line, the newest and any unread ones expanded (bodies load when a message is expanded) — and
+ * Reply / Reply all / Forward for the last message at the bottom. Opening it marks the conversation read. On phones
+ * the main actions sit in a bottom bar.
  */
 export function Reader({
   client,
@@ -109,6 +381,8 @@ export function Reader({
   onAddContact,
   registerActions,
   onlyEmailId,
+  mine = new Set<string>(),
+  authservIds = [],
   markRead = { mode: "open", delay: 5 },
   defaultReply = "reply",
 }: {
@@ -116,6 +390,10 @@ export function Reader({
   threadId: string;
   /** Show just this message of the thread (the list isn't grouping conversations). */
   onlyEmailId?: string | undefined;
+  /** The signed-in person's own addresses (lowercase): their messages show as "me". */
+  mine?: ReadonlySet<string>;
+  /** Our mail server's authserv-ids: only its Authentication-Results are trusted for "mailed-by" / "signed-by". */
+  authservIds?: readonly string[];
   /** When opened mail is marked read: at once, after `delay` seconds, or never (a setting). */
   markRead?: { mode: "open" | "delay" | "never"; delay: number };
   /** What the Reply button and `r` do (a setting). */
@@ -127,7 +405,7 @@ export function Reader({
   hiddenMailboxIds: string[];
   canPrev: boolean;
   canNext: boolean;
-  /** An inline reply composer, shown at the bottom instead of the reply box. */
+  /** An inline reply composer, shown at the bottom instead of the reply buttons. */
   inlineComposer: ReactNode;
   onPrev: () => void;
   onNext: () => void;
@@ -143,10 +421,9 @@ export function Reader({
   registerActions: (a: ReaderActions | null) => void;
 }) {
   const [thread, setThread] = useState<Summary[] | null>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [views, setViews] = useState<Record<string, MessageView | "missing">>({});
   const [error, setError] = useState<string | null>(null);
-  const [original, setOriginal] = useState<{ text: string; cut: boolean } | "loading" | null>(null);
   // The reading pane's height: an HTML message frame fills it (the frame can't measure its own content).
   const pane = useRef<HTMLDivElement>(null);
   const [paneHeight, setPaneHeight] = useState(640);
@@ -174,8 +451,7 @@ export function Reader({
         const one = onlyEmailId ? shown.filter((e) => e.id === onlyEmailId) : [];
         const list = one.length > 0 ? one : shown;
         setThread(list);
-        // Open the newest message that isn't an unsent draft (a draft reply stays listed in the conversation).
-        setExpandedId(list.filter((e) => e.keywords.$draft !== true).at(-1)?.id ?? list.at(-1)?.id ?? null);
+        setExpanded(defaultExpanded(list));
         const unread = list.filter((e) => e.keywords.$seen !== true).map((e) => e.id);
         const markSeen = () => {
           if (!live) return;
@@ -208,33 +484,39 @@ export function Reader({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per thread
   }, [threadId]);
 
+  // Bodies load lazily: only for expanded messages, once each.
   useEffect(() => {
-    if (!expandedId || views[expandedId] !== undefined) return;
+    const missing = [...expanded].filter((id) => views[id] === undefined);
+    if (missing.length === 0) return;
     let live = true;
-    client
-      .message(expandedId)
-      .then((v) => {
-        if (live) setViews((m) => ({ ...m, [expandedId]: v ?? "missing" }));
-      })
-      .catch((err: unknown) => {
-        if (!live) return;
-        if (err instanceof Error && err.name === "SignedOutError") onSignedOut();
-        else setError("This message couldn't be loaded.");
-      });
+    for (const id of missing) {
+      client
+        .message(id)
+        .then((v) => {
+          if (live) setViews((m) => ({ ...m, [id]: v ?? "missing" }));
+        })
+        .catch((err: unknown) => {
+          if (!live) return;
+          if (err instanceof Error && err.name === "SignedOutError") onSignedOut();
+          else setError("This message couldn't be loaded.");
+        });
+    }
     return () => {
       live = false;
     };
-  }, [expandedId, views, client, onSignedOut]);
+  }, [expanded, views, client, onSignedOut]);
 
-  const expanded = thread?.find((e) => e.id === expandedId) ?? null;
-  const view = expandedId ? views[expandedId] : undefined;
-  const loaded = view && view !== "missing" ? view : null;
-  const flagged = expanded?.keywords.$flagged === true;
-  const read = expanded?.keywords.$seen === true;
+  // The message toolbar actions and shortcuts act on: the newest message that isn't an unsent draft.
+  const current = thread ? (thread.filter((e) => e.keywords.$draft !== true).at(-1) ?? thread.at(-1) ?? null) : null;
+  const currentView = current ? views[current.id] : undefined;
+  const loaded = currentView && currentView !== "missing" ? currentView : null;
+  const flagged = current?.keywords.$flagged === true;
+  const read = current?.keywords.$seen === true;
   const pinned = thread?.some((e) => e.keywords.$pinned === true) ?? false;
   const role = currentFolder?.role ?? null;
   const inJunk = role === "junk";
   const inTrash = role === "trash";
+  const allExpanded = thread !== null && thread.length > 0 && thread.every((e) => expanded.has(e.id));
 
   const setKeyword = (ids: string[], keyword: string, on: boolean) => {
     if (ids.length === 0) return;
@@ -249,14 +531,22 @@ export function Reader({
     });
   };
 
+  const replyWith = (view: MessageView | null, mode: "reply" | "replyAll" | "forward", inline = false) => {
+    if (view) onAction({ kind: mode, message: view, inline });
+  };
   const reply = (mode: "reply" | "replyAll" | "forward", inline = false) => {
-    if (loaded) onAction({ kind: mode, message: loaded, inline });
+    replyWith(loaded, mode, inline);
+  };
+
+  const expandAll = (on: boolean) => {
+    if (!thread) return;
+    setExpanded(on ? new Set(thread.map((e) => e.id)) : new Set(current ? [current.id] : []));
   };
 
   useEffect(() => {
     registerActions({
       toggleFlag: () => {
-        if (expanded) setKeyword([expanded.id], "$flagged", !flagged);
+        if (current) setKeyword([current.id], "$flagged", !flagged);
       },
       togglePin: () => {
         if (thread)
@@ -267,7 +557,7 @@ export function Reader({
           );
       },
       setRead: (r: boolean) => {
-        if (expanded) setKeyword([expanded.id], "$seen", r);
+        if (current) setKeyword([current.id], "$seen", r);
       },
       reply: (mode) => {
         reply(mode === "reply" ? defaultReply : mode);
@@ -278,45 +568,141 @@ export function Reader({
     };
   });
 
+  /** The conventional message menu: answer · delete and unread · sender and spam · print, download, source. */
+  const messageMenu = (e: Summary): MenuEntry[] => {
+    const v = views[e.id];
+    const view = v && v !== "missing" ? v : null;
+    const sender = e.from?.[0];
+    const blockable = sender && !isMine(sender, mine) ? sender.email.toLowerCase() : null;
+    return [
+      {
+        label: "Reply",
+        icon: Reply,
+        disabled: !view,
+        onSelect: () => {
+          replyWith(view, "reply");
+        },
+      },
+      {
+        label: "Reply all",
+        icon: ReplyAll,
+        disabled: !view,
+        onSelect: () => {
+          replyWith(view, "replyAll");
+        },
+      },
+      {
+        label: "Forward",
+        icon: Forward,
+        disabled: !view,
+        onSelect: () => {
+          replyWith(view, "forward");
+        },
+      },
+      { separator: true },
+      {
+        label: inTrash || inJunk ? "Delete forever" : "Delete",
+        icon: Trash2,
+        danger: true,
+        onSelect: () => {
+          onAction(inTrash || inJunk ? { kind: "deleteForever" } : { kind: "trash" });
+        },
+      },
+      {
+        label: "Mark unread from here",
+        icon: Mail,
+        onSelect: () => {
+          if (!thread) return;
+          setKeyword(fromHere(thread, e.id), "$seen", false);
+          onClose();
+        },
+      },
+      { separator: true },
+      ...(blockable
+        ? [
+            {
+              label: `Block "${blockable}"`,
+              icon: Ban,
+              onSelect: () => {
+                onAction({ kind: "block", address: blockable });
+              },
+            },
+          ]
+        : []),
+      inJunk
+        ? {
+            label: "Not spam",
+            icon: ShieldCheck,
+            onSelect: () => {
+              onAction({ kind: "notJunk" });
+            },
+          }
+        : {
+            label: "Report spam",
+            icon: ShieldAlert,
+            onSelect: () => {
+              onAction({ kind: "junk" });
+            },
+          },
+      {
+        label: "Report phishing",
+        icon: ShieldX,
+        onSelect: () => {
+          onAction({ kind: "phishing" });
+        },
+      },
+      { separator: true },
+      {
+        label: "Print",
+        icon: Printer,
+        onSelect: () => {
+          window.open(client.printUrl(e.id), "_blank", "noopener,noreferrer");
+        },
+      },
+      {
+        label: "Download message",
+        icon: Download,
+        onSelect: () => {
+          const a = document.createElement("a");
+          a.href = client.rawDownloadUrl(e.id);
+          a.download = "message.eml";
+          a.click();
+        },
+      },
+      {
+        label: "Show original",
+        icon: FileCode,
+        onSelect: () => {
+          window.open(`${pagesBase()}/message/${encodeURIComponent(e.id)}/original`, "_blank", "noopener,noreferrer");
+        },
+      },
+    ];
+  };
+
   const moveTargets = folders.length
     ? folderTree(folders)
         .map((n) => n.folder)
         .filter((f) => f.id !== currentFolder?.id && f.role !== "drafts" && f.role !== "sent")
     : [];
   const more: MenuEntry[] = [
-    defaultReply === "replyAll"
-      ? {
-          label: "Reply",
-          icon: Reply,
-          onSelect: () => {
-            reply("reply");
-          },
-          disabled: !loaded,
-        }
-      : {
-          label: "Reply all",
-          icon: ReplyAll,
-          onSelect: () => {
-            reply("replyAll");
-          },
-          disabled: !loaded,
-          hint: "a",
-        },
-    {
-      label: "Forward",
-      icon: Forward,
-      onSelect: () => {
-        reply("forward");
-      },
-      disabled: !loaded,
-      hint: "f",
-    },
+    ...(current ? messageMenu(current) : []),
     { separator: true },
+    ...(inTrash
+      ? [
+          {
+            label: "Restore",
+            icon: ArchiveRestore,
+            onSelect: () => {
+              onAction({ kind: "restore" });
+            },
+          },
+        ]
+      : []),
     {
       label: read ? "Mark as unread" : "Mark as read",
       icon: read ? Mail : MailOpen,
       onSelect: () => {
-        if (expanded) setKeyword([expanded.id], "$seen", !read);
+        if (current) setKeyword([current.id], "$seen", !read);
       },
       hint: read ? "⇧U" : "⇧I",
     },
@@ -324,50 +710,21 @@ export function Reader({
       label: flagged ? "Remove from Priority" : "Add to Priority",
       icon: Flag,
       onSelect: () => {
-        if (expanded) setKeyword([expanded.id], "$flagged", !flagged);
+        if (current) setKeyword([current.id], "$flagged", !flagged);
       },
       hint: "s",
     },
-    inJunk
-      ? {
-          label: "Not junk",
-          icon: ShieldCheck,
-          onSelect: () => {
-            onAction({ kind: "notJunk" });
+    ...(thread && thread.length > 1
+      ? [
+          {
+            label: allExpanded ? "Collapse all" : "Expand all",
+            icon: allExpanded ? ChevronsDownUp : ChevronsUpDown,
+            onSelect: () => {
+              expandAll(!allExpanded);
+            },
           },
-        }
-      : {
-          label: "Report junk",
-          icon: ShieldAlert,
-          onSelect: () => {
-            onAction({ kind: "junk" });
-          },
-          hint: "!",
-        },
-    { separator: true },
-    {
-      label: "View original",
-      icon: FileCode,
-      disabled: !expanded,
-      onSelect: () => {
-        if (!expanded) return;
-        setOriginal("loading");
-        client
-          .rawText(expanded.id)
-          .then(setOriginal)
-          .catch(() => {
-            setOriginal({ text: "The original couldn't be loaded.", cut: false });
-          });
-      },
-    },
-    {
-      label: "Print",
-      icon: Printer,
-      disabled: !expanded,
-      onSelect: () => {
-        if (expanded) window.open(client.printUrl(expanded.id), "_blank", "noopener,noreferrer");
-      },
-    },
+        ]
+      : []),
     { separator: true },
     { heading: "Move to" },
     ...moveTargets.map((f) => ({
@@ -394,8 +751,49 @@ export function Reader({
     </Tooltip>
   );
 
-  const senderName = displayName(expanded?.from?.[0]);
+  /** Archive normally; Restore in Trash; Not spam in Junk. */
+  const primaryMove = (size: "size-4" | "size-5", tip: boolean) => {
+    const [label, Icon, action, shortcut]: [string, typeof Archive, ReaderAction, string | undefined] = inTrash
+      ? ["Restore", ArchiveRestore, { kind: "restore" }, undefined]
+      : inJunk
+        ? ["Not spam", ShieldCheck, { kind: "notJunk" }, undefined]
+        : ["Archive", Archive, { kind: "archive" }, "e"];
+    if (role === "archive") return null;
+    const button = (
+      <button
+        type="button"
+        onClick={() => {
+          onAction(action);
+        }}
+        aria-label={label}
+        className={iconButtonClass}
+      >
+        <Icon className={size} aria-hidden />
+      </button>
+    );
+    return tip ? (
+      <Tooltip label={label} shortcut={shortcut}>
+        {button}
+      </Tooltip>
+    ) : (
+      button
+    );
+  };
+
+  // Folder chips: where this conversation is (not Sent or Drafts). The Inbox chip's × archives it.
+  const chipIds = thread
+    ? [...new Set(thread.flatMap((e) => Object.keys(e.mailboxIds).filter((id) => e.mailboxIds[id])))]
+    : [];
+  const chips = chipIds
+    .map((id) => folders.find((f) => f.id === id))
+    .filter((f): f is Folder => f !== undefined && f.role !== "sent" && f.role !== "drafts");
+
+  const last = current;
+  const lastView = loaded;
+  const manyRecipients = lastView ? lastView.to.length + lastView.cc.length > 1 : false;
   const ReplyIcon = defaultReply === "replyAll" ? ReplyAll : Reply;
+  const pill =
+    "inline-flex h-9 items-center gap-2 rounded-full border bg-background px-4 text-[13.5px] shadow-xs transition-colors hover:bg-accent disabled:opacity-50";
   return (
     <section aria-label="Message" className="flex h-full min-h-0 flex-col">
       <div className="flex h-14 shrink-0 items-center gap-0.5 border-b px-2">
@@ -448,38 +846,8 @@ export function Reader({
             <Pin className={`size-4 ${pinned ? "fill-current text-primary" : ""}`} aria-hidden />
           </button>
         </Tooltip>
-        <Tooltip label={flagged ? "Remove from Priority" : "Add to Priority"} shortcut="s">
-          <button
-            type="button"
-            disabled={!expanded}
-            onClick={() => {
-              if (expanded) setKeyword([expanded.id], "$flagged", !flagged);
-            }}
-            aria-label="Priority"
-            aria-pressed={flagged}
-            className={iconButtonClass}
-          >
-            <Flag
-              className={`size-4 ${flagged ? "fill-current text-[rgb(var(--am-status-warning-bg))]" : ""}`}
-              aria-hidden
-            />
-          </button>
-        </Tooltip>
         <span className="hidden items-center gap-0.5 md:flex">
-          {role !== "archive" && (
-            <Tooltip label="Archive" shortcut="e">
-              <button
-                type="button"
-                onClick={() => {
-                  onAction({ kind: "archive" });
-                }}
-                aria-label="Archive"
-                className={iconButtonClass}
-              >
-                <Archive className="size-4" aria-hidden />
-              </button>
-            </Tooltip>
-          )}
+          {primaryMove("size-4", true)}
           <Tooltip label={defaultReply === "replyAll" ? "Reply all" : "Reply"} shortcut="r">
             <button
               type="button"
@@ -505,149 +873,153 @@ export function Reader({
             {error}
           </p>
         </div>
-      ) : thread === null || !expanded ? (
+      ) : thread === null || !current ? (
         <ReaderSkeleton />
       ) : (
         <div ref={pane} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pt-5 pb-3 sm:px-6">
-          <div className="flex flex-col gap-1.5">
-            <h2 className="am-h2 break-words">{subjectOf(expanded.subject)}</h2>
-            <p className="am-micro">
-              {fullDate(expanded.receivedAt)}
-              {thread.length > 1 ? ` · ${String(thread.length)} messages` : ""}
-            </p>
-          </div>
-
-          {thread.length > 1 && (
-            <ol aria-label="Conversation" className="flex max-h-40 shrink-0 flex-col overflow-y-auto rounded-xl border">
-              {thread.map((e) => {
-                const current = e.id === expandedId;
-                return (
-                  <li key={e.id} className="border-b last:border-b-0">
-                    <button
-                      type="button"
-                      aria-current={current ? "true" : undefined}
-                      onClick={() => {
-                        setExpandedId(e.id);
-                      }}
-                      className={`flex w-full items-center gap-3 px-3 py-2 text-left transition-colors ${current ? "bg-accent" : "hover:bg-accent/50"}`}
-                    >
-                      <SenderAvatar email={e.from?.[0]?.email} label={initials(e.from?.[0])} size="sm" />
-                      <span className="w-28 shrink-0 truncate font-medium text-[13px] sm:w-36">
-                        {displayName(e.from?.[0])}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted-foreground">{e.preview}</span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ol>
-          )}
-
-          <div className="flex shrink-0 items-start gap-3 border-y py-3">
-            <SenderAvatar email={expanded.from?.[0]?.email} label={initials(expanded.from?.[0])} size="lg" />
-            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <div className="flex min-w-0 flex-wrap items-center gap-x-2">
-                <span className="font-medium text-[14px]">{senderName}</span>
-                <span aria-hidden className="h-3 w-px bg-border" />
-                <span className="truncate font-mono text-[12.5px] text-muted-foreground">
-                  {expanded.from?.[0]?.email}
-                </span>
-                {expanded.from?.[0] && !knownAddresses.has(expanded.from[0].email.toLowerCase()) && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const f = expanded.from?.[0];
-                      if (f) onAddContact(f);
-                    }}
-                    className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-[12px] text-primary hover:bg-accent"
+          <div className="flex items-start gap-3">
+            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+              <h2 className="am-h2 break-words">{subjectOf(current.subject)}</h2>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {chips.map((f) => (
+                  <span
+                    key={f.id}
+                    className="inline-flex h-6 items-center gap-1 rounded-md bg-muted px-2 text-[12px] text-muted-foreground"
                   >
-                    <UserPlus className="size-3.5" aria-hidden /> Add to contacts
-                  </button>
-                )}
+                    {folderLabel(f)}
+                    {f.role === "inbox" && (
+                      <button
+                        type="button"
+                        aria-label="Remove label Inbox"
+                        onClick={() => {
+                          onAction({ kind: "archive" });
+                        }}
+                        className="-mr-1 inline-flex size-4 items-center justify-center rounded hover:bg-accent hover:text-foreground"
+                      >
+                        <X className="size-3" aria-hidden />
+                      </button>
+                    )}
+                  </span>
+                ))}
+                {thread.length > 1 && <span className="am-micro">{String(thread.length)} messages</span>}
               </div>
-              {loaded ? (
-                <>
-                  <AddressLine label="To:" list={loaded.to} />
-                  <AddressLine label="Cc:" list={loaded.cc} />
-                </>
-              ) : (
-                <Bone className="mt-1 h-3 w-48" />
-              )}
             </div>
+            {thread.length > 1 && (
+              <Tooltip label={allExpanded ? "Collapse all" : "Expand all"}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    expandAll(!allExpanded);
+                  }}
+                  aria-label={allExpanded ? "Collapse all" : "Expand all"}
+                  className={`${iconButtonClass} hidden md:inline-flex`}
+                >
+                  {allExpanded ? (
+                    <ChevronsDownUp className="size-4" aria-hidden />
+                  ) : (
+                    <ChevronsUpDown className="size-4" aria-hidden />
+                  )}
+                </button>
+              </Tooltip>
+            )}
           </div>
 
-          {view === undefined ? (
-            <BodySkeleton />
-          ) : view === "missing" ? (
-            <p className="am-small">This message is no longer here.</p>
-          ) : (
-            <MessageContent
-              view={view}
-              client={client}
-              paneHeight={paneHeight}
-              onCompose={onComposeTo}
-              onViewFull={() => {
-                void client
-                  .message(view.id, { full: true })
-                  .then((v) => {
-                    if (v) setViews((m) => ({ ...m, [view.id]: v }));
-                  })
-                  .catch(() => undefined);
-              }}
-            />
-          )}
+          <ol aria-label="Conversation" className="flex shrink-0 flex-col rounded-xl border">
+            {thread.map((e) => (
+              <li key={e.id} className="border-b last:border-b-0">
+                {expanded.has(e.id) ? (
+                  <MessageCard
+                    summary={e}
+                    view={views[e.id]}
+                    client={client}
+                    mine={mine}
+                    authservIds={authservIds}
+                    paneHeight={paneHeight}
+                    menu={messageMenu(e)}
+                    knownAddresses={knownAddresses}
+                    onAddContact={onAddContact}
+                    collapsible={thread.length > 1}
+                    onCollapse={() => {
+                      setExpanded((s) => {
+                        const n = new Set(s);
+                        n.delete(e.id);
+                        return n;
+                      });
+                    }}
+                    onToggleFlag={() => {
+                      setKeyword([e.id], "$flagged", e.keywords.$flagged !== true);
+                    }}
+                    onReply={() => {
+                      const v = views[e.id];
+                      replyWith(v && v !== "missing" ? v : null, defaultReply);
+                    }}
+                    onComposeTo={onComposeTo}
+                    onViewFull={() => {
+                      void client
+                        .message(e.id, { full: true })
+                        .then((v) => {
+                          if (v) setViews((m) => ({ ...m, [e.id]: v }));
+                        })
+                        .catch(() => undefined);
+                    }}
+                  />
+                ) : (
+                  <CollapsedRow
+                    summary={e}
+                    mine={mine}
+                    onExpand={() => {
+                      setExpanded((s) => new Set([...s, e.id]));
+                    }}
+                  />
+                )}
+              </li>
+            ))}
+          </ol>
 
-          {/* The reply box stays at the bottom of the pane while the message scrolls under it. */}
+          {/* Reply buttons stay at the bottom of the pane while the conversation scrolls under them. */}
           <div className="sticky bottom-0 z-10 -mx-4 mt-auto shrink-0 bg-gradient-to-t from-background from-70% to-transparent px-4 pt-4 pb-1 sm:-mx-6 sm:px-6">
             {inlineComposer ?? (
-              <button
-                type="button"
-                disabled={!loaded}
-                onClick={() => {
-                  reply(defaultReply, true);
-                }}
-                className="flex h-11 w-full items-center gap-3 rounded-xl border bg-background px-3.5 text-left text-[13.5px] text-muted-foreground shadow-xs transition-colors hover:border-ring/50 hover:text-foreground"
+              <div
+                role="group"
+                aria-label={`Answer ${senderLabel(last?.from?.[0], mine)}`}
+                className="flex flex-wrap gap-2"
               >
-                <Reply className="size-4 shrink-0" aria-hidden />
-                <span className="min-w-0 flex-1 truncate">
-                  {defaultReply === "replyAll" ? "Reply all" : `Reply to ${senderName}`}…
-                </span>
-                <Paperclip className="size-4 shrink-0 opacity-60" aria-hidden />
-                <Send className="size-4 shrink-0 opacity-60" aria-hidden />
-              </button>
+                <button
+                  type="button"
+                  disabled={!lastView}
+                  onClick={() => {
+                    reply("reply", true);
+                  }}
+                  className={pill}
+                >
+                  <Reply className="size-4" aria-hidden /> Reply
+                </button>
+                {manyRecipients && (
+                  <button
+                    type="button"
+                    disabled={!lastView}
+                    onClick={() => {
+                      reply("replyAll", true);
+                    }}
+                    className={pill}
+                  >
+                    <ReplyAll className="size-4" aria-hidden /> Reply all
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={!lastView}
+                  onClick={() => {
+                    reply("forward", true);
+                  }}
+                  className={pill}
+                >
+                  <Forward className="size-4" aria-hidden /> Forward
+                </button>
+              </div>
             )}
           </div>
         </div>
-      )}
-
-      {original !== null && (
-        <Modal
-          title="Original message"
-          wide
-          onClose={() => {
-            setOriginal(null);
-          }}
-        >
-          {original === "loading" ? (
-            <Bone className="h-48 w-full" />
-          ) : (
-            <div className="flex flex-col gap-3">
-              <pre className="max-h-[60vh] overflow-auto rounded-lg bg-muted p-3 font-mono text-[12px] leading-5 whitespace-pre-wrap break-all">
-                {original.text}
-              </pre>
-              {original.cut && <p className="am-micro">Only the first 2 MB is shown here.</p>}
-              {expanded && (
-                <a
-                  href={client.rawDownloadUrl(expanded.id)}
-                  download="message.eml"
-                  className="inline-flex h-9 w-fit items-center gap-2 rounded-lg border px-3 text-[13.5px] hover:bg-accent"
-                >
-                  <Download className="size-4" aria-hidden /> Download .eml
-                </a>
-              )}
-            </div>
-          )}
-        </Modal>
       )}
 
       {/* Phones: the main actions sit in a bottom bar. */}
@@ -655,18 +1027,7 @@ export function Reader({
         aria-label="Message actions"
         className="flex h-14 shrink-0 items-center justify-around border-t bg-background px-2 md:hidden"
       >
-        {role !== "archive" && (
-          <button
-            type="button"
-            onClick={() => {
-              onAction({ kind: "archive" });
-            }}
-            aria-label="Archive"
-            className={iconButtonClass}
-          >
-            <Archive className="size-5" aria-hidden />
-          </button>
-        )}
+        {primaryMove("size-5", false)}
         {deleteButton}
         <button
           type="button"

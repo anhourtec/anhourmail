@@ -169,6 +169,34 @@ export function folderTree(folders: Folder[]): FolderNode[] {
   return out;
 }
 
+/** "5 days ago", "3 hours ago", "just now" (any distance; for the conversation view's dates). */
+export function ago(iso: string, now = new Date()): string {
+  const sec = Math.round((now.getTime() - new Date(iso).getTime()) / 1000);
+  if (sec < 45) return "just now";
+  const rtf = new Intl.RelativeTimeFormat(style.locale, { numeric: "always" });
+  if (sec < 3600) return rtf.format(-Math.max(1, Math.round(sec / 60)), "minute");
+  if (sec < 86_400) return rtf.format(-Math.round(sec / 3600), "hour");
+  if (sec < 30 * 86_400) return rtf.format(-Math.round(sec / 86_400), "day");
+  if (sec < 365 * 86_400) return rtf.format(-Math.round(sec / (30 * 86_400)), "month");
+  return rtf.format(-Math.round(sec / (365 * 86_400)), "year");
+}
+
+/** A message's date in a conversation: "Sun 18 Oct, 00:13 (5 days ago)". */
+export function messageDate(iso: string, now = new Date()): string {
+  const d = new Date(iso);
+  const day = d.toLocaleDateString(
+    style.locale,
+    zoned({
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      ...(ymd(d)[0] === ymd(now)[0] ? {} : { year: "numeric" }),
+    }),
+  );
+  const time = d.toLocaleTimeString(style.locale, zoned({ hour: "2-digit", minute: "2-digit" }));
+  return `${day}, ${time} (${ago(iso, now)})`;
+}
+
 /** Relative list time: "just now", "24 minutes ago", "1 day ago" (up to 3 days), then "22 Oct 2026". */
 export function relativeTime(iso: string, now = new Date()): string {
   const d = new Date(iso);

@@ -214,7 +214,10 @@ test("write, send, receive in a second mailbox, reply, search and switch back @d
   await expect(reader.getByRole("heading", { name: `Plans ${tag}` })).toBeVisible();
 
   // Reply from the inline box.
-  await reader.getByRole("button", { name: /Reply to/ }).click();
+  await reader
+    .getByRole("group", { name: /^Answer / })
+    .getByRole("button", { name: "Reply", exact: true })
+    .click();
   const reply = page.getByRole("dialog", { name: "Reply" });
   await expect(reply.getByRole("button", { name: `Remove ${OWNER}` })).toBeVisible();
   await expect(reply.getByLabel("Subject")).toHaveValue(`Re: Plans ${tag}`);
@@ -362,12 +365,16 @@ test("every common body type reads natively in the reader's flow", async ({ page
   reader = await openBySearch(page, "subject:samedi", /Le marché de samedi/);
   await expect(reader.getByText(/Le café du marché ouvre à 7 h/)).toBeVisible();
 
-  // View original shows the source as text.
+  // Show original opens its own page in a new tab: a summary, then the source as plain text.
   await reader.getByRole("button", { name: "More actions" }).click();
-  await page.getByRole("menuitem", { name: "View original" }).click();
-  const original = page.getByRole("dialog", { name: "Original message" });
-  await expect(original.getByText(/Message-ID: <sample-latin1@demo-family\.test>/)).toBeVisible();
-  await expect(original.getByRole("link", { name: "Download .eml" })).toBeVisible();
+  const [original] = await Promise.all([
+    page.waitForEvent("popup"),
+    page.getByRole("menuitem", { name: "Show original" }).click(),
+  ]);
+  await expect(original.getByRole("heading", { name: "Original message" })).toBeVisible();
+  await expect(original.getByLabel("Message source")).toContainText("Message-ID: <sample-latin1@demo-family.test>");
+  await expect(original.getByRole("link", { name: "Download original" })).toBeVisible();
+  await original.close();
   expect(consoleErrors).toEqual([]);
 });
 

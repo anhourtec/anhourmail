@@ -367,19 +367,41 @@ export function MessageListSkeleton({ rows = 12 }: { rows?: number }) {
   );
 }
 
-/** Reading pane: subject, sender block, body lines. */
+/**
+ * Reading pane (a conversation): subject with folder chips, earlier messages as one-line rows, then the newest
+ * message expanded (sender card and body lines).
+ */
 export function ReaderSkeleton() {
   return (
-    <div className="flex flex-col gap-6 p-6">
-      <Bone className="h-7 w-2/3" />
-      <div className="flex items-center gap-3">
-        <Bone className="size-10 rounded-full" />
-        <div className="flex flex-col gap-2">
-          <Bone className="h-3.5 w-48" />
-          <Bone className="h-3 w-32" />
+    <div className="flex flex-col gap-4 px-4 pt-5 sm:px-6">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex flex-1 flex-col gap-2">
+          <Bone className="h-7 w-2/3" />
+          <Bone className="h-5 w-20 rounded-md" />
+        </div>
+        <Bone className="hidden size-8 rounded-lg md:block" />
+      </div>
+      <div className="flex flex-col rounded-xl border">
+        {[0, 1].map((i) => (
+          <div key={i} className="flex items-center gap-3 border-b px-3 py-2.5">
+            <Bone className="size-7 rounded-md" />
+            <Bone className="h-3.5 w-28" />
+            <Bone className="h-3 flex-1" />
+            <Bone className="h-3 w-24" />
+          </div>
+        ))}
+        <div className="flex flex-col gap-4 p-3">
+          <div className="flex items-center gap-3">
+            <Bone className="size-10 rounded-md" />
+            <div className="flex flex-1 flex-col gap-2">
+              <Bone className="h-3.5 w-48" />
+              <Bone className="h-3 w-24" />
+            </div>
+            <Bone className="h-3 w-28" />
+          </div>
+          <TextBlockSkeleton lines={8} boxed={false} />
         </div>
       </div>
-      <TextBlockSkeleton lines={12} boxed={false} />
     </div>
   );
 }
