@@ -11,6 +11,8 @@ export type E2eUsers = {
   /** A mailbox of this run's own (fresh mail-server allowance per run) for webmail send/receive journeys. */
   recipient: { address: string; password: string };
   /** Per browser project: logins for the sign-in security journeys (their own account for the requirement). */
+  /** Per browser project: the mailbox passwords journey's own account (owner and member). */
+  passwords: Record<string, { owner: string; member: string }>;
   security: Record<
     string,
     { totp: string; passkey: string; owner: string; member: string; pkOwner: string; pkMember: string }

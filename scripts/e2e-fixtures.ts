@@ -61,6 +61,7 @@ if (mode === "create") {
     string,
     { totp: string; passkey: string; owner: string; member: string; pkOwner: string; pkMember: string }
   > = {};
+  const passwords: Record<string, { owner: string; member: string }> = {};
   for (const project of ["desktop", "mobile"]) {
     const [secAccount] = await db
       .insert(schema.customerAccount)
@@ -89,6 +90,20 @@ if (mode === "create") {
       { accountId: pkAccount.id, userId: pkOwner.id, role: "owner" },
       { accountId: pkAccount.id, userId: pkMember.id, role: "member" },
     ]);
+    // Mailbox passwords journey: its own account per project, so its mailbox doesn't count against the shared
+    // account's mailbox ceiling.
+    const [pwAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} Passwords ${project}`, plan: "plus" })
+      .returning();
+    if (!pwAccount) throw new Error("passwords account not created");
+    const pwOwner = await addLogin(`pw-${project}-owner`);
+    const pwMember = await addLogin(`pw-${project}-member`);
+    await db.insert(schema.accountMembership).values([
+      { accountId: pwAccount.id, userId: pwOwner.id, role: "owner" },
+      { accountId: pwAccount.id, userId: pwMember.id, role: "member" },
+    ]);
+    passwords[project] = { owner: pwOwner.email, member: pwMember.email };
     security[project] = {
       totp: logins.totp.email,
       passkey: logins.passkey.email,
@@ -129,7 +144,7 @@ if (mode === "create") {
   mkdirSync("test-results", { recursive: true });
   writeFileSync(
     FILE,
-    JSON.stringify({ run, password, accountName: account.name, users, recipient, security }, null, 2),
+    JSON.stringify({ run, password, accountName: account.name, users, recipient, security, passwords }, null, 2),
     {
       mode: 0o600,
     },

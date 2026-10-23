@@ -153,10 +153,22 @@ async function upsertMailbox(
       description: a.description,
     })),
   });
+  // The Password credential the reconciler expects (07-security.md "Mailbox passwords").
+  const passwordCredentialId = await mgmt.passwordCredentialId(stalwartId);
   const [row] = await db
     .insert(schema.mailbox)
-    .values({ accountId: m.accountId, userId: m.userId, address: m.address, stalwartId, quotaBytes: m.quotaBytes })
-    .onConflictDoUpdate({ target: schema.mailbox.address, set: { stalwartId, accountId: m.accountId } })
+    .values({
+      accountId: m.accountId,
+      userId: m.userId,
+      address: m.address,
+      stalwartId,
+      quotaBytes: m.quotaBytes,
+      passwordCredentialId,
+    })
+    .onConflictDoUpdate({
+      target: schema.mailbox.address,
+      set: { stalwartId, accountId: m.accountId, passwordCredentialId, pendingPasswordHash: null },
+    })
     .returning();
   if (!row) throw new Error(`mailbox ${m.address} not stored`);
   // Setting the password replaces the account's credential list on Stalwart, which drops its app passwords

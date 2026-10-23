@@ -28,6 +28,7 @@ test("an owner creates an app password for their own mailbox, sees it once, and 
   await page.getByLabel("Address").fill("me");
   await page.getByLabel("Domain").selectOption({ label: domain });
   await page.getByLabel("Belongs to").selectOption({ label: u.users.owner });
+  await page.getByLabel("Password", { exact: true }).fill("e2e mailbox password");
   await page.getByRole("button", { name: "Create mailbox" }).click();
   await expect(panel(page, "Add a mailbox").getByRole("status").filter({ hasText: address })).toBeVisible();
   await panel(page, "Add a mailbox").getByRole("link", { name: "Close" }).click();

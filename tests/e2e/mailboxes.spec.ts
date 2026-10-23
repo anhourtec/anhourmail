@@ -30,6 +30,7 @@ test("an owner creates a mailbox, changes its storage, suspends, resumes, delete
   await page.getByLabel("Domain").selectOption({ label: domain });
   await page.getByLabel("Belongs to").selectOption({ label: u.users.member });
   await page.getByLabel("Storage (GB)").fill("5");
+  await page.getByLabel("Password", { exact: true }).fill("e2e mailbox password");
   await page.getByRole("button", { name: "Create mailbox" }).click();
   await expect(adding.getByRole("status").filter({ hasText: `jane@${domain}` })).toBeVisible();
 
@@ -39,6 +40,7 @@ test("an owner creates a mailbox, changes its storage, suspends, resumes, delete
   // The same address can't be taken twice (the panel stays open for the next one).
   await page.getByLabel("Address").fill("jane");
   await page.getByLabel("Domain").selectOption({ label: domain });
+  await page.getByLabel("Password", { exact: true }).fill("e2e mailbox password");
   await page.getByRole("button", { name: "Create mailbox" }).click();
   await expect(page.getByRole("alert").filter({ hasText: "That address is already in use." })).toBeVisible();
   await adding.getByRole("link", { name: "Close" }).click();
@@ -54,7 +56,7 @@ test("an owner creates a mailbox, changes its storage, suspends, resumes, delete
   await row.getByRole("link").click();
   const details = panel(page, `jane@${domain}`);
   await expect(details.getByRole("heading", { name: `jane@${domain}`, level: 2 })).toBeVisible();
-  await expect(details.getByText(u.users.member)).toBeVisible();
+  await expect(details.getByText(u.users.member, { exact: true }).first()).toBeVisible();
   await details.getByRole("tab", { name: "Storage" }).click();
   await details.getByLabel("Storage (GB)").fill("3");
   await details.getByRole("button", { name: "Save" }).click();

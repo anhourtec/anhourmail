@@ -27,6 +27,7 @@ test("an owner adds, turns off and deletes aliases; the member sees only their o
     await page.getByLabel("Domain").selectOption({ label: domain });
     await page.getByLabel("Belongs to").selectOption({ label: owner });
     await page.getByLabel("Storage (GB)").fill("1");
+    await page.getByLabel("Password", { exact: true }).fill("e2e mailbox password");
     await page.getByRole("button", { name: "Create mailbox" }).click();
     await expect(page.getByRole("row", { name: new RegExp(`${local}@${domain}`) })).toBeVisible();
   }
