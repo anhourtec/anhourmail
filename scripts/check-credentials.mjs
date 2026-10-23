@@ -10,6 +10,7 @@ const FORBIDDEN = [
   /(^|\/)credentials\.md$/,
   /^docs\/internal\/handoff\.md$/,
   /^deploy\.md$/,
+  /^pricing\.md$/,
   /^docs\/internal\/private\//,
   /\.local\.md$/,
   /(^|\/)\.env(\..*)?$/,

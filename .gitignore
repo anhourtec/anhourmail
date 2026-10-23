@@ -32,6 +32,7 @@ credentials.md
 
 # local-only session log and the private deployment guide (kept on the working machine)
 deploy.md
+pricing.md
 docs/internal/handoff.md
 
 # dev-stack generated state (Stalwart data, generated secrets)

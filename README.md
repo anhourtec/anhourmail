@@ -1,7 +1,9 @@
 <h3 align="center">
   <a name="readme-top"></a>
-  <!-- Logo placeholder: replace with the AnhourMail mark once the brand assets land in apps/site/public. -->
-  <img src="./apps/site/public/logo.svg" alt="AnhourMail" height="96">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./packages/ui/assets/brand/anhourmail-logo-dark.svg">
+    <img src="./packages/ui/assets/brand/anhourmail-logo-light.svg" alt="AnhourMail" height="56">
+  </picture>
 </h3>
 
 <div align="center">
@@ -85,7 +87,7 @@ built in the open; billing, abuse controls and the production deployment come ne
 
 | Feature            | Description                                                                 |
 | ------------------ | --------------------------------------------------------------------------- |
-| **Free address**   | `you@anhourmail.com` with 10 GB                                             |
+| **Free address**   | `you@anhourmail.com` with 1 GB                                              |
 | **Custom domains** | Bring your own domains on paid plans, with guided DNS and live verification |
 | **Aliases**        | Aliases, catch-all and masked aliases you can switch off at any time        |
 | **Mail access**    | IMAP, SMTP and JMAP; app passwords; two-factor sign-in                      |
