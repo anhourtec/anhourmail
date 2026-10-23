@@ -46,6 +46,10 @@ const nextConfig = {
   // Next's dev request log prints raw paths, which can hold tokens.
   logging: { incomingRequests: false },
   turbopack: { root },
+  // Dev only: no persistent Turbopack cache for this app. Twice on 2026-10-23 the on-disk dev cache got into a state
+  // where every page load triggered an HMR "restart" of the entry chunk list and an endless "HMR hash mismatch" reload
+  // (a clean cache on the same tree loaded once). Cold dev starts compile from scratch instead.
+  experimental: { turbopackFileSystemCacheForDev: false },
   outputFileTracingRoot: root,
   transpilePackages: [
     "@anhourmail/adapters",
