@@ -285,7 +285,10 @@ provisioning ──worker──► active ──suspend──► suspended ─�
   409, so concurrent creates can't share an address. Alias changes queue `mailbox.ensure`, which writes the whole
   alias list (enabled flags included) to the Stalwart account.
 - Job kinds: `domain.ensure` (the domain + its catch-all address while the catch-all mailbox is active),
-  `domain.remove`, `mailbox.ensure` (account + quota + suspension + aliases, including masked aliases),
+  `domain.remove`, `mailbox.ensure` (account + quota + suspension + aliases, including masked aliases; a new account
+  gets the argon2id hash chosen at creation), `mailbox.password` (subject: a mailbox; replaces its one Password
+  credential with the waiting argon2id hash — an admin's reset or the person's own change from the webmail — and
+  records the credential id for the reconciler; 07-security.md "Mailbox passwords"),
   `app_password.revoke` (subject: a mailbox; destroys its `revoking` app passwords, matching id and creation time,
   then deletes the rows). Every call is idempotent (upsert by natural key), so retries and duplicate jobs are safe.
 - **App passwords are the exception to "provisioning is a job"** (ADR-0020): creating one calls Stalwart inside the

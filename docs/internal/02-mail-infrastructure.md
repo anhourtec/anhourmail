@@ -117,8 +117,9 @@ and 175 more`. Without `impersonate` these permissions apply to its own account 
     on `svc-ops`/`svc-audit` the master-user form `<mailbox>%<account>` then signs in as any mailbox over the HTTP
     management path **and the mail ports** (IMAP/POP3/SMTP — verified run-25; app passwords can't). Because Stalwart
     Community can't forbid this, production routes the apps to the management listener only through an internal
-    **management proxy** (ops repo `mgmtproxy/`) that refuses credential writes, app-password/API-key writes on a
-    service account, and Basic/`%` logins; Stalwart's listener binds only the proxy's and the public NGINX's networks.
+    **management proxy** (ops repo `mgmtproxy/`) that refuses credential writes (except the mailbox password job's
+    exact one-slot argon2id Password replacement on a non-service account, marked `X-AnhourMail-Credential-Write`;
+    ADR-0020 "Mailbox passwords"), app-password/API-key writes on a service account, and Basic/`%` logins; Stalwart's listener binds only the proxy's and the public NGINX's networks.
     The deployment plan creates the accounts (`service-accounts.ts`) and fails on a password, app password or a key
     whose set differs; the per-minute `job:service-accounts` (`reconcileServiceAccounts`) reports any credential but
     API keys on them or a missing expected account; the app-password reconciler flags a mailbox without exactly one

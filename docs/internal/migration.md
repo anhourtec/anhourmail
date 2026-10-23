@@ -33,20 +33,22 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 ## Summary
 
-| #    | Migration                          | Commit      | Date       | Change                                                                                               | Rollback        |
-| ---- | ---------------------------------- | ----------- | ---------- | ---------------------------------------------------------------------------------------------------- | --------------- |
-| 0012 | `0012_app_passwords_catch_all`     | uncommitted | 2026-10-22 | `app_password` (metadata only); `customer_domain.catch_all_mailbox_id`                               | Safe            |
-| 0011 | `0011_webmail_settings`            | uncommitted | 2026-10-22 | `webmail_preference` (display choices per mailbox), `forwarding_target` (one confirmed target each)  | Safe            |
-| 0010 | `0010_session_sign_in_method`      | uncommitted | 2026-10-22 | `auth_session.sign_in_method` (how the session signed in)                                            | Safe            |
-| 0009 | `0009_sign_in_security`            | uncommitted | 2026-10-22 | `auth_two_factor`, `auth_passkey`; `auth_user.two_factor_enabled`; `customer_account.sign_in_policy` | Safe            |
-| 0008 | `0008_invite_send_log`             | uncommitted | 2026-10-22 | `invite_send` table (one row per invite email sent) for the per-account daily cap                    | Safe            |
-| 0006 | `0006_remove_waitlist`             | uncommitted | 2026-10-22 | Drop `waitlist_entry`; drop `invite.source`, `invite.waitlist_entry_id`                              | Not recommended |
-| 0005 | `0005_domain_claims`               | uncommitted | 2026-10-21 | Domain names unique per account; across accounts only once claimed (verified)                        | Caution         |
-| 0004 | `0004_waitlist_opt_in_and_invites` | `3e75c1f`   | 2026-10-21 | Waitlist double opt-in columns; invite source/waitlist link/acceptance                               | Safe            |
-| 0003 | `0003_provisioning_queue`          | `843be65`   | 2026-10-21 | `provisioning_job` table; `customer_domain.stalwart_id/last_error`, `mailbox.last_error`             | Safe            |
-| 0002 | `0002_user_first_last_name`        | `710e664`   | 2026-10-21 | `auth_user.first_name` (not null, default '') and `last_name`                                        | Safe            |
-| 0001 | `0001_audit_append_only`           | `710e664`   | 2026-10-21 | Trigger blocking UPDATE/DELETE/TRUNCATE on `audit_log`                                               | Caution         |
-| 0000 | `0000_init`                        | `710e664`   | 2026-10-21 | Initial control-plane schema (14 tables)                                                             | Safe            |
+| #    | Migration                          | Commit      | Date       | Change                                                                                                   | Rollback        |
+| ---- | ---------------------------------- | ----------- | ---------- | -------------------------------------------------------------------------------------------------------- | --------------- |
+| 0014 | `0014_mailbox_password_grant`      | uncommitted | 2026-10-23 | `mailbox.pending_password_grant` (the web app's HMAC grant for the waiting hash)                         | Safe            |
+| 0013 | `0013_mailbox_password`            | uncommitted | 2026-10-23 | `mailbox.pending_password_hash` (argon2id hash waiting for the worker), `mailbox.password_credential_id` | Safe            |
+| 0012 | `0012_app_passwords_catch_all`     | uncommitted | 2026-10-22 | `app_password` (metadata only); `customer_domain.catch_all_mailbox_id`                                   | Safe            |
+| 0011 | `0011_webmail_settings`            | uncommitted | 2026-10-22 | `webmail_preference` (display choices per mailbox), `forwarding_target` (one confirmed target each)      | Safe            |
+| 0010 | `0010_session_sign_in_method`      | uncommitted | 2026-10-22 | `auth_session.sign_in_method` (how the session signed in)                                                | Safe            |
+| 0009 | `0009_sign_in_security`            | uncommitted | 2026-10-22 | `auth_two_factor`, `auth_passkey`; `auth_user.two_factor_enabled`; `customer_account.sign_in_policy`     | Safe            |
+| 0008 | `0008_invite_send_log`             | uncommitted | 2026-10-22 | `invite_send` table (one row per invite email sent) for the per-account daily cap                        | Safe            |
+| 0006 | `0006_remove_waitlist`             | uncommitted | 2026-10-22 | Drop `waitlist_entry`; drop `invite.source`, `invite.waitlist_entry_id`                                  | Not recommended |
+| 0005 | `0005_domain_claims`               | uncommitted | 2026-10-21 | Domain names unique per account; across accounts only once claimed (verified)                            | Caution         |
+| 0004 | `0004_waitlist_opt_in_and_invites` | `3e75c1f`   | 2026-10-21 | Waitlist double opt-in columns; invite source/waitlist link/acceptance                                   | Safe            |
+| 0003 | `0003_provisioning_queue`          | `843be65`   | 2026-10-21 | `provisioning_job` table; `customer_domain.stalwart_id/last_error`, `mailbox.last_error`                 | Safe            |
+| 0002 | `0002_user_first_last_name`        | `710e664`   | 2026-10-21 | `auth_user.first_name` (not null, default '') and `last_name`                                            | Safe            |
+| 0001 | `0001_audit_append_only`           | `710e664`   | 2026-10-21 | Trigger blocking UPDATE/DELETE/TRUNCATE on `audit_log`                                                   | Caution         |
+| 0000 | `0000_init`                        | `710e664`   | 2026-10-21 | Initial control-plane schema (14 tables)                                                                 | Safe            |
 
 ## Details
 
@@ -60,6 +62,26 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0014_mailbox_password_grant · uncommitted · 2026-10-23 · Safe
+
+- Added: `mailbox.pending_password_grant` (text, null): `<expiry>.<hex HMAC-SHA256>` made by the web app with
+  `MAILBOX_PASSWORD_GRANT_KEY` over `stalwart account id | sha256(pending hash) | expiry`; the worker forwards it and
+  the management proxy verifies it (security review run-26 M1). Cleared with the hash. Not a secret on its own (it
+  only authorises that exact hash on that account for ≤ 1 hour).
+- Changed / Removed / Data: none. Rollback: older code ignores the column (and production then refuses resets at the
+  proxy until it is back).
+
+### 0013_mailbox_password · uncommitted · 2026-10-23 · Safe
+
+- Added: `mailbox.pending_password_hash` (text, null): a new mailbox password as a salted argon2id PHC string waiting
+  for the worker (set at creation, by an admin's reset or by the person's own change; cleared once Stalwart has it or
+  when its job gives up — never the password itself, rule 23). `mailbox.password_credential_id` (text, null): Stalwart's
+  id for the mailbox's Password credential as the control plane last set it; the reconciler reports a different one.
+- Changed: —
+- Removed: —
+- Data: none. Existing mailboxes have no recorded id until their next `mailbox.ensure`; run `job:mailbox-backfill`
+  after deploying so the reconciler stops reporting them as untracked. Rollback: older code ignores both columns.
 
 ### 0012_app_passwords_catch_all · uncommitted · 2026-10-22 · Safe
 

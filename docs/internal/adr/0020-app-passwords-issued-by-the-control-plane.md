@@ -1,7 +1,7 @@
 # ADR-0020: App passwords issued by the control plane, limited per credential
 
 **Status:** Accepted 2026-10-22 · amended 2026-10-23 (credential split, below — supersedes the single management
-key in decision 1)
+key in decision 1) · amended 2026-10-23 (mailbox passwords, below — console-made mailboxes now have a known password)
 
 ## Context
 
@@ -137,6 +137,39 @@ every mailbox. Verified on the pinned v0.16.27 (throwaway domains and accounts, 
 - Every Stalwart upgrade re-runs `credentials.int.test.ts`: it fails if the User role changes (the provisioning key
   would no longer be able to create mailboxes) or any boundary above moves.
 
+## Mailbox passwords (amendment 2026-10-23)
+
+**Context.** Console-made mailboxes had a random password nobody knew, so nobody could sign in to the webmail, and the
+management proxy (run-25) refuses every `x:Account/set` update that writes `credentials`.
+
+**Decision** (maintainer, 2026-10-23; details in `07-security.md` "Mailbox passwords"):
+
+1. The create form takes the password (typed, or generated in the browser and shown once). The core service checks it
+   and hashes it to argon2id at once; only the PHC string is kept (`mailbox.pending_password_hash`) until the worker
+   sets it inside `x:Account/set create` (already allowed by the proxy).
+2. A person changes their own in the webmail settings. Stalwart could let an account change its own Password, but
+   customer accounts have `sysAccountPassword*` denied (decision 4) and that stays: the BFF proves the current
+   password with a Stalwart sign-in, then the change goes the way of 3. This session signs in again; others end.
+3. Admin reset: `mailbox.password.reset` ★ (Owner, User Admin), step-up, guard rail 8, **refused during act-as** (staff
+   never choose a customer's password; the same refusal applies to creating a mailbox while acting as), audited
+   `mailbox.password_reset`, the owner emailed. Applied by job `mailbox.password` with the provisioning key: a patch of
+   the one Password slot (`credentials/<n>`), so app passwords stay. The proxy allows exactly that shape — on a
+   User-role customer account, never a service account or a system mailbox (no-reply, postmaster), with the pinned
+   argon2id parameters — when the request carries `X-AnhourMail-Credential-Write: replace` (a marker) **and** a valid
+   grant `X-AnhourMail-Password-Grant`: an HMAC the web app makes with `MAILBOX_PASSWORD_GRANT_KEY` (held by the web
+   app and the proxy only) over the account id, the hash's SHA-256 and an expiry ≤ 1 h. So the worker's provisioning
+   key alone can't set a customer password; only the web and worker together could (residual). The proxy caps marked
+   replacements at 20 a minute and logs each one (account id only). Everything else stays refused (review run-26).
+4. Detection: `mailbox.password_credential_id` records the Password credential after each create/reset/change; the
+   reconciler reports a different or unrecorded one (`platform.reconciler_drift`) and never fixes it.
+
+**Consequences.** People can use the webmail with console-made mailboxes. The provisioning key (worker, scheduler) can
+replace a customer's Password through the proxy only with a grant the web app made for that account and hash; the
+proxy still refuses service accounts, system mailboxes, extra credentials and other properties. Verified on v0.16.27: replacing the slot keeps app passwords and
+revokes every OAuth token; the `credentialId` changes on the first replacement after creation but **not** on later
+ones, so detection catches a replacement made before our first reset only (open item: a stronger signal). A legacy
+mailbox's credential is recorded at its next `mailbox.ensure` (`job:mailbox-backfill`), adopting whatever it has then.
+
 ## Consequences
 
 - Mail apps work for console-made mailboxes without anyone choosing or knowing a mailbox password.
@@ -153,7 +186,8 @@ every mailbox. Verified on the pinned v0.16.27 (throwaway domains and accounts, 
 - Sharing can't be denied by a permission of its own (`shareWith` rides on `/set`): customer accounts can't create or
   update folders and calendars over JMAP and every ACL method is off, but address books stay writable (the webmail
   needs them), so `AddressBook/set { shareWith }` remains open with a mailbox password (open item).
-- A future "set mailbox password" must patch only the password entry, or it drops the app passwords.
+- Setting a mailbox password patches only the Password entry (`replacePassword`), so app passwords stay (amendment
+  "Mailbox passwords").
 - Production NGINX must not expose Stalwart's `/api/auth` and `/auth/*` publicly (ops item).
 
 ## Alternatives
