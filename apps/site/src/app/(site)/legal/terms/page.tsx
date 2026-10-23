@@ -21,9 +21,9 @@ const SECTIONS: LegalSection[] = [
     title: "Who we are",
     body: (
       <p>
-        {BRAND.product} is run by {BRAND.company}, a company based in {BRAND.location}. “We” and “us” mean{" "}
-        {BRAND.company}; “you” means the person who holds the account. If you use {BRAND.product} for a family or group
-        account, the account Owner accepts these terms for everyone they add.
+        {BRAND.product} is run by {BRAND.company}. “We” and “us” mean {BRAND.company}; “you” means the person who holds
+        the account. If you use {BRAND.product} for a family or group account, the account Owner accepts these terms for
+        everyone they add.
       </p>
     ),
   },

@@ -2,7 +2,7 @@
 
 # AnhourMail
 
-AnhourMail is a hosted email service by **Anhourtec** (Vancouver/Victoria, BC, Canada) for privacy-minded,
+AnhourMail is a hosted email service by **Anhourtec** for privacy-minded,
 tech-savvy individuals: free `@anhourmail.com` addresses, custom domains on paid plans, aliases and masked aliases,
 IMAP/SMTP/JMAP, and a fast open-source webmail. Mail is handled by **Stalwart** (AGPL-3.0, run unmodified and
 driven through its JMAP management API). Everything else — signup, invites, plans, billing, domains,

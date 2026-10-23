@@ -19,7 +19,6 @@ import { EMAIL_LOGO_DARK, EMAIL_LOGO_LIGHT } from "./logo.generated";
 export const esc = (s: string): string => s.replace(/[&<>"']/g, (c) => `&#${String(c.charCodeAt(0))};`);
 
 /** Where the company is, for the footer of every system email. */
-export const EMAIL_LOCATION = "Vancouver/Victoria, BC, Canada";
 
 export const LOGO_CID = { light: "logo-light@anhourmail", dark: "logo-dark@anhourmail" } as const;
 
@@ -136,7 +135,7 @@ export function systemEmail(input: SystemEmailInput): MailMessage {
   const url = httpUrl(input.action.url);
   const site = siteHost(input.site);
   const facts = input.facts ?? [];
-  const signature = `${BRAND.product} by ${BRAND.company} · ${EMAIL_LOCATION}`;
+  const signature = `${BRAND.product} by ${BRAND.company}`;
 
   const text = [
     input.greeting,

@@ -104,7 +104,7 @@ describe("every system email uses the shared layout", () => {
       expect(m.html).toContain('src="cid:logo-light@anhourmail"');
       expect(m.html).not.toMatch(/<img[^>]+src="https?:/);
       expect(m.html).toContain('href="https://example.test"');
-      expect(m.text).toContain("AnhourMail by Anhourtec · Vancouver/Victoria, BC, Canada");
+      expect(m.text).toContain("AnhourMail by Anhourtec");
       expect(m.text).toContain("https://example.test");
     }
   });

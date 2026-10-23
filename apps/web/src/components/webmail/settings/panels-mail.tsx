@@ -124,7 +124,7 @@ export function WritingPanel({
               setDrafts((d) => ({ ...d, [identityId]: e.target.value }));
               setStatus(null);
             }}
-            placeholder={"Sam Lee\nAnhourtec · Victoria, BC"}
+            placeholder={"Sam Lee\nAnhourtec"}
             className={`${areaClass} font-mono text-[13.5px]`}
           />
           <div className="flex flex-wrap items-center gap-3">

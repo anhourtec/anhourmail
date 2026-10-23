@@ -4,7 +4,7 @@ Last updated: 2026-10-21
 
 ## What AnhourMail is
 
-A hosted email service from Anhourtec (British Columbia, Canada) for **privacy-minded, tech-savvy individuals**. It offers free `@anhourmail.com` addresses, paid custom domains, aliases, catch-all and masked aliases, standard protocols (IMAP, SMTP, JMAP), and an **open-source, fast webmail**, the successor to HourMail.
+A hosted email service from Anhourtec for **privacy-minded, tech-savvy individuals**. It offers free `@anhourmail.com` addresses, paid custom domains, aliases, catch-all and masked aliases, standard protocols (IMAP, SMTP, JMAP), and an **open-source, fast webmail**, the successor to HourMail.
 
 For families and small groups on Plus/Supporter it also offers the mail collaboration people know from mainstream business mail suites: shared mailboxes, distribution lists (static and dynamic), groups, delegated access (full access, send as, send on behalf, folder sharing), mail flow rules, forwarding, auto-replies and message trace — built on Stalwart Community, with policy in our control plane (`10-collaboration.md`, ADR-0013).
 

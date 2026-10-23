@@ -21,10 +21,9 @@ const SECTIONS: LegalSection[] = [
     title: "Who is responsible",
     body: (
       <p>
-        {BRAND.company}, based in {BRAND.location}, runs {BRAND.product} and is responsible for the personal information
-        described here. We follow British Columbia’s Personal Information Protection Act (PIPA) and, for information
-        that crosses provincial or national borders, the federal PIPEDA. Our privacy officer can be reached at {privacy}
-        .
+        {BRAND.company} runs {BRAND.product} and is responsible for the personal information described here. We follow
+        British Columbia’s Personal Information Protection Act (PIPA) and, for information that crosses provincial or
+        national borders, the federal PIPEDA. Our privacy officer can be reached at {privacy}.
       </p>
     ),
   },

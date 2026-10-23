@@ -120,7 +120,7 @@ describe("systemEmail layout", () => {
   it("writes a footer with why, who and where, and a plain-text part that mirrors the content", () => {
     const m = systemEmail({ ...base, facts: [{ label: "Mailbox:", value: "k***@family.test" }], closing: "Last." });
     expect(m.html).toContain("You got this email because a reset was asked for.");
-    expect(m.html).toContain("AnhourMail by Anhourtec · Vancouver/Victoria, BC, Canada");
+    expect(m.html).toContain("AnhourMail by Anhourtec");
     expect(m.html).toContain(">example.test</a>");
     expect(m.text).toBe(
       [
@@ -138,7 +138,7 @@ describe("systemEmail layout", () => {
         "If you didn't ask, ignore this email.",
         "",
         "You got this email because a reset was asked for.",
-        "AnhourMail by Anhourtec · Vancouver/Victoria, BC, Canada",
+        "AnhourMail by Anhourtec",
         "https://example.test",
         "",
       ].join("\n"),

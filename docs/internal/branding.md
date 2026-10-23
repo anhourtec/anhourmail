@@ -102,7 +102,7 @@ no-reply address through our own Stalwart.
   card a heading (the subject unless given; 22 px, weight 500, sentence case), the greeting and short paragraphs, mono
   "facts" for values someone chose, one solid button, a copy-paste link, then an optional muted note under a hairline
   ("If you didn't ask, ignore this email"). Under the card, muted and centred: why this address got the email (per
-  email), "AnhourMail by Anhourtec · Vancouver/Victoria, BC, Canada" and a plain link to the deployment's site host
+  email), "AnhourMail by Anhourtec" and a plain link to the deployment's site host
   (`platform.hosts.site`).
 - **Client-proof HTML:** `role="presentation"` tables, every style inline, 560 px wide and centred (a fixed-width
   ghost table for desktop Outlook), `lang`, `<meta name="color-scheme" content="light dark">`, system font stack, a

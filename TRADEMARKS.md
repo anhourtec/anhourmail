@@ -1,7 +1,7 @@
 # Trademark policy
 
 The AnhourMail source code is open source (see [LICENSE](./LICENSE)). The **AnhourMail name and logo are not**.
-"AnhourMail", "Anhourtec" and their logos are trademarks of Anhourtec, British Columbia, Canada.
+"AnhourMail", "Anhourtec" and their logos are trademarks of Anhourtec.
 
 This policy exists so that people can trust that anything called "AnhourMail" is run by us. It is not meant to
 stop you from using, studying, changing or sharing the code.

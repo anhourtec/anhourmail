@@ -42,7 +42,6 @@ export const isSuspensionReason = (v: unknown): v is SuspensionReason =>
 export const BRAND = {
   product: "AnhourMail",
   company: "Anhourtec",
-  location: "British Columbia, Canada",
 } as const;
 
 /** Public hostnames under a platform domain. */
