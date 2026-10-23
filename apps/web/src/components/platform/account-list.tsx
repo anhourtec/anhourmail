@@ -89,9 +89,19 @@ export function AccountList({ rows }: { rows: AccountRow[] }) {
                   />
                 </div>
               </td>
-              <td className={listClass.td}>{a.plan}</td>
+              <td className={listClass.td}>
+                {a.plan}
+                {/* Small screens hide the Status column: a suspended account still says so. */}
+                {a.status === "suspended" && (
+                  <span className="block sm:hidden">
+                    <StatusText tone="danger">Suspended</StatusText>
+                  </span>
+                )}
+              </td>
               <td className={`${listClass.td} hidden sm:table-cell`}>
-                <StatusText tone={a.active ? "success" : "warning"}>{a.active ? "Active" : a.status}</StatusText>
+                <StatusText tone={a.active ? "success" : a.status === "suspended" ? "danger" : "warning"}>
+                  {a.active ? "Active" : a.status === "suspended" ? "Suspended" : a.status}
+                </StatusText>
               </td>
               <td className={`${listClass.td} am-num hidden md:table-cell`}>{a.members}</td>
               <td className={`${listClass.td} am-num hidden md:table-cell`}>{a.mailboxes}</td>

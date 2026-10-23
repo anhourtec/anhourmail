@@ -6,6 +6,7 @@ import { listAliases } from "@anhourmail/core/aliases";
 import { listDomains } from "@anhourmail/core/domains";
 import { listMailboxes } from "@anhourmail/core/mailboxes";
 import { listPeople } from "@anhourmail/core/people";
+import { accountSuspensionNotice } from "@anhourmail/core/platform";
 import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 
 import { navTree } from "@/server/console-nav";
@@ -14,6 +15,7 @@ import { env } from "@/server/env";
 
 import type { MenuAccount } from "./account-menu";
 import { ConsoleChrome } from "./console-chrome";
+import { AccountSuspendedNotice } from "./console/account-suspended-notice";
 import type { NavCounts, PrimaryAction } from "./console/left-nav";
 import { SIDEBAR_COOKIE } from "./sidebar-cookies";
 
@@ -85,6 +87,11 @@ export async function ConsoleShell({
         .find((i) => i.href)?.href ?? "/",
   }));
   const staffRole = actor.platformRoles[0];
+  // A suspended account (staff, `platform.account.suspend`): its people see the notice instead of its pages.
+  const suspendedNotice =
+    current && actor.suspendedAccountIds?.includes(current)
+      ? await accountSuspensionNotice(container().deps, actor, current)
+      : null;
   return (
     <ConsoleChrome
       tree={navTree(actor, current)}
@@ -108,7 +115,19 @@ export async function ConsoleShell({
       staff={actor.platformRoles.length > 0}
       initialCompact={compact}
     >
-      {children}
+      {current && suspendedNotice ? (
+        <>
+          <AccountSuspendedNotice
+            accountName={names[current] ?? "Account"}
+            reasonLabel={suspendedNotice.reasonLabel}
+            since={suspendedNotice.since}
+          />
+          {/* The account's own pages are closed; pages that aren't the account's (Security, home) stay below. */}
+          {accountId === current ? null : children}
+        </>
+      ) : (
+        children
+      )}
     </ConsoleChrome>
   );
 }

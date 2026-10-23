@@ -3,6 +3,8 @@
 
 import { type SyntheticEvent, useState } from "react";
 
+import { SUPPORT_EMAIL } from "@anhourmail/shared/platform";
+
 import { useHydrated } from "@/components/use-hydrated";
 
 import { PasswordInput } from "@/components/password-input";
@@ -50,7 +52,7 @@ export function WebmailSignInForm({
       const code = ((await res.json().catch(() => null)) as { error?: { code?: string } } | null)?.error?.code;
       setError(
         code === "mailbox_unavailable"
-          ? "This mailbox can't be used right now. If you think this is a mistake, ask your account's admin."
+          ? `This mailbox is suspended, so it can't be used right now. Its mail is kept. If you think this is a mistake, ask your account's admin, or email ${SUPPORT_EMAIL} if Anhourtec suspended your account.`
           : (MESSAGES[res.status] ?? "Something went wrong. Try again."),
       );
     } catch {

@@ -7,7 +7,7 @@ import { AuthSplit, LegalConsent } from "@/components/auth-split";
 import { WebmailSignInForm } from "@/components/webmail/sign-in-form";
 import { env } from "@/server/env";
 import { platform } from "@/server/platform";
-import { BLOCKED_MESSAGE, NOTICE_COOKIE } from "@/server/webmail/http";
+import { BLOCKED_HELP, BLOCKED_MESSAGE, NOTICE_COOKIE } from "@/server/webmail/http";
 import { webmail, webmailCookieName } from "@/server/webmail/instance";
 import { prefillAddress, webmailBasePath } from "@/server/webmail/paths";
 
@@ -45,7 +45,7 @@ export default async function WebmailSignInPage({
           role="alert"
           className="am-small rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2.5 text-destructive"
         >
-          {BLOCKED_MESSAGE} If you think this is a mistake, ask your account's admin.
+          {BLOCKED_MESSAGE} {BLOCKED_HELP}
         </p>
       )}
       <WebmailSignInForm

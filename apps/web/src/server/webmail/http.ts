@@ -3,6 +3,8 @@ import "server-only";
 
 import { NextResponse } from "next/server";
 
+import { SUPPORT_EMAIL } from "@anhourmail/shared/platform";
+
 import { webmailCookie } from "./instance";
 import {
   WebmailBlockedError,
@@ -16,7 +18,10 @@ import {
 
 /** Why the sign-in page is shown again (a short-lived, HttpOnly hint; never a credential). */
 export const NOTICE_COOKIE = "am.webmail_notice";
-export const BLOCKED_MESSAGE = "This mailbox can't be used right now.";
+export const BLOCKED_MESSAGE = "This mailbox is suspended, so it can't be used right now. Its mail is kept.";
+
+/** What to do about it: the account's admin, or Anhourtec support when Anhourtec suspended the account. */
+export const BLOCKED_HELP = `If you think this is a mistake, ask your account's admin, or email ${SUPPORT_EMAIL} if Anhourtec suspended your account.`;
 
 /** Maps webmail BFF errors to the `{ error: { code, message } }` envelope; null when `err` isn't one of ours. */
 export function webmailErrorResponse(err: unknown): Response | null {

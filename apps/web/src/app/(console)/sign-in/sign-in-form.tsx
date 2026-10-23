@@ -129,7 +129,7 @@ export function SignInForm({ next = "/" }: { next?: string }) {
         return;
       }
       setError(
-        res.code === "USER_NOT_VERIFIED"
+        res.code === "USER_NOT_VERIFIED" || res.code === "SIGN_IN_METHOD_REQUIRED"
           ? res.message
           : res.status === 429
             ? res.message

@@ -21,16 +21,18 @@ export async function getActorAndSession(headers: Headers): Promise<{ actor: Act
   const ctx = requestContext();
   if (ctx) ctx.userId = user.id;
   // Sequential: a transaction holds one database connection, which runs one query at a time.
-  const [platformRoles, memberships, suspended, mustEnrol, refusal] = await container().deps.uow.run(
-    async (r) =>
-      [
-        await r.access.platformRoles(user.id),
-        await r.access.memberships(user.id),
-        await r.access.isSuspended(user.id),
-        await requiredEnrolment(r, user.id),
-        await sessionRefusalFor(r, user.id, user.signInMethod),
-      ] as const,
-  );
+  const [platformRoles, memberships, suspended, mustEnrol, refusal, suspendedAccountIds] =
+    await container().deps.uow.run(
+      async (r) =>
+        [
+          await r.access.platformRoles(user.id),
+          await r.access.memberships(user.id),
+          await r.access.isSuspended(user.id),
+          await requiredEnrolment(r, user.id),
+          await sessionRefusalFor(r, user.id, user.signInMethod),
+          await r.suspensions.suspendedAccountsOf(user.id),
+        ] as const,
+    );
   if (refusal) {
     const c = requestContext();
     await endSessionForRequirement(
@@ -51,6 +53,7 @@ export async function getActorAndSession(headers: Headers): Promise<{ actor: Act
       suspended,
       ...(mustEnrol ? { mustEnrol } : {}),
       ...(user.signInMethod ? { signInMethod: user.signInMethod } : {}),
+      ...(suspendedAccountIds.length > 0 ? { suspendedAccountIds } : {}),
     },
     sessionId: user.sessionId,
   };

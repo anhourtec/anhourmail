@@ -5,7 +5,7 @@ import { notFound } from "next/navigation";
 
 import { can, NotFoundError } from "@anhourmail/core";
 import { GB } from "@anhourmail/core/mailboxes";
-import { viewAccount } from "@anhourmail/core/platform";
+import { staffSuspensionView, viewAccount } from "@anhourmail/core/platform";
 import { PLANS } from "@anhourmail/shared/plans";
 import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 import { requestIdFrom } from "@anhourmail/server/request-context";
@@ -18,6 +18,7 @@ import { StatusText, type Tone } from "@/components/console/status-text";
 import { CopyValue } from "@/components/copy-value";
 import { MailboxStatus } from "@/components/mailboxes/mailbox-status";
 import { StaffCreateAddress } from "@/components/platform/staff-create-address";
+import { SuspensionControl } from "@/components/platform/suspension-control";
 import { requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
 import { platform } from "@/server/platform";
@@ -50,6 +51,9 @@ export default async function CustomerAccountPage({ params }: { params: Promise<
     throw err;
   }
   const { summary, people, domains, mailboxes, pendingInvites } = detail;
+  const suspension = await staffSuspensionView(container().deps, actor, accountId);
+  // Suspending and lifting: Global Administrator only, never while acting as someone (the server checks again).
+  const canSuspend = can(actor, "platform.account.suspend") && actor.actingAs === undefined;
 
   const peopleTab = (
     <>
@@ -77,6 +81,11 @@ export default async function CustomerAccountPage({ params }: { params: Promise<
                 <th scope="col" className={`${listClass.th} hidden md:table-cell`}>
                   Joined
                 </th>
+                {canSuspend && (
+                  <th scope="col" className={listClass.th}>
+                    <span className="sr-only">Actions</span>
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -95,6 +104,24 @@ export default async function CustomerAccountPage({ params }: { params: Promise<
                     </StatusText>
                   </td>
                   <td className={`${listClass.td} am-num hidden md:table-cell`}>{dateFmt.format(p.joinedAt)}</td>
+                  {canSuspend && (
+                    <td className={listClass.td}>
+                      {p.userId !== actor.userId && (
+                        <SuspensionControl
+                          kind="person"
+                          url={`/api/platform/people/${encodeURIComponent(p.userId)}/suspension`}
+                          suspended={p.suspended}
+                          subject={p.email}
+                        />
+                      )}
+                      {suspension.people[p.userId] && (
+                        <p className="am-micro mt-1">
+                          {suspension.people[p.userId]?.reasonLabel}
+                          {suspension.people[p.userId]?.note ? ` · ${suspension.people[p.userId]?.note ?? ""}` : ""}
+                        </p>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -181,13 +208,36 @@ export default async function CustomerAccountPage({ params }: { params: Promise<
       <p className="am-small max-w-prose rounded-lg border px-4 py-3">
         Opening this page is recorded in the account&apos;s audit log, where its admins see it as Anhourtec staff.
       </p>
+      {canSuspend && (
+        <div className="flex flex-wrap items-start gap-3">
+          <SuspensionControl
+            kind="account"
+            url={`/api/platform/accounts/${encodeURIComponent(summary.id)}/suspension`}
+            suspended={suspension.account !== null}
+            subject={summary.name}
+          />
+        </div>
+      )}
       <FieldGrid>
         <Field label="Plan">{PLANS[summary.plan].name}</Field>
         <Field label="Status">
-          <StatusText tone={summary.status === "active" ? "success" : "warning"}>
-            {summary.status === "active" ? "Active" : summary.status}
+          <StatusText tone={summary.status === "active" ? "success" : "danger"}>
+            {summary.status === "active" ? "Active" : summary.status === "suspended" ? "Suspended" : summary.status}
           </StatusText>
         </Field>
+        {suspension.account && (
+          <Field label="Suspension">
+            <span className="flex flex-col gap-0.5">
+              <span>
+                {suspension.account.reasonLabel} · since{" "}
+                <span className="am-num">{dateFmt.format(suspension.account.at)}</span>
+              </span>
+              {suspension.account.note && (
+                <span className="am-small break-words">Internal note: {suspension.account.note}</span>
+              )}
+            </span>
+          </Field>
+        )}
         <Field label="Created">
           <span className="am-num">{dateFmt.format(summary.createdAt)}</span>
         </Field>

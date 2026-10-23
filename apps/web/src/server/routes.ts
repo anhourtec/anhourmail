@@ -376,6 +376,39 @@ export const ROUTES: readonly RouteSpec[] = [
     // The harness sends no address: allowed callers get a validation error.
     probeStatus: 400,
   },
+  // Staff suspension (Global Administrator; fresh step-up). The harness probes random ids: allowed callers get 404.
+  {
+    method: "POST",
+    path: "/api/platform/accounts/:accountId/suspension",
+    file: "app/api/platform/accounts/[accountId]/suspension/route.ts",
+    guard: "platform.account.suspend",
+    audits: "trust.suspended",
+    probeStatus: 404,
+  },
+  {
+    method: "DELETE",
+    path: "/api/platform/accounts/:accountId/suspension",
+    file: "app/api/platform/accounts/[accountId]/suspension/route.ts",
+    guard: "platform.account.suspend",
+    audits: "trust.unsuspended",
+    probeStatus: 404,
+  },
+  {
+    method: "POST",
+    path: "/api/platform/people/:userId/suspension",
+    file: "app/api/platform/people/[userId]/suspension/route.ts",
+    guard: "platform.account.suspend",
+    audits: "trust.suspended",
+    probeStatus: 404,
+  },
+  {
+    method: "DELETE",
+    path: "/api/platform/people/:userId/suspension",
+    file: "app/api/platform/people/[userId]/suspension/route.ts",
+    guard: "platform.account.suspend",
+    audits: "trust.unsuspended",
+    probeStatus: 404,
+  },
   // Webmail BFF (ADR-0003, ADR-0018): served on the webmail origin only (host-routing.ts).
   {
     method: "POST",
