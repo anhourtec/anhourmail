@@ -26,7 +26,7 @@ npm-debug.log*
 credentials.md
 
 # Playwright MCP output: screenshots, traces, snapshots (see CLAUDE.md rule 6)
-.playwright-mcp/
+.playwright-mcp
 /playwright-report/
 /test-results/
 

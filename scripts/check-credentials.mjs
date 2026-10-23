@@ -14,7 +14,7 @@ const FORBIDDEN = [
   /\.local\.md$/,
   /(^|\/)\.env(\..*)?$/,
   /^infra\/stalwart\/\.generated\//,
-  /^\.playwright-mcp\//,
+  /^\.playwright-mcp(\/|$)/,
   /^deploy\/certs\//,
   /\.(pem|key)$/,
 ];
