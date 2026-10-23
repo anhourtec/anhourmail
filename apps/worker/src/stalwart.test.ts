@@ -26,6 +26,13 @@ describe("worker Stalwart settings (ADR-0020 credential split)", () => {
     expect(() => {
       checkStalwartSettings("worker", { ...prod, STALWART_PROVISIONING_KEY: "p", STALWART_AUDIT_KEY: "a" });
     }).toThrow(/STALWART_AUDIT_KEY must not be given to this process/);
+    // Never the web app's mailbox password grant key, in any environment.
+    expect(() => {
+      checkStalwartSettings("worker", { STALWART_PROVISIONING_KEY: "p", MAILBOX_PASSWORD_GRANT_KEY: "g".repeat(40) });
+    }).toThrow(/MAILBOX_PASSWORD_GRANT_KEY must not be given/);
+    expect(() => {
+      checkStalwartSettings("scheduler", { STALWART_PROVISIONING_KEY: "p", MAILBOX_PASSWORD_GRANT_KEY: "g" });
+    }).toThrow(/MAILBOX_PASSWORD_GRANT_KEY must not be given/);
   });
 
   it("requires the audit key on the scheduler and allows it on one-off jobs", () => {

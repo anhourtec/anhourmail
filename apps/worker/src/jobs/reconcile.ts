@@ -43,6 +43,8 @@ l.at(credentials.clean ? "info" : "warn", "app password reconcile finished", {
   missingOnMailServer: credentials.missingOnMailServer,
   apiKeys: credentials.apiKeys,
   extraPasswords: credentials.extraPasswords,
+  passwordReplaced: credentials.passwordReplaced,
+  passwordUntracked: credentials.passwordUntracked,
   unreachable: credentials.unreachable,
   mailboxesWithDrift: credentials.addresses.length,
 });

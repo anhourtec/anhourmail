@@ -31,6 +31,11 @@ export function checkStalwartSettings(
 ): void {
   const { required, optional } = WORKER_CREDENTIALS[kind];
   const problems = credentialEnvProblems(required, env, optional);
+  // The mailbox password grant key belongs to the web app and the management proxy only: with it, the provisioning key
+  // could replace any customer's password (ADR-0020 "Mailbox passwords"). Refused everywhere, dev included.
+  if ((env.MAILBOX_PASSWORD_GRANT_KEY ?? "") !== "") {
+    problems.push("MAILBOX_PASSWORD_GRANT_KEY must not be given to this process (web app and management proxy only)");
+  }
   if (problems.length > 0) throw new Error(`Worker configuration refused: ${problems.join("; ")}`);
 }
 
