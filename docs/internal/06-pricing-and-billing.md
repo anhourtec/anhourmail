@@ -17,26 +17,36 @@ Plans, prices, storage and limits are defined once in `packages/shared/src/plans
 Supersedes the open decision recorded on 2026-10-21 (founding price, soft quota, smaller free storage). The numbers live
 in `plans.ts`; in outline:
 
-- **Free:** $0, one `@<platform domain>` address, 1 GB.
-- **Plus:** yearly, lower than the 2026-10-21 placeholder; up to 10 mailboxes included (`includedMailboxes`), 10 GB per
-  mailbox (`storageGb`), unlimited custom domains and aliases, catch-all, add people.
+- **Free:** $0, one `@<platform domain>` address, 1 GB (`storagePoolGb`).
+- **Plus:** yearly, **per account** (covers everyone in it); up to 10 mailboxes included (`includedMailboxes`), **10 GB
+  pooled for the whole account** (`storagePoolGb`), unlimited custom domains and aliases, catch-all, add people.
 - **Supporter:** pay what you want above a lower minimum; everything in Plus plus the badge.
-- **No hard limits on paid accounts, fair use instead:** `fairUseStorageGb` (30 GB stored per account across its
-  mailboxes), then `extraStoragePricePerGb` per GB per year; mailboxes beyond the included ten at `extraMailboxPrice`
-  per mailbox per year (CAD rounded up to a clean figure). The pricing page and docs render the line with
-  `fairUseText()`.
-- **Until billing exists (Phase 5)** nothing is charged: an account can't create more than `MAX_MAILBOXES` (= the ten
-  included), and the copy says more mailboxes come with billing. Fair-use storage isn't metered yet; per-mailbox
-  quotas (`storageGb`) are the hard limit today. Charging code is Phase 5.
-- **Storage per mailbox went down** (Free 10 → 1 GB, Plus and Supporter 30 → 10 GB). Existing mailboxes are brought down
-  by the one-off `job:quota-cap` (`08-operations.md`): never below the mail they hold (rounded up to the next GB), each
-  change audited in the account as `mailbox.quota_changed` with reason `plan_storage_reduced`; the console shows a
-  mailbox kept above the plan as such.
+- **Paid extras (Phase 5, billing):** storage blocks of `storageBlockGb` (+10 GB) at `storageBlockPrice` per year, and
+  mailboxes beyond the included ten at `extraMailboxPrice` per year. Never auto-charged. The pricing page and docs render
+  the lines with `storageText()`. The earlier "fair use 30 GB, then $1/GB" line is withdrawn: at $9 it lost money for
+  accounts storing 9–30 GB.
+- **Pooled enforcement (revised 2026-10-23 evening):** the mail server enforces quotas per mailbox only, so the sum of an
+  account's mailbox quotas can never exceed its pool (`accountPoolBytes(plan, blocks)` — blocks are 0 until billing).
+  `packages/core/src/mailboxes/service.ts`: a new mailbox defaults to an even share of the unassigned pool over the
+  plan's remaining included mailboxes (`defaultShareBytes`, whole GB, at least 1 GB) or a chosen 1 GB … unassigned; it
+  is refused when the pool is fully assigned ("All 10 GB of this account's storage is assigned. Lower another mailbox's
+  storage or add more."). Changing storage allows from the mailbox's measured usage rounded up (`minQuotaBytes`) to its
+  quota plus the unassigned pool, under the account lock. Every mailbox counts toward the pool, suspended or being
+  deleted too (they still hold mail).
+- **Existing data:** `job:quota-cap` (`rebalanceStoragePools`) scales an over-assigned account's quotas down in
+  proportion, never below each mailbox's usage rounded up, records `keptAbovePool`, audits `mailbox.quota_changed` with
+  reason `storage_pooled` and queues `mailbox.ensure`. Never deletes mail.
+- **Published now, enforced in Phase 6** (`ACCOUNT_POLICY`): external recipients per mailbox per day Free 50 / paid
+  500 (lower in the first 14 days); message size 25 MB send / 50 MB receive; a full mailbox refuses mail ("mailbox
+  full"), warnings at 80/95%; free inactivity 12 months → warnings → suspension, mail kept 90 days, the name never
+  reissued.
 
 **Cost model per paying account (rough, USD per year):** card fee about $0.56 on the Plus price; storage about $3 for a
 typical account (a few GB, three copies, backups); about $5.40 left as margin. At that margin about **210 paying
-accounts** cover the production topology's fixed costs (`09-roadmap.md` "Path to production"). Heavy accounts pay for
-their own storage above the fair-use allowance, so the worst case is bounded rather than absorbed.
+accounts** cover the production topology's fixed costs (`09-roadmap.md` "Path to production"). With the pool fully used
+(10 GB ≈ $10 of storage) a Plus account is about −$1.56; typical use (3–5 GB) is +$3.40 to +$5.40. Each +10 GB block at
+$10 is roughly break-even after card fees (bundle it with the renewal to avoid a second fee), so heavy accounts pay for
+their own storage and the worst case is bounded rather than absorbed.
 
 ## Stripe design
 

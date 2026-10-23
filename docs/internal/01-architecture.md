@@ -266,10 +266,10 @@ scheduler ─► job:storage-usage (every 10 min, provisioning key) ─► batch
              for every mailbox with a stalwart_id ─► mailbox.storage_used_bytes / storage_checked_at. Sizes only
              (rule 24); a failed batch keeps the last good value; not audited (an observation, not a change). The
              console reads the columns from Postgres — the web app gets no new Stalwart access (ADR-0020).
-one-off   ─► job:quota-cap (deploy step after a plan's storage per mailbox goes down) ─► reads usage the same way,
-             lowers quota_bytes to the plan's storageGb but never below the mail held (rounded up to the next GB),
-             queues mailbox.ensure (→ quotas.maxDiskQuota); audit mailbox.quota_changed (system, account scope,
-             reason plan_storage_reduced). Never deletes mail; re-runnable.
+one-off   ─► job:quota-cap (deploy step: storage pooled per account) ─► per account whose quotas add up to more than
+             its pool (accountPoolBytes), reads usage the same way and scales quota_bytes down in proportion, never
+             below the mail held (rounded up to the next GB); queues mailbox.ensure (→ quotas.maxDiskQuota); audit
+             mailbox.quota_changed (system, account scope, reason storage_pooled). Never deletes mail; re-runnable.
 ```
 
 Mailbox lifecycle (status in `mailbox.status`; every change is a console mutation that queues `mailbox.ensure`):

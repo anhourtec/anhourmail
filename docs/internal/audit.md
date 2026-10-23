@@ -84,9 +84,9 @@ meta includes `suspensionMismatches` and `requeued`.
 `mailbox.deleted` stays reserved for an immediate deletion without a grace period (not offered today).
 
 Storage: `job:quota-cap` writes `mailbox.quota_changed` as the system **in the mailbox's account scope** (meta
-`fromGb`, `toGb`, `planGb`, `usedBytes`, `abovePlan`, `reason: "plan_storage_reduced"`), so the account's admins see
-why a quota went down and when one was kept above the plan; a mailbox it can't lower is reported in the job log, not
-audited. The scheduler's storage measurements (`job:storage-usage`, every 10 minutes) are **not audited**: they record
+`fromGb`, `toGb`, `poolGb`, `usedBytes`, `reason: "storage_pooled"`; entries before 2026-10-23 evening carry `planGb`,
+`abovePlan`, `reason: "plan_storage_reduced"`), so the account's admins see why a quota went down; an account kept
+above its pool by the mail it holds is reported in the job log (`keptAbovePoolAccountIds`), not audited. The scheduler's storage measurements (`job:storage-usage`, every 10 minutes) are **not audited**: they record
 an observation of the mail server, not a change anyone asked for, and would flood the log.
 
 First platform administrator: `platform.admin_bootstrapped` is written by the system actor `bootstrap-admin` (worker
