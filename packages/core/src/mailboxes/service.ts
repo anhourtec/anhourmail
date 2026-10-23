@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { randomUUID } from "node:crypto";
 
-import { MAILBOX_DELETE_GRACE_DAYS, MAX_MAILBOXES, PLANS } from "@anhourmail/shared/plans";
+import { accountPoolBytes, MAILBOX_DELETE_GRACE_DAYS, MAX_MAILBOXES, PLANS } from "@anhourmail/shared/plans";
+import {
+  defaultShareBytes,
+  formatBytes,
+  minQuotaBytes,
+  poolFullMessage,
+  type StoragePool,
+  storagePool,
+} from "@anhourmail/shared/storage";
 
 import { type Actor, authorize, can } from "../actor";
 import { maskEmail } from "../audit/record";
@@ -108,11 +116,31 @@ export async function assertDomainHeld(repos: Repositories, accountId: string, a
   }
 }
 
-/** Largest quota a mailbox can have on the account's plan (each mailbox gets up to the plan's storage). */
-async function planQuota(repos: Repositories, accountId: string): Promise<number> {
+/**
+ * The account's storage pool as it stands (plan storage plus purchased blocks; blocks are 0 until billing opens): what
+ * its mailboxes are given, what is left, and what each holds. Every mailbox counts, suspended or being deleted too —
+ * they still hold their mail.
+ */
+async function poolOf(repos: Repositories, accountId: string) {
   const account = await repos.accounts.get(accountId);
   if (!account) throw new NotFoundError();
-  return PLANS[account.plan].storageGb * GB;
+  const mailboxes = await repos.mailboxes.listByAccount(accountId);
+  const used = new Map((await repos.mailboxStorage.byAccount(accountId)).map((x) => [x.mailboxId, x.usedBytes]));
+  const pool = storagePool(
+    accountPoolBytes(account.plan),
+    mailboxes.map((m) => ({ quotaBytes: m.quotaBytes, storageUsedBytes: used.get(m.id) ?? null })),
+  );
+  return { plan: PLANS[account.plan], pool, count: mailboxes.length, used };
+}
+
+/** A new mailbox's storage: the default share of the pool, or the amount asked for (1 GB … the unassigned pool). */
+function newMailboxQuota(p: Awaited<ReturnType<typeof poolOf>>, input: unknown): number {
+  const { pool } = p;
+  if (pool.unassignedBytes < GB) throw new PlanLimitError(poolFullMessage(pool.poolBytes));
+  if (input === undefined || input === null || input === "") {
+    return defaultShareBytes(pool.unassignedBytes, p.count, p.plan.includedMailboxes);
+  }
+  return parseQuota(input, GB, Math.floor(pool.unassignedBytes / GB) * GB);
 }
 
 async function planIncludesDomains(repos: Repositories, accountId: string): Promise<boolean> {
@@ -120,13 +148,24 @@ async function planIncludesDomains(repos: Repositories, accountId: string): Prom
   return account !== null && PLANS[account.plan].customDomains;
 }
 
-function parseQuota(input: unknown, max: number): number {
-  if (input === undefined || input === null || input === "") return max;
+/** A whole number of GB from `min` to `max` (bytes, whole GB). */
+function parseQuota(input: unknown, min: number, max: number): number {
   const gb = typeof input === "number" ? input : Number(input);
-  if (!Number.isInteger(gb) || gb < 1 || gb * GB > max) {
-    throw new ValidationError(`Choose a whole number of GB from 1 to ${String(max / GB)}.`);
+  if (!Number.isInteger(gb) || gb * GB < min || gb * GB > max) {
+    throw new ValidationError(`Choose a whole number of GB from ${String(min / GB)} to ${String(max / GB)}.`);
   }
   return gb * GB;
+}
+
+/** The storage a mailbox can be given: at least what it holds (rounded up), at most its quota plus the unassigned pool. */
+function quotaRange(m: Mailbox, pool: StoragePool, usedBytes: number | null) {
+  return { min: minQuotaBytes(usedBytes), max: Math.floor((m.quotaBytes + pool.unassignedBytes) / GB) * GB };
+}
+
+/** The account's storage pool (`mailbox.read`): the Mailboxes page header. */
+export async function mailboxStoragePool(deps: Deps, actor: Actor, accountId: string): Promise<StoragePool> {
+  authorize(actor, "mailbox.read", accountId);
+  return deps.uow.run(async (r) => (await poolOf(r, accountId)).pool);
 }
 
 export async function listMailboxes(deps: Deps, actor: Actor, accountId: string): Promise<MailboxView[]> {
@@ -140,7 +179,14 @@ export async function getMailbox(
   accountId: string,
   id: string,
 ): Promise<
-  MailboxView & { maxQuotaBytes: number; lifecycleLocked: boolean; passwordPending: boolean; canSetPassword: boolean }
+  MailboxView & {
+    maxQuotaBytes: number;
+    minQuotaBytes: number;
+    pool: StoragePool;
+    lifecycleLocked: boolean;
+    passwordPending: boolean;
+    canSetPassword: boolean;
+  }
 > {
   authorize(actor, "mailbox.read", accountId);
   return deps.uow.run(async (r) => {
@@ -148,9 +194,15 @@ export async function getMailbox(
     const [v] = await views(r, accountId, [m]);
     if (!v) throw new NotFoundError();
     const locked = lifecycleLocked(actor, accountId, m, await r.access.members(accountId));
+    const p = await poolOf(r, accountId);
+    const range = quotaRange(m, p.pool, v.storageUsedBytes);
     return {
       ...v,
-      maxQuotaBytes: await planQuota(r, accountId),
+      /** Storage it can be given: its own plus the account's unassigned pool. */
+      maxQuotaBytes: range.max,
+      /** What it holds, rounded up (at least 1 GB): it can't be lowered below this. */
+      minQuotaBytes: range.min,
+      pool: p.pool,
       /** True when this person may not suspend, delete or restore it (the console hides those actions). */
       lifecycleLocked: locked,
       /** A new password is waiting for the mail server (set a moment ago). */
@@ -173,6 +225,7 @@ export async function mailboxOptions(deps: Deps, actor: Actor, accountId: string
   authorize(actor, "mailbox.manage", accountId);
   return deps.uow.run(async (r) => {
     const allowance = await platformAllowance(r, deps.platform, accountId);
+    const p = await poolOf(r, accountId);
     return {
       domains: (await r.domains.listByAccount(accountId))
         .filter((d) => d.status === "active")
@@ -188,8 +241,11 @@ export async function mailboxOptions(deps: Deps, actor: Actor, accountId: string
       members: (await r.access.members(accountId)).map((m) => ({ userId: m.userId, email: m.email })),
       /** The plan includes custom domains (where more mailboxes can live). */
       customDomains: await planIncludesDomains(r, accountId),
-      maxQuotaGb: (await planQuota(r, accountId)) / GB,
-      remaining: MAX_MAILBOXES - (await r.mailboxes.count(accountId)),
+      /** The unassigned pool in whole GB (0: full, a new mailbox is refused) and the default share. */
+      maxQuotaGb: Math.floor(p.pool.unassignedBytes / GB),
+      defaultQuotaGb: defaultShareBytes(p.pool.unassignedBytes, p.count, p.plan.includedMailboxes) / GB,
+      pool: p.pool,
+      remaining: MAX_MAILBOXES - p.count,
     };
   });
 }
@@ -245,13 +301,13 @@ export async function createMailbox(
         if (!owner) throw new ValidationError("Choose someone in this account.");
         userId = owner.userId;
       }
-      const quotaBytes = parseQuota(input.quotaGb, await planQuota(repos, accountId));
       if (onPlatform) await assertPlatformAllowance(repos, deps.platform, accountId);
       if ((await repos.mailboxes.count(accountId)) >= MAX_MAILBOXES) {
         throw new PlanLimitError(
           `Your plan includes ${String(MAX_MAILBOXES)} mailboxes. More mailboxes come with billing, which isn't open yet.`,
         );
       }
+      const quotaBytes = newMailboxQuota(await poolOf(repos, accountId), input.quotaGb);
       const address = `${local}@${domainName}`;
       const password = mailboxPassword(input.password, address);
       if (breached) throw new BreachedPasswordError();
@@ -349,7 +405,13 @@ export async function staffCreatePlatformMailbox(
       if (!(await platformAddressFree(repos, address, accountId))) {
         throw new ConflictError("That address is already in use.");
       }
-      const mailbox = newMailbox(deps, accountId, userId, address, await planQuota(repos, accountId));
+      const mailbox = newMailbox(
+        deps,
+        accountId,
+        userId,
+        address,
+        newMailboxQuota(await poolOf(repos, accountId), null),
+      );
       await repos.mailboxes.insert(mailbox);
       // No password waiting: the worker gives the account a random one nobody knows until the account sets its own.
       await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: mailbox.id, runAfter: deps.clock.now() });
@@ -372,7 +434,10 @@ export async function staffCreatePlatformMailbox(
 
 const BEING_DELETED = "This mailbox is being deleted. Restore it first.";
 
-/** Changes a mailbox's quota (1 GB to the plan's storage); the worker applies it to the mail server. */
+/**
+ * Changes a mailbox's quota within the account's pool: from what it holds (rounded up to the next GB, at least 1 GB)
+ * to its current quota plus the unassigned pool. The worker applies it to the mail server.
+ */
 export async function setMailboxQuota(
   deps: Deps,
   actor: Actor,
@@ -393,7 +458,28 @@ export async function setMailboxQuota(
       if (input.quotaGb === undefined || input.quotaGb === null || input.quotaGb === "") {
         throw new ValidationError("Choose a quota in GB.");
       }
-      const quotaBytes = parseQuota(input.quotaGb, await planQuota(repos, accountId));
+      await repos.accounts.lock(accountId); // the pool holds under concurrent changes
+      const p = await poolOf(repos, accountId);
+      const usedBytes = p.used.get(m.id) ?? null;
+      const range = quotaRange(m, p.pool, usedBytes);
+      const gb = typeof input.quotaGb === "number" ? input.quotaGb : Number(input.quotaGb);
+      if (Number.isInteger(gb) && gb * GB < range.min && gb * GB < m.quotaBytes) {
+        throw new ValidationError(
+          `This mailbox holds ${formatBytes(usedBytes ?? 0)}. Choose at least ${formatBytes(range.min)}, or delete some mail first.`,
+        );
+      }
+      if (Number.isInteger(gb) && gb * GB > range.max && gb * GB > m.quotaBytes) {
+        throw new ValidationError(
+          p.pool.unassignedBytes < GB
+            ? poolFullMessage(p.pool.poolBytes)
+            : `Only ${formatBytes(p.pool.unassignedBytes)} of this account's storage is unassigned. Choose up to ${formatBytes(range.max)}.`,
+        );
+      }
+      const quotaBytes = parseQuota(
+        input.quotaGb,
+        Math.min(range.min, m.quotaBytes),
+        Math.max(range.max, m.quotaBytes),
+      );
       await repos.mailboxes.setQuota(m.id, quotaBytes);
       await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: m.id, runAfter: deps.clock.now() });
       const [v] = await views(repos, accountId, [{ ...m, quotaBytes }]);

@@ -100,15 +100,33 @@ describe("mailboxes service", () => {
     expect((await listMailboxes(d, domainAdmin, ACCOUNT_A)).map((x) => x.address)).toEqual(["jane@family.ca"]);
   });
 
-  it("defaults the quota to the plan's storage and keeps it within 1 GB … plan storage", async () => {
+  it("defaults the quota to an even share of the unassigned pool and keeps it within 1 GB … unassigned", async () => {
     const d = setup();
+    // Plus: 10 GB shared by the account, 10 mailboxes included → 1 GB each by default, never running the pool dry.
     const m = await create(d, owner, ACCOUNT_A, { localPart: "a", domainId: DOMAIN_A });
-    expect(m.quotaBytes).toBe(10 * GB);
-    for (const quotaGb of [0, 11, 2.5, "x"]) {
+    expect(m.quotaBytes).toBe(1 * GB);
+    for (const quotaGb of [0, 10, 2.5, "x"]) {
       await expect(create(d, owner, ACCOUNT_A, { localPart: "b", domainId: DOMAIN_A, quotaGb })).rejects.toThrow(
         ValidationError,
       );
     }
+    expect((await create(d, owner, ACCOUNT_A, { localPart: "b", domainId: DOMAIN_A, quotaGb: 9 })).quotaBytes).toBe(
+      9 * GB,
+    );
+    // The pool is fully assigned: refused with a message that says what to do.
+    await expect(create(d, owner, ACCOUNT_A, { localPart: "c", domainId: DOMAIN_A })).rejects.toThrow(
+      "All 10 GB of this account's storage is assigned. Lower another mailbox's storage or add more.",
+    );
+    await expect(create(d, owner, ACCOUNT_A, { localPart: "c", domainId: DOMAIN_A })).rejects.toThrow(PlanLimitError);
+  });
+
+  it("splits what is left evenly over the remaining included mailboxes", async () => {
+    const d = setup();
+    await create(d, owner, ACCOUNT_A, { localPart: "a", domainId: DOMAIN_A, quotaGb: 2 });
+    // 8 GB left over 9 slots → 1 GB; with 6 GB given to one mailbox, 2 GB over 8 slots → still at least 1 GB.
+    expect((await create(d, owner, ACCOUNT_A, { localPart: "b", domainId: DOMAIN_A })).quotaBytes).toBe(GB);
+    const o = await mailboxOptions(d, owner, ACCOUNT_A);
+    expect(o).toMatchObject({ maxQuotaGb: 7, defaultQuotaGb: 1, pool: { poolBytes: 10 * GB, assignedBytes: 3 * GB } });
   });
 
   it("refuses pending or other accounts' domains, non-members, taken addresses and the 11th mailbox", async () => {
@@ -143,15 +161,45 @@ describe("mailboxes service", () => {
     );
   });
 
-  it("changes the quota (audited, re-provisioned) and shows the bound", async () => {
+  it("changes the quota within the pool (audited, re-provisioned) and shows the bounds", async () => {
     const d = setup();
     const m = await create(d, owner, ACCOUNT_A, { localPart: "a", domainId: DOMAIN_A });
     const out = await setMailboxQuota(d, userAdmin, ACCOUNT_A, m.id, { quotaGb: "7" }, req);
     expect(out.quotaBytes).toBe(7 * GB);
-    expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "mailbox.quota_changed", meta: { fromGb: 10, toGb: 7 } });
+    expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "mailbox.quota_changed", meta: { fromGb: 1, toGb: 7 } });
     expect(d.uow.state.jobs.filter((j) => j.subjectId === m.id)).toHaveLength(1); // queued job reused
-    expect((await getMailbox(d, domainAdmin, ACCOUNT_A, m.id)).maxQuotaBytes).toBe(10 * GB);
+    expect(await getMailbox(d, domainAdmin, ACCOUNT_A, m.id)).toMatchObject({
+      maxQuotaBytes: 10 * GB,
+      minQuotaBytes: 1 * GB,
+      pool: { poolBytes: 10 * GB, assignedBytes: 7 * GB, unassignedBytes: 3 * GB },
+    });
     await expect(setMailboxQuota(d, owner, ACCOUNT_A, m.id, {}, req)).rejects.toThrow(ValidationError);
+  });
+
+  it("never gives a mailbox more than its quota plus the unassigned pool", async () => {
+    const d = setup();
+    const m = await create(d, owner, ACCOUNT_A, { localPart: "a", domainId: DOMAIN_A, quotaGb: 7 });
+    await create(d, owner, ACCOUNT_A, { localPart: "b", domainId: DOMAIN_A, quotaGb: 2 });
+    await expect(setMailboxQuota(d, owner, ACCOUNT_A, m.id, { quotaGb: 9 }, req)).rejects.toThrow(
+      "Only 1 GB of this account's storage is unassigned. Choose up to 8 GB.",
+    );
+    expect((await setMailboxQuota(d, owner, ACCOUNT_A, m.id, { quotaGb: 8 }, req)).quotaBytes).toBe(8 * GB);
+    await expect(setMailboxQuota(d, owner, ACCOUNT_A, m.id, { quotaGb: 9 }, req)).rejects.toThrow(
+      "All 10 GB of this account's storage is assigned.",
+    );
+    // Keeping the same amount is always fine, even with the pool full.
+    expect((await setMailboxQuota(d, owner, ACCOUNT_A, m.id, { quotaGb: 8 }, req)).quotaBytes).toBe(8 * GB);
+  });
+
+  it("never lowers a mailbox below what it holds (rounded up to the next GB)", async () => {
+    const d = setup();
+    const m = await create(d, owner, ACCOUNT_A, { localPart: "a", domainId: DOMAIN_A, quotaGb: 8 });
+    d.uow.state.mailboxStorage.push({ mailboxId: m.id, usedBytes: 5.3 * GB, checkedAt: new Date(0) });
+    await expect(setMailboxQuota(d, owner, ACCOUNT_A, m.id, { quotaGb: 5 }, req)).rejects.toThrow(
+      "This mailbox holds 5.3 GB. Choose at least 6 GB, or delete some mail first.",
+    );
+    expect((await setMailboxQuota(d, owner, ACCOUNT_A, m.id, { quotaGb: 6 }, req)).quotaBytes).toBe(6 * GB);
+    expect((await getMailbox(d, owner, ACCOUNT_A, m.id)).minQuotaBytes).toBe(6 * GB);
   });
 
   it("lists the form options: active domains, the platform domain's allowance, members and room left", async () => {
@@ -172,6 +220,8 @@ describe("mailboxes service", () => {
       ],
       customDomains: true,
       maxQuotaGb: 10,
+      defaultQuotaGb: 1,
+      pool: { poolBytes: 10 * GB, assignedBytes: 0, unassignedBytes: 10 * GB, usedBytes: null },
       remaining: 10,
     });
   });
