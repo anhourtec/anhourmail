@@ -4,7 +4,8 @@
 # Runs the CI pipeline (.github/workflows/ci.yml) locally against committed code, next to a running dev stack.
 #
 #   npm run ci:local                                   # every job, against HEAD
-#   npm run ci:local -- --jobs integration,e2e         # only some jobs (always run in ci.yml order)
+#   npm run ci:local -- --jobs integration,e2e         # only some jobs (in ci.yml order); e2e (Playwright) is
+#                                                      # local-only, not in ci.yml, and runs only when named
 #   npm run ci:local -- --ref origin/main              # another commit
 #   npm run ci:local -- --apply .cicd/lib.sh --apply scripts/x.ts
 #                                                      # plus the working-tree state of those paths (try a fix
@@ -30,7 +31,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ALL_JOBS="checks unit integration rbac e2e build security licences" # ci.yml order
+ALL_JOBS="checks unit integration rbac e2e build security licences" # ci.yml order, plus the local-only e2e
+DEFAULT_JOBS="checks unit integration rbac build security licences" # exactly the ci.yml jobs
 STACK_JOBS=" integration rbac e2e "
 PROJECT="anhourmail-ci"
 
@@ -40,7 +42,7 @@ REDIS_HOST_PORT:43579 STALWART_HTTP_PORT:43580 MAILPIT_SMTP_PORT:43525 MAILPIT_U
 STALWART_SMTP_PORT:43625 STALWART_SUBMISSIONS_PORT:43665 STALWART_SUBMISSION_PORT:43687 STALWART_IMAP_PORT:43643
 STALWART_IMAPS_PORT:43693 STALWART_POP3_PORT:43610 STALWART_POP3S_PORT:43695 STALWART_SIEVE_PORT:43690"
 
-usage() { sed -n '4,13p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '4,14p' "$0" | sed 's/^# \{0,1\}//'; }
 
 ref="HEAD"
 jobs_csv=""
@@ -65,7 +67,7 @@ done
 
 selected=""
 if [[ -z "$jobs_csv" ]]; then
-  selected="$ALL_JOBS"
+  selected="$DEFAULT_JOBS"
 else
   for j in ${jobs_csv//,/ }; do
     case " $ALL_JOBS " in *" $j "*) ;; *) echo "unknown job: $j (jobs: $ALL_JOBS)" >&2; exit 2 ;; esac

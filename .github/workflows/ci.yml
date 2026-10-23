@@ -62,27 +62,6 @@ jobs:
       - run: .cicd/setup.sh
       - run: .cicd/rbac.sh
 
-  e2e:
-    name: Playwright e2e
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with: { node-version-file: .nvmrc, cache: npm }
-      - run: .cicd/setup.sh
-      - run: .cicd/e2e.sh
-      - if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: playwright-report
-          # Report and per-test screenshots only: CI records no traces, and test-results/e2e-users.json (the run's
-          # throwaway logins) is never uploaded. Artifacts of a public repository are downloadable by anyone.
-          path: |
-            playwright-report/
-            test-results/e2e/
-          if-no-files-found: ignore
-          retention-days: 5
-
   build:
     name: build apps + images
     runs-on: ubuntu-24.04

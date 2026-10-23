@@ -123,7 +123,8 @@ an app container direct access to Stalwart's management listener.
    out-of-scope IDs return **404**, missing permission returns **403**.
 6. **Playwright MCP for all UI checks:** light + dark, 1440 + 390 wide, read the console. Screenshots only in
    `.playwright-mcp/` (gitignored). Playwright MCP is a local, interactive tool only: CI never uses, installs,
-   references or depends on it (CI runs the Playwright test runner on `tests/e2e`).
+   references or depends on it. The Playwright e2e suite (`tests/e2e`, `npm run test:e2e`) is local only too: GitHub CI
+   doesn't run it; run it before pushing UI changes (`npm run ci:local -- --jobs e2e`).
 7. **Stay narrow, ship complete work.** No scope creep, no TODOs where working code belongs.
 8. **Keep `docs/internal/handoff.md` current every session:** current state, dated session entry (what changed,
    how it was verified, test counts and durations, anything flaky), open items.
