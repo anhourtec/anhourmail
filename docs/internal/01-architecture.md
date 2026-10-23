@@ -215,7 +215,12 @@ customers to production names. Facts flow two ways from `packages/shared/src/pla
   production `PLATFORM_DOMAIN` must be set explicitly and the app refuses to start unless `APP_URL` and `WEBMAIL_URL`
   are hosts directly under it (`app.<domain>`, `mail.<domain>`); worker processes (`apps/worker/src/platform.ts`) run
   the same check on `APP_URL` (`productionPlatformProblems` in `platform.ts`). Free `@…` addresses live on the
-  platform domain itself (`Platform.freeAddressDomain`). `npm run db:seed` refuses a non-`.test` `PLATFORM_DOMAIN` or
+  platform domain itself (`Platform.freeAddressDomain`; ADR-0021): any account may create mailboxes there
+  (`domainId: "platform"`, `packages/core/src/mailboxes/platform.ts`) — Free one, paid plans within `MAX_MAILBOXES` —
+  with the shared name rules (`packages/shared/src/addresses.ts`), a confirmed console email, fail-closed limits per
+  account and per client address, and no reuse across accounts (`retired_platform_address`). The domain belongs to no
+  account and has no `customer_domain` row; the seed creates it on the dev Stalwart, the deployment's bootstrap in
+  production (it is the system domain). `npm run db:seed` refuses a non-`.test` `PLATFORM_DOMAIN` or
   a non-local `APP_URL` (`scripts/seed/guard.ts`). System emails carry no
   hostnames of their own: their links come from `APP_URL` and their sender from `MAIL_FROM`.
 - **Public site and docs (static):** `apps/site` and `docs/public` publish the product's own names through
@@ -297,7 +302,14 @@ provisioning ──worker──► active ──suspend──► suspended ─�
 - Catch-all: `customer_domain.catch_all_mailbox_id`, set through `setCatchAll` (`domain.manage`, paid plans) and
   cleared in the same unit of work that suspends or deletes its mailbox (`turnOffCatchAllFor`, which re-queues the
   domain).
-- New mailboxes get a random, unusable argon2id password; mail access is via webmail sign-in and app passwords.
-- Platform domains (free tier, staff) are desired implicitly through their mailboxes; `RECONCILE_IGNORE_DOMAINS`
-  lists mail-server-only infrastructure domains (dev: `dev.test`).
+- New mailboxes get the argon2id hash of the password chosen at creation; one created by staff (a free platform
+  address, `staffCreatePlatformMailbox`) gets a random, unusable one until the account sets a password. Mail access
+  is via webmail sign-in and app passwords.
+- Platform domains (free tier, staff) are desired implicitly through their mailboxes, and the configured platform
+  domain always is. `RECONCILE_IGNORE_DOMAINS` lists mail-server-only infrastructure domains (dev: `dev.test`):
+  unknown accounts there aren't drift — except on the platform domain, where customers' free addresses live: there
+  only the system accounts (`svc-*`, `no-reply`, `postmaster`, `abuse`, `dmarc-reports`, `tls-reports`;
+  `isSystemLocalPart`) are expected and anyone else is reported (ADR-0021).
+- Purging a platform-domain mailbox (and deleting a masked alias there) retires its address
+  (`retired_platform_address`): never reissued to another account.
 - Verified by `packages/adapters/src/stalwart/provisioning.int.test.ts` against the compose stack (CI integration job).

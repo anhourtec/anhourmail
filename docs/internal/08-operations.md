@@ -85,6 +85,14 @@ Security patches skip the soak but still follow steps 1–4 and 6.
 
 ## Access control (pre-launch)
 
+**Current policy (maintainer decision, 2026-10-23): open to everyone.** The web hosts are public (no IP allow-list)
+and self-service sign-up is on (`SIGNUP_MODE=open`): anyone can create a personal Free account after verifying their
+email. This replaces the 2026-10-21 decision below while pre-staging runs. The main open risk is outbound abuse from new
+accounts until Phase 6 (sending limits, trust tiers, phone verification, abuse queue) — staff watch new accounts and the
+platform audit, and can close sign-up (`SIGNUP_MODE=closed`) or gate the web hosts (allow-list) at any time.
+
+Earlier decision, kept for the record:
+
 Decision 2026-10-21 (maintainer): until public launch the app is **not exposed to the internet**. The firewall
 allows HTTPS (443) only from allow-listed IPs (staff, invited testers); everyone else is dropped before NGINX.
 Within that boundary self-service sign-up is on (`SIGNUP_MODE=open`): new users get a personal Free account with

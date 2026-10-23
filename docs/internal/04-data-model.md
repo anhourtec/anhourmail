@@ -61,6 +61,15 @@ Conventions: `uuid` primary keys (v7, time-ordered), `created_at`/`updated_at` `
 | `disclaimer`               | account_id, html, text, scope (`all`/`external_only`), enabled, version, updated_by                                                                                                                                                                                                               | Inserted by our submission path before DKIM signing; not applied to IMAP/SMTP-client mail in v1.                                                                                                                                                        |
 | `usage_snapshot`           | account_id, mailbox_id, day, bytes_used, messages_sent, recipients_sent                                                                                                                                                                                                                           | From the quota/usage sync job.                                                                                                                                                                                                                          |
 
+**The platform domain has no row** (ADR-0021): free addresses (`name@<PLATFORM_DOMAIN>`) are `mailbox` rows like any
+other, on a domain that is configuration (`deps.platform.domain`), owned by no account and never a `customer_domain`
+(customers can't add it). Per account: `PLANS.<plan>.platformMailboxes` (Free 1) or, on paid plans, within
+`MAX_MAILBOXES`.
+
+| Entity                     | Key fields                                                       | Notes                                                                                                                                                                                           |
+| -------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `retired_platform_address` | address (pk, lowercase), account_id (no foreign key), retired_at | Built (migration 0015). A platform-domain address that was in use and is gone (purged mailbox, its masked aliases, a deleted masked alias): never handed to a different account; never deleted. |
+
 Member profile fields used by signature placeholders (`display_name`, `job_title`, `phone`) live on
 `account_membership` (per account, editable by the member and by User Admins).
 

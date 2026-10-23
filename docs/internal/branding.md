@@ -93,7 +93,34 @@ Never claim "unhackable", "military-grade" or "immune to government requests". S
 
 ## Transactional email
 
-One plain 570 px layout: tables, inline styles, a VML fallback button for desktop clients that ignore CSS buttons, system fonts, a hidden preheader, a `prefers-color-scheme` dark block and a plain-text part. Sent from `anhourmail.com` addresses through our own Stalwart. No tracking pixels or click tracking.
+One layout for every system email (password reset, invites, email confirmation, security and password notices, the
+first administrator's set-password link), shared by the web app and the worker: `systemEmail` in
+`packages/adapters/src/mail/layout.ts`. Callers pass the words; the layout owns the look. Sent from the platform's
+no-reply address through our own Stalwart.
+
+- **Structure:** logo centred above a white card (12 px radius, hairline border) on the `--am-surface` page; in the
+  card a heading (the subject unless given; 22 px, weight 500, sentence case), the greeting and short paragraphs, mono
+  "facts" for values someone chose, one solid button, a copy-paste link, then an optional muted note under a hairline
+  ("If you didn't ask, ignore this email"). Under the card, muted and centred: why this address got the email (per
+  email), "AnhourMail by Anhourtec · Vancouver/Victoria, BC, Canada" and a plain link to the deployment's site host
+  (`platform.hosts.site`).
+- **Client-proof HTML:** `role="presentation"` tables, every style inline, 560 px wide and centred (a fixed-width
+  ghost table for desktop Outlook), `lang`, `<meta name="color-scheme" content="light dark">`, system font stack, a
+  hidden preheader (each email passes one; never secrets or inviter-chosen text). The button is a table cell with
+  `bgcolor` and padding plus a VML `v:roundrect` in `<!--[if mso]>` for desktop Outlook. The small `<style>` block is
+  progressive only: dark colours and the dark logo under `prefers-color-scheme: dark` (and `[data-ogsc]`), tighter
+  padding under 600 px. Without it the email still reads correctly in light.
+- **Colours:** the token values as literal hex (the one documented exception to "tokens, not hex"): ink `#0f141e`,
+  soft `#475060`, muted `#646e80` (4.9:1 on the page), links `#0369a1`, button `#0077c8` with white text (4.7:1);
+  dark: page `#070d18`, card `#0c1a2e`, white text, soft `#c2c8d1`, muted `#9ba4b2`, links `#38ceff`.
+- **Logo:** embedded, never fetched — two PNGs (light and dark surfaces) attached inline and shown by `cid:`, with
+  `alt="AnhourMail"`, width and height so it degrades to the name when images are off. They are rendered from the
+  brand SVGs at 2x (280 × 28 shown) by `node scripts/render-email-logo.mjs` into
+  `packages/ui/assets/brand/email/`; `npm run brand:sync` turns them into `packages/adapters/src/mail/logo.generated.ts`
+  and `check:brand` fails when that module is stale.
+- **Privacy (CLAUDE.md rule 29):** no remote images, no tracking pixels, no click tracking, no rewritten links and no
+  added query parameters — links are exactly the action URL and the plain site. The action URL must be http(s).
+  Every interpolated value is HTML-escaped; the plain-text part says everything the HTML part says.
 
 ## Brand assets
 

@@ -80,6 +80,18 @@ active ──(user removes)──► removing (grace 7 days; mail kept) ──�
 - DNS checks run in the scheduler: every 5 min for 1 h after an edit, then hourly while pending, then daily for active domains. Each check result is stored (`dns_check`) and audited when its state changes.
 - A domain can only be active in one account. Claiming an already-active domain requires the ownership TXT again, and the old owner is notified.
 
+## The platform domain (free addresses)
+
+`PLATFORM_DOMAIN` (anhourmail.com in production) is the deployment's system domain on Stalwart — `svc-*` service
+accounts, `no-reply`, `postmaster`, the reporting addresses — and, since ADR-0021, also holds customers' free addresses
+(`name@<platform domain>`). It has no lifecycle above: no account owns it, it has no `customer_domain` row, customers
+can't add it, and it never gets a catch-all. The deployment's bootstrap creates it (the seed does on the dev Stalwart).
+Free addresses are ordinary Stalwart user accounts created by the worker's `mailbox.ensure` with the provisioning key
+(the password the person chose, as an argon2id hash; a random unusable one when staff create it). The reconciler
+expects only the system accounts there besides the control plane's mailboxes; any other account on it is reported as
+drift. Names follow `packages/shared/src/addresses.ts` (4–32 characters, reserved names, no reuse across accounts).
+Sending limits for free mailboxes are still Phase 6 (03-anti-spam-and-abuse.md "Free-tier risk").
+
 ## Stalwart configuration principles (v0.16.27)
 
 - **Pinned** `stalwartlabs/stalwart:v0.16.27@sha256:c429b3…` (ADR-0001). It is never forked or patched. Upgrades follow `08-operations.md`.

@@ -16,7 +16,7 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 
 | Area | Actions |
 | --- | --- |
-| `auth` | `auth.sign_in`, `auth.sign_in_failed`, `auth.sign_out`, `auth.password_changed`, `auth.password_reset`, `auth.password_reset_requested`, `auth.two_factor_enabled`, `auth.two_factor_disabled`, `auth.app_password_created`, `auth.app_password_revoked`, `auth.session_revoked`, `auth.locked_out`, `auth.mail_client_sign_in`, `auth.mail_client_sign_in_failed`, `auth.two_factor_reset`, `auth.backup_code_used`, `auth.sessions_revoked_all`, `auth.new_device`, `auth.passkey_added`, `auth.passkey_renamed`, `auth.passkey_removed`, `auth.recovery_codes_regenerated`, `auth.identity_confirmed` |
+| `auth` | `auth.sign_in`, `auth.sign_in_failed`, `auth.sign_out`, `auth.password_changed`, `auth.password_reset`, `auth.password_reset_requested`, `auth.two_factor_enabled`, `auth.two_factor_disabled`, `auth.app_password_created`, `auth.app_password_revoked`, `auth.session_revoked`, `auth.locked_out`, `auth.mail_client_sign_in`, `auth.mail_client_sign_in_failed`, `auth.two_factor_reset`, `auth.backup_code_used`, `auth.sessions_revoked_all`, `auth.new_device`, `auth.passkey_added`, `auth.passkey_renamed`, `auth.passkey_removed`, `auth.recovery_codes_regenerated`, `auth.identity_confirmed`, `auth.email_verification_sent`, `auth.email_verified` |
 | `account` | `account.created`, `account.deleted`, `account.updated`, `account.invite_sent`, `account.invite_accepted`, `account.invite_resent`, `account.invite_revoked`, `account.member_added`, `account.member_removed`, `account.role_changed`, `account.ownership_transferred`, `account.sign_in_policy_changed`, `account.sign_in_factor_added` |
 | `domain` | `domain.added`, `domain.verified`, `domain.verify_failed`, `domain.removed`, `domain.dns_state_changed` |
 | `mailbox` | `mailbox.created`, `mailbox.suspended`, `mailbox.unsuspended`, `mailbox.deleted`, `mailbox.quota_changed`, `mailbox.deletion_scheduled`, `mailbox.restored`, `mailbox.password_reset`, `mailbox.password_changed` |
@@ -116,9 +116,25 @@ account's log. `staff.account_viewed` is written in the viewed account's scope e
 staff paths (`MutationSpec.staffPath`) always record the actor as staff with the platform role, even when that staff
 member also belongs to the account (rule 49).
 
-Views: the console and the audit API show the network part of the IP only (`203.0.113.x`, IPv6 `/48`) and no user
-agent; filters are area, actor (person, staff — including act-as —, system, signed out), result and UTC dates, newest
-first with a `before` cursor.
+Views: account audit logs (console and API) and the person's own Security activity show the network part of the IP
+only (`203.0.113.x`, IPv6 `/48`); the **platform** audit shows the full stored address, IPv4 or IPv6, only to
+holders of `platform.audit.full_ip` (Global Administrator), so they can watch open sign-ups and reset requests for
+abuse; other platform readers (Reports Reader) see the network part. Decided in the audit service by scope and permission (`platformAuditPage`), never by the page. No view shows the
+user agent. Filters are area, actor (person, staff — including act-as —, system, signed out), result and UTC dates,
+newest first with a `before` cursor.
+
+Signed-out and identity events carry the request's client address (TRUST_PROXY rules, the same one the rate limiter
+uses): `account.created` (sign-up), `auth.password_reset_requested`, `auth.email_verification_sent` and
+`auth.email_verified`, like every sign-in event. The IP is the only request detail they keep (no user agent).
+
+Free platform addresses (ADR-0021): `mailbox.created` with meta `platformAddress: true` in the account's scope;
+refusals are `denied` with `email_unverified` (sign-in email not confirmed) or `act_as`, failures `failed` with
+`plan_limit` (the plan's free addresses used up) or `conflict` (name in use or retired from another account). Staff
+creating one (`platform.mailbox.create`) is the same action by staff in the account's own log, with meta
+`passwordSetBy: "account"`; a refusal before the account is known (missing permission, unknown account) goes to the
+platform log only. `platform.mailbox_purged` meta `retiredPlatformAddresses` counts the platform addresses retired
+for good. `auth.email_verification_sent` (target masked, no link or token) and `auth.email_verified` are platform-scope
+identity events.
 
 Not audited here by design: personal folder create/rename/move/delete and message moves — they are mail data
 handled by Stalwart over JMAP/IMAP and never pass through the control plane (ADR-0014). Audited: folder sharing

@@ -50,6 +50,26 @@ Every comparable privacy-focused provider we looked at that offered open free si
 
 Status: proposed in `09-roadmap.md` Phase 6 exit criteria. The final decision is the owner's.
 
+**Built 2026-10-23 (ADR-0021), while sign-up is open on pre-staging:** free `@<platform domain>` addresses are gated
+by a confirmed console email (link sent at sign-up), one per Free account, fail-closed creation limits per account and
+per client address (`platformMailboxAccount`, `platformMailboxIp`), a rate-limited availability check that answers
+only available / not available, 4–32-character names with a reserved list (short names held back from squatters), and
+no reuse of a retired name by another account. Everything is audited; the platform audit shows staff the full client
+IP of sign-ups, reset requests and confirmations. **Still open — the main risk while sign-up is open:** sending limits
+for free mailboxes (trust tiers stored and enforced, fail-closed outbound counters, `new`-tier external-sending hold)
+are Phase 6; today a free mailbox sends under the same server-side limits as any other. Phone verification (SMS/OTP)
+remains the intended sign-up gate before a public launch. Until then: watch Platform → Accounts and the platform audit,
+and close sign-up (`SIGNUP_MODE=closed`) on abuse.
+
+**Maintainer decision, 2026-10-23 (security review run-27, item 2 — risk accepted):** free platform-domain mailboxes may
+send to external addresses **with no extra restriction until Phase 6**, and sign-up stays open. The risk: abuse from
+free mailboxes damages the reputation of the platform domain and our outbound IP — the same domain and IP that
+transactional mail (password resets, invites, email confirmation links) depends on, so a listing would also break
+sign-in recovery for everyone. Mitigation until Phase 6: staff watch Platform → Customer accounts and the platform
+audit (full client IPs for Global Administrators), and close sign-up (`SIGNUP_MODE=closed`) or suspend accounts and
+mailboxes on abuse. The fix is Phase 6 (trust tiers stored and enforced, fail-closed outbound counters, the `new`-tier
+external-sending hold, a separate free-tier outbound IP).
+
 ### Shared mailboxes and distribution lists
 
 Lists multiply one message into many deliveries, so they are an abuse amplifier (`10-collaboration.md`):

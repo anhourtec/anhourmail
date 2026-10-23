@@ -17,7 +17,9 @@ criteria further down.
    **Exit:** smoke 100% on the real host; a customer domain verified and mailboxes sending and receiving externally;
    mail-tester ≥ 9/10; restore drill passes; `security-reviewer` pass on the deployed config.
 2. **Close the product gaps a beta needs** (Phases 3–4 remainder): free `@anhourmail.com` sign-up with SMS/OTP
-   verification (provider to choose), console → webmail session handoff, data export and account deletion,
+   verification (provider to choose) — **free addresses built 2026-10-23** (ADR-0021: claim from the console with a
+   confirmed email, one per Free account, name rules, no reuse, staff create; SMS/OTP and Phase 6 sending limits for
+   free mailboxes still open), console → webmail session handoff, data export and account deletion,
    act-as (staff, audited, visible to account admins), remote-image proxy, push sync in the webmail, webmail
    settings part 2 (rules, templates), and the leftover open items in the handoff (alias admin-lock, daily alias
    creation cap, provisioning-queue lock token, unknown-recipient rejection at SMTP time).

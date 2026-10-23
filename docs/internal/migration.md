@@ -35,6 +35,7 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 | #    | Migration                          | Commit      | Date       | Change                                                                                                   | Rollback        |
 | ---- | ---------------------------------- | ----------- | ---------- | -------------------------------------------------------------------------------------------------------- | --------------- |
+| 0015 | `0015_platform_addresses`          | uncommitted | 2026-10-23 | `retired_platform_address` (platform-domain addresses never reissued to another account)                 | Safe            |
 | 0014 | `0014_mailbox_password_grant`      | uncommitted | 2026-10-23 | `mailbox.pending_password_grant` (the web app's HMAC grant for the waiting hash)                         | Safe            |
 | 0013 | `0013_mailbox_password`            | uncommitted | 2026-10-23 | `mailbox.pending_password_hash` (argon2id hash waiting for the worker), `mailbox.password_credential_id` | Safe            |
 | 0012 | `0012_app_passwords_catch_all`     | uncommitted | 2026-10-22 | `app_password` (metadata only); `customer_domain.catch_all_mailbox_id`                                   | Safe            |
@@ -62,6 +63,17 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0015_platform_addresses · uncommitted · 2026-10-23 · Safe
+
+- Added: `retired_platform_address` (address text primary key, account_id uuid not null — deliberately no foreign key,
+  retired_at timestamptz not null). Free platform-domain addresses that were in use and are gone are never handed to a
+  different account (ADR-0021).
+- Changed: —
+- Removed: —
+- Data: none (starts empty; addresses are retired by the purge and by deleting a masked alias on the platform domain).
+- Rollback: drop the table. Older code ignores it; the no-reuse guarantee is lost for anything retired meanwhile, so
+  export the rows first if rolling back for real.
 
 ### 0014_mailbox_password_grant · uncommitted · 2026-10-23 · Safe
 
