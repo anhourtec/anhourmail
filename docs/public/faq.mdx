@@ -21,10 +21,23 @@ time the law requires and nothing more. See the [Privacy Policy](/legal/privacy)
 
 ## How much storage do I get?
 
-Each mailbox holds up to <Value of="freeStorage" /> on Free and <Value of="plusStorage" /> on Plus and Supporter.
-Paid accounts have no hard limit on the account as a whole: <Value of="paidFairUse" />. Nothing is charged for
-extra storage or mailboxes until billing opens, and we'll tell you before anything is. The console shows how much
-each mailbox uses; see [Mailboxes](/docs/mailboxes#storage-used).
+Free accounts get <Value of="freeStorage" /> for their one mailbox. Plus and Supporter cost the same for the whole
+account, however many people are in it, and include <Value of="plusStorage" /> shared by the whole account: you decide
+how much each mailbox gets. More storage, +<Value of="storageBlock" /> for <Value of="storageBlockPrice" /> a year, and
+extra mailboxes, <Value of="extraMailboxPrice" /> a year each, come with billing, which isn't open yet. Nothing is ever
+charged automatically. See [Mailboxes](/docs/mailboxes#account-storage).
+
+## What happens when a mailbox is full?
+
+New mail to it is refused with a "mailbox full" bounce, so the sender knows it didn't arrive. Nothing is deleted. The
+console warns at 80% and 95%. Delete some mail, give the mailbox a bigger share of the account's storage, or (once
+billing opens) add more.
+
+## What happens to a free account nobody uses?
+
+A free account nobody signs in to for <Value of="freeInactivityMonths" /> months gets email warnings, then is
+suspended. Its mail is kept for <Value of="inactiveMailKeptDays" /> more days, and its address is never given to anyone
+else. Paid accounts are never closed for inactivity.
 
 ## Do you read my mail?
 

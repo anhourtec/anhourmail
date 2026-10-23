@@ -16,7 +16,8 @@ you can also create mailboxes on any domain you've connected and verified (see
    `+` is reserved, because `you+anything@` already reaches you. Our domain is in the list too, marked **free
    address**, while your plan has room for one; names there follow [their own rules](/docs/free-address#choosing-a-name).
 3. Choose who it **belongs to**, or leave it for later.
-4. Set its **storage** in whole GB, up to your plan's storage per mailbox.
+4. Set its **storage** in whole GB. It starts at an even share of the account's unassigned storage, and can be up to
+   all of it (see [Account storage](#account-storage)).
 5. Set its **password**: type one, or choose **Generate a strong password** and copy it. A generated password is
    shown only until you create the mailbox. Give it to the person safely; they sign in to the
    [webmail](/docs/webmail) with it and can change it there.
@@ -46,18 +47,31 @@ raised. Choose the **Storage** column heading to sort mailboxes by how much they
 - Only sizes are read. Nothing about your messages is looked at to measure them.
 - The console's home page shows the total your account uses across all its mailboxes.
 
+## Account storage
+
+Storage belongs to the account, not to each mailbox: <Value of="freeStorage" /> on Free and <Value of="plusStorage" />
+shared by the whole account on Plus and Supporter (see [what each plan
+includes](/docs/free-address#what-each-plan-includes)). Each mailbox gets a share, and the shares never add up to more
+than the account has. The top of the **Mailboxes** page shows how much the account uses, how much is assigned to
+mailboxes and how much is unassigned, with a bar that turns amber at 80% and red at 95%.
+
+- A new mailbox starts with an even share of what's unassigned. When everything is assigned, adding a mailbox says so:
+  lower another mailbox's storage first, or add more storage once billing opens.
+- More storage comes in blocks of +<Value of="storageBlock" /> for <Value of="storageBlockPrice" /> a year, with
+  billing. Nothing is charged automatically.
+- A full mailbox refuses new mail with a "mailbox full" bounce. Nothing is deleted.
+
 ## Change storage
 
-Each mailbox can have up to your plan's storage per mailbox: <Value of="freeStorage" /> on Free and
+Open the mailbox, choose the **Storage** tab and change **Storage (GB)** under **Change storage**. The tab shows the
+mailbox's share and how much of the account's storage is unassigned. You can choose from what the mailbox already
+holds (rounded up to the next GB) up to its current share plus everything unassigned. The new quota applies within a
+minute.
 
-<Value of="plusStorage" /> on Plus and Supporter (see [what each plan
-includes](/docs/free-address#what-each-plan-includes)). Open the mailbox, choose the **Storage** tab and change
-**Storage (GB)** under **Change storage**. The new quota applies within a minute. Lowering it below what the mailbox
-already holds doesn't delete anything, but the mailbox stops accepting new mail until there's room again.
-
-When a plan's storage per mailbox goes down, a mailbox that already holds more than the new amount keeps enough room
-for what's in it, rounded up to the next GB, so it keeps receiving mail. Its **Storage** tab says it's above the
-plan's storage per mailbox. Nothing is ever deleted to make it fit.
+When storage became shared per account, accounts whose mailboxes were given more than the account has were brought
+within it: each mailbox's share went down in proportion, but never below the mail it already holds (rounded up to the
+next GB), so it keeps receiving mail. Nothing was deleted. If an account's mail alone is more than its storage, the
+**Mailboxes** page says the shares are above the account's storage.
 
 ## How many mailboxes
 
