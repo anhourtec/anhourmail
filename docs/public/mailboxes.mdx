@@ -1,6 +1,6 @@
 ---
 title: Mailboxes
-description: Create mailboxes on your own domain, give them to people in your account, set their storage, and suspend, delete or restore them.
+description: Create mailboxes on your own domain with a password, give them to people in your account, set their storage, reset a password, and suspend, delete or restore them.
 ---
 
 A mailbox is an address with its own storage, like `jane@example.org`. On the Plus and Supporter plans you can
@@ -14,6 +14,13 @@ create mailboxes on any domain you've connected and verified (see [Use your own 
    `+` is reserved, because `you+anything@` already reaches you.
 3. Choose who it **belongs to**, or leave it for later.
 4. Set its **storage** in whole GB, up to your plan's storage per mailbox.
+5. Set its **password**: type one, or choose **Generate a strong password** and copy it. A generated password is
+   shown only until you create the mailbox. Give it to the person safely; they sign in to the
+   [webmail](/docs/webmail) with it and can change it there.
+
+Mailbox passwords need 12 to 128 characters (a passphrase works well), no spaces at the start or end, and can't be
+the mailbox's address or start with `app_`. We never store a mailbox password: it's turned into a one-way hash right
+away, and only the mail server keeps that hash. Mail apps use [app passwords](/docs/clients/app-passwords) instead.
 
 The panel stays open, so you can add several in a row. The mailbox shows **Setting up** in the list for a moment,
 then **Active**.
@@ -26,6 +33,18 @@ and you can tick several mailboxes to suspend, resume or delete them together.
 
 Open the mailbox, choose the **Storage** tab and change **Storage (GB)**. The new quota applies within a minute. Lowering it below what the mailbox
 already holds doesn't delete anything, but the mailbox stops accepting new mail until there's room again.
+
+## Set a new password
+
+When someone forgets their mailbox password, or a mailbox passes to someone new, open the mailbox, choose the
+**Password** tab (or **Set password**), type or generate a new password and choose **Save new password**. If you
+haven't confirmed it's you in the last few minutes, the console asks for your console password or a code first.
+
+- The new password works within a minute. The old one stops working.
+- Everyone signed in to the webmail with that mailbox is signed out. App passwords keep working.
+- The person the mailbox belongs to gets an email saying its password was changed (never the password itself), and
+  the change appears in the account's audit log.
+- Staff never set a mailbox password while helping you in your account.
 
 ## Suspend a mailbox
 
@@ -60,8 +79,8 @@ restored if its domain is no longer verified in your account.
 
 ## Who can manage mailboxes
 
-Owners and User Admins can create, suspend, delete and restore mailboxes and change their storage. Only an owner can
-suspend, delete or restore a mailbox that belongs to an owner or an admin. Domain Admins and Auditors can see
+Owners and User Admins can create, suspend, delete and restore mailboxes, change their storage and set a new password.
+Only an owner can suspend, delete, restore or set the password of a mailbox that belongs to an owner or an admin. Domain Admins and Auditors can see
 mailboxes.
 
 If a suspension or deletion couldn't be applied on the mail server, the mailbox shows **Not applied** and its page
