@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createAuth } from "@anhourmail/adapters/auth";
 import { memoryMailer } from "@anhourmail/adapters/mail";
+import { KNOWN_BREACHED_PASSWORDS, memoryBreachedPasswords } from "@anhourmail/adapters/memory";
 import { createDb, PgUnitOfWork, schema } from "@anhourmail/adapters/postgres";
 import { systemClock } from "@anhourmail/core";
 import { verifyAuditScope } from "@anhourmail/core/audit";
@@ -120,6 +121,7 @@ describe("job:bootstrap-admin against Postgres", () => {
           passwordChanged: async () => undefined,
           sessionRefusal: async () => null,
         },
+        breachedPasswords: memoryBreachedPasswords(),
       });
       const post = (p: string, body: unknown) =>
         auth.handler(
@@ -129,6 +131,10 @@ describe("job:bootstrap-admin against Postgres", () => {
             body: JSON.stringify(body),
           }),
         );
+      // A password seen in a data breach is refused before the link is used up.
+      const breached = await post("/reset-password", { token, newPassword: KNOWN_BREACHED_PASSWORDS[0] });
+      expect(breached.status).toBe(400);
+      expect(((await breached.json()) as { code?: string }).code).toBe("PASSWORD_BREACHED");
       const password = `${randomBytes(12).toString("base64url")}-Bs1`;
       expect((await post("/reset-password", { token, newPassword: password })).status).toBe(200);
       const [cred] = await db.select().from(schema.authAccount).where(eq(schema.authAccount.userId, user.id));

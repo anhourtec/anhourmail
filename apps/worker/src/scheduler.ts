@@ -43,6 +43,8 @@ export const JOBS: readonly Job[] = [
   { name: "domain-recheck", script: "job:domain-recheck", everyMs: 5 * 60_000, timeoutMs: 4 * 60_000, enabled: true },
   // Deleted mailboxes past their grace period: remove the Stalwart account, then the rows (audited).
   { name: "mailbox-purge", script: "job:mailbox-purge", everyMs: 3600_000, timeoutMs: 10 * 60_000, enabled: true },
+  // Storage used per mailbox for the console (sizes only, read with the provisioning key; keeps the last good value).
+  { name: "storage-usage", script: "job:storage-usage", everyMs: 10 * 60_000, timeoutMs: 5 * 60_000, enabled: true },
 ];
 
 /** The environment a job's process gets: the audit key only for jobs that declare it (`stalwartKeys`). */

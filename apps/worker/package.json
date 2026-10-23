@@ -16,6 +16,8 @@
     "job:domain-recheck": "tsx src/jobs/domain-recheck.ts",
     "job:mailbox-purge": "tsx src/jobs/mailbox-purge.ts",
     "job:mailbox-backfill": "tsx src/jobs/mailbox-backfill.ts",
+    "job:storage-usage": "tsx src/jobs/storage-usage.ts",
+    "job:quota-cap": "tsx src/jobs/quota-cap.ts",
     "job:bootstrap-admin": "tsx --env-file-if-exists=../../.env src/jobs/bootstrap-admin.ts"
   },
   "dependencies": {
