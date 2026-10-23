@@ -1,7 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 
-import { accountStorage, formatBytes, storageCheckedAgo, storageSummary } from "./storage";
+import {
+  accountStorage,
+  defaultShareBytes,
+  formatBytes,
+  minQuotaBytes,
+  poolFullMessage,
+  poolSummary,
+  storageCheckedAgo,
+  storagePool,
+  storageSummary,
+} from "./storage";
 
 const GB = 1024 ** 3;
 
@@ -111,5 +121,49 @@ describe("accountStorage", () => {
         { quotaBytes: 1 * GB, storageUsedBytes: null },
       ]),
     ).toEqual({ usedBytes: GB, quotaBytes: 21 * GB, measured: 2, mailboxes: 3 });
+  });
+});
+
+describe("storage pool", () => {
+  it("adds up what is assigned and what is left (never negative)", () => {
+    const boxes = [
+      { quotaBytes: 4 * GB, storageUsedBytes: 2 * GB },
+      { quotaBytes: 3 * GB, storageUsedBytes: null },
+    ];
+    expect(storagePool(10 * GB, boxes)).toEqual({
+      poolBytes: 10 * GB,
+      assignedBytes: 7 * GB,
+      unassignedBytes: 3 * GB,
+      usedBytes: 2 * GB,
+    });
+    expect(storagePool(1 * GB, boxes).unassignedBytes).toBe(0);
+    expect(poolSummary(storagePool(10 * GB, [{ quotaBytes: 10 * GB, storageUsedBytes: 8.5 * GB }])).level).toBe(
+      "warning",
+    );
+  });
+
+  it("defaults a new mailbox to an even share of what is left over the remaining slots (whole GB, at least 1)", () => {
+    expect(defaultShareBytes(10 * GB, 0, 10)).toBe(1 * GB);
+    expect(defaultShareBytes(10 * GB, 8, 10)).toBe(5 * GB);
+    expect(defaultShareBytes(10 * GB, 9, 10)).toBe(10 * GB);
+    expect(defaultShareBytes(2 * GB, 2, 10)).toBe(1 * GB);
+    expect(defaultShareBytes(3 * GB, 12, 10)).toBe(3 * GB); // beyond the included mailboxes: one slot
+    expect(defaultShareBytes(1 * GB, 0, 1)).toBe(1 * GB);
+    expect(defaultShareBytes(0.5 * GB, 0, 10)).toBe(0);
+    expect(defaultShareBytes(-5, 0, 10)).toBe(0);
+  });
+
+  it("the least a quota can be: usage rounded up to the next GB, at least 1 GB", () => {
+    expect(minQuotaBytes(null)).toBe(GB);
+    expect(minQuotaBytes(0)).toBe(GB);
+    expect(minQuotaBytes(5.3 * GB)).toBe(6 * GB);
+    expect(minQuotaBytes(6 * GB)).toBe(6 * GB);
+    expect(minQuotaBytes(Number.NaN)).toBe(GB);
+  });
+
+  it("says the pool is full in words", () => {
+    expect(poolFullMessage(10 * GB)).toBe(
+      "All 10 GB of this account's storage is assigned. Lower another mailbox's storage or add more.",
+    );
   });
 });

@@ -2,7 +2,17 @@
 import { describe, expect, it } from "vitest";
 
 import { customerDomainRecords, DKIM_SELECTORS, dkimTarget, VERIFY_PREFIX } from "./dns";
-import { ADDONS, BILLING, fairUseText, formatPrice, MAX_MAILBOXES, PLAN_ORDER, PLANS } from "./plans";
+import {
+  ACCOUNT_POLICY,
+  accountPoolBytes,
+  ADDONS,
+  BILLING,
+  formatPrice,
+  MAX_MAILBOXES,
+  PLAN_ORDER,
+  PLANS,
+  storageText,
+} from "./plans";
 import {
   CARDDAV,
   CLIENT_ENDPOINTS,
@@ -42,40 +52,51 @@ describe("plans", () => {
     expect(BILLING.trialDays).toBe(0);
   });
 
-  it("match the 2026-10-23 pricing decision: storage per mailbox, prices, fair use and extras", () => {
-    expect(PLAN_ORDER.map((id) => PLANS[id].storageGb)).toEqual([1, 10, 10]);
+  it("match the 2026-10-23 pricing decision: pooled storage per account, prices, storage blocks and extras", () => {
+    expect(PLAN_ORDER.map((id) => PLANS[id].storagePoolGb)).toEqual([1, 10, 10]);
     expect(PLANS.plus.price).toEqual({ USD: 900, CAD: 1200 });
     expect(PLANS.supporter.price).toEqual({ USD: 2000, CAD: 2700 });
     expect(PLANS.free).toMatchObject({
       includedMailboxes: 1,
       platformMailboxes: 1,
       extraMailboxPrice: null,
-      fairUseStorageGb: null,
-      extraStoragePricePerGb: null,
+      storageBlockGb: null,
+      storageBlockPrice: null,
     });
     for (const id of ["plus", "supporter"] as const) {
       expect(PLANS[id]).toMatchObject({
         includedMailboxes: 10,
         extraMailboxPrice: { USD: 100, CAD: 140 },
-        fairUseStorageGb: 30,
-        extraStoragePricePerGb: { USD: 100, CAD: 140 },
+        storageBlockGb: 10,
+        storageBlockPrice: { USD: 1000, CAD: 1400 },
       });
     }
     // Until billing can sell extra mailboxes, the creation ceiling is exactly what paid plans include.
     expect(MAX_MAILBOXES).toBe(PLANS.plus.includedMailboxes);
+    expect(ACCOUNT_POLICY.externalRecipientsPerDay).toEqual({ free: 50, paid: 500 });
+    expect(ACCOUNT_POLICY).toMatchObject({ sendMessageMb: 25, receiveMessageMb: 50, freeInactivityMonths: 12 });
   });
 
-  it("renders the fair-use line from the facts (none for Free)", () => {
-    expect(fairUseText(PLANS.plus)).toBe(
-      "No hard limits — fair use 30 GB per account, then $1/GB/year; extra mailboxes $1/year each",
-    );
-    expect(fairUseText(PLANS.supporter, "CAD")).toMatch(
-      /^No hard limits — fair use 30 GB per account, then .*1\.40\/GB\/year; extra mailboxes .*1\.40\/year each$/,
-    );
-    expect(fairUseText(PLANS.free)).toBeNull();
-    expect(fairUseText({ ...PLANS.plus, extraMailboxPrice: null })).toBe(
-      "No hard limits — fair use 30 GB per account, then $1/GB/year",
-    );
+  it("sizes an account's pool from its plan and purchased blocks (none until billing)", () => {
+    expect(accountPoolBytes("free")).toBe(1024 ** 3);
+    expect(accountPoolBytes("plus")).toBe(10 * 1024 ** 3);
+    expect(accountPoolBytes("supporter", 2)).toBe(30 * 1024 ** 3);
+    expect(accountPoolBytes("free", 3)).toBe(1024 ** 3); // Free can't add storage
+    expect(accountPoolBytes("plus", -1)).toBe(10 * 1024 ** 3);
+  });
+
+  it("renders the storage and extras lines from the facts (none for Free)", () => {
+    expect(storageText(PLANS.plus)).toEqual({
+      pool: "10 GB shared by the whole account",
+      block: "More storage: +10 GB for $10/year (coming with billing)",
+      extraMailbox: "Extra mailboxes: $1/year each (coming with billing)",
+    });
+    expect(storageText(PLANS.supporter, "CAD").block).toMatch(/^More storage: \+10 GB for .*14\/year/);
+    expect(storageText(PLANS.free)).toEqual({
+      pool: "1 GB shared by the whole account",
+      block: null,
+      extraMailbox: null,
+    });
   });
 
   it("formats prices per currency", () => {

@@ -19,21 +19,20 @@ export type Plan = {
   price: Price | null;
   payWhatYouWant: boolean;
   /**
-   * Storage per mailbox, in GB (2026-10-23: Free 1, Plus and Supporter 10). Lowering it doesn't shrink existing
-   * mailboxes by itself: `job:quota-cap` brings them down, never below the mail they already hold.
+   * Storage for the whole account, in GB, shared by all its mailboxes (2026-10-23: Free 1, Plus and Supporter 10).
+   * The mail server enforces quotas per mailbox only, so the account's owners split this pool across mailboxes: the
+   * sum of mailbox quotas never exceeds the pool plus purchased blocks (`accountPoolBytes`). Lowering it doesn't
+   * shrink existing mailboxes by itself: `job:quota-cap` rebalances them, never below the mail they already hold.
    */
-  storageGb: number;
+  storagePoolGb: number;
   /** Mailboxes the price includes (Free: its one address; paid plans: `MAX_MAILBOXES`). */
   includedMailboxes: number;
   /** Per extra mailbox beyond `includedMailboxes`, per year; null = none can be added. Sold once billing opens. */
   extraMailboxPrice: Price | null;
-  /**
-   * Fair use: storage the whole account stores (all its mailboxes) before extra storage is charged; null = none (the
-   * plan's own small quota is the limit). Not a hard limit: nothing stops at this number.
-   */
-  fairUseStorageGb: number | null;
-  /** Per GB per year stored beyond `fairUseStorageGb`; null when the plan has no fair-use allowance. */
-  extraStoragePricePerGb: Price | null;
+  /** Size of one storage block that adds to the account's pool, in GB; null = the plan can't add storage. */
+  storageBlockGb: number | null;
+  /** Per storage block per year; null = none can be added. Sold once billing opens (blocks are 0 until then). */
+  storageBlockPrice: Price | null;
   customDomains: boolean;
   /**
    * Mailboxes on the platform domain (`name@anhourmail.com`) per account. A number caps them on their own (Free: one
@@ -53,10 +52,10 @@ const GB = 1;
 
 /** Paid plans (2026-10-23): an extra mailbox beyond the ten included, per year. */
 const EXTRA_MAILBOX_PRICE: Price = { USD: 100, CAD: 140 };
-/** Paid plans: storage a whole account stores before extra storage is charged (fair use, not a hard limit). */
-const FAIR_USE_STORAGE_GB = 30;
-/** Paid plans: per GB per year stored beyond the fair-use allowance. */
-const EXTRA_STORAGE_PRICE_PER_GB: Price = { USD: 100, CAD: 140 };
+/** Paid plans: one storage block adds this much to the account's pool. */
+const STORAGE_BLOCK_GB = 10;
+/** Paid plans: per storage block per year. */
+const STORAGE_BLOCK_PRICE: Price = { USD: 1000, CAD: 1400 };
 
 export const PLANS: Readonly<Record<PlanId, Plan>> = {
   free: {
@@ -65,11 +64,11 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     tagline: "An @anhourmail.com address with private-by-default webmail.",
     price: null,
     payWhatYouWant: false,
-    storageGb: 1 * GB,
+    storagePoolGb: 1 * GB,
     includedMailboxes: 1,
     extraMailboxPrice: null,
-    fairUseStorageGb: null,
-    extraStoragePricePerGb: null,
+    storageBlockGb: null,
+    storageBlockPrice: null,
     customDomains: false,
     platformMailboxes: 1,
     addPeople: false,
@@ -84,11 +83,11 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     tagline: "Bring your own domains, unlimited aliases and more room.",
     price: { USD: 900, CAD: 1200 },
     payWhatYouWant: false,
-    storageGb: 10 * GB,
+    storagePoolGb: 10 * GB,
     includedMailboxes: 10,
     extraMailboxPrice: EXTRA_MAILBOX_PRICE,
-    fairUseStorageGb: FAIR_USE_STORAGE_GB,
-    extraStoragePricePerGb: EXTRA_STORAGE_PRICE_PER_GB,
+    storageBlockGb: STORAGE_BLOCK_GB,
+    storageBlockPrice: STORAGE_BLOCK_PRICE,
     customDomains: true,
     platformMailboxes: null,
     addPeople: true,
@@ -103,11 +102,11 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     tagline: "Everything in Plus. Pay what you want and fund the free tier.",
     price: { USD: 2000, CAD: 2700 },
     payWhatYouWant: true,
-    storageGb: 10 * GB,
+    storagePoolGb: 10 * GB,
     includedMailboxes: 10,
     extraMailboxPrice: EXTRA_MAILBOX_PRICE,
-    fairUseStorageGb: FAIR_USE_STORAGE_GB,
-    extraStoragePricePerGb: EXTRA_STORAGE_PRICE_PER_GB,
+    storageBlockGb: STORAGE_BLOCK_GB,
+    storageBlockPrice: STORAGE_BLOCK_PRICE,
     customDomains: true,
     platformMailboxes: null,
     addPeople: true,
@@ -122,8 +121,8 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
 export const MAX_CUSTOM_DOMAINS = 20;
 
 /**
- * Mailboxes an account can create today: the ten paid plans include (`includedMailboxes`); each gets up to the plan's
- * `storageGb`. Extra mailboxes (`extraMailboxPrice`) can't be added until billing exists (Phase 5), so this stays the
+ * Mailboxes an account can create today: the ten paid plans include (`includedMailboxes`); they share the account's
+ * storage pool (`storagePoolGb`). Extra mailboxes (`extraMailboxPrice`) can't be added until billing exists (Phase 5), so this stays the
  * ceiling until then (docs/internal/06-pricing-and-billing.md).
  */
 export const MAX_MAILBOXES = 10;
@@ -207,14 +206,47 @@ export function formatPrice(amountMinor: number, currency: Currency): string {
 }
 
 /**
- * The paid plans' fair-use line for the pricing page and docs: "No hard limits — fair use 30 GB per account, then
- * $1/GB/year; extra mailboxes $1/year each". Null for a plan without a fair-use allowance (Free).
+ * Storage an account can assign to its mailboxes, in bytes: the plan's pool plus purchased storage blocks (always 0
+ * until billing opens, Phase 5).
  */
-export function fairUseText(plan: Plan, currency: Currency = "USD"): string | null {
-  if (plan.fairUseStorageGb === null || plan.extraStoragePricePerGb === null) return null;
-  const storage = `fair use ${String(plan.fairUseStorageGb)} GB per account, then ${formatPrice(plan.extraStoragePricePerGb[currency], currency)}/GB/${BILLING.interval}`;
-  const mailboxes = plan.extraMailboxPrice
-    ? `; extra mailboxes ${formatPrice(plan.extraMailboxPrice[currency], currency)}/${BILLING.interval} each`
-    : "";
-  return `No hard limits — ${storage}${mailboxes}`;
+export function accountPoolBytes(plan: PlanId, storageBlocks = 0): number {
+  const p = PLANS[plan];
+  const blocks = p.storageBlockGb === null ? 0 : Math.max(0, Math.floor(storageBlocks)) * p.storageBlockGb;
+  return (p.storagePoolGb + blocks) * 1024 ** 3;
 }
+
+/**
+ * The paid plans' storage and extras lines for the pricing page and docs: "10 GB shared by the whole account",
+ * "More storage: +10 GB for $10/year (coming with billing)", "Extra mailboxes: $1/year each (coming with billing)".
+ */
+export function storageText(plan: Plan, currency: Currency = "USD") {
+  return {
+    pool: `${String(plan.storagePoolGb)} GB shared by the whole account`,
+    block:
+      plan.storageBlockGb === null || plan.storageBlockPrice === null
+        ? null
+        : `More storage: +${String(plan.storageBlockGb)} GB for ${formatPrice(plan.storageBlockPrice[currency], currency)}/${BILLING.interval} (coming with billing)`,
+    extraMailbox:
+      plan.extraMailboxPrice === null
+        ? null
+        : `Extra mailboxes: ${formatPrice(plan.extraMailboxPrice[currency], currency)}/${BILLING.interval} each (coming with billing)`,
+  };
+}
+
+/**
+ * Account and sending policy published in the docs and enforced later (Phase 6): daily external recipients per
+ * mailbox (lower during the first days), message size, and what happens to a free account nobody signs in to.
+ */
+export const ACCOUNT_POLICY = {
+  /** External recipients per mailbox per day. */
+  externalRecipientsPerDay: { free: 50, paid: 500 },
+  /** Days after sign-up during which the daily cap is lower. */
+  newAccountDays: 14,
+  /** Largest message a mailbox can send / receive, in MB. */
+  sendMessageMb: 25,
+  receiveMessageMb: 50,
+  /** Free accounts: months without a sign-in before suspension (after email warnings). */
+  freeInactivityMonths: 12,
+  /** Days a suspended inactive account's mail is kept before it is removed (its name is never reissued). */
+  inactiveMailKeptDays: 90,
+} as const;

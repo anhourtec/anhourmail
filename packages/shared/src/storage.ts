@@ -106,3 +106,58 @@ export function accountStorage(mailboxes: readonly { quotaBytes: number; storage
     mailboxes: mailboxes.length,
   };
 }
+
+const POOL_GB = 1024 ** 3;
+
+/** How an account's storage pool is split: what the mailboxes are given, what is left, and what they hold. */
+export type StoragePool = {
+  /** The account's pool: plan storage plus purchased blocks. */
+  poolBytes: number;
+  /** Sum of every mailbox's quota (can exceed the pool only for mailboxes kept above it to fit their mail). */
+  assignedBytes: number;
+  /** Pool not yet given to a mailbox (0 when fully or over-assigned). */
+  unassignedBytes: number;
+  /** Total held across measured mailboxes (null: none measured yet). */
+  usedBytes: number | null;
+};
+
+export function storagePool(
+  poolBytes: number,
+  mailboxes: readonly { quotaBytes: number; storageUsedBytes: number | null }[],
+): StoragePool {
+  const total = accountStorage(mailboxes);
+  return {
+    poolBytes,
+    assignedBytes: total.quotaBytes,
+    unassignedBytes: Math.max(0, poolBytes - total.quotaBytes),
+    usedBytes: total.usedBytes,
+  };
+}
+
+/**
+ * A new mailbox's default storage: the unassigned pool split evenly over the mailbox slots the plan still has (whole
+ * GB, at least 1 GB while any is left), so adding mailboxes one by one never runs the pool dry. 0 = the pool is fully
+ * assigned (a new mailbox is refused).
+ */
+export function defaultShareBytes(unassignedBytes: number, mailboxCount: number, includedMailboxes: number): number {
+  const freeGb = Math.floor(Math.max(0, unassignedBytes) / POOL_GB);
+  if (freeGb < 1) return 0;
+  const slots = Math.max(1, includedMailboxes - mailboxCount);
+  return Math.max(1, Math.floor(freeGb / slots)) * POOL_GB;
+}
+
+/** Usage rounded up to the next whole GB (at least 1 GB): the least a mailbox's quota can be without being full. */
+export function minQuotaBytes(usedBytes: number | null): number {
+  const used = usedBytes !== null && Number.isFinite(usedBytes) ? Math.max(0, usedBytes) : 0;
+  return Math.max(1, Math.ceil(used / POOL_GB)) * POOL_GB;
+}
+
+/** The pool message the console shows when no storage is left to give a mailbox. */
+export function poolFullMessage(poolBytes: number): string {
+  return `All ${formatBytes(poolBytes)} of this account's storage is assigned. Lower another mailbox's storage or add more.`;
+}
+
+/** How full the account's pool is, by what its mailboxes hold (amber at 80%, red at 95%, like a mailbox). */
+export function poolSummary(pool: StoragePool): StorageSummary {
+  return storageSummary(pool.usedBytes, pool.poolBytes);
+}
