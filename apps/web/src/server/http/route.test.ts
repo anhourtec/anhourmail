@@ -123,6 +123,7 @@ describe("security hardening (audit 2026-10-21)", () => {
 
   it("refuses per-IP routes without a client address in production instead of sharing one bucket", async () => {
     vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("BREACHED_PASSWORD_CHECK", undefined);
     vi.stubEnv("TRUST_PROXY", "true");
     vi.stubEnv("APP_URL", "https://app.example.test");
     vi.stubEnv("WEBMAIL_URL", "https://mail.example.test");

@@ -26,6 +26,7 @@ function production(overrides: Record<string, string | undefined> = {}) {
     STALWART_API_KEY: undefined,
     STALWART_DEV_ADMIN_USER: undefined,
     STALWART_DEV_ADMIN_PASSWORD: undefined,
+    BREACHED_PASSWORD_CHECK: undefined,
     ...overrides,
   };
   for (const [k, v] of Object.entries(base)) vi.stubEnv(k, v);
