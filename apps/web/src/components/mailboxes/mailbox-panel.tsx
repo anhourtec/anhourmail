@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { MailboxAppPasswords } from "@anhourmail/core/app-passwords";
 import { GB, type MailboxView } from "@anhourmail/core/mailboxes";
-import { HardDrive, Pause, Play, RotateCcw, Trash2 } from "lucide-react";
+import { HardDrive, KeyRound, Pause, Play, RotateCcw, Trash2 } from "lucide-react";
 import Link from "next/link";
 
 import { AppPasswordList } from "../app-passwords/app-password-list";
@@ -11,10 +11,16 @@ import { initialsOf } from "../console/initials";
 import { DeleteMailbox, RestoreMailbox, SuspendMailbox } from "./mailbox-lifecycle";
 import { MailboxStatus } from "./mailbox-status";
 import { QuotaForm } from "./quota-form";
+import { ResetMailboxPassword } from "./reset-mailbox-password";
 
 const dateFmt = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium" });
 
-type Detail = MailboxView & { maxQuotaBytes: number; lifecycleLocked: boolean };
+type Detail = MailboxView & {
+  maxQuotaBytes: number;
+  lifecycleLocked: boolean;
+  passwordPending: boolean;
+  canSetPassword: boolean;
+};
 
 /**
  * The mailbox details panel: header (initials, address, status, inline actions) and tabs — Overview (label / value
@@ -44,6 +50,8 @@ export function MailboxPanel({
   const lifecycle = canManage && !m.lifecycleLocked;
   const purgeOn = m.purgeAfter ? dateFmt.format(new Date(m.purgeAfter)) : null;
   const quotaGb = m.quotaBytes / GB;
+  /** Setting a password needs the mailbox on the mail server and not being deleted (the server says so too). */
+  const passwordSettable = m.canSetPassword && (m.status === "active" || m.status === "suspended");
 
   const tabs = [
     {
@@ -179,6 +187,23 @@ export function MailboxPanel({
           },
         ]
       : []),
+    ...(passwordSettable
+      ? [
+          {
+            id: "password",
+            label: "Password",
+            content: (
+              <ResetMailboxPassword
+                accountId={accountId}
+                mailboxId={m.id}
+                address={m.address}
+                ownerEmail={m.owner?.email ?? null}
+                pending={m.passwordPending}
+              />
+            ),
+          },
+        ]
+      : []),
     ...(canManage
       ? [
           {
@@ -235,6 +260,12 @@ export function MailboxPanel({
               <TabLink tab="storage">
                 <HardDrive aria-hidden />
                 Change storage
+              </TabLink>
+            )}
+            {passwordSettable && (
+              <TabLink tab="password">
+                <KeyRound aria-hidden />
+                Set password
               </TabLink>
             )}
             {lifecycle && !deleting && (

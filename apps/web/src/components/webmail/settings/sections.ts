@@ -102,7 +102,7 @@ export const SECTIONS: readonly Section[] = [
     id: "account",
     label: "Account",
     icon: CircleUser,
-    summary: "Your name, addresses, storage and signing out",
+    summary: "Your name, addresses, storage, password and signing out",
     keywords: [
       "name",
       "display name",
@@ -112,6 +112,8 @@ export const SECTIONS: readonly Section[] = [
       "storage",
       "quota",
       "space",
+      "password",
+      "change password",
       "sign out",
       "log out",
       "empty trash",

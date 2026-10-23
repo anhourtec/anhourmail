@@ -13,6 +13,7 @@ const storage = (bytes: number) =>
     : `${(bytes / 1024 ** 2).toFixed(1).replace(/\.0$/, "")} MB`;
 import { type Identity, type MailClient, RefusedError, type SettingsOverview } from "../mail-client";
 import { areaClass, Choice, fieldClass, Group, Note, Row, smallPrimary, smallSecondary, Toggle } from "./controls";
+import { ChangePasswordForm } from "./password-form";
 
 type Change = (patch: Partial<WebmailPreferences>) => void;
 type Status = { tone: "ok" | "error"; text: string } | null;
@@ -762,6 +763,8 @@ export function AccountPanel({
           )}
         </div>
       </Group>
+
+      <ChangePasswordForm client={client} address={data.address} account={data.accountId} />
 
       <Group title="Signing out">
         <Toggle

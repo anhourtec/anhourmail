@@ -714,6 +714,13 @@ export function createMailClient(origin = "") {
           body: JSON.stringify({ enabled, keepCopy }),
         },
       ),
+    /** Changes the mailbox's own password (current one checked by the mail server); this session stays signed in. */
+    changePassword: (account: string, current: string, next: string) =>
+      bff<{ applied: boolean; signedIn: boolean }>(`${origin}/api/webmail/settings/password`, {
+        method: "POST",
+        headers: { [ACCOUNT]: account },
+        body: JSON.stringify({ current, next }),
+      }),
     removeForwarding: (account: string) =>
       bff<{ removed: boolean }>(`${origin}/api/webmail/settings/forwarding`, {
         method: "DELETE",
