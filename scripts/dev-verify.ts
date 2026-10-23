@@ -18,7 +18,7 @@ import net from "node:net";
 import tls from "node:tls";
 
 import { JmapClient } from "@anhourmail/jmap-client";
-import { stalwart } from "@anhourmail/stalwart-client";
+import { stalwartDevAdmin } from "@anhourmail/stalwart-client";
 
 import { DEV_DOMAIN } from "../infra/stalwart/dev-plan";
 
@@ -49,9 +49,9 @@ async function waitFor<T>(fn: () => Promise<T | undefined>, timeoutMs = 20_000):
   return undefined;
 }
 
-await stalwart().ready();
+await stalwartDevAdmin().ready();
 check("Stalwart ready", true);
-check("Remote route is Mailpit", (await stalwart().remoteRoute()) === "mailpit");
+check("Remote route is Mailpit", (await stalwartDevAdmin().remoteRoute()) === "mailpit");
 
 const alice = jmapFor("alice");
 const bob = jmapFor("bob");

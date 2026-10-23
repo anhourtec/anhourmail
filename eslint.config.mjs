@@ -103,6 +103,44 @@ export default tseslint.config(
     ],
     rules: { "no-restricted-imports": "off" },
   },
+  // Each process uses only its own Stalwart credential (ADR-0020 "Credential split"): the web app never the
+  // provisioning or audit key (it can't create accounts), the worker image never the operations key (it can't act
+  // inside a mailbox); the dev admin is for dev tooling and integration-test set-up.
+  {
+    files: ["apps/web/src/server/adapters/**"],
+    ignores: ["**/*.int.test.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@anhourmail/stalwart-client",
+              importNames: ["stalwartProvisioning", "stalwartAudit", "stalwartDevAdmin"],
+              message: "The web app holds the operations key only (ADR-0020 'Credential split').",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["apps/worker/**"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@anhourmail/stalwart-client",
+              importNames: ["stalwartOperations", "stalwartDevAdmin"],
+              message: "Worker processes hold the provisioning (and the scheduler the audit) key only (ADR-0020).",
+            },
+          ],
+        },
+      ],
+    },
+  },
   // The domain core is plain TypeScript: no frameworks, no adapters.
   {
     files: ["packages/core/**"],

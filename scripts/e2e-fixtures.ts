@@ -10,7 +10,7 @@ import { like } from "drizzle-orm";
 
 import { hashPassword } from "@anhourmail/adapters/auth";
 import { createDb, schema } from "@anhourmail/adapters/postgres";
-import { stalwart } from "@anhourmail/stalwart-client";
+import { stalwartDevAdmin } from "@anhourmail/stalwart-client";
 
 const FILE = "test-results/e2e-users.json";
 const url = process.env.DATABASE_URL;
@@ -104,7 +104,7 @@ if (mode === "create") {
   // control plane (active, so the webmail's access gate admits it); `delete` removes both (names carry the run id).
   const recipientDomain = `${run}.test`;
   const recipient = { address: `inbox@${recipientDomain}`, password: `${randomBytes(12).toString("base64url")}-E2e` };
-  const mgmt = stalwart();
+  const mgmt = stalwartDevAdmin();
   const domainStalwartId = await mgmt.upsertDomain({ name: recipientDomain });
   const userStalwartId = await mgmt.upsertUser({
     name: "inbox",
@@ -142,7 +142,7 @@ if (mode === "create") {
   await db.delete(schema.customerAccount).where(like(schema.customerAccount.name, `${run}%`));
   // Domains and mailboxes the run created on the dev mail server (their names carry the run id).
   try {
-    const mgmt = stalwart();
+    const mgmt = stalwartDevAdmin();
     const domainOf = (address: string) => address.slice(address.lastIndexOf("@") + 1);
     for (const u of await mgmt.listUsers()) {
       if (domainOf(u.address).includes(run)) await mgmt.destroy("x:Account", u.id);

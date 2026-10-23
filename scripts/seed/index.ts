@@ -37,7 +37,7 @@ import {
   platformFacts,
   PLANS,
 } from "@anhourmail/shared";
-import { type StalwartManagement, stalwart } from "@anhourmail/stalwart-client";
+import { type StalwartManagement, stalwartDevAdmin } from "@anhourmail/stalwart-client";
 
 import { applyDevMailPlan, DEV_DOMAIN, DEV_MAILBOXES, devWebmailOrigins } from "../../infra/stalwart/dev-plan";
 import { type CredentialRow, writeCredentials } from "./credentials";
@@ -267,7 +267,7 @@ const deps: Deps = {
   clock: systemClock,
   platform: platformFacts(parsePlatformDomain(process.env.PLATFORM_DOMAIN)),
 };
-const mgmt = stalwart();
+const mgmt = stalwartDevAdmin();
 
 log("migrations…");
 execFileSync("npx", ["tsx", "packages/adapters/src/db-postgres/migrate.ts", DATABASE_URL], {
