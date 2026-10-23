@@ -2,7 +2,8 @@
 /**
  * Domain errors. The HTTP layer maps them: Unauthenticated → 401, Forbidden → 403, NotFound → 404 (also for
  * out-of-scope ids — never confirm another account's ids), Validation → 400, Conflict → 409, PlanLimit → 403,
- * EnrolmentRequired → 403.
+ * EnrolmentRequired → 403,
+ * EmailUnverified → 403.
  */
 export class DomainError extends Error {
   constructor(
@@ -48,6 +49,16 @@ export class ConflictError extends DomainError {
 export class PlanLimitError extends DomainError {
   constructor(message: string) {
     super(message, "plan_limit");
+  }
+}
+
+/**
+ * The person hasn't confirmed their sign-in email address yet, and this action needs it (a free platform address).
+ * HTTP 403 with its own code, so the console can offer to send the confirmation link.
+ */
+export class EmailUnverifiedError extends DomainError {
+  constructor() {
+    super("Confirm your email address first: open the link we sent you, or send a new one.", "email_unverified");
   }
 }
 

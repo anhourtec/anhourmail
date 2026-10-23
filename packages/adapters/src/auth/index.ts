@@ -49,6 +49,18 @@ export type AuthOptions = {
   sendPasswordReset: (input: { email: string; name: string; url: string }) => Promise<void>;
   /** After a successful reset (audit, notifications). */
   onPasswordReset?: (user: { id: string; email: string }) => Promise<void>;
+  /**
+   * Confirming the sign-in address (a free platform address needs it; ADR-0021): sends the link with this token, at
+   * sign-up and when the person asks again from the console (`sendEmailVerification`). The caller builds the link
+   * (fixed landing page, never one from the request). Unset = no confirmation emails.
+   */
+  emailVerification?: {
+    /** Seconds a link works. */
+    expiresInSec: number;
+    send: (input: { email: string; name: string; token: string }) => Promise<void>;
+    /** After the address is confirmed (audit). */
+    onVerified: (user: { id: string; email: string }) => Promise<void>;
+  };
   /** Key ring that seals TOTP secrets at rest (rule 16). */
   sealer: Sealer;
   /**
@@ -107,6 +119,29 @@ export function createAuth(opts: AuthOptions) {
         await opts.onPasswordReset?.({ id: user.id, email: user.email });
       },
     },
+    ...(opts.emailVerification
+      ? {
+          emailVerification: {
+            sendOnSignUp: true,
+            sendOnSignIn: false,
+            // Confirming an address never signs anyone in: the link only flips `emailVerified`.
+            autoSignInAfterVerification: false,
+            expiresIn: opts.emailVerification.expiresInSec,
+            sendVerificationEmail: async ({
+              user,
+              token,
+            }: {
+              user: { email: string; name: string };
+              token: string;
+            }) => {
+              await opts.emailVerification?.send({ email: user.email, name: user.name, token });
+            },
+            afterEmailVerification: async (user: { id: string; email: string }) => {
+              await opts.emailVerification?.onVerified({ id: user.id, email: user.email });
+            },
+          },
+        }
+      : {}),
     session: {
       expiresIn: 60 * 60 * 24 * 7,
       updateAge: 60 * 60 * 24,
@@ -295,6 +330,25 @@ export async function sessionUser(auth: Auth, headers: Headers): Promise<Session
 }
 
 export const authRouteHandlers = (auth: Auth) => toNextJsHandler(auth);
+
+/**
+ * Sends a new "confirm your email address" link to the signed-in person (the console's own route; better-auth's
+ * public endpoint isn't exposed, so nobody can make us email an address they don't sign in with). `already_verified`
+ * when there is nothing to confirm.
+ */
+export async function sendEmailVerification(
+  auth: Auth,
+  headers: Headers,
+  email: string,
+): Promise<"sent" | "already_verified"> {
+  try {
+    await auth.api.sendVerificationEmail({ body: { email }, headers });
+    return "sent";
+  } catch (err) {
+    if (err instanceof APIError && err.body?.code === "EMAIL_ALREADY_VERIFIED") return "already_verified";
+    throw err;
+  }
+}
 
 /** Password hashing for server-side account creation (seed). Same scheme as sign-in. */
 export { hashPassword, mailboxPasswordHasher, needsRehash, verifyPassword } from "./password";
