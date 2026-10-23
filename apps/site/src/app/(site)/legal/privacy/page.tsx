@@ -102,6 +102,11 @@ const SECTIONS: LegalSection[] = [
           <li>
             <strong>Payments:</strong> Stripe (United States) — billing details for paid plans only. Never mailbox data.
           </li>
+          <li>
+            <strong>Breached-password check:</strong> Have I Been Pwned’s Pwned Passwords service — when you choose a
+            new password, our server sends only the first five characters of a one-way (SHA-1) hash of it and compares
+            the answer itself. Your password, its full hash, your address and your IP address are never sent.
+          </li>
           <li>The full list of providers, with what each receives and where, will be published here before launch.</li>
         </ul>
       </>

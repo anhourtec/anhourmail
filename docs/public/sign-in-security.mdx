@@ -8,6 +8,19 @@ menu under your initials in the top-right corner and choose **Security**.
 
 These settings protect the console. Mail apps (phone, desktop) keep signing in with app passwords, as before.
 
+## Passwords seen in data breaches
+
+When you choose a new password — signing up, resetting it, joining an account from an invite, or setting a mailbox
+password — we check that it hasn't appeared in a known data breach. If it has, you'll see "<Value of="breachedPasswordMessage" />"
+Pick another one: a passphrase of a few unrelated words, or a generated
+password saved in your password manager, works well.
+
+The check never sends your password anywhere. Our server turns it into a one-way hash (SHA-1) and sends only the first
+5 characters of that hash to the [Pwned Passwords](https://haveibeenpwned.com/Passwords) service, which answers with
+every breached hash starting with them — hundreds, padded to a similar size. Our server compares the rest itself, so
+the service never learns your password, its full hash, or who you are. Your browser doesn't contact the service at
+all. If it can't be reached in time, your password is accepted as usual.
+
 ## Two-factor sign-in with an authenticator app
 
 After your password, the console asks for a <Value of="totpDigits" />-digit code from an authenticator app on your
