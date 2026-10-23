@@ -755,6 +755,39 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
       }
     });
 
+    it("access: a confirmed sign-in email reads as confirmed", async () => {
+      const { uow, cleanup, createUser } = await factory();
+      try {
+        const id = await createUser(`verified-${randomUUID()}@example.test`);
+        expect(await uow.run((r) => r.access.emailVerified(id))).toBe(true);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("platform addresses: retired once, first holder wins, case-insensitive, rolled back with the unit of work", async () => {
+      const { uow, cleanup } = await factory();
+      try {
+        const address = `gone-${randomUUID().slice(0, 8)}@platform-mail.test`;
+        const [a, b] = [randomUUID(), randomUUID()];
+        expect(await uow.run((r) => r.platformAddresses.retiredFrom(address))).toBeNull();
+        await uow.run((r) => r.platformAddresses.retire(address, a, new Date()));
+        await uow.run((r) => r.platformAddresses.retire(address.toUpperCase(), b, new Date()));
+        expect(await uow.run((r) => r.platformAddresses.retiredFrom(address))).toBe(a);
+        expect(await uow.run((r) => r.platformAddresses.retiredFrom(address.toUpperCase()))).toBe(a);
+        const other = `rolled-${randomUUID().slice(0, 8)}@platform-mail.test`;
+        await expect(
+          uow.run(async (r) => {
+            await r.platformAddresses.retire(other, a, new Date());
+            throw new Error("boom");
+          }),
+        ).rejects.toThrow("boom");
+        expect(await uow.run((r) => r.platformAddresses.retiredFrom(other))).toBeNull();
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("security: factors, sessions, passkeys and trusted devices stay scoped to their person", async () => {
       const { uow, cleanup, createUser, seedAuth } = await factory();
       try {

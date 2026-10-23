@@ -15,6 +15,7 @@ import {
   type MailboxRepository,
   MAILBOX_STATUSES,
   type MailboxStatus,
+  type PlatformAddressRepository,
 } from "@anhourmail/core/mailboxes";
 import type {
   DesiredMailbox,
@@ -54,6 +55,7 @@ import {
   mailbox,
   platformRoleAssignment,
   provisioningJob,
+  retiredPlatformAddress,
   userProfile,
 } from "./schema";
 
@@ -218,6 +220,14 @@ class PgAccessRepository implements AccessRepository {
       .from(userProfile)
       .where(eq(userProfile.userId, userId));
     return row?.suspended ?? false;
+  }
+
+  async emailVerified(userId: string): Promise<boolean> {
+    const [row] = await this.x
+      .select({ verified: authUser.emailVerified })
+      .from(authUser)
+      .where(eq(authUser.id, userId));
+    return row?.verified ?? false;
   }
 
   async accountNames(accountIds: readonly string[]): Promise<Record<string, string>> {
@@ -644,6 +654,25 @@ class PgMailboxPasswordRepository implements MailboxPasswordRepository {
       .from(mailbox)
       .where(eq(mailbox.id, mailboxId));
     return r?.pending ?? false;
+  }
+}
+
+class PgPlatformAddressRepository implements PlatformAddressRepository {
+  constructor(private readonly x: Executor) {}
+
+  async retiredFrom(address: string): Promise<string | null> {
+    const [r] = await this.x
+      .select({ accountId: retiredPlatformAddress.accountId })
+      .from(retiredPlatformAddress)
+      .where(eq(retiredPlatformAddress.address, address.toLowerCase()));
+    return r?.accountId ?? null;
+  }
+
+  async retire(address: string, accountId: string, at: Date): Promise<void> {
+    await this.x
+      .insert(retiredPlatformAddress)
+      .values({ address: address.toLowerCase(), accountId, retiredAt: at })
+      .onConflictDoNothing();
   }
 }
 
@@ -1134,6 +1163,7 @@ const repositories = (x: Executor): Repositories => ({
   domains: new PgDomainRepository(x),
   mailboxes: new PgMailboxRepository(x),
   mailboxPasswords: new PgMailboxPasswordRepository(x),
+  platformAddresses: new PgPlatformAddressRepository(x),
   aliases: new PgAliasRepository(x),
   people: new PgPeopleRepository(x),
   invites: new PgInviteRepository(x),

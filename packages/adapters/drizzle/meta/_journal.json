@@ -106,6 +106,13 @@
       "when": 1792732982891,
       "tag": "0014_mailbox_password_grant",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1792759547634,
+      "tag": "0015_platform_addresses",
+      "breakpoints": true
     }
   ]
 }

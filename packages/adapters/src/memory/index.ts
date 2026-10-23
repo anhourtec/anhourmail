@@ -13,6 +13,7 @@ import {
   type MailboxPasswordRepository,
   type MailboxRepository,
   MAILBOX_STATUSES,
+  type PlatformAddressRepository,
 } from "@anhourmail/core/mailboxes";
 import type {
   DomainState,
@@ -43,6 +44,10 @@ export type MemoryState = {
   platformRoles: { userId: string; role: PlatformRole }[];
   memberships: { userId: string; accountId: string; role: AccountRole; joinedAt?: Date }[];
   suspended: string[];
+  /** Users whose sign-in email isn't confirmed yet (everyone else counts as confirmed, like seeded logins). */
+  unverifiedEmails: string[];
+  /** Retired platform-domain addresses (Postgres: `retired_platform_address`). */
+  retiredPlatformAddresses: { address: string; accountId: string; retiredAt: Date }[];
   accounts: {
     id: string;
     name: string;
@@ -92,6 +97,8 @@ export const emptyState = (): MemoryState => ({
   platformRoles: [],
   memberships: [],
   suspended: [],
+  unverifiedEmails: [],
+  retiredPlatformAddresses: [],
   accounts: [],
   userStates: {},
   jobs: [],
@@ -166,6 +173,7 @@ function repositories(s: MemoryState): Repositories {
     memberships: async (userId) =>
       s.memberships.filter((m) => m.userId === userId).map(({ accountId, role }) => ({ accountId, role })),
     isSuspended: async (userId) => s.suspended.includes(userId),
+    emailVerified: async (userId) => !s.unverifiedEmails.includes(userId),
     accountNames: async (ids) =>
       Object.fromEntries(s.accounts.filter((a) => ids.includes(a.id)).map((a) => [a.id, a.name] as const)),
     members: async (accountId) =>
@@ -365,6 +373,17 @@ function repositories(s: MemoryState): Repositories {
           .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
           .slice(0, limit),
       ),
+  };
+
+  const platformAddresses: PlatformAddressRepository = {
+    retiredFrom: async (address) =>
+      s.retiredPlatformAddresses.find((r) => r.address === address.toLowerCase())?.accountId ?? null,
+    retire: async (address, accountId, at) => {
+      const a = address.toLowerCase();
+      if (!s.retiredPlatformAddresses.some((r) => r.address === a)) {
+        s.retiredPlatformAddresses.push({ address: a, accountId, retiredAt: at });
+      }
+    },
   };
 
   const mailboxPasswords: MailboxPasswordRepository = {
@@ -784,6 +803,7 @@ function repositories(s: MemoryState): Repositories {
     domains,
     mailboxes,
     mailboxPasswords,
+    platformAddresses,
     aliases,
     people,
     invites,

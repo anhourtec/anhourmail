@@ -312,6 +312,19 @@ export const mailAlias = pgTable(
   (t) => [index("mail_alias_mailbox_idx").on(t.mailboxId)],
 );
 
+/**
+ * Platform-domain addresses that were in use and are gone (a purged mailbox, a deleted masked alias on the platform
+ * domain): never handed to a different account (ADR-0021). No foreign key on purpose: deleting the account must not
+ * free its addresses. Never deleted.
+ */
+export const retiredPlatformAddress = pgTable("retired_platform_address", {
+  /** Lowercase full address. */
+  address: text("address").primaryKey(),
+  /** The account that held it (kept after the account is gone). */
+  accountId: uuid("account_id").notNull(),
+  retiredAt: timestamp("retired_at", { withTimezone: true }).notNull(),
+});
+
 // --- audit (append-only, hash-chained per scope; ADR-0010) -------------------------------------------------
 
 export const auditLog = pgTable(
