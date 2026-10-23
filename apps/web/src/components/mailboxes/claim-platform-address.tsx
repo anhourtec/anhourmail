@@ -20,8 +20,11 @@ type Check =
 /** The server's answer for one name (kept with the name it was for, so a stale answer is never shown). */
 type Answer = { value: string; check: Check };
 
-/** How long typing pauses before the name is checked (each check is rate-limited on the server). */
-const CHECK_DELAY_MS = 400;
+/**
+ * How long typing pauses before the name is checked: short enough to feel instant, long enough to skip the keystrokes
+ * in the middle of a word (each check is rate-limited on the server).
+ */
+const CHECK_DELAY_MS = 150;
 
 /**
  * "Get your free @<platform domain> address": a name with a live availability check (the naming rules are checked here
@@ -54,6 +57,9 @@ export function ClaimPlatformAddress({
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<string | null>(null);
   const [verified, setVerified] = useState(emailVerified);
+  // Answers already given for this panel, so going back to a name (backspace, retyping) shows it at once without asking
+  // again. Creating the address is still checked on the server, so a name taken since is refused there.
+  const [known, setKnown] = useState<ReadonlyMap<string, Check>>(() => new Map());
 
   const value = name.trim().toLowerCase();
   const localProblem = value === "" ? null : platformLocalPartProblem(value);
@@ -67,14 +73,15 @@ export function ClaimPlatformAddress({
           ? { state: "problem", message: "Confirm your email address first, then names can be checked." }
           : answer?.value === value
             ? answer.check
-            : { state: "checking" };
+            : (known.get(value) ?? { state: "checking" });
 
   useEffect(() => {
-    if (!verified || value === "" || platformLocalPartProblem(value) !== null) return;
+    if (!verified || value === "" || platformLocalPartProblem(value) !== null || known.has(value)) return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
       void (async () => {
-        const answered = (c: Check) => {
+        const answered = (c: Check, remember = true) => {
+          if (remember) setKnown((prev) => new Map(prev).set(value, c));
           setAnswer({ value, check: c });
         };
         try {
@@ -83,7 +90,7 @@ export function ClaimPlatformAddress({
             { signal: controller.signal },
           );
           if (res.status === 429) {
-            answered({ state: "problem", message: "Too many checks for now. Wait a moment, then try again." });
+            answered({ state: "problem", message: "Too many checks for now. Wait a moment, then try again." }, false);
             return;
           }
           const json = (await res.json().catch(() => null)) as {
@@ -92,7 +99,10 @@ export function ClaimPlatformAddress({
           } | null;
           const d = json?.data;
           if (!res.ok || !d) {
-            answered({ state: "problem", message: json?.error?.message ?? "Couldn't check that name. Try again." });
+            answered(
+              { state: "problem", message: json?.error?.message ?? "Couldn't check that name. Try again." },
+              false,
+            );
           } else if (d.problem) answered({ state: "problem", message: d.problem });
           else if (d.address) answered({ state: d.available ? "available" : "unavailable", address: d.address });
         } catch {
@@ -104,7 +114,7 @@ export function ClaimPlatformAddress({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [value, accountId, verified]);
+  }, [value, accountId, verified, known]);
 
   async function onSubmit(e: SyntheticEvent<HTMLFormElement>) {
     e.preventDefault();
