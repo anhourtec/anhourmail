@@ -10,6 +10,7 @@
     "./postgres/schema": "./src/db-postgres/schema.ts",
     "./contract": "./src/contract/index.ts",
     "./auth": "./src/auth/index.ts",
+    "./breached-passwords": "./src/breached-passwords/index.ts",
     "./mail": "./src/mail/index.ts",
     "./mail/layout": "./src/mail/layout.ts",
     "./stalwart": "./src/stalwart/index.ts",

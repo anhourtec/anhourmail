@@ -3,3 +3,4 @@ export type * from "./entity";
 export type * from "./repository";
 export * from "./rules";
 export * from "./service";
+export * from "./breached-passwords";
