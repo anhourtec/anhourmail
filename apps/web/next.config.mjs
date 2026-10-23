@@ -21,18 +21,15 @@ const lanHosts = () =>
     .map((i) => i.address);
 
 /**
- * Baseline headers for the console. The webmail routes get a stricter nonce-based CSP and the sandboxed
- * message frame in Phase 4 (docs/internal/05-webmail.md "Rendering safety").
+ * Baseline headers for every response. No Content-Security-Policy here: src/proxy.ts sets the one policy each
+ * response carries (a nonce policy for console and webmail pages, a data-only one for the console API), and the
+ * webmail API sets its own per response. A config header of the same name would replace those.
  */
 const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "no-referrer" },
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=(), interest-cohort=()" },
-  {
-    key: "Content-Security-Policy",
-    value: "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'",
-  },
   ...(https ? [{ key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" }] : []),
 ];
 
@@ -62,16 +59,7 @@ const nextConfig = {
   ],
   allowedDevOrigins: ["127.0.0.1", "localhost", "*.localhost", ...lanHosts()],
   compiler: { removeConsole: process.env.NODE_ENV === "production" ? { exclude: ["error", "warn"] } : false },
-  // The webmail API sets its own Content-Security-Policy per response (a sandbox for print views, previews and raw
-  // sources); a config header of the same name would replace it, so that path gets every header but the CSP.
-  headers: async () => [
-    { source: "/:path((?!api/webmail/).*)", headers: securityHeaders },
-    {
-      // route() adds a strict CSP to any webmail API response that doesn't set its own.
-      source: "/api/webmail/:path*",
-      headers: securityHeaders.filter((h) => h.key !== "Content-Security-Policy"),
-    },
-  ],
+  headers: async () => [{ source: "/:path*", headers: securityHeaders }],
 };
 
 export default nextConfig;
