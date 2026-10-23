@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { Metadata, Viewport } from "next";
+import { headers } from "next/headers";
 import type { ReactNode } from "react";
 
 import { BRAND_ICONS } from "@anhourmail/ui/anhourtec-logo";
@@ -33,14 +34,16 @@ export const viewport: Viewport = {
   ],
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  // Set by src/proxy.ts on every page (nonce CSP); the theme script must carry it.
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
     <html lang="en-CA" className={brandFontVars} suppressHydrationWarning>
       <body className="flex min-h-dvh flex-col">
         <noscript>
           <style>{".am-site-reveal{opacity:1;transform:none}"}</style>
         </noscript>
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider nonce={nonce}>{children}</ThemeProvider>
       </body>
     </html>
   );

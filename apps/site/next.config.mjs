@@ -22,18 +22,17 @@ const lanIps = Object.values(os.networkInterfaces())
   .map((i) => i.address);
 
 /**
- * Marketing site + public docs + changelog + credits (anhourmail.com). A Next server with prerendered pages.
+ * Marketing site + public docs + changelog + credits (anhourmail.com). A Next server; pages render per request so each
+ * carries a fresh CSP nonce (src/proxy.ts).
  * Sign-up and sign-in live on the console (`APP_URL`); the site only links there. Zero third-party requests: self-hosted fonts, no analytics, no cookies.
+ * No Content-Security-Policy here: src/proxy.ts sets the one nonce policy each response carries (a config header of
+ * the same name would replace it).
  */
 const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=(), interest-cohort=()" },
-  {
-    key: "Content-Security-Policy",
-    value: "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'",
-  },
   ...(https ? [{ key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" }] : []),
 ];
 

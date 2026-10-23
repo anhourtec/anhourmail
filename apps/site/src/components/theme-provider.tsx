@@ -6,11 +6,18 @@ import type { ReactNode } from "react";
 
 /**
  * Light / Dark / System for every page (class on <html>). Deliberately tiny: the docs framework's provider (search,
- * docs UI) is mounted only under /docs, so marketing pages don't download it (Lighthouse mobile).
+ * docs UI) is mounted only under /docs, so marketing pages don't download it (Lighthouse mobile). Its inline theme
+ * script carries the request's CSP nonce (src/proxy.ts).
  */
-export function ThemeProvider({ children }: { children: ReactNode }) {
+export function ThemeProvider({ children, nonce }: { children: ReactNode; nonce?: string | undefined }) {
   return (
-    <NextThemes attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+    <NextThemes
+      attribute="class"
+      defaultTheme="system"
+      enableSystem
+      disableTransitionOnChange
+      {...(nonce ? { nonce } : {})}
+    >
       {children}
     </NextThemes>
   );
