@@ -6,9 +6,11 @@
  * (`sysAccountUpdate`, held by the provisioning key) can set a *password* on an account — a customer's (then sign in
  * as them) or `svc-ops`/`svc-audit` (then sign in with that key's `impersonate`, including the `<mailbox>%<account>`
  * master-user form, even on the mail ports — verified). Stalwart (Community) has no setting to forbid that, so in
- * production an internal **management proxy** refuses any `x:Account/set` that writes a `credentials` value and any
- * `x:AppPassword/set` on a service account (ops repo), and the reconciler reports a password or app password that
- * slips onto a service account and a mailbox without exactly one Password credential. The keys:
+ * production an internal **management proxy** refuses any `x:Account/set` that writes a `credentials` value — except
+ * the mailbox password job's single Password-slot replacement on a customer (User-role, non-system) account carrying
+ * a grant the web app made with a key the worker doesn't hold (`mailboxPasswordGrant`) — and any `x:AppPassword/set`
+ * on a service account (ops repo); the reconciler reports a password or app password that slips onto a service
+ * account, a mailbox without exactly one Password credential, and a Password other than the one we recorded. The keys:
  *
  * - **provisioning** (worker, scheduler): domains, accounts, DKIM keys. Stalwart lets a credential assign only
  *   permissions it holds itself, measured against what the new account would end up with (its role minus

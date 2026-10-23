@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+
 import {
   appPasswordPermissions,
   type AppPasswordScope,
@@ -126,6 +128,60 @@ const isSieveLocked = (p: { disabledPermissions?: Record<string, boolean> } | un
   Object.keys(CUSTOMER_DENIALS).every((k) => p?.disabledPermissions?.[k] === true);
 
 export type RelayRouteInput = { name: string; description: string; host: string; port: number };
+
+/**
+ * Header on the one management call that replaces a mailbox password (`replacePassword`). The production management
+ * proxy refuses every credentials write without it, and with it accepts only a single Password slot replacement with
+ * an argon2id hash on a non-service account. It is a marker the worker adds, not a secret or a control by itself.
+ */
+export const MAILBOX_PASSWORD_HEADER = "X-AnhourMail-Credential-Write";
+
+/**
+ * A salted argon2id PHC string at exactly the control plane's parameters (m=19456 KiB, t=2, p=1), with a bounded salt
+ * and hash, as `@node-rs/argon2` writes it. The management proxy checks the same shape.
+ */
+export const ARGON2ID_PHC = /^\$argon2id\$v=19\$m=19456,t=2,p=1\$[A-Za-z0-9+/]{16,64}\$[A-Za-z0-9+/]{32,128}$/;
+
+/** Header carrying the web app's grant for one password replacement (`mailboxPasswordGrant`). */
+export const MAILBOX_PASSWORD_GRANT_HEADER = "X-AnhourMail-Password-Grant";
+
+/** Longest a grant may be valid for (the management proxy refuses a later expiry). */
+export const MAILBOX_PASSWORD_GRANT_MAX_SEC = 3600;
+
+const grantMessage = (accountId: string, passwordHash: string, expiresAt: number) =>
+  `${accountId}|${createHash("sha256").update(passwordHash).digest("hex")}|${String(expiresAt)}`;
+
+/**
+ * The web app's grant for replacing `accountId`'s password with exactly `passwordHash`: `<expiry>.<hex HMAC-SHA256>`
+ * of `accountId|sha256hex(passwordHash)|expiry` (epoch seconds, at most an hour ahead) under a key only the web app
+ * and the management proxy hold — so whoever holds the provisioning key alone (the worker) can't make one.
+ */
+export function mailboxPasswordGrant(key: string, accountId: string, passwordHash: string, nowMs = Date.now()): string {
+  const expiresAt = Math.floor(nowMs / 1000) + MAILBOX_PASSWORD_GRANT_MAX_SEC;
+  const mac = createHmac("sha256", key)
+    .update(grantMessage(accountId, passwordHash, expiresAt))
+    .digest("hex");
+  return `${String(expiresAt)}.${mac}`;
+}
+
+/** What the management proxy checks (tests and tooling): the grant matches, in constant time, and hasn't expired. */
+export function verifyMailboxPasswordGrant(
+  key: string,
+  grant: string,
+  accountId: string,
+  passwordHash: string,
+  nowMs = Date.now(),
+): boolean {
+  const m = /^(\d{1,12})\.([0-9a-f]{64})$/.exec(grant);
+  if (!m) return false;
+  const expiresAt = Number(m[1]);
+  const now = Math.floor(nowMs / 1000);
+  if (expiresAt < now || expiresAt > now + MAILBOX_PASSWORD_GRANT_MAX_SEC) return false;
+  const want = createHmac("sha256", key)
+    .update(grantMessage(accountId, passwordHash, expiresAt))
+    .digest();
+  return timingSafeEqual(want, Buffer.from(m[2] ?? "", "hex"));
+}
 
 /** An app password as Stalwart lists it: never the secret (it answers `****`). */
 export type AppPasswordRecord = { id: string; description: string; createdAt: Date };
@@ -501,6 +557,59 @@ export class StalwartManagement {
       throw new StalwartError("Another credential disappeared during the revocation", "set");
     }
     return true;
+  }
+
+  /** The account's one sign-in Password credential id; null when it has none or more than one. */
+  async passwordCredentialId(accountId: string): Promise<string | null> {
+    const passwords = (await this.#credentials(accountId)).filter((c) => c.type === "Password");
+    return passwords.length === 1 ? (passwords[0]?.id ?? null) : null;
+  }
+
+  /**
+   * Replaces the account's sign-in password with `passwordHash`, a salted argon2id PHC string (Stalwart stores it as
+   * is, so the password never crosses the management API — rule 23). Only the one Password credential is replaced,
+   * with a patch of its list position, so app passwords and API keys stay (verified on v0.16.27: they keep working,
+   * while every OAuth token of the account stops — Stalwart derives them from the password). Needs `sysAccountUpdate`
+   * (the provisioning key). The request carries `MAILBOX_PASSWORD_HEADER`, which the production management proxy
+   * requires before it lets a credentials write through (a marker, not a control: the proxy checks the patch itself).
+   * Throws unless the account has exactly one Password credential before and after, and nothing else changed.
+   * Returns the Password credential id afterwards (Stalwart keeps or changes it; it isn't a reliable change marker).
+   */
+  async replacePassword(
+    accountId: string,
+    passwordHash: string,
+    opts: { grant?: string | null } = {},
+  ): Promise<{ credentialId: string }> {
+    if (!ARGON2ID_PHC.test(passwordHash))
+      throw new StalwartError("Mailbox passwords must be argon2id PHC strings", "set");
+    const before = await this.#credentials(accountId);
+    const passwords = before.filter((c) => c.type === "Password");
+    const slot = passwords[0];
+    if (passwords.length !== 1 || !slot) {
+      throw new StalwartError("Account doesn't have exactly one password credential", "set");
+    }
+    await this.transport.set(
+      "x:Account",
+      { update: { [accountId]: { [`credentials/${slot.index}`]: { "@type": "Password", secret: passwordHash } } } },
+      {
+        headers: {
+          [MAILBOX_PASSWORD_HEADER]: "replace",
+          ...(opts.grant ? { [MAILBOX_PASSWORD_GRANT_HEADER]: opts.grant } : {}),
+        },
+      },
+    );
+    const after = await this.#credentials(accountId);
+    const now = after.filter((c) => c.type === "Password");
+    const others = (list: typeof before) =>
+      list
+        .filter((c) => c.type !== "Password")
+        .map((c) => `${c.type}:${c.id}:${String(c.createdAt.getTime())}`)
+        .sort()
+        .join(",");
+    if (now.length !== 1 || !now[0] || others(after) !== others(before)) {
+      throw new StalwartError("Credentials changed unexpectedly while setting the password", "set");
+    }
+    return { credentialId: now[0].id };
   }
 
   async #credentials(

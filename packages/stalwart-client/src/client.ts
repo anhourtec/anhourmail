@@ -71,21 +71,31 @@ export class StalwartTransport {
     return json.permissions.filter((p): p is string => typeof p === "string");
   }
 
-  /** Runs method calls in one request and returns responses keyed by call id. Method-level errors throw. */
-  async call(calls: MethodCall[]): Promise<Map<string, Record<string, unknown>>> {
-    return this.rawCall(USING, calls);
+  /**
+   * Runs method calls in one request and returns responses keyed by call id. Method-level errors throw. `headers` are
+   * extra request headers (e.g. the mailbox-password marker the management proxy looks for).
+   */
+  async call(
+    calls: MethodCall[],
+    opts: { headers?: Record<string, string> } = {},
+  ): Promise<Map<string, Record<string, unknown>>> {
+    return this.rawCall(USING, calls, opts);
   }
 
   /**
    * Like `call`, but with the capabilities the calls need (standard JMAP objects such as `SieveScript` and `Blob`
    * aren't under `urn:stalwart:jmap`). Management credentials can act on another account by passing its id.
    */
-  async rawCall(using: readonly string[], calls: MethodCall[]): Promise<Map<string, Record<string, unknown>>> {
+  async rawCall(
+    using: readonly string[],
+    calls: MethodCall[],
+    opts: { headers?: Record<string, string> } = {},
+  ): Promise<Map<string, Record<string, unknown>>> {
     let res: Response;
     try {
       res = await this.#fetch(`${this.#baseUrl}/jmap`, {
         method: "POST",
-        headers: { Authorization: this.#authHeader, "Content-Type": "application/json" },
+        headers: { ...opts.headers, Authorization: this.#authHeader, "Content-Type": "application/json" },
         body: JSON.stringify({ using, methodCalls: calls }),
         signal: AbortSignal.timeout(this.#timeoutMs),
       });
@@ -117,8 +127,9 @@ export class StalwartTransport {
       update?: Record<string, Record<string, unknown>>;
       destroy?: string[];
     },
+    opts: { headers?: Record<string, string> } = {},
   ): Promise<{ created: Record<string, { id: string } & Record<string, unknown>> }> {
-    const res = (await this.call([[`${object}/set`, args, "s"]])).get("s") ?? {};
+    const res = (await this.call([[`${object}/set`, args, "s"]], opts)).get("s") ?? {};
     for (const key of ["notCreated", "notUpdated", "notDestroyed"] as const) {
       const failed = res[key] as Record<string, unknown> | null | undefined;
       if (failed && Object.keys(failed).length > 0) {

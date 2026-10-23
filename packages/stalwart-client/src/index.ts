@@ -28,6 +28,12 @@ export {
 export {
   type AppPasswordRecord,
   type DomainInput,
+  ARGON2ID_PHC,
+  MAILBOX_PASSWORD_GRANT_HEADER,
+  MAILBOX_PASSWORD_GRANT_MAX_SEC,
+  MAILBOX_PASSWORD_HEADER,
+  mailboxPasswordGrant,
+  verifyMailboxPasswordGrant,
   type RelayRouteInput,
   StalwartManagement,
   CUSTOMER_PERMISSIONS,
