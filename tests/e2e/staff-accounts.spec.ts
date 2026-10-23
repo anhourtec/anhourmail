@@ -15,7 +15,7 @@ test("a Global Administrator finds an account, opens it, and its owner sees the 
   await page.getByRole("link", { name: u.accountName }).click();
   await expect(page.getByRole("heading", { name: u.accountName, level: 1 })).toBeVisible();
   await expect(page.getByText("Opening this page is recorded in the account's audit log")).toBeVisible();
-  await expect(page.getByText(u.users.owner)).toBeVisible();
+  await expect(page.getByRole("tabpanel", { name: /^People/ }).getByText(u.users.owner)).toBeVisible();
 
   // The platform audit is a filterable table with a details drawer.
   await (await openNav(page)).getByRole("link", { name: "Platform audit" }).click();

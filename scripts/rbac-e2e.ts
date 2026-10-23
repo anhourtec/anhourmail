@@ -19,7 +19,13 @@ import { inArray, like } from "drizzle-orm";
 import { hashPassword } from "@anhourmail/adapters/auth";
 import { createDb, schema } from "@anhourmail/adapters/postgres";
 import { type Actor, authorize, DomainError } from "@anhourmail/core";
-import { ACCOUNT_ROLES, type AccountRole, PLATFORM_ROLES, type PlatformRole } from "@anhourmail/shared/rbac";
+import {
+  ACCOUNT_ROLES,
+  type AccountRole,
+  type Permission,
+  PLATFORM_ROLES,
+  type PlatformRole,
+} from "@anhourmail/shared/rbac";
 
 import { ROUTES, type RouteSpec } from "../apps/web/src/server/routes";
 
@@ -28,6 +34,7 @@ const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL is not set");
 
 const run = `rbac-${randomBytes(4).toString("hex")}`;
+const HARNESS_IP = `198.51.100.${String(1 + ((randomBytes(1)[0] ?? 0) % 254))}`;
 const { db, pool } = createDb(DATABASE_URL);
 
 type Persona = {
@@ -38,6 +45,15 @@ type Persona = {
 };
 
 const STATUS: Record<string, number> = { unauthorized: 401, forbidden: 403, not_found: 404 };
+
+function authorizes(actor: Actor, permission: Permission): boolean {
+  try {
+    authorize(actor, permission);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function expectedStatus(route: RouteSpec, p: Persona, accountId: string): number {
   const okStatus = route.probeStatus ?? (route.method === "POST" ? 202 : 200);
@@ -72,7 +88,9 @@ async function createUser(email: string, password: string, suspended = false): P
 async function signIn(email: string, password: string): Promise<string> {
   const res = await fetch(`${WEB}/api/auth/sign-in/email`, {
     method: "POST",
-    headers: { "content-type": "application/json", origin: WEB },
+    // A documentation-range client address (TRUST_PROXY in dev/CI): the sign-in's platform audit entry carries it,
+    // which the full-IP check below reads back.
+    headers: { "content-type": "application/json", origin: WEB, "x-forwarded-for": HARNESS_IP },
     body: JSON.stringify({ email, password }),
   });
   const cookie = res.headers
@@ -136,6 +154,21 @@ try {
   await addUser("suspended A owner", { account: [accountA.id, "owner"], suspended: true });
 
   for (const p of personas) if (p.email) p.cookie = await signIn(p.email, password);
+
+  // ---- 1b. (right after the sign-ins, so they are among the newest entries) full IPs in the platform audit: `platform.audit.full_ip` (Global Administrator) only ----------------
+  for (const p of personas.filter((x) => x.actor.kind === "user" && x.actor.platformRoles.length > 0)) {
+    const res = await fetch(`${WEB}/api/platform/audit?limit=200`, {
+      headers: { cookie: p.cookie ?? "", origin: WEB },
+    });
+    if (res.status !== 200) continue; // no platform.audit.read: covered by the route matrix above
+    const { data } = (await res.json()) as { data: { entries: { ip: string | null }[] } };
+    const ips = data.entries.map((e) => e.ip).filter((ip): ip is string => ip !== null);
+    const full = ips.includes(HARNESS_IP);
+    const shouldBeFull = authorizes(p.actor, "platform.audit.full_ip");
+    const anyFull = ips.some((ip) => !ip.endsWith(".x") && !ip.endsWith("/48") && ip !== "hidden");
+    const okFull = shouldBeFull ? full : !anyFull;
+    results.push({ route: "platform audit IPs (full_ip)", persona: p.label, expected: 1, got: okFull ? 1 : 0 });
+  }
 
   // ---- 2. every route × every persona -------------------------------------------------------------------
   for (const route of ROUTES) {

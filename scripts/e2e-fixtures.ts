@@ -160,7 +160,8 @@ if (mode === "create") {
     const mgmt = stalwartDevAdmin();
     const domainOf = (address: string) => address.slice(address.lastIndexOf("@") + 1);
     for (const u of await mgmt.listUsers()) {
-      if (domainOf(u.address).includes(run)) await mgmt.destroy("x:Account", u.id);
+      // Free platform addresses the run claimed are `<run>-…@<platform domain>`.
+      if (domainOf(u.address).includes(run) || u.address.startsWith(`${run}-`)) await mgmt.destroy("x:Account", u.id);
     }
     for (const d of await mgmt.listDomains()) if (d.name.includes(run)) await mgmt.destroyDomain(d.id);
     // Tests that fail sign-in on purpose come from 203.0.113.0/24 (RFC 5737, never a real client); lift any ban

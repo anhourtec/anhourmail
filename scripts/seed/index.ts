@@ -316,8 +316,9 @@ const quota = (plan: keyof typeof PLANS) => PLANS[plan].storageGb * 1024 ** 3;
 
 const people = demo ? demoPeople(ADMIN_EMAIL) : demoPeople(ADMIN_EMAIL).filter((p) => p.email === ADMIN_EMAIL);
 
-// Mail domains in Stalwart
-const mailDomains = new Set(people.filter((p) => p.mailbox).map((p) => domainOf(p.email)));
+// Mail domains in Stalwart, plus the platform domain (free addresses, ADR-0021): production's bootstrap creates it as
+// the system domain; in development it exists only on this isolated Stalwart (no route out, rule 19).
+const mailDomains = new Set([...people.filter((p) => p.mailbox).map((p) => domainOf(p.email)), deps.platform.domain]);
 for (const d of mailDomains) await mgmt.upsertDomain({ name: d });
 
 const accountIds = new Map<AccountKey, string>();
