@@ -5,6 +5,10 @@ only**, then run `npm run brand:sync` — it copies every file in this folder (n
 `apps/web/public` and `apps/site/public`; `npm run check:brand` (pre-commit + CI) fails if the copies drift or an app
 still holds a retired file. Rules: CLAUDE.md rule 53, docs/internal/branding.md.
 
+The email logo PNGs in `email/` are rendered from the logo SVGs with `node scripts/render-email-logo.mjs` (Playwright
+Chromium, already installed for the e2e suite); `npm run brand:sync` then regenerates the embedded copy in
+`packages/adapters/src/mail/logo.generated.ts` (branding.md "Transactional email").
+
 Logo: the Anhourtec glyphs spelling ANHOURMAIL, with the O drawn as an envelope.
 
 ## Browser and app icons
@@ -32,6 +36,7 @@ Logo: the Anhourtec glyphs spelling ANHOURMAIL, with the O drawn as an envelope.
 | `anhourmail-icon-light.svg`, `-dark.svg`, `-black.svg`, `-white.svg` | The envelope-O on its own, transparent                 |
 | `anhourmail-app-icon.svg`                                            | Blue rounded tile with a white envelope                |
 | `print/anhourmail-logo-{light,dark}.png`, `@2x.png`                  | Raster logos for documents (not copied into the apps)  |
+| `email/anhourmail-logo-email-{light,dark}.png`                       | Logo embedded in system emails, 2x (not copied)        |
 | `anhourtec-logo-light-bg.svg`, `anhourtec-logo-dark-bg.svg`          | The Anhourtec company logo on light / dark backgrounds |
 
 In the UI, render the logo with `Wordmark` (`@anhourmail/ui/wordmark`): `tone="auto"` follows the theme with the
