@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { MailboxAppPasswords } from "@anhourmail/core/app-passwords";
 import { GB, type MailboxView } from "@anhourmail/core/mailboxes";
+import { formatBytes, storageSummary } from "@anhourmail/shared/storage";
 import { HardDrive, KeyRound, Pause, Play, RotateCcw, Trash2 } from "lucide-react";
 import Link from "next/link";
 
@@ -12,8 +13,19 @@ import { DeleteMailbox, RestoreMailbox, SuspendMailbox } from "./mailbox-lifecyc
 import { MailboxStatus } from "./mailbox-status";
 import { QuotaForm } from "./quota-form";
 import { ResetMailboxPassword } from "./reset-mailbox-password";
+import { StorageLevelText, UsageBar, UsedOfQuota } from "./storage-usage";
 
 const dateFmt = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium" });
+
+/** A label / value row with a hairline under it (the Storage tab's lined layout). */
+function StorageRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="grid gap-1 border-b py-3.5 text-[14px] sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-6">
+      <dt className="font-medium">{label}</dt>
+      <dd className="min-w-0 break-words">{children}</dd>
+    </div>
+  );
+}
 
 type Detail = MailboxView & {
   maxQuotaBytes: number;
@@ -24,7 +36,8 @@ type Detail = MailboxView & {
 
 /**
  * The mailbox details panel: header (initials, address, status, inline actions) and tabs — Overview (label / value
- * / manage grid), Storage and Access for people who manage mailboxes. What's offered follows the same rules the
+ * / manage grid), Storage (used and quota as lined rows; the quota form for people who manage mailboxes) and Access for
+ * people who manage mailboxes. What's offered follows the same rules the
  * server enforces (an admin's or owner's mailbox needs an owner to suspend, delete or restore).
  */
 export function MailboxPanel({
@@ -34,6 +47,7 @@ export function MailboxPanel({
   peopleHref,
   graceDays,
   appPasswords,
+  storageCheckedAgo,
   tab,
 }: {
   m: Detail;
@@ -44,12 +58,17 @@ export function MailboxPanel({
   graceDays: number;
   /** Its app passwords (names and dates only), for people who can see mailboxes. */
   appPasswords: MailboxAppPasswords | null;
+  /** "Updated 5 minutes ago" for the last storage measurement, or null if it was never measured. */
+  storageCheckedAgo: string | null;
   tab?: string | null;
 }) {
   const deleting = m.status === "deleting";
   const lifecycle = canManage && !m.lifecycleLocked;
   const purgeOn = m.purgeAfter ? dateFmt.format(new Date(m.purgeAfter)) : null;
   const quotaGb = m.quotaBytes / GB;
+  const usage = storageSummary(m.storageUsedBytes, m.quotaBytes);
+  /** Kept above the plan's storage when the plan's storage went down, so the mail already in it fits. */
+  const abovePlan = m.quotaBytes > m.maxQuotaBytes;
   /** Setting a password needs the mailbox on the mail server and not being deleted (the server says so too). */
   const passwordSettable = m.canSetPassword && (m.status === "active" || m.status === "suspended");
 
@@ -96,14 +115,13 @@ export function MailboxPanel({
             <Field
               label="Storage"
               manage={
-                canManage && !deleting ? (
-                  <TabLink tab="storage" plain>
-                    Change storage
-                  </TabLink>
-                ) : undefined
+                <TabLink tab="storage" plain>
+                  {canManage && !deleting ? "Change storage" : "View storage"}
+                </TabLink>
               }
             >
-              <span className="am-num">{quotaGb} GB</span>
+              <UsedOfQuota usedBytes={m.storageUsedBytes} quotaBytes={m.quotaBytes} />
+              {usage.percent && <span className="am-num text-muted-foreground"> · {usage.percent}</span>}
             </Field>
             {appPasswords && (
               <Field
@@ -170,23 +188,53 @@ export function MailboxPanel({
           },
         ]
       : []),
-    ...(canManage && !deleting
-      ? [
-          {
-            id: "storage",
-            label: "Storage",
-            content: (
-              <div className="flex flex-col gap-3">
-                <p className="am-body">
-                  Now <span className="am-num">{quotaGb} GB</span>, up to{" "}
-                  <span className="am-num">{m.maxQuotaBytes / GB} GB</span> on this plan.
-                </p>
-                <QuotaForm accountId={accountId} mailboxId={m.id} currentGb={quotaGb} maxGb={m.maxQuotaBytes / GB} />
+    {
+      id: "storage",
+      label: "Storage",
+      content: (
+        <div className="flex flex-col gap-8">
+          <dl className="flex flex-col border-t">
+            <StorageRow label="Used">
+              <div className="flex w-full max-w-sm flex-col gap-1.5">
+                {usage.used === null ? (
+                  <span>Not measured yet. Storage is measured every few minutes.</span>
+                ) : (
+                  <>
+                    <UsageBar fraction={usage.fraction} level={usage.level} className="mt-1.5" />
+                    <span>
+                      <UsedOfQuota usedBytes={m.storageUsedBytes} quotaBytes={m.quotaBytes} />
+                      <span className="am-num text-muted-foreground"> · {usage.percent}</span>
+                    </span>
+                    <StorageLevelText level={usage.level} label={usage.label} />
+                  </>
+                )}
+                {storageCheckedAgo && <span className="am-micro">{storageCheckedAgo}</span>}
               </div>
-            ),
-          },
-        ]
-      : []),
+            </StorageRow>
+            <StorageRow label="Quota">
+              {abovePlan ? (
+                <span>
+                  <span className="am-num">{formatBytes(m.quotaBytes)}</span>, above this plan&apos;s{" "}
+                  <span className="am-num">{formatBytes(m.maxQuotaBytes)}</span> per mailbox, so the mail already in it
+                  fits
+                </span>
+              ) : (
+                <span>
+                  <span className="am-num">{formatBytes(m.quotaBytes)}</span>, up to{" "}
+                  <span className="am-num">{formatBytes(m.maxQuotaBytes)}</span> on this plan
+                </span>
+              )}
+            </StorageRow>
+          </dl>
+          {canManage && !deleting && (
+            <section aria-label="Change storage" className="flex flex-col gap-3">
+              <h3 className="am-h4">Change storage</h3>
+              <QuotaForm accountId={accountId} mailboxId={m.id} currentGb={quotaGb} maxGb={m.maxQuotaBytes / GB} />
+            </section>
+          )}
+        </div>
+      ),
+    },
     ...(passwordSettable
       ? [
           {

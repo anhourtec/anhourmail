@@ -24,12 +24,15 @@ import {
 } from "../console/data-list";
 import { ConfirmDialog } from "../console/flyout";
 import { MAILBOX_STATUS, MailboxStatus } from "./mailbox-status";
+import { StorageCell, UsedOfQuota } from "./storage-usage";
 
 export type MailboxRow = {
   id: string;
   address: string;
   ownerEmail: string | null;
-  quotaGb: number;
+  quotaBytes: number;
+  /** Storage used at the last measurement (every ~10 minutes); null until measured. */
+  usedBytes: number | null;
   status: Status;
   applyFailed: boolean;
   /** Formatted on the server ("Restorable until …" while deleting). */
@@ -41,7 +44,8 @@ type Filter = "all" | Status;
 const SORT_KEYS = {
   address: (r: MailboxRow) => r.address,
   owner: (r: MailboxRow) => r.ownerEmail ?? "~",
-  storage: (r: MailboxRow) => r.quotaGb,
+  // By storage used; mailboxes not measured yet sort below an empty one.
+  storage: (r: MailboxRow) => r.usedBytes ?? -1,
   status: (r: MailboxRow) => MAILBOX_STATUS[r.status].text,
 };
 
@@ -258,6 +262,9 @@ export function MailboxList({
                             {m.address}
                           </Link>
                           <span className="am-micro truncate md:hidden">{m.ownerEmail ?? "Not assigned"}</span>
+                          <span className="am-micro sm:hidden">
+                            <UsedOfQuota usedBytes={m.usedBytes} quotaBytes={m.quotaBytes} />
+                          </span>
                         </div>
                         <RowMenu
                           label={`Actions for ${m.address}`}
@@ -286,7 +293,9 @@ export function MailboxList({
                     <td className={`${listClass.td} hidden break-all md:table-cell`}>
                       {m.ownerEmail ?? <span className="text-muted-foreground">Not assigned</span>}
                     </td>
-                    <td className={`${listClass.td} am-num hidden sm:table-cell`}>{m.quotaGb} GB</td>
+                    <td className={`${listClass.td} hidden sm:table-cell`}>
+                      <StorageCell usedBytes={m.usedBytes} quotaBytes={m.quotaBytes} />
+                    </td>
                     <td className={listClass.td}>
                       <div className="flex flex-col items-start gap-0.5">
                         <MailboxStatus status={m.status} applyFailed={m.applyFailed} />
