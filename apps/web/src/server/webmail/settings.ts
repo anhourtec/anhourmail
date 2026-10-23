@@ -71,6 +71,8 @@ export class WebmailSettings {
       settings: WebmailSettingsService;
       mailer: Mailer;
       webmailUrl: string;
+      /** The deployment's public site host, for the footer of the confirmation email. */
+      siteHost: string;
     },
   ) {}
 
@@ -242,6 +244,7 @@ export class WebmailSettings {
           mailbox: maskEmail(address),
           url: `${this.d.webmailUrl.replace(/\/$/, "")}/forwarding/confirm/${out.token}`,
           hours: FORWARDING_LINK_HOURS,
+          site: this.d.siteHost,
         }),
       );
     } catch (err) {

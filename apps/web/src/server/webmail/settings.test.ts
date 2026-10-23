@@ -194,7 +194,13 @@ async function setup() {
   };
   const core = new WebmailSettingsService({ uow, clock: { now: () => new Date() }, platform: PUBLIC_PLATFORM });
   confirmedSource.core = core;
-  const settings = new WebmailSettings({ mail: svc, settings: core, mailer, webmailUrl: "https://mail.example/" });
+  const settings = new WebmailSettings({
+    mail: svc,
+    settings: core,
+    mailer,
+    webmailUrl: "https://mail.example/",
+    siteHost: "example.test",
+  });
   const script = () => managed.get("acc1") ?? "";
   return { svc, sessionId, uow, sent, mailer, core, settings, script, managed, sieveFail, inactive, ...fake };
 }

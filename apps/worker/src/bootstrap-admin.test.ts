@@ -94,6 +94,7 @@ describe("setPasswordEmail", () => {
       firstName: "<b>Ada</b>",
       url: "https://x.test/?a=1&b=2",
       minutes: 60,
+      site: "example.test",
     });
     expect(m.html).toContain("&#60;b&#62;Ada&#60;/b&#62;");
     expect(m.html).toContain("https://x.test/?a=1&#38;b=2");

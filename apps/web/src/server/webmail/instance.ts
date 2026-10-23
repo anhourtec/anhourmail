@@ -11,6 +11,7 @@ import { managedSieve } from "../adapters/stalwart";
 import { stalwartOAuthPort } from "../adapters/stalwart-oauth";
 import { container } from "../container";
 import { env } from "../env";
+import { platform } from "../platform";
 import { type SessionKv, WebmailSessionStore } from "./session-store";
 import { WebmailService } from "./service";
 import { WebmailSettings } from "./settings";
@@ -129,6 +130,7 @@ export function webmailSettings(): WebmailSettings {
     settings: settingsService(),
     mailer: container().mailer,
     webmailUrl: env().WEBMAIL_URL,
+    siteHost: platform().hosts.site,
   });
   return settingsInstance;
 }

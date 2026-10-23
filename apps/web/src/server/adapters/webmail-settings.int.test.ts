@@ -139,6 +139,7 @@ describe("webmail settings on the dev Stalwart", () => {
     settings: core,
     mailer: { send: async (m) => void sent.push(m) },
     webmailUrl: WEBMAIL_URL,
+    siteHost: PUBLIC_PLATFORM.hosts.site,
   });
   let ownerSession = "";
   let senderSession = "";

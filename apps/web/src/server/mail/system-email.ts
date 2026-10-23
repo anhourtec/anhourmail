@@ -1,68 +1,51 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { MailMessage } from "@anhourmail/adapters/mail";
+import { systemEmail } from "@anhourmail/adapters/mail/layout";
 
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${String(c.charCodeAt(0))};`);
-
-/**
- * One plain layout for AnhourMail's own system mail: text part first, a minimal HTML part with system fonts, one
- * button, no images, no tracking pixels, no rewritten links (privacy brand; branding.md "Transactional email").
+/*
+ * The console's and webmail's system emails, all in the one shared layout (`@anhourmail/adapters/mail/layout`; its
+ * rules are in branding.md "Transactional email"). Each takes `site`, the deployment's public site host
+ * (`platform().hosts.site`), for the footer link.
  */
-export function systemEmail(input: {
-  to: string;
-  subject: string;
-  greeting: string;
-  lines: string[];
-  /** Labelled values shown quoted in mono (e.g. a name someone chose), after the lines. */
-  facts?: { label: string; value: string }[];
-  /** A last line just before the button. */
-  closing?: string;
-  action: { label: string; url: string };
-  footer: string;
-}): MailMessage {
-  const facts = input.facts ?? [];
-  const text = [
-    input.greeting,
-    "",
-    ...input.lines,
-    ...(facts.length > 0 ? ["", ...facts.map((f) => `${f.label} "${f.value}"`)] : []),
-    ...(input.closing ? ["", input.closing] : []),
-    "",
-    `${input.action.label}: ${input.action.url}`,
-    "",
-    input.footer,
-    "",
-    "— AnhourMail",
-  ].join("\n");
-  const paragraphs = [
-    ...input.lines.map((l) => `<p>${esc(l)}</p>`),
-    ...facts.map(
-      (f) =>
-        `<p>${esc(f.label)} <code style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace">&quot;${esc(f.value)}&quot;</code></p>`,
-    ),
-    ...(input.closing ? [`<p>${esc(input.closing)}</p>`] : []),
-  ].join("\n");
-  const html = `<!doctype html><html><body style="margin:0;padding:24px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#0f141e;line-height:1.5">
-<p>${esc(input.greeting)}</p>
-${paragraphs}
-<p><a href="${esc(input.action.url)}" style="display:inline-block;padding:10px 16px;border-radius:8px;background:#0077c8;color:#ffffff;text-decoration:none">${esc(input.action.label)}</a></p>
-<p style="color:#475060;font-size:13px">${esc(input.footer)}</p>
-</body></html>`;
-  return { to: input.to, subject: input.subject, text, html };
-}
 
 const hello = (name?: string) => (name && name.trim() !== "" ? `Hi ${name.trim()},` : "Hi,");
 
-export function passwordResetEmail(input: { to: string; name: string; url: string }): MailMessage {
+export function passwordResetEmail(input: { to: string; name: string; url: string; site: string }): MailMessage {
   return systemEmail({
     to: input.to,
     subject: "Reset your AnhourMail password",
+    preheader: "Use this link within an hour to choose a new password.",
     greeting: hello(input.name),
     lines: [
       "Someone asked to reset the password for your AnhourMail account. If it was you, use this link within an hour.",
       "Every other signed-in session will be signed out once the password changes.",
     ],
     action: { label: "Reset your password", url: input.url },
-    footer: "If you didn't ask, ignore this email — your password stays the same.",
+    note: "If you didn't ask, ignore this email — your password stays the same.",
+    reason: "You got this email because a password reset was asked for on the AnhourMail login for this address.",
+    site: input.site,
+  });
+}
+
+/**
+ * Confirms the console sign-in address (sent at sign-up and when the person asks again). A confirmed address is what
+ * a free platform address needs; the link works for `hours`.
+ */
+export function emailVerificationEmail(input: { to: string; url: string; hours: number; site: string }): MailMessage {
+  return systemEmail({
+    to: input.to,
+    subject: "Confirm your email address for AnhourMail",
+    preheader: `Confirm this address to finish setting up your account. The link works for ${String(input.hours)} hours.`,
+    // Plain greeting, like the invite: the sign-up name is whatever anyone typed for someone else's address.
+    greeting: "Hi,",
+    lines: [
+      "Confirm that this is your email address to finish setting up your AnhourMail account.",
+      `The link works for ${String(input.hours)} hours.`,
+    ],
+    action: { label: "Confirm your email address", url: input.url },
+    note: "If you didn't sign up for AnhourMail, ignore this email — nothing happens unless you confirm.",
+    reason: "You got this email because this address was used to sign up for AnhourMail.",
+    site: input.site,
   });
 }
 
@@ -74,18 +57,23 @@ export function inviteEmail(input: {
   role: string;
   url: string;
   days: number;
+  site: string;
 }): MailMessage {
   return systemEmail({
     to: input.to,
     // Generic on purpose: the subject is what spam filters and previews show, so no inviter-chosen text in it.
     subject: "You've been invited to an AnhourMail account",
+    // Generic for the same reason as the subject.
+    preheader: `Accept within ${String(input.days)} days. The link works once, for this address only.`,
     greeting: "Hi,",
     lines: [
       `${input.inviter} invited you to join ${input.accountName} on AnhourMail as ${input.role}.`,
       `The link works once, for this address only, for ${String(input.days)} days.`,
     ],
     action: { label: "Accept the invite", url: input.url },
-    footer: "If you weren't expecting this, ignore this email — nothing happens unless you accept.",
+    note: "If you weren't expecting this, ignore this email — nothing happens unless you accept.",
+    reason: "You got this email because someone invited this address to an AnhourMail account.",
+    site: input.site,
   });
 }
 
@@ -98,10 +86,12 @@ export function passkeyAddedEmail(input: {
   passkeyName: string;
   at: Date;
   securityUrl: string;
+  site: string;
 }): MailMessage {
   return systemEmail({
     to: input.to,
     subject: "A passkey was added to your AnhourMail login",
+    preheader: "It can sign you in without your password. If this wasn't you, remove it.",
     greeting: hello(),
     lines: [
       `A passkey was added to your AnhourMail console login on ${utcTime(input.at)}. It can sign you in without your password.`,
@@ -109,7 +99,8 @@ export function passkeyAddedEmail(input: {
     facts: [{ label: "Name given:", value: input.passkeyName }],
     closing: "If this wasn't you, remove it and change your password on your Security page.",
     action: { label: "Open your Security page", url: input.securityUrl },
-    footer: "We send this whenever a passkey is added, so you always know.",
+    reason: "We send this whenever a passkey is added, so you always know.",
+    site: input.site,
   });
 }
 
@@ -128,6 +119,7 @@ export function firstFactorEmail(input: {
   at: Date;
   securityUrl: string;
   forOwner: boolean;
+  site: string;
 }): MailMessage {
   const what = input.factor === "passkey" ? "a passkey" : "an authenticator app";
   const where = input.accountName ? ` (required by ${input.accountName})` : "";
@@ -136,6 +128,9 @@ export function firstFactorEmail(input: {
     subject: input.forOwner
       ? "Someone in your account set up two-step sign-in"
       : "Two-step sign-in was set up on your login",
+    preheader: input.forOwner
+      ? "Check with them if you weren't expecting it."
+      : "If this wasn't you, change your password now.",
     greeting: hello(),
     lines: input.forOwner
       ? [
@@ -149,7 +144,8 @@ export function firstFactorEmail(input: {
       ? {}
       : { closing: "If this wasn't you, change your password and check your Security page now." }),
     action: { label: "Open the Security page", url: input.securityUrl },
-    footer: "We send this the first time someone sets up a sign-in factor while their account requires one.",
+    reason: "We send this the first time someone sets up a sign-in factor while their account requires one.",
+    site: input.site,
   });
 }
 
@@ -162,11 +158,13 @@ export function forwardingConfirmEmail(input: {
   mailbox: string;
   url: string;
   hours: number;
+  site: string;
 }): MailMessage {
   return systemEmail({
     to: input.to,
     // Generic: no text the mailbox owner chose.
     subject: "Confirm mail forwarding to this address",
+    preheader: "Nothing is forwarded to you unless you confirm.",
     greeting: hello(),
     lines: [
       "An AnhourMail mailbox asked to forward its mail to this address. Nothing is forwarded unless you confirm.",
@@ -174,6 +172,8 @@ export function forwardingConfirmEmail(input: {
     ],
     facts: [{ label: "Mailbox:", value: input.mailbox }],
     action: { label: "Review and confirm", url: input.url },
-    footer: "If you don't know this mailbox, ignore this email — no mail will be forwarded to you.",
+    note: "If you don't know this mailbox, ignore this email — no mail will be forwarded to you.",
+    reason: "You got this email because an AnhourMail mailbox asked to forward its mail to this address.",
+    site: input.site,
   });
 }

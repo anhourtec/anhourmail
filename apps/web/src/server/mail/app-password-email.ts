@@ -4,9 +4,11 @@ import "server-only";
 import type { CreatedAppPassword } from "@anhourmail/core/app-passwords";
 import { log } from "@anhourmail/server/log";
 
+import { systemEmail } from "@anhourmail/adapters/mail/layout";
+
 import { container } from "../container";
 import { env } from "../env";
-import { systemEmail } from "./system-email";
+import { platform } from "../platform";
 
 const utcTime = (d: Date) =>
   `${new Intl.DateTimeFormat("en-CA", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(d)} UTC`;
@@ -23,6 +25,7 @@ export async function sendAppPasswordNotice(to: string, accountId: string, creat
       systemEmail({
         to,
         subject: "An app password was created for your mailbox",
+        preheader: "Mail apps can use it to read or send mail. If this wasn't you, revoke it now.",
         greeting: "Hi,",
         lines: [
           `An app password was created for ${created.address} on ${utcTime(created.appPassword.createdAt)}. Mail apps can use it to read or send mail for this mailbox.`,
@@ -30,7 +33,8 @@ export async function sendAppPasswordNotice(to: string, accountId: string, creat
         facts: [{ label: "Name given:", value: created.appPassword.name }],
         closing: "If this wasn't you, revoke it now and change your console password.",
         action: { label: "Review app passwords", url },
-        footer: "We send this whenever an app password is created, so you always know.",
+        reason: "We send this whenever an app password is created, so you always know.",
+        site: platform().hosts.site,
       }),
     );
   } catch (err) {

@@ -3,9 +3,11 @@ import "server-only";
 
 import { log } from "@anhourmail/server/log";
 
+import { systemEmail } from "@anhourmail/adapters/mail/layout";
+
 import { container } from "../container";
 import { env } from "../env";
-import { systemEmail } from "./system-email";
+import { platform } from "../platform";
 
 const utcTime = (d: Date) =>
   `${new Intl.DateTimeFormat("en-CA", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(d)} UTC`;
@@ -26,6 +28,7 @@ export async function sendMailboxPasswordResetNotice(
       systemEmail({
         to,
         subject: "Your mailbox password was changed",
+        preheader: `The password for ${input.address} was changed. If this wasn't you, act now.`,
         greeting: "Hi,",
         lines: [
           input.by === "webmail"
@@ -42,7 +45,8 @@ export async function sendMailboxPasswordResetNotice(
             ? "If this wasn't you, change your console password and ask an owner or admin of your account to set a new mailbox password now."
             : "Ask the administrator for the new password, or if you didn't expect this, contact them and an owner of your account.",
         action: { label: "Open the webmail", url },
-        footer: "We send this whenever a mailbox password changes, so you always know.",
+        reason: "We send this whenever a mailbox password changes, so you always know.",
+        site: platform().hosts.site,
       }),
     );
   } catch (err) {

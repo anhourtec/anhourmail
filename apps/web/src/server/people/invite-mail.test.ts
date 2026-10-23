@@ -68,7 +68,8 @@ describe("sendInviteEmail", () => {
     expect(m?.text).toContain(`http://localhost:43200/invite/${"T".repeat(43)}`);
     expect(m?.text).toContain("as User Administrator");
     expect(m?.text).toContain("for 7 days");
-    expect(m?.html).not.toContain("<img");
+    // Only the embedded logo: no remote images or tracking pixels.
+    expect(m?.html).not.toMatch(/<img[^>]+src="(?!cid:)/);
   });
 
   it("falls back to the inviter's email, and reports a failed send without logging the token", async () => {

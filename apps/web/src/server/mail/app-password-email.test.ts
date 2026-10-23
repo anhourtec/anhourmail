@@ -69,7 +69,8 @@ describe("sendAppPasswordNotice", () => {
     expect(m?.text).toContain("http://localhost:43200/accounts/acc-1/app-passwords");
     expect(m?.html).toContain("Phone &#60;b&#62;");
     expect(`${m?.text ?? ""}${m?.html ?? ""}`).not.toContain(SECRET);
-    expect(m?.html).not.toContain("<img");
+    // Only the embedded logo: no remote images or tracking pixels.
+    expect(m?.html).not.toMatch(/<img[^>]+src="(?!cid:)/);
   });
 
   it("logs a failed send by error name only, and doesn't throw", async () => {

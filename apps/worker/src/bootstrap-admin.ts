@@ -6,6 +6,7 @@
  * the console's "Choose a new password" page, by email, and the link is never logged or printed.
  */
 import type { Mailer, MailMessage } from "@anhourmail/adapters/mail";
+import { systemEmail } from "@anhourmail/adapters/mail/layout";
 import type { Deps } from "@anhourmail/core";
 import { bootstrapPlatformAdmin, SET_PASSWORD_LINK_MINUTES } from "@anhourmail/core/platform";
 import type { Logger } from "@anhourmail/server/log";
@@ -15,28 +16,30 @@ export type BootstrapAdminInput = { email: string; firstName: string; lastName?:
 /** `created`: login, role and email done. `refused`: nothing changed. `mail_failed`: created, but the email didn't go. */
 export type BootstrapAdminResult = "created" | "refused" | "mail_failed";
 
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${String(c.charCodeAt(0))};`);
-
-/** Plain system mail (same shape as the console's: text first, one button, no images or tracking). */
-export function setPasswordEmail(input: { to: string; firstName: string; url: string; minutes: number }): MailMessage {
-  const lines = [
-    "An AnhourMail platform administrator login was created for this address.",
-    `Choose your password with this link within ${String(input.minutes)} minutes. It works once.`,
-    'After that, use "Forgot password" on the console sign-in page if you need a new link.',
-  ];
-  const greeting = `Hi ${input.firstName},`;
-  const footer = "If you weren't expecting this, tell your team before using the link.";
-  return {
+/** The set-password email, in the shared system-email layout (branding.md "Transactional email"). */
+export function setPasswordEmail(input: {
+  to: string;
+  firstName: string;
+  url: string;
+  minutes: number;
+  /** The deployment's public site host (`platform.hosts.site`), for the footer link. */
+  site: string;
+}): MailMessage {
+  return systemEmail({
     to: input.to,
     subject: "Set your AnhourMail administrator password",
-    text: [greeting, "", ...lines, "", `Choose your password: ${input.url}`, "", footer, "", "— AnhourMail"].join("\n"),
-    html: `<!doctype html><html><body style="margin:0;padding:24px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#0f141e;line-height:1.5">
-<p>${esc(greeting)}</p>
-${lines.map((l) => `<p>${esc(l)}</p>`).join("\n")}
-<p><a href="${esc(input.url)}" style="display:inline-block;padding:10px 16px;border-radius:8px;background:#0077c8;color:#ffffff;text-decoration:none">Choose your password</a></p>
-<p style="color:#475060;font-size:13px">${esc(footer)}</p>
-</body></html>`,
-  };
+    preheader: `Choose your password within ${String(input.minutes)} minutes. The link works once.`,
+    greeting: `Hi ${input.firstName},`,
+    lines: [
+      "An AnhourMail platform administrator login was created for this address.",
+      `Choose your password with this link within ${String(input.minutes)} minutes. It works once.`,
+      'After that, use "Forgot password" on the console sign-in page if you need a new link.',
+    ],
+    action: { label: "Choose your password", url: input.url },
+    note: "If you weren't expecting this, tell your team before using the link.",
+    reason: "You got this email because an AnhourMail platform administrator login was created for this address.",
+    site: input.site,
+  });
 }
 
 export async function runBootstrapAdmin(opts: {
@@ -71,6 +74,7 @@ export async function runBootstrapAdmin(opts: {
         firstName: opts.input.firstName.trim(),
         url,
         minutes: SET_PASSWORD_LINK_MINUTES,
+        site: opts.deps.platform.hosts.site,
       }),
     );
   } catch (err) {

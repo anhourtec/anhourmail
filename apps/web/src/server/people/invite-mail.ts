@@ -9,6 +9,7 @@ import { log } from "@anhourmail/server/log";
 import { container } from "../container";
 import { env } from "../env";
 import { inviteEmail } from "../mail/system-email";
+import { platform } from "../platform";
 
 /**
  * Emails an invite link after the invite is stored. A delivery failure doesn't undo the invite (it can be resent);
@@ -24,6 +25,7 @@ export async function sendInviteEmail(sent: SentInvite, inviter: { name?: string
         role: ROLE_LABELS[`account:${sent.invite.role}`],
         url: `${env().APP_URL.replace(/\/$/, "")}/invite/${sent.token}`,
         days: INVITE_TTL_DAYS,
+        site: platform().hosts.site,
       }),
     );
     return true;

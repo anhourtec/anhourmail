@@ -55,7 +55,8 @@ describe("sendMailboxPasswordResetNotice", () => {
     expect(m?.text).toContain("Oct 23, 2026");
     expect(m?.text).toContain("Webmail sessions for this mailbox are signed out");
     expect(m?.text).toContain("http://localhost:43300");
-    expect(m?.html).not.toContain("<img");
+    // Only the embedded logo: no remote images or tracking pixels.
+    expect(m?.html).not.toMatch(/<img[^>]+src="(?!cid:)/);
     await sendMailboxPasswordResetNotice("person@example.test", { address: "kid@family.test", by: "self", at });
     expect(mailer.sent[1]?.text).toContain("You set a new password for kid@family.test");
     await sendMailboxPasswordResetNotice("person@example.test", { address: "kid@family.test", by: "webmail", at });
