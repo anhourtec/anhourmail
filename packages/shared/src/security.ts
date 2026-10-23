@@ -79,3 +79,68 @@ export const APP_PASSWORDS_PER_MAILBOX = 5;
 
 /** App password names people choose ("Phone", "Work laptop"). */
 export const APP_PASSWORD_NAME_MAX = 40;
+
+// --- mailbox passwords (webmail and mail apps; docs/internal/07-security.md "Mailbox passwords") ------------------
+
+/**
+ * A mailbox password: what a person types to sign in to the webmail (and, with an app password for everything else,
+ * what their mail apps never need). Same length rule as console passwords (12+), plus what would break sign-in: no
+ * leading or trailing spaces (mail apps trim them), nothing that starts like an app password (`app_`, which the
+ * webmail sign-in refuses), no control characters, and not the address itself.
+ */
+export const MAILBOX_PASSWORD = { min: 12, max: 128 } as const;
+
+/** The requirements as the forms show them (one line each). */
+export const MAILBOX_PASSWORD_RULES: readonly string[] = [
+  `${String(MAILBOX_PASSWORD.min)} to ${String(MAILBOX_PASSWORD.max)} characters. A passphrase works well.`,
+  "No spaces at the start or end.",
+  "Not the mailbox address, and not starting with app_.",
+];
+
+/** Why `password` can't be a mailbox password for `address` (one sentence for the form), or null when it's fine. */
+export function mailboxPasswordProblem(password: string, address: string): string | null {
+  const chars = Array.from(password).length; // code points, as people count them
+  if (chars < MAILBOX_PASSWORD.min) {
+    return `Use at least ${String(MAILBOX_PASSWORD.min)} characters for the password.`;
+  }
+  if (chars > MAILBOX_PASSWORD.max) return `Use at most ${String(MAILBOX_PASSWORD.max)} characters for the password.`;
+  if (password.trim() !== password) return "Remove the spaces at the start or end of the password.";
+  if (/\p{Cc}/u.test(password)) return "The password can't contain control characters.";
+  if (/^app_/i.test(password)) return "Mailbox passwords can't start with app_ (that's how app passwords start).";
+  const lower = password.toLowerCase();
+  const addr = address.trim().toLowerCase();
+  const local = addr.slice(0, addr.lastIndexOf("@"));
+  if (lower === addr || (local !== "" && lower === local)) return "Choose a password that isn't the mailbox address.";
+  return null;
+}
+
+/**
+ * The only mailbox-password hash we hand on: argon2id v19 at exactly our parameters (m=19456 KiB, t=2, p=1) with a
+ * bounded salt and hash (base64, as `@node-rs/argon2` writes them). The management proxy and the Stalwart client
+ * check the same shape.
+ */
+export const MAILBOX_PASSWORD_PHC = /^\$argon2id\$v=19\$m=19456,t=2,p=1\$[A-Za-z0-9+/]{16,64}\$[A-Za-z0-9+/]{32,128}$/;
+
+/** "Generate a strong password": length and alphabet (no look-alikes such as l, 1, O, 0): 56 symbols, ~116 bits. */
+export const GENERATED_MAILBOX_PASSWORD = {
+  length: 20,
+  alphabet: "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789",
+} as const;
+
+/**
+ * A strong mailbox password from the browser's (or Node's) cryptographic random source: `GENERATED_MAILBOX_PASSWORD`
+ * length from its alphabet, without modulo bias (bytes ≥ the largest multiple of the alphabet size are drawn again).
+ */
+export function generateMailboxPassword(
+  fill: (bytes: Uint8Array<ArrayBuffer>) => Uint8Array<ArrayBuffer> = (b) => globalThis.crypto.getRandomValues(b),
+): string {
+  const { alphabet, length } = GENERATED_MAILBOX_PASSWORD;
+  const limit = 256 - (256 % alphabet.length);
+  let out = "";
+  while (out.length < length) {
+    for (const byte of fill(new Uint8Array(length * 2))) {
+      if (byte < limit && out.length < length) out += alphabet.charAt(byte % alphabet.length);
+    }
+  }
+  return out;
+}

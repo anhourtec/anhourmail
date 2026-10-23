@@ -16,7 +16,17 @@ import {
   productionPlatformProblems,
   PUBLIC_PLATFORM,
 } from "./platform";
-import { isSignInPolicy, RECOVERY_CODES, SIGN_IN_POLICIES, SIGN_IN_POLICY_LABELS } from "./security";
+import {
+  GENERATED_MAILBOX_PASSWORD,
+  generateMailboxPassword,
+  isSignInPolicy,
+  MAILBOX_PASSWORD,
+  MAILBOX_PASSWORD_RULES,
+  mailboxPasswordProblem,
+  RECOVERY_CODES,
+  SIGN_IN_POLICIES,
+  SIGN_IN_POLICY_LABELS,
+} from "./security";
 import { BULK_MAIL, TRUST_TIERS } from "./sending";
 
 describe("plans", () => {
@@ -158,5 +168,40 @@ describe("sign-in security", () => {
     expect(isSignInPolicy("sms")).toBe(false);
     expect(isSignInPolicy(1)).toBe(false);
     expect(RECOVERY_CODES.warnAtOrBelow).toBeLessThan(RECOVERY_CODES.count);
+  });
+});
+
+describe("mailbox passwords", () => {
+  it("accepts a passphrase and explains every refusal in one sentence", () => {
+    expect(mailboxPasswordProblem("correct horse battery staple", "kid@family.ca")).toBeNull();
+    expect(mailboxPasswordProblem("p\u00e4ssw\u00f6rd-\u00fcn\u00efcode", "kid@family.ca")).toBeNull();
+    expect(mailboxPasswordProblem("x".repeat(MAILBOX_PASSWORD.max), "kid@family.ca")).toBeNull();
+    const cases: [string, RegExp][] = [
+      ["short", /at least 12/],
+      ["x".repeat(MAILBOX_PASSWORD.max + 1), /at most 128/],
+      [" leading-space-pw", /spaces at the start or end/],
+      ["trailing-space-pw ", /spaces at the start or end/],
+      ["tab\tinside-password", /control characters/],
+      ["App_something-long", /app_/],
+      ["KID@family.ca", /isn't the mailbox address/],
+    ];
+    for (const [pw, why] of cases) expect(mailboxPasswordProblem(pw, "kid@family.ca")).toMatch(why);
+    expect(mailboxPasswordProblem("kidkidkidkid", "kidkidkidkid@family.ca")).toMatch(/isn't the mailbox address/);
+    expect(MAILBOX_PASSWORD_RULES).toHaveLength(3);
+  });
+
+  it("generates passwords of the set length from the alphabet, without bias, that pass the rules", () => {
+    const a = generateMailboxPassword();
+    expect(a).toHaveLength(GENERATED_MAILBOX_PASSWORD.length);
+    expect(a).toMatch(new RegExp(`^[${GENERATED_MAILBOX_PASSWORD.alphabet}]+$`));
+    expect(generateMailboxPassword()).not.toBe(a);
+    expect(mailboxPasswordProblem(a, "kid@family.ca")).toBeNull();
+    // Bytes at or above the last full multiple of the alphabet size are drawn again, never folded in.
+    let call = 0;
+    const out = generateMailboxPassword((b) => {
+      b.fill(call++ === 0 ? 255 : 1);
+      return b;
+    });
+    expect(out).toBe(GENERATED_MAILBOX_PASSWORD.alphabet.charAt(1).repeat(GENERATED_MAILBOX_PASSWORD.length));
   });
 });

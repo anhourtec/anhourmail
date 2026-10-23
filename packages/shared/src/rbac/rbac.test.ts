@@ -110,6 +110,13 @@ describe("permission matrix invariants", () => {
     for (const r of revokeOthers) expect(accountRoleCan(r, "app_password.manage.own")).toBe(true);
   });
 
+  it("setting a mailbox password is Owner and User Admin only, critical, and implies managing mailboxes", () => {
+    const holders = ACCOUNT_ROLES.filter((r) => accountRoleCan(r, "mailbox.password.reset"));
+    expect([...holders].sort()).toEqual(["owner", "user_admin"]);
+    expect(holders.every((r) => accountRoleCan(r, "mailbox.manage"))).toBe(true);
+    expect(isCritical("mailbox.password.reset")).toBe(true);
+  });
+
   it("only Owners can require two-factor sign-in or a passkey for the account (critical)", () => {
     for (const r of ACCOUNT_ROLES) expect(accountRoleCan(r, "account.security.manage")).toBe(r === "owner");
     expect(isCritical("account.security.manage")).toBe(true);

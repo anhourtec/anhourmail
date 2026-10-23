@@ -85,6 +85,12 @@ export const PERMISSIONS = {
     scope: "account",
     description: "Create, suspend, delete and restore mailboxes (an Owner's or admin's mailbox: Owners only)",
   },
+  "mailbox.password.reset": {
+    scope: "account",
+    description:
+      "Set a new password on a mailbox (step-up; an Owner's or admin's mailbox: Owners only; never while acting as)",
+    critical: true,
+  },
   "member.credentials.reset": { scope: "account", description: "Reset a member's password or 2FA" },
   "alias.manage.any": { scope: "account", description: "Manage aliases for any mailbox in the account" },
   "alias.manage.own": { scope: "account", description: "Manage own aliases and masked aliases" },
@@ -218,6 +224,7 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
     "domain.manage",
     "mailbox.read",
     "mailbox.manage",
+    "mailbox.password.reset",
     "member.credentials.reset",
     "alias.manage.any",
     "alias.manage.own",
@@ -275,6 +282,7 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
     "domain.read",
     "mailbox.read",
     "mailbox.manage",
+    "mailbox.password.reset",
     "member.credentials.reset",
     "alias.manage.any",
     "alias.manage.own",
