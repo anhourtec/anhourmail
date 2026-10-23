@@ -6,11 +6,16 @@
  */
 import { randomBytes } from "node:crypto";
 
-import type { AppPasswordIssuer } from "@anhourmail/core/app-passwords";
-import type { MailServer } from "@anhourmail/core/provisioning";
+import type { AppPasswordInventory, AppPasswordIssuer } from "@anhourmail/core/app-passwords";
+import type { MailServer, ServiceAccountInventory } from "@anhourmail/core/provisioning";
 import type { ManagedScriptReader } from "@anhourmail/core/webmail";
 import { MANAGED_SIEVE_SCRIPT } from "@anhourmail/shared/webmail";
-import { scopesOf, type StalwartManagement } from "@anhourmail/stalwart-client";
+import {
+  LEGACY_SERVICE_ACCOUNT,
+  scopesOf,
+  SERVICE_CREDENTIALS,
+  type StalwartManagement,
+} from "@anhourmail/stalwart-client";
 
 import { hashPassword } from "../auth/password";
 
@@ -21,10 +26,11 @@ const split = (address: string): [string, string] => {
 };
 
 /**
- * Revokes one app password if the account still has it with this creation time. Stalwart reuses credential ids after
- * a revocation, so an id alone could name a newer app password the person still uses.
+ * Revokes one app password with owner access (`x:AppPassword`, the web app's operations key) if the account still
+ * has it with this creation time. Stalwart reuses credential ids after a revocation, so an id alone could name a newer
+ * app password the person still uses.
  */
-async function revokeMatching(
+async function revokeWithOwnerAccess(
   mgmt: StalwartManagement,
   input: { externalId: string; credentialId: string; createdAt: Date },
 ): Promise<void> {
@@ -34,14 +40,26 @@ async function revokeMatching(
   await mgmt.destroyAppPassword(input.externalId, input.credentialId);
 }
 
-/** App passwords on Stalwart (`x:AppPassword` on the mailbox's account; research/stalwart.md "App passwords"). */
+/**
+ * App passwords on Stalwart (`x:AppPassword` on the mailbox's account; research/stalwart.md "App passwords"), for the
+ * web app with the operations key (`impersonate` + `sysAppPassword*`): create, and undo a create whose record failed.
+ */
 export function stalwartAppPasswords(mgmt: StalwartManagement): AppPasswordIssuer {
   return {
     async create({ externalId, name, protocols }) {
       const made = await mgmt.createAppPassword(externalId, { description: name, scopes: protocols });
       return { credentialId: made.id, createdAt: made.createdAt, secret: made.secret };
     },
-    revoke: (input) => revokeMatching(mgmt, input),
+    revoke: (input) => revokeWithOwnerAccess(mgmt, input),
+  };
+}
+
+/**
+ * What each mailbox holds, for the reconciler: read from `x:Account.credentials` with the provisioning key, which has
+ * no owner access to the mailbox (ADR-0020 "Credential split").
+ */
+export function stalwartAppPasswordInventory(mgmt: StalwartManagement): AppPasswordInventory {
+  return {
     async list(externalId) {
       const inv = await mgmt.credentialInventory(externalId);
       return {
@@ -51,20 +69,59 @@ export function stalwartAppPasswords(mgmt: StalwartManagement): AppPasswordIssue
           protocols: scopesOf(a.permissions),
         })),
         apiKeys: inv.apiKeys,
+        passwords: inv.passwords.length,
       };
     },
   };
 }
 
-/** Reads a mailbox's managed Sieve script with the management key (for the reconciler). */
-export function stalwartManagedScripts(mgmt: StalwartManagement): ManagedScriptReader {
+/**
+ * The service accounts (`SERVICE_CREDENTIALS`, and the retired single-key account) on the deployment's infrastructure
+ * domains (`RECONCILE_IGNORE_DOMAINS`: the system domain), with the kinds of credential each holds, read with the
+ * provisioning key. A customer mailbox that happens to share a name on another domain isn't one.
+ */
+export function stalwartServiceAccounts(mgmt: StalwartManagement, domains: readonly string[]): ServiceAccountInventory {
+  const names = new Set([...Object.values(SERVICE_CREDENTIALS).map((c) => c.account), LEGACY_SERVICE_ACCOUNT]);
+  const wanted = new Set(domains.map((d) => d.toLowerCase()));
   return {
-    async read(externalId) {
-      return (await mgmt.getSieveScript(externalId, MANAGED_SIEVE_SCRIPT))?.content ?? null;
+    async list() {
+      const [all, accounts] = await Promise.all([
+        mgmt.listDomains(),
+        mgmt.transport.getAll<{
+          id: string;
+          name: string;
+          domainId: string;
+          credentials?: Record<string, { "@type"?: string }>;
+        }>("x:Account", ["name", "domainId", "credentials"]),
+      ]);
+      const matched = all.filter((d) => wanted.has(d.name.toLowerCase()));
+      const domainIds = new Set(matched.map((d) => d.id));
+      return {
+        domains: matched.map((d) => d.name.toLowerCase()),
+        accounts: accounts
+          .filter((a) => domainIds.has(a.domainId) && names.has(a.name.toLowerCase()))
+          .map((a) => ({
+            name: a.name.toLowerCase(),
+            credentials: Object.values(a.credentials ?? {}).map((c) => c["@type"] ?? "?"),
+          })),
+      };
     },
   };
 }
 
+/** The service accounts that must exist (`SERVICE_CREDENTIALS`): what `reconcileServiceAccounts` checks for. */
+export const expectedServiceAccounts = (): string[] => Object.values(SERVICE_CREDENTIALS).map((c) => c.account);
+
+/** Reads a mailbox's managed Sieve script and whether it is active, with the scheduler's audit key (reconciler). */
+export function stalwartManagedScripts(mgmt: StalwartManagement): ManagedScriptReader {
+  return { read: (externalId) => mgmt.getSieveScript(externalId, MANAGED_SIEVE_SCRIPT) };
+}
+
+/**
+ * The MailServer port with the provisioning key (worker and scheduler): domains, accounts, aliases, suspension and
+ * app-password revocation through `x:Account.credentials`. It never needs owner access to a mailbox: the managed Sieve
+ * script is written (and made active) by the web app with the operations key.
+ */
 export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
   return {
     async ensureDomain(name, catchAllAddress) {
@@ -76,7 +133,9 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
       };
     },
 
-    revokeAppPassword: (input) => revokeMatching(mgmt, input),
+    async revokeAppPassword({ externalId, credentialId, createdAt }) {
+      await mgmt.revokeAppPasswordCredential(externalId, credentialId, createdAt);
+    },
 
     async ensureMailbox({ externalId: known, address, quotaBytes, suspended, aliases }) {
       const [local, domain] = split(address);
@@ -107,10 +166,6 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
             };
           }),
       });
-      // Our managed Sieve script stays the active one: users can't switch it off (`jmapSieveScriptDestroy` denied also
-      // refuses a bare deactivate), but an account changed by hand or locked late is put right by every ensure (and the
-      // backfill). Nothing is deleted; a mailbox without one is left alone.
-      if (!suspended) await mgmt.activateSieveScript(externalId, MANAGED_SIEVE_SCRIPT);
       return { externalId };
     },
 

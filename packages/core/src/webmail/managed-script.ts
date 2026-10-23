@@ -4,8 +4,11 @@ import { MANAGED_SIEVE_SETTINGS_PREFIX } from "@anhourmail/shared/webmail";
 import { mutation } from "../mutation";
 import type { Deps } from "../ports";
 
-/** Reads a mailbox's managed Sieve script on the mail server (adapter: management API). Null when it has none. */
-export type ManagedScriptReader = { read(externalId: string): Promise<string | null> };
+/**
+ * Reads a mailbox's managed Sieve script on the mail server (adapter: the scheduler's read-only audit key) with whether
+ * it is the active one. Null when it has none.
+ */
+export type ManagedScriptReader = { read(externalId: string): Promise<{ content: string; active: boolean } | null> };
 
 export type ManagedScriptFindings = {
   /** The settings line we write is there and readable. */
@@ -114,9 +117,14 @@ export type ManagedScriptDrift = {
   unconfirmedRedirects: number;
   /** Extensions or constructs the webmail never writes. */
   foreign: number;
+  /**
+   * Our script exists but isn't the active one (users can't switch it off; by hand, or an account locked late). Shown
+   * as "inactive" in the webmail settings and re-activated by the next save there; reported here, not re-queued.
+   */
+  inactive: number;
   /** Mailboxes the mail server couldn't answer for. */
   unreachable: number;
-  /** Mailboxes queued for `mailbox.ensure` (re-activates our script; never rewrites or deletes anything). */
+  /** Mailboxes queued for `mailbox.ensure` (re-asserts the customer lock; never rewrites or deletes anything). */
   requeued: number;
   clean: boolean;
 };
@@ -126,7 +134,7 @@ const RECONCILER = { kind: "system", name: "reconcile" } as const;
 /**
  * Reconciler: checks every active mailbox's managed Sieve script against what the control plane allows — the
  * webmail's own settings line, redirects only to the confirmed forwarding target, nothing the webmail never writes.
- * Matters because the management key can write Sieve on any account (ADR-0020). Reports and audits drift
+ * Matters because the web app's operations key can write Sieve on any account (ADR-0020). Reports and audits drift
  * (`platform.reconciler_drift`, counts only) and re-queues `mailbox.ensure` for those mailboxes; never deletes or
  * rewrites a script (CLAUDE.md rule 26) — a person looks at it.
  */
@@ -139,20 +147,22 @@ export async function reconcileManagedScripts(deps: Deps, reader: ManagedScriptR
     notOurs: 0,
     unconfirmedRedirects: 0,
     foreign: 0,
+    inactive: 0,
     unreachable: 0,
     requeued: 0,
     clean: true,
   };
   const requeue: string[] = [];
   for (const m of mailboxes) {
-    const text = await reader.read(m.stalwartId).catch(() => undefined);
-    if (text === undefined) {
+    const script = await reader.read(m.stalwartId).catch(() => undefined);
+    if (script === undefined) {
       out.unreachable += 1;
       continue;
     }
-    if (text === null) continue; // no managed script yet: nothing set
+    if (script === null) continue; // no managed script yet: nothing set
     out.checked += 1;
-    const found = inspectManagedScript(text);
+    if (!script.active) out.inactive += 1;
+    const found = inspectManagedScript(script.content);
     const target = await deps.uow.run((r) => r.webmailSettings.forwarding(m.id));
     const confirmed = target?.status === "confirmed" ? target.address.toLowerCase() : null;
     let drift = false;
@@ -171,7 +181,7 @@ export async function reconcileManagedScripts(deps: Deps, reader: ManagedScriptR
     if (drift) requeue.push(m.id);
   }
   out.requeued = requeue.length;
-  out.clean = out.notOurs + out.unconfirmedRedirects + out.foreign + out.unreachable === 0;
+  out.clean = out.notOurs + out.unconfirmedRedirects + out.foreign + out.inactive + out.unreachable === 0;
   if (!out.clean) {
     const now = deps.clock.now();
     await mutation(
@@ -195,6 +205,7 @@ export async function reconcileManagedScripts(deps: Deps, reader: ManagedScriptR
             scriptsNotOurs: out.notOurs,
             unconfirmedRedirects: out.unconfirmedRedirects,
             foreignScripts: out.foreign,
+            scriptsInactive: out.inactive,
             mailboxesUnreachable: out.unreachable,
             requeued: out.requeued,
           },

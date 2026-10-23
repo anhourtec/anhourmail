@@ -19,7 +19,7 @@ import type { Deps, UnitOfWork } from "../ports";
 import type { UserActor } from "../actor";
 import { reconcileManagedScripts } from "../webmail/managed-script";
 import { appPasswordName, appPasswordProtocols } from "./entity";
-import type { AppPasswordIssuer } from "./ports";
+import type { AppPasswordInventory, AppPasswordIssuer } from "./ports";
 import {
   createAppPassword,
   listMailboxAppPasswords,
@@ -90,23 +90,32 @@ function setup() {
 type Issued = { externalId: string; name: string; protocols: readonly string[] };
 type OnServer = { credentialId: string; createdAt: Date; protocols: AppPasswordProtocol[] | null };
 
-function fakeIssuer(opts: { fail?: boolean } = {}): AppPasswordIssuer & {
-  issued: Issued[];
-  revoked: string[];
-  server: Map<string, OnServer[]>;
-  apiKeys: Map<string, number>;
-} {
+function fakeIssuer(opts: { fail?: boolean } = {}): AppPasswordIssuer &
+  AppPasswordInventory & {
+    issued: Issued[];
+    revoked: string[];
+    server: Map<string, OnServer[]>;
+    apiKeys: Map<string, number>;
+    passwordCount: Map<string, number>;
+  } {
   const issued: Issued[] = [];
   const revoked: string[] = [];
   const server = new Map<string, OnServer[]>();
   const apiKeys = new Map<string, number>();
+  const passwordCount = new Map<string, number>();
   let n = 0;
   return {
     issued,
     revoked,
     server,
     apiKeys,
-    list: async (externalId) => ({ appPasswords: server.get(externalId) ?? [], apiKeys: apiKeys.get(externalId) ?? 0 }),
+    passwordCount,
+    list: async (externalId) => ({
+      appPasswords: server.get(externalId) ?? [],
+      apiKeys: apiKeys.get(externalId) ?? 0,
+      // Every mailbox has exactly one sign-in Password unless a test overrides it.
+      passwords: passwordCount.get(externalId) ?? 1,
+    }),
     create: async (input) => {
       if (opts.fail) throw new Error("mail server unavailable");
       issued.push({ externalId: input.externalId, name: input.name, protocols: [...input.protocols] });
@@ -463,6 +472,21 @@ describe("reconciling app passwords with the mail server", () => {
     expect(issuer.revoked).toEqual([]);
     expect(d.uow.state.appPasswords).toHaveLength(3);
   });
+
+  it("flags a mailbox without exactly one sign-in Password (a password added by hand)", async () => {
+    const { d } = setup();
+    const issuer = fakeIssuer();
+    // A second Password on one mailbox (0 on another, as if one were dropped): both are drift.
+    issuer.passwordCount.set("s-dddd", 2);
+    issuer.passwordCount.set("s-abab", 0);
+    const report = await reconcileAppPasswords(d, issuer);
+    expect(report).toMatchObject({ clean: false, extraPasswords: 2 });
+    expect(report.addresses.sort()).toEqual(["kid@family.ca", "mum@family.ca"]);
+    expect(d.uow.state.audit.at(-1)).toMatchObject({
+      action: "platform.reconciler_drift",
+      meta: { mailboxesWithExtraPasswords: 2 },
+    });
+  });
 });
 
 describe("reconciling managed Sieve scripts", () => {
@@ -496,17 +520,25 @@ describe("reconciling managed Sieve scripts", () => {
       read: async (id: string) => {
         const v = scripts[id] ?? null;
         if (v instanceof Error) throw v;
-        return v;
+        // The member's script is ours and clean but switched off: reported, not re-queued (ensure can't fix it).
+        return v === null ? null : { content: v, active: id !== "s-abab" };
       },
     };
     const report = await reconcileManagedScripts(d, reader);
-    expect(report).toMatchObject({ checked: 3, notOurs: 1, unconfirmedRedirects: 2, foreign: 1, requeued: 2 });
+    expect(report).toMatchObject({
+      checked: 3,
+      notOurs: 1,
+      unconfirmedRedirects: 2,
+      foreign: 1,
+      inactive: 1,
+      requeued: 2,
+    });
     expect(d.uow.state.jobs.map((j) => `${j.kind}:${j.subjectId}`).sort()).toEqual(
       [`mailbox.ensure:${MBX_OWNER}`, `mailbox.ensure:${MBX_UADMIN}`].sort(),
     );
     expect(d.uow.state.audit.at(-1)).toMatchObject({
       action: "platform.reconciler_drift",
-      meta: { unconfirmedRedirects: 2, scriptsNotOurs: 1, foreignScripts: 1 },
+      meta: { unconfirmedRedirects: 2, scriptsNotOurs: 1, foreignScripts: 1, scriptsInactive: 1 },
     });
     expect(JSON.stringify(d.uow.state.audit.at(-1))).not.toContain("evil.test");
   });
@@ -514,7 +546,9 @@ describe("reconciling managed Sieve scripts", () => {
   it("is clean (no audit) when every script is ours, and counts a mailbox the server can't answer for", async () => {
     const { d } = setup();
     const before = d.uow.state.audit.length;
-    const clean = await reconcileManagedScripts(d, { read: async () => ours({ enabled: false, address: null }) });
+    const clean = await reconcileManagedScripts(d, {
+      read: async () => ({ content: ours({ enabled: false, address: null }), active: true }),
+    });
     expect(clean).toMatchObject({ clean: true, checked: 4 });
     expect(d.uow.state.audit.length).toBe(before);
     const down = await reconcileManagedScripts(d, { read: () => Promise.reject(new Error("down")) });

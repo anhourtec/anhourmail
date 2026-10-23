@@ -3,7 +3,9 @@
  * App passwords end to end against the real Stalwart (compose stack): the core service issues them through the
  * management API on the mailbox's account, mail apps sign in over IMAP and SMTP with them, their limits hold
  * (protocol scopes, no self-service, no webmail sign-in), suspension blocks them, and revoking (a provisioning job)
- * takes them off the mail server.
+ * takes them off the mail server. The code under test runs with the production credentials (ADR-0020 "Credential
+ * split"): provisioning jobs, revocation and the inventory with the provisioning key, issuing with the operations key,
+ * the managed-script check with the audit key. The dev admin only sets things up and plays "someone else".
  *
  * Mail ports reach Stalwart through the shared dev forwarder, and Stalwart bans an address after 100 failed sign-ins a
  * day (`x:Security.authBanRate`), which would cut every dev client off. Refusals for a missing permission (a suspended
@@ -39,7 +41,8 @@ import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 import { hashPassword } from "../auth/password";
 import { createDb, schema } from "../db-postgres/client";
 import { PgUnitOfWork } from "../db-postgres/repositories";
-import { stalwartAppPasswords, stalwartMailServer, stalwartManagedScripts } from ".";
+import { stalwartAppPasswordInventory, stalwartAppPasswords, stalwartMailServer, stalwartManagedScripts } from ".";
+import { issueTestKeys } from "./int-keys";
 
 const dbUrl = process.env.TEST_DATABASE_URL;
 const stalwartUrl = process.env.STALWART_URL;
@@ -54,11 +57,13 @@ const deps = { uow: new PgUnitOfWork(db), clock: systemClock, platform: PUBLIC_P
 const mgmt = new StalwartManagement(
   new StalwartTransport({ baseUrl: stalwartUrl, auth: { type: "basic", username: admin, password: adminPassword } }),
 );
-const mail = stalwartMailServer(mgmt);
-const issuer = stalwartAppPasswords(mgmt);
 const meta = { requestId: "int-app-passwords", ip: null, userAgent: null };
 
 const tag = randomUUID().slice(0, 8);
+const keys = await issueTestKeys(mgmt, stalwartUrl, `svc-${tag}.test`);
+const mail = stalwartMailServer(keys.provisioning);
+const issuer = stalwartAppPasswords(keys.operations);
+const inventory = stalwartAppPasswordInventory(keys.provisioning);
 const domain = `apw-${tag}.test`;
 const address = `owner@${domain}`;
 const mailboxPassword = randomBytes(18).toString("base64url");
@@ -85,6 +90,7 @@ afterAll(async () => {
   for (const u of users.filter((x) => x.address.endsWith(`@${domain}`))) await mgmt.destroy("x:Account", u.id);
   const d = (await mgmt.listDomains()).find((x) => x.name === domain);
   if (d) await mgmt.destroyDomain(d.id);
+  await keys.cleanup();
   if (accountId) await db.delete(schema.customerAccount).where(eq(schema.customerAccount.id, accountId));
   if (userId) await db.delete(schema.authUser).where(eq(schema.authUser.id, userId));
   await pool.end();
@@ -400,9 +406,9 @@ describe("app passwords on Stalwart", () => {
     expect(contacts.status).toBe(207);
 
     // The reconciler finds exactly ours; a credential made behind our back is reported (never removed).
-    expect((await reconcileAppPasswords(deps, issuer)).addresses).not.toContain(address);
+    expect((await reconcileAppPasswords(deps, inventory)).addresses).not.toContain(address);
     await mgmt.transport.set("x:AppPassword", { accountId: stalwartId, create: { x: { description: "by hand" } } });
-    expect((await reconcileAppPasswords(deps, issuer)).addresses).toContain(address);
+    expect((await reconcileAppPasswords(deps, inventory)).addresses).toContain(address);
     const byHand = (await mgmt.listAppPasswords(stalwartId)).find((a) => a.description === "by hand");
     expect(byHand).toBeDefined();
     await mgmt.destroyAppPassword(stalwartId, byHand?.id ?? "");
@@ -505,14 +511,15 @@ describe("app passwords on Stalwart", () => {
     });
     expect(await imapLogin(tablet.secret)).toBe(true);
 
-    // The managed Sieve script: one written behind our back with an unconfirmed redirect is reported and the mailbox
-    // re-queued; nothing is deleted or rewritten.
-    await mgmt.putSieveScript(
+    // The managed Sieve script: one written behind our back (here with the operations key, the credential that can)
+    // with an unconfirmed redirect is reported by the audit key's check and the mailbox re-queued; nothing is deleted
+    // or rewritten.
+    await keys.operations.putSieveScript(
       stalwartId,
       MANAGED_SIEVE_SCRIPT,
       'require ["copy"];\nredirect :copy "spy@example.test";\n',
     );
-    const scripts = await reconcileManagedScripts(deps, stalwartManagedScripts(mgmt));
+    const scripts = await reconcileManagedScripts(deps, stalwartManagedScripts(keys.audit));
     expect(scripts.unconfirmedRedirects).toBeGreaterThanOrEqual(1);
     expect(scripts.notOurs).toBeGreaterThanOrEqual(1);
     expect((await mgmt.getSieveScript(stalwartId, MANAGED_SIEVE_SCRIPT))?.content).toContain("spy@example.test");

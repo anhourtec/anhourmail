@@ -11,7 +11,7 @@ import { lifecycleLocked } from "../mailboxes/service";
 import { mutation, type MutationOutcome } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 import { type AppPassword, appPasswordName, appPasswordProtocols, type AppPasswordStatus } from "./entity";
-import type { AppPasswordIssuer } from "./ports";
+import type { AppPasswordInventory, AppPasswordIssuer } from "./ports";
 
 /** What the console shows: never the mail server's ids, and never a secret. */
 export type AppPasswordView = {
@@ -292,6 +292,12 @@ export type AppPasswordDrift = {
   missingOnMailServer: number;
   /** API keys on customer mailboxes: end users never get one. */
   apiKeys: number;
+  /**
+   * Mailboxes without exactly one sign-in Password credential: 0 means it was replaced oddly, >1 (Stalwart refuses a
+   * second through our client, so this is a direct-access write) means a password was added by hand — a way to sign
+   * in as the mailbox or, with `impersonate`, master-user into it over the mail ports.
+   */
+  extraPasswords: number;
   /** Mailboxes whose credentials the mail server couldn't list. */
   unreachable: number;
   /** Addresses with drift (returned to the caller; never logged or audited). */
@@ -307,7 +313,7 @@ const sameTime = (a: Date, b: Date) => Math.abs(a.getTime() - b.getTime()) < 100
  * compares every mailbox's app passwords and API keys on the mail server with ours. Reports and audits drift as
  * `platform.reconciler_drift` (counts only); never revokes or deletes anything by itself.
  */
-export async function reconcileAppPasswords(deps: Deps, issuer: AppPasswordIssuer): Promise<AppPasswordDrift> {
+export async function reconcileAppPasswords(deps: Deps, inventory: AppPasswordInventory): Promise<AppPasswordDrift> {
   const revoking = await deps.uow.run((r) => r.appPasswords.mailboxesWithRevoking());
   // Revocations with a job queued or running are in flight, not drift; the rest (their job gave up) are queued again.
   const pending = revoking.filter((x) => !x.jobOpen).map((x) => x.mailboxId);
@@ -319,6 +325,7 @@ export async function reconcileAppPasswords(deps: Deps, issuer: AppPasswordIssue
     unexpectedPermissions: 0,
     missingOnMailServer: 0,
     apiKeys: 0,
+    extraPasswords: 0,
     unreachable: 0,
     addresses: [],
     clean: true,
@@ -326,7 +333,7 @@ export async function reconcileAppPasswords(deps: Deps, issuer: AppPasswordIssue
   for (const m of mailboxes) {
     const rows = await deps.uow.run((r) => r.appPasswords.listByMailbox(m.id));
     // One mailbox the mail server can't answer for (e.g. its account removed by hand) doesn't stop the rest.
-    const onServer = await issuer.list(m.stalwartId).catch(() => null);
+    const onServer = await inventory.list(m.stalwartId).catch(() => null);
     if (!onServer) {
       out.unreachable += 1;
       out.addresses.push(m.address);
@@ -356,6 +363,10 @@ export async function reconcileAppPasswords(deps: Deps, issuer: AppPasswordIssue
       out.apiKeys += onServer.apiKeys;
       drift = true;
     }
+    if (onServer.passwords !== 1) {
+      out.extraPasswords += 1;
+      drift = true;
+    }
     if (drift) out.addresses.push(m.address);
   }
   out.requeued = pending.length;
@@ -365,6 +376,7 @@ export async function reconcileAppPasswords(deps: Deps, issuer: AppPasswordIssue
       out.unexpectedPermissions +
       out.missingOnMailServer +
       out.apiKeys +
+      out.extraPasswords +
       out.unreachable +
       out.requeued ===
     0;
@@ -393,6 +405,7 @@ export async function reconcileAppPasswords(deps: Deps, issuer: AppPasswordIssue
             unexpectedAppPasswordPermissions: out.unexpectedPermissions,
             missingAppPasswords: out.missingOnMailServer,
             apiKeysOnMailboxes: out.apiKeys,
+            mailboxesWithExtraPasswords: out.extraPasswords,
             mailboxesUnreachable: out.unreachable,
           },
         };
