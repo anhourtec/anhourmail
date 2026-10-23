@@ -88,6 +88,24 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 - `docs/public/` — user guides, the source for `anhourmail.com/docs`.
 - `docs/shared/` — snippets rendered by both; facts come from `packages/shared`, never typed by hand.
 
+## Where we are and what's next
+
+As of 2026-10-23 development pauses while pre-staging goes up on one VM from the private ops repository
+(`anhourmail-ops`, following the local-only `deploy.md`). The next phases, in order, with exit criteria, are in
+`docs/internal/09-roadmap.md` "Path to production":
+
+1. pre-staging on one VM (real DNS, certificates, rDNS, external mail, backups and a restore drill);
+2. product gaps a beta needs (free sign-up with SMS/OTP, webmail session handoff, data export and deletion, act-as,
+   image proxy, push sync, webmail settings part 2);
+3. billing;
+4. abuse controls, monitoring and backups;
+5. production host (app VM + mail VM), warm-up and dogfood;
+6. closed beta, then launch.
+
+When work resumes, read `docs/internal/handoff.md` first: it lists what pre-staging proved, what failed, and the open
+items. Every Stalwart management caller goes through the internal management proxy in the ops repository; never give
+an app container direct access to Stalwart's management listener.
+
 ## Working rules
 
 1. **No AI attribution anywhere.** Never mention Claude, AI, or any assistant in commit messages, PR descriptions,
@@ -334,3 +352,4 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Rule 58: no scratch or probe files in the repository                                                                               |
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Rule 59: update the README with every push                                                                                         |
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Waitlist removed from the product (maintainer decision); sign-up is open (firewalled) or closed                                    |
+| 2026-10-23 | Nishchayjeet Singh (Nish) | "Where we are and what's next": development pauses for pre-staging; next phases to production                                      |
