@@ -1,6 +1,6 @@
 ---
 title: Mailboxes
-description: Create mailboxes on your own domain or ours with a password, give them to people in your account, set their storage, reset a password, and suspend, delete or restore them.
+description: Create mailboxes on your own domain or ours with a password, give them to people in your account, see and set their storage, reset a password, and suspend, delete or restore them.
 ---
 
 A mailbox is an address with its own storage, like `jane@example.org`. Every account can have an address at our
@@ -23,19 +23,48 @@ you can also create mailboxes on any domain you've connected and verified (see
 
 Mailbox passwords need 12 to 128 characters (a passphrase works well), no spaces at the start or end, and can't be
 the mailbox's address or start with `app_`. We never store a mailbox password: it's turned into a one-way hash right
-away, and only the mail server keeps that hash. Mail apps use [app passwords](/docs/clients/app-passwords) instead.
+away, and only the mail server keeps that hash. A password that has appeared in a known data breach is refused
+([how the check works](/docs/sign-in-security#passwords-seen-in-data-breaches)). Mail apps use
+[app passwords](/docs/clients/app-passwords) instead.
 
 The panel stays open, so you can add several in a row. The mailbox shows **Setting up** in the list for a moment,
 then **Active**.
 
-Choose a mailbox's address in the list to open its details panel. **Overview** shows who it belongs to and its
-storage; **Storage** and **Access** are where you change them. The ⋮ menu beside each address has the same actions,
+Choose a mailbox's address in the list to open its details panel. **Overview** shows who it belongs to and how much
+storage it uses; **Storage** and **Access** are where you change them. The ⋮ menu beside each address has the same actions,
 and you can tick several mailboxes to suspend, resume or delete them together.
+
+## Storage used
+
+The **Storage** column shows how much each mailbox holds out of its quota, with a bar. When a mailbox reaches 80% of
+its quota the bar turns amber and says **Getting full**; from 95% it turns red and says **Almost full**, and **Full**
+once there's no room left. A full mailbox stops accepting new mail until something is deleted or its storage is
+raised. Choose the **Storage** column heading to sort mailboxes by how much they use.
+
+- Storage is measured every ten minutes or so, so a message that just arrived may not be counted yet. The mailbox's
+  **Storage** tab says when it was last measured. A new mailbox shows **—** until its first measurement.
+- Only sizes are read. Nothing about your messages is looked at to measure them.
+- The console's home page shows the total your account uses across all its mailboxes.
 
 ## Change storage
 
-Open the mailbox, choose the **Storage** tab and change **Storage (GB)**. The new quota applies within a minute. Lowering it below what the mailbox
+Each mailbox can have up to your plan's storage per mailbox: <Value of="freeStorage" /> on Free and
+
+<Value of="plusStorage" /> on Plus and Supporter (see [what each plan
+includes](/docs/free-address#what-each-plan-includes)). Open the mailbox, choose the **Storage** tab and change
+**Storage (GB)** under **Change storage**. The new quota applies within a minute. Lowering it below what the mailbox
 already holds doesn't delete anything, but the mailbox stops accepting new mail until there's room again.
+
+When a plan's storage per mailbox goes down, a mailbox that already holds more than the new amount keeps enough room
+for what's in it, rounded up to the next GB, so it keeps receiving mail. Its **Storage** tab says it's above the
+plan's storage per mailbox. Nothing is ever deleted to make it fit.
+
+## How many mailboxes
+
+Plus and Supporter include <Value of="includedMailboxes" /> mailboxes per account. More mailboxes, at
+
+<Value of="extraMailboxPrice" /> a year each, come with billing, which isn't open yet. Free includes one address at our
+domain.
 
 ## Set a new password
 

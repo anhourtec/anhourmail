@@ -264,7 +264,8 @@ export function PlanCards() {
               </p>
               <ul className="flex flex-col gap-2.5 border-t pt-5 text-sm">
                 {[
-                  `${p.storageGb} GB storage`,
+                  `${p.storageGb} GB per mailbox`,
+                  p.includedMailboxes === 1 ? "1 mailbox" : `${String(p.includedMailboxes)} mailboxes included`,
                   p.customDomains ? "Bring your own domains" : `An @${PRODUCT_DOMAIN} address`,
                   p.aliases === null ? "Unlimited aliases" : `${p.aliases} aliases`,
                   p.maskedAliases === null ? "Unlimited masked aliases" : `${p.maskedAliases} masked aliases`,

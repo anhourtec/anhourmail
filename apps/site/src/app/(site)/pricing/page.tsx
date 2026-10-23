@@ -4,7 +4,17 @@ import Link from "next/link";
 
 import { CheckIcon, MinusIcon } from "lucide-react";
 
-import { ADDONS, BILLING, MAX_MAILBOXES, PLAN_ORDER, PLANS, PRODUCT_DOMAIN, type Plan } from "@anhourmail/shared";
+import {
+  ADDONS,
+  BILLING,
+  fairUseText,
+  formatPrice,
+  MAX_MAILBOXES,
+  PLAN_ORDER,
+  PLANS,
+  PRODUCT_DOMAIN,
+  type Plan,
+} from "@anhourmail/shared";
 
 import { Reveal } from "@/components/reveal";
 import { CtaBand, FaqList, PageHero, PlanCards, SectionHead } from "@/components/sections";
@@ -18,7 +28,21 @@ export const metadata: Metadata = {
 
 type RowValue = string | boolean;
 const ROWS: readonly { label: string; value: (p: Plan) => RowValue }[] = [
-  { label: "Storage", value: (p) => `${String(p.storageGb)} GB` },
+  { label: "Storage per mailbox", value: (p) => `${String(p.storageGb)} GB` },
+  {
+    label: "Mailboxes included",
+    value: (p) =>
+      p.extraMailboxPrice
+        ? `${String(p.includedMailboxes)}, then ${formatPrice(p.extraMailboxPrice.USD, "USD")}/${BILLING.interval} each`
+        : String(p.includedMailboxes),
+  },
+  {
+    label: "Storage per account",
+    value: (p) =>
+      p.fairUseStorageGb === null || p.extraStoragePricePerGb === null
+        ? `${String(p.storageGb)} GB`
+        : `Fair use ${String(p.fairUseStorageGb)} GB, then ${formatPrice(p.extraStoragePricePerGb.USD, "USD")}/GB/${BILLING.interval}`,
+  },
   // Free: its own allowance; paid plans: as many as their mailboxes (ADR-0021).
   {
     label: `@${PRODUCT_DOMAIN} addresses`,
@@ -54,6 +78,14 @@ const FAQ = [
   },
   { q: "Do prices include tax?", a: "No. Sales tax is added at checkout where it applies." },
   {
+    q: "Is there a storage limit on paid plans?",
+    a: `No hard limit on the account. Each mailbox holds up to ${String(PLANS.plus.storageGb)} GB, and an account can store ${String(PLANS.plus.fairUseStorageGb)} GB in total under fair use; storage beyond that is ${PLANS.plus.extraStoragePricePerGb ? formatPrice(PLANS.plus.extraStoragePricePerGb.USD, "USD") : ""} per GB per ${BILLING.interval}. We let you know before anything is charged.`,
+  },
+  {
+    q: `Can I have more than ${String(PLANS.plus.includedMailboxes)} mailboxes?`,
+    a: `Paid plans include ${String(PLANS.plus.includedMailboxes)}. Extra mailboxes will be ${PLANS.plus.extraMailboxPrice ? formatPrice(PLANS.plus.extraMailboxPrice.USD, "USD") : ""} per ${BILLING.interval} each once billing opens; until then an account can have up to ${String(MAX_MAILBOXES)}.`,
+  },
+  {
     q: "What happens if a payment fails?",
     a: "We retry and let you know. If it still fails, the account moves to the free plan’s limits. Your mail is never deleted because a payment failed.",
   },
@@ -86,6 +118,13 @@ export default function PricingPage() {
           </Reveal>
           <h2 className="sr-only">Plans</h2>
           <PlanCards />
+          {fairUseText(PLANS.plus) && (
+            <Reveal>
+              <p className="am-small text-center">
+                {PLANS.plus.name} and {PLANS.supporter.name}: {fairUseText(PLANS.plus)}.
+              </p>
+            </Reveal>
+          )}
         </div>
       </section>
       <section className="am-site-section pt-0">
