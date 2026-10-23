@@ -113,6 +113,20 @@
       "when": 1792759547634,
       "tag": "0015_platform_addresses",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1792768775986,
+      "tag": "0016_mailbox_storage_used",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1792771609868,
+      "tag": "0017_staff_suspension",
+      "breakpoints": true
     }
   ]
 }
