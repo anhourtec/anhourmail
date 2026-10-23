@@ -211,6 +211,6 @@ export const fieldClass =
 export const areaClass =
   "min-h-28 w-full resize-y rounded-lg border bg-background px-3 py-2 text-[14px] leading-6 outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring";
 export const smallPrimary =
-  "inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 font-medium text-[14px] text-primary-foreground transition-opacity disabled:opacity-60";
+  "inline-flex h-9 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-primary px-4 font-medium text-[14px] text-primary-foreground transition-opacity disabled:opacity-60";
 export const smallSecondary =
-  "inline-flex h-9 items-center justify-center gap-2 rounded-lg border px-3.5 text-[14px] transition-colors hover:bg-accent disabled:opacity-60";
+  "inline-flex h-9 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg border px-3.5 text-[14px] transition-colors hover:bg-accent disabled:opacity-60";
