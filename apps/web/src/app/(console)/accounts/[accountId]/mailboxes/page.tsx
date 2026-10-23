@@ -4,7 +4,7 @@ import Link from "next/link";
 
 import { can } from "@anhourmail/core";
 import { listMailboxAppPasswords } from "@anhourmail/core/app-passwords";
-import { getMailbox, listMailboxes, mailboxOptions } from "@anhourmail/core/mailboxes";
+import { getMailbox, listMailboxes, mailboxOptions, mailboxStoragePool } from "@anhourmail/core/mailboxes";
 import { MAILBOX_DELETE_GRACE_DAYS, MAX_MAILBOXES } from "@anhourmail/shared/plans";
 import { storageCheckedAgo } from "@anhourmail/shared/storage";
 import { PageHeader } from "@anhourmail/ui/page-header";
@@ -14,6 +14,7 @@ import { ClaimPlatformAddress } from "@/components/mailboxes/claim-platform-addr
 import { CreateMailboxForm } from "@/components/mailboxes/create-mailbox-form";
 import { MailboxList } from "@/components/mailboxes/mailbox-list";
 import { MailboxPanel } from "@/components/mailboxes/mailbox-panel";
+import { StoragePoolSummary } from "@/components/mailboxes/storage-usage";
 import { requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
 import { env } from "@/server/env";
@@ -44,6 +45,7 @@ export default async function MailboxesPage({
   const openId = param(sp, "mailbox");
   const data = await forPage(async () => ({
     mailboxes: await listMailboxes(deps, actor, accountId),
+    pool: await mailboxStoragePool(deps, actor, accountId),
     options: canManage ? await mailboxOptions(deps, actor, accountId) : null,
     open: openId ? await getMailbox(deps, actor, accountId, openId) : null,
     appPasswords: openId ? await listMailboxAppPasswords(deps, actor, accountId, openId) : null,
@@ -59,7 +61,7 @@ export default async function MailboxesPage({
       </>
     );
   }
-  const { mailboxes, options, open, appPasswords } = data;
+  const { mailboxes, pool, options, open, appPasswords } = data;
   const path = `/accounts/${accountId}/mailboxes`;
   const canAdd = options !== null && options.remaining > 0 && (options.domains.length > 0 || options.platform.allowed);
   const creating = canAdd && param(sp, "new") === "1" ? options : null;
@@ -71,9 +73,10 @@ export default async function MailboxesPage({
     <>
       <PageHeader
         title="Mailboxes"
-        description="Each mailbox is an address with its own storage. Aliases point more addresses at it."
+        description="Each mailbox is an address with its share of the account's storage. Aliases point more addresses at it."
         breadcrumbs={crumbs}
       />
+      <StoragePoolSummary pool={pool} />
       {canClaim && (
         <div className="flex flex-col gap-2 rounded-lg border border-l-4 border-l-primary bg-card px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 flex-col gap-1">

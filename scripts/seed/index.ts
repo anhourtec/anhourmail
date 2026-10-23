@@ -312,7 +312,9 @@ const rows: CredentialRow[] = [];
 const special: { label: string; detail: string }[] = [];
 let mailClient: { address: string; appPassword: string; host: string; imapPort: number; smtpPort: number } | null =
   null;
-const quota = (plan: keyof typeof PLANS) => PLANS[plan].storageGb * 1024 ** 3;
+// An even share of the account's pool per mailbox (1 GB), so demo accounts stay within their pooled storage.
+const quota = (plan: keyof typeof PLANS) =>
+  Math.max(1, Math.floor(PLANS[plan].storagePoolGb / PLANS[plan].includedMailboxes)) * 1024 ** 3;
 
 const people = demo ? demoPeople(ADMIN_EMAIL) : demoPeople(ADMIN_EMAIL).filter((p) => p.email === ADMIN_EMAIL);
 

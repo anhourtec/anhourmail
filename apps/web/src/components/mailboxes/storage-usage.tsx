@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { type StorageLevel, storageSummary } from "@anhourmail/shared/storage";
+import {
+  formatBytes,
+  poolSummary,
+  type StorageLevel,
+  type StoragePool,
+  storageSummary,
+} from "@anhourmail/shared/storage";
 
 import { StatusText } from "../console/status-text";
 
@@ -70,5 +76,34 @@ export function StorageCell({ usedBytes, quotaBytes }: { usedBytes: number | nul
       {s.level !== "unknown" && <UsageBar fraction={s.fraction} level={s.level} className="max-w-40" />}
       <StorageLevelText level={s.level} label={s.label} />
     </div>
+  );
+}
+
+/**
+ * The account's storage pool (Mailboxes page header): "4.2 GB used of 10 GB · 7 GB assigned to mailboxes · 3 GB
+ * unassigned", with a bar that turns amber at 80% and red at 95% of the pool, and the level in words.
+ */
+export function StoragePoolSummary({ pool }: { pool: StoragePool }) {
+  const s = poolSummary(pool);
+  const over = pool.assignedBytes > pool.poolBytes;
+  return (
+    <section aria-label="Account storage" className="flex flex-col gap-1.5 rounded-lg border bg-card px-4 py-3">
+      <p className="text-[14px]">
+        <span className="font-medium">Account storage</span>{" "}
+        <span className="text-muted-foreground">
+          <span className="am-num">{s.used ?? "—"}</span> used of <span className="am-num">{s.quota}</span> ·{" "}
+          <span className="am-num">{formatBytes(pool.assignedBytes)}</span> assigned to mailboxes ·{" "}
+          {over ? (
+            <>above the pool, to fit mail already held</>
+          ) : (
+            <>
+              <span className="am-num">{formatBytes(pool.unassignedBytes)}</span> unassigned
+            </>
+          )}
+        </span>
+      </p>
+      <UsageBar fraction={s.fraction ?? 0} level={s.level === "unknown" ? "ok" : s.level} className="max-w-md" />
+      <StorageLevelText level={s.level} label={s.label} />
+    </section>
   );
 }

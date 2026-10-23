@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { MailboxAppPasswords } from "@anhourmail/core/app-passwords";
 import { GB, type MailboxView } from "@anhourmail/core/mailboxes";
-import { formatBytes, storageSummary } from "@anhourmail/shared/storage";
+import { formatBytes, type StoragePool, storageSummary } from "@anhourmail/shared/storage";
 import { HardDrive, KeyRound, Pause, Play, RotateCcw, Trash2 } from "lucide-react";
 import Link from "next/link";
 
@@ -29,6 +29,8 @@ function StorageRow({ label, children }: { label: string; children: React.ReactN
 
 type Detail = MailboxView & {
   maxQuotaBytes: number;
+  minQuotaBytes: number;
+  pool: StoragePool;
   lifecycleLocked: boolean;
   passwordPending: boolean;
   canSetPassword: boolean;
@@ -67,8 +69,8 @@ export function MailboxPanel({
   const purgeOn = m.purgeAfter ? dateFmt.format(new Date(m.purgeAfter)) : null;
   const quotaGb = m.quotaBytes / GB;
   const usage = storageSummary(m.storageUsedBytes, m.quotaBytes);
-  /** Kept above the plan's storage when the plan's storage went down, so the mail already in it fits. */
-  const abovePlan = m.quotaBytes > m.maxQuotaBytes;
+  /** The account's mailboxes were kept above its pool when storage became pooled, so the mail already in them fits. */
+  const abovePool = m.pool.assignedBytes > m.pool.poolBytes;
   /** Setting a password needs the mailbox on the mail server and not being deleted (the server says so too). */
   const passwordSettable = m.canSetPassword && (m.status === "active" || m.status === "suspended");
 
@@ -211,17 +213,22 @@ export function MailboxPanel({
                 {storageCheckedAgo && <span className="am-micro">{storageCheckedAgo}</span>}
               </div>
             </StorageRow>
-            <StorageRow label="Quota">
-              {abovePlan ? (
+            <StorageRow label="Share">
+              <span>
+                <span className="am-num">{formatBytes(m.quotaBytes)}</span> of the account&apos;s{" "}
+                <span className="am-num">{formatBytes(m.pool.poolBytes)}</span>, shared by all its mailboxes
+              </span>
+            </StorageRow>
+            <StorageRow label="Unassigned">
+              {abovePool ? (
                 <span>
-                  <span className="am-num">{formatBytes(m.quotaBytes)}</span>, above this plan&apos;s{" "}
-                  <span className="am-num">{formatBytes(m.maxQuotaBytes)}</span> per mailbox, so the mail already in it
-                  fits
+                  None. The account&apos;s mailboxes are given{" "}
+                  <span className="am-num">{formatBytes(m.pool.assignedBytes)}</span>, above its storage, so the mail
+                  already in them fits
                 </span>
               ) : (
                 <span>
-                  <span className="am-num">{formatBytes(m.quotaBytes)}</span>, up to{" "}
-                  <span className="am-num">{formatBytes(m.maxQuotaBytes)}</span> on this plan
+                  <span className="am-num">{formatBytes(m.pool.unassignedBytes)}</span> not given to any mailbox
                 </span>
               )}
             </StorageRow>
@@ -229,7 +236,13 @@ export function MailboxPanel({
           {canManage && !deleting && (
             <section aria-label="Change storage" className="flex flex-col gap-3">
               <h3 className="am-h4">Change storage</h3>
-              <QuotaForm accountId={accountId} mailboxId={m.id} currentGb={quotaGb} maxGb={m.maxQuotaBytes / GB} />
+              <QuotaForm
+                accountId={accountId}
+                mailboxId={m.id}
+                currentGb={quotaGb}
+                minGb={Math.min(quotaGb, m.minQuotaBytes / GB)}
+                maxGb={Math.max(quotaGb, m.maxQuotaBytes / GB)}
+              />
             </section>
           )}
         </div>

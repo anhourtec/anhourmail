@@ -24,7 +24,7 @@ export default async function SignUpPage() {
       <div className="flex flex-col gap-2">
         <h1 className="am-h1">Create your account</h1>
         <p className="am-small">
-          You start on the {PLANS.free.name} plan with {PLANS.free.storageGb} GB. Upgrade any time.
+          You start on the {PLANS.free.name} plan with {PLANS.free.storagePoolGb} GB of storage. Upgrade any time.
         </p>
       </div>
       <SignUpForm />

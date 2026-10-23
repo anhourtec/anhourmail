@@ -61,8 +61,11 @@ test("an owner creates a mailbox, changes its storage, suspends, resumes, delete
   await details.getByLabel("Storage (GB)").fill("3");
   await details.getByRole("button", { name: "Save" }).click();
   await expect(details.getByRole("status").filter({ hasText: "Saved." })).toBeVisible();
-  // Lined rows: used (not measured yet for a new mailbox) and the quota against the plan's storage per mailbox.
-  await expect(details.getByText(/^3 GB, up to 10 GB on this plan$/)).toBeVisible();
+  // Lined rows: used (not measured yet for a new mailbox), its share of the account's pooled storage, what's left.
+  await expect(details.getByRole("definition").filter({ hasText: "3 GB of the account's 10 GB" })).toBeVisible();
+  await expect(details.getByRole("definition").filter({ hasText: "not given to any mailbox" })).toBeVisible();
+  // The page header shows the account's pool.
+  await expect(page.getByRole("region", { name: "Account storage" })).toContainText("assigned to mailboxes");
   await expect(details.getByRole("definition").filter({ hasText: "Not measured yet" })).toBeVisible();
 
   // The old mailbox address still works: it opens the same panel.

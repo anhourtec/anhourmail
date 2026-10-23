@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { type SyntheticEvent, useState } from "react";
 
 import { PLATFORM_ADDRESS } from "@anhourmail/shared/addresses";
+import { poolFullMessage } from "@anhourmail/shared/storage";
 
 import { callApi } from "../api";
 import { inputClass, primaryButtonClass } from "../ui-classes";
@@ -16,7 +17,10 @@ type Options = {
   /** The platform domain (free addresses; ADR-0021): offered while the plan has room for another. */
   platform: { id: string; domain: string; used: number; max: number | null; allowed: boolean };
   members: { userId: string; email: string }[];
+  /** The account's unassigned storage in whole GB (0: fully assigned) and the default share for a new mailbox. */
   maxQuotaGb: number;
+  defaultQuotaGb: number;
+  pool: { poolBytes: number };
 };
 
 /**
@@ -37,6 +41,7 @@ export function CreateMailboxForm({ accountId, options }: { accountId: string; o
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<string | null>(null);
   const [password, setPassword] = useState("");
+  const poolFull = options.maxQuotaGb < 1;
 
   function onSubmit(e: SyntheticEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -147,10 +152,21 @@ export function CreateMailboxForm({ accountId, options }: { accountId: string; o
             type="number"
             inputMode="numeric"
             min={1}
-            max={options.maxQuotaGb}
-            defaultValue={options.maxQuotaGb}
+            max={Math.max(1, options.maxQuotaGb)}
+            defaultValue={options.defaultQuotaGb || ""}
+            disabled={poolFull}
+            aria-describedby="new-quota-hint"
             className={`${inputClass} am-num`}
           />
+          <span id="new-quota-hint" className={`am-micro ${poolFull ? "text-destructive" : ""}`}>
+            {poolFull ? (
+              poolFullMessage(options.pool.poolBytes)
+            ) : (
+              <>
+                <span className="am-num">{options.maxQuotaGb} GB</span> of the account&apos;s storage is unassigned.
+              </>
+            )}
+          </span>
         </label>
       </div>
       <MailboxPasswordField value={password} onChange={setPassword} />
@@ -166,7 +182,7 @@ export function CreateMailboxForm({ accountId, options }: { accountId: string; o
           panel.
         </p>
       )}
-      <button type="submit" disabled={pending} className={`${primaryButtonClass} w-fit`}>
+      <button type="submit" disabled={pending || poolFull} className={`${primaryButtonClass} w-fit`}>
         <Plus className="size-4" aria-hidden />
         {pending ? "Creating…" : "Create mailbox"}
       </button>

@@ -7,16 +7,21 @@ import { type SyntheticEvent, useState } from "react";
 import { callApi } from "../api";
 import { inputClass, secondaryButtonClass } from "../ui-classes";
 
-/** Change a mailbox's storage quota (whole GB, up to the plan's storage). */
+/**
+ * Change a mailbox's share of the account's storage (whole GB): from what it holds, rounded up, to its current share
+ * plus what is unassigned. The server enforces the same range.
+ */
 export function QuotaForm({
   accountId,
   mailboxId,
   currentGb,
+  minGb,
   maxGb,
 }: {
   accountId: string;
   mailboxId: string;
   currentGb: number;
+  minGb: number;
   maxGb: number;
 }) {
   const router = useRouter();
@@ -54,7 +59,7 @@ export function QuotaForm({
           name="quotaGb"
           type="number"
           inputMode="numeric"
-          min={1}
+          min={minGb}
           max={maxGb}
           defaultValue={currentGb}
           aria-describedby="quota-hint"
@@ -65,7 +70,8 @@ export function QuotaForm({
         </button>
       </div>
       <p id="quota-hint" className="am-micro">
-        From 1 to {maxGb} GB on this plan.
+        From <span className="am-num">{minGb}</span> to <span className="am-num">{maxGb}</span> GB
+        {minGb > 1 ? " (it can't go below the mail it holds)" : ""}.
       </p>
       <p role="status" aria-live="polite" className={`am-small ${message?.error ? "text-destructive" : ""}`}>
         {message?.text}

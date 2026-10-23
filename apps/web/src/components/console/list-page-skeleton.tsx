@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import {
+  Bone,
   CommandBarSkeleton,
   FilterChipsSkeleton,
   ListSkeleton,
@@ -20,6 +21,7 @@ export function ListPageSkeleton({
   checkbox = false,
   lead = true,
   search = true,
+  summary = false,
 }: {
   label: string;
   actions?: number;
@@ -29,10 +31,18 @@ export function ListPageSkeleton({
   checkbox?: boolean;
   lead?: boolean;
   search?: boolean;
+  /** A summary card under the header (the Mailboxes page's account storage line and bar). */
+  summary?: boolean;
 }) {
   return (
     <SkeletonPage label={label}>
       <PageHeaderSkeleton lead={lead} />
+      {summary && (
+        <div className="flex flex-col gap-2 rounded-lg border px-4 py-3">
+          <Bone className="h-4 w-full max-w-xl" />
+          <Bone className="h-1.5 w-full max-w-md rounded-full" />
+        </div>
+      )}
       <CommandBarSkeleton actions={actions} search={search} />
       {chips > 0 && <FilterChipsSkeleton chips={chips} />}
       <ListSkeleton rows={rows} columns={columns} checkbox={checkbox} />
