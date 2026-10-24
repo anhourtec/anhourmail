@@ -65,10 +65,14 @@ const ATTRS: Record<string, string[]> = {
 };
 const attrsFor = (tag: string): string[] => ATTRS[tag] ?? COMMON;
 
-/** Removed together with everything inside them (their text is code, data or a control label, not prose). */
+/**
+ * Removed together with everything inside them (their text is code, data or a control label, not prose; `summary`
+ * is the reading view's quote toggle when a reply quotes it).
+ */
 const DROP_WITH_CONTENT = [
   "script", "style", "template", "textarea", "select", "option", "button", "noscript", "noembed", "noframes",
   "iframe", "frame", "frameset", "object", "embed", "applet", "svg", "math", "title", "head", "xmp", "plaintext",
+  "summary",
 ]; // prettier-ignore
 
 const LINK = /^(?:https?:\/\/|mailto:|tel:)/i;

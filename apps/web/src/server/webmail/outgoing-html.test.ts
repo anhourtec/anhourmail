@@ -179,6 +179,14 @@ describe("sanitizeOutgoingHtml: what is kept", () => {
     expect(r.removedTags).toEqual(["button", "form", "head", "script", "style", "title"]);
   });
 
+  it("unwraps the reading view's quote toggle without its label", () => {
+    expect(
+      clean(
+        '<details data-am-quote="1"><summary title="Show quoted text">&#8226;&#8226;&#8226;</summary><p>old</p></details>',
+      ),
+    ).toBe("<p>old</p>");
+  });
+
   it("reports removed attributes", () => {
     const r = sanitizeOutgoingHtml('<p class="c" id="i" onclick="x" data-track="1">x</p>');
     expect(r.html).toBe("<p>x</p>");
