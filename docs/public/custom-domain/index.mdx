@@ -36,6 +36,9 @@ Once the required records are found, the domain shows **Setting up** for a minut
   already, enter only the part before it.
 - **There is already an SPF record.** A domain can have only one. Merge ours into the existing one instead of
   adding a second.
+- **"DKIM not found in DNS — mail will fail DKIM."** Each DKIM record only counts once the signing key it points to
+  answers in DNS. Check the name and value of both DKIM records; if the console says your record is right, the key
+  behind it isn't published yet and the domain stays pending until it is, so your mail isn't sent unsigned.
 - **Verification is still pending after a day.** Make sure there is no typo in the verification code, then press
   **Check now**.
 
