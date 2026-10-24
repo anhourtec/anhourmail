@@ -6,7 +6,7 @@ import { webmail, webmailSessionId } from "@/server/webmail/instance";
 
 /**
  * Saves a draft (autosave and before sending). The BFF builds the message itself: in Drafts, from one of the
- * person's own identities, plain text, capped recipients and attachments (`server/webmail/compose.ts`). A draft
+ * person's own identities, plain text or sanitised HTML, capped recipients and attachments (`server/webmail/compose.ts`). A draft
  * being replaced must itself be a draft in Drafts.
  */
 export const PUT = route(

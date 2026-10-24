@@ -13,6 +13,7 @@ import { ContactInput } from "./contacts";
 import {
   COMPOSED_KEYWORD,
   DraftInput,
+  draftBody,
   draftEmail,
   draftProblem,
   MAX_RECIPIENTS,
@@ -22,6 +23,7 @@ import {
   UNDO_SECONDS,
   uploadType,
 } from "./compose";
+import { MAX_OUTGOING_HTML } from "./outgoing-html";
 import {
   GrantRefusedError,
   WebmailBlockedError,
@@ -127,6 +129,44 @@ describe("draft validation", () => {
       "drafts",
     );
     expect(all).toMatchObject({ cc: [{ email: "c@x.test" }], bcc: [{ email: "b@x.test" }] });
+  });
+
+  it("sends HTML as multipart/alternative, re-sanitised, with a generated text part", () => {
+    const e = draftEmail(
+      DraftInput.parse({
+        ...base,
+        text: "",
+        html: '<p onclick="x">Hi <b>there</b> <a href="javascript:alert(1)">x</a></p><script>alert(1)</script>',
+      }),
+      identity,
+      "drafts",
+    );
+    expect(e).toMatchObject({
+      bodyValues: {
+        body: { value: "Hi there x" },
+        html: { value: '<p>Hi <b>there</b> <a target="_blank" rel="noopener noreferrer">x</a></p>' },
+      },
+      textBody: [{ partId: "body", type: "text/plain" }],
+      htmlBody: [{ partId: "html", type: "text/html" }],
+    });
+  });
+
+  it("keeps the person's own text part next to the HTML", () => {
+    expect(draftBody({ text: "Mine", html: "<p>Rich</p>" })).toMatchObject({
+      bodyValues: { body: { value: "Mine" }, html: { value: "<p>Rich</p>" } },
+    });
+  });
+
+  it("falls back to plain text when the HTML sanitises to nothing", () => {
+    expect(draftBody({ text: "Plain", html: "<script>alert(1)</script>" })).toEqual({
+      bodyValues: { body: { value: "Plain" } },
+      textBody: [{ partId: "body", type: "text/plain" }],
+    });
+    expect(draftBody({ text: "Plain" })).not.toHaveProperty("htmlBody");
+  });
+
+  it("refuses HTML over the cap", () => {
+    expect(DraftInput.safeParse({ ...base, html: "a".repeat(MAX_OUTGOING_HTML + 1) }).success).toBe(false);
   });
 
   it("puts the sender's display name in From, and none when it is blank", () => {

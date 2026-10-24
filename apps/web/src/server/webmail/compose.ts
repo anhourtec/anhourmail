@@ -3,10 +3,13 @@ import { z } from "zod";
 
 import { type SendLimits, TRUST_TIERS, type TrustTier, WEBMAIL_ATTACHMENTS } from "@anhourmail/shared";
 
+import { MAX_OUTGOING_HTML, outgoingText, sanitizeOutgoingHtml } from "./outgoing-html";
+
 /**
  * Composing mail (docs/internal/05-webmail.md "Compose"): the browser sends a draft description; the BFF validates
  * it and builds the JMAP `Email` itself, so a hand-written request can't pick another sender, another mailbox, or
- * skip the caps. Plain text only in this slice (no HTML is ever sent from the webmail yet).
+ * skip the caps. An HTML body is optional: it is re-sanitised here (`outgoing-html.ts`; the client's copy is never
+ * trusted) and sent as multipart/alternative with a text/plain part.
  */
 
 /**
@@ -86,6 +89,8 @@ export const DraftInput = z.object({
     .max(998)
     .transform((s) => s.replace(/[\r\n]+/g, " ")),
   text: z.string().max(MAX_TEXT_CHARS),
+  /** Rich-text body; sanitised again before it is stored. Absent for plain-text mail. */
+  html: z.string().max(MAX_OUTGOING_HTML).optional(),
   inReplyTo: z.array(messageId).max(5).optional(),
   references: z.array(messageId).max(50).optional(),
   attachments: z
@@ -149,14 +154,31 @@ export function draftEmail(d: DraftInput, identity: Identity, draftsId: string):
     subject: d.subject,
     ...(d.inReplyTo?.length ? { inReplyTo: d.inReplyTo } : {}),
     ...(d.references?.length ? { references: d.references } : {}),
-    bodyValues: { body: { value: d.text } },
-    textBody: [{ partId: "body", type: "text/plain" }],
+    ...draftBody(d),
     attachments: d.attachments.map((a) => ({
       blobId: a.blobId,
       type: a.type,
       name: a.name,
       disposition: "attachment",
     })),
+  };
+}
+
+/**
+ * The body parts: plain text only, or (with `html`) a text/plain part plus the sanitised text/html part, which
+ * JMAP turns into multipart/alternative. The text part is the person's own text when they wrote one, else it is
+ * generated from the HTML. HTML that sanitises to nothing is sent as plain text.
+ */
+export function draftBody(d: Pick<DraftInput, "text" | "html">): Record<string, unknown> {
+  const html = d.html === undefined ? "" : sanitizeOutgoingHtml(d.html).html;
+  if (html === "") {
+    return { bodyValues: { body: { value: d.text } }, textBody: [{ partId: "body", type: "text/plain" }] };
+  }
+  const text = d.text.trim() === "" ? outgoingText(html).slice(0, MAX_TEXT_CHARS) : d.text;
+  return {
+    bodyValues: { body: { value: text }, html: { value: html } },
+    textBody: [{ partId: "body", type: "text/plain" }],
+    htmlBody: [{ partId: "html", type: "text/html" }],
   };
 }
 
