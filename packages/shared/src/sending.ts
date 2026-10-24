@@ -68,3 +68,12 @@ export const WEBMAIL_ATTACHMENTS = {
   perFileMb: 20,
   perMessageMb: 25,
 } as const;
+
+/**
+ * HTML the webmail sends (published in the docs, enforced by the outgoing sanitiser in the composer and the BFF): the
+ * largest HTML body or inserted .html file in MB, and the largest picture embedded in it in KB (1 MB = 1024 KB).
+ */
+export const WEBMAIL_HTML = {
+  maxMb: 1,
+  inlineImageKb: 512,
+} as const;

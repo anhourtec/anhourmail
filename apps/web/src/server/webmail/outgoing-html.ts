@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import sanitizeHtml from "sanitize-html";
 
+import { WEBMAIL_HTML } from "@anhourmail/shared";
+
 /**
  * Allow-list sanitiser for HTML the webmail **sends** (docs/internal/05-webmail.md "Compose", 07-security.md
  * "Outgoing HTML"). It runs in two places with the same rules: in the browser (rich-text editor output, pasted
@@ -24,9 +26,9 @@ import sanitizeHtml from "sanitize-html";
  */
 
 /** The longest HTML a message body may have (characters, roughly bytes for markup). */
-export const MAX_OUTGOING_HTML = 1024 * 1024;
+export const MAX_OUTGOING_HTML = WEBMAIL_HTML.maxMb * 1024 * 1024;
 /** The largest inline `data:` image (characters of the URI). */
-export const MAX_DATA_IMAGE_BYTES = 512 * 1024;
+export const MAX_DATA_IMAGE_BYTES = WEBMAIL_HTML.inlineImageKb * 1024;
 /** The longest `style` attribute kept. */
 export const MAX_OUTGOING_STYLE = 8 * 1024;
 

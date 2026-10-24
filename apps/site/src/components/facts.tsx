@@ -34,6 +34,7 @@ import {
   TRUSTED_DEVICE_DAYS,
   type TrustTier,
   WEBMAIL_ATTACHMENTS,
+  WEBMAIL_HTML,
 } from "@anhourmail/shared";
 
 import { CopyButton } from "./copy-button";
@@ -87,6 +88,8 @@ const VALUES = {
   carddavUrl: CARDDAV.url,
   attachmentPerFile: `${String(WEBMAIL_ATTACHMENTS.perFileMb)} MB`,
   attachmentPerMessage: `${String(WEBMAIL_ATTACHMENTS.perMessageMb)} MB`,
+  htmlMaxSize: `${String(WEBMAIL_HTML.maxMb)} MB`,
+  htmlInlineImage: `${String(WEBMAIL_HTML.inlineImageKb)} KB`,
   bulkAddOnName: ADDONS[BULK_MAIL.addOnId].name,
   bulkAddOnStatus: ADDONS[BULK_MAIL.addOnId].status === "planned" ? "coming later" : "available now",
   bulkAddOnPlans: ADDONS[BULK_MAIL.addOnId].requires.map((id) => PLANS[id].name).join(" and "),
