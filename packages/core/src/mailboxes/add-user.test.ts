@@ -29,6 +29,7 @@ import {
 import type { Deps } from "../ports";
 import { BreachedPasswordError } from "../security/breached-passwords";
 import { addUser, type AddUserInput } from "./add-user";
+import { renameMailbox } from "./service";
 
 const owner = user({ id: "owner", account: [[ACCOUNT_A, "owner"]] });
 const userAdmin = user({ id: "uadmin", account: [[ACCOUNT_A, "user_admin"]] });
@@ -217,5 +218,28 @@ describe("addUser", () => {
       d.uow.state.userEmails[`p${String(i)}`] = `p${String(i)}@example.ca`;
     }
     await expect(add(d, owner)).rejects.toThrow(PlanLimitError);
+  });
+
+  it("Edit name: sets and clears the display name, queues the mail server, audits without the name", async () => {
+    const d = setup();
+    const { mailbox } = await add(d, owner);
+    const renamed = await renameMailbox(d, userAdmin, ACCOUNT_A, mailbox.id, { displayName: " Jane  Q. Doe " }, req);
+    expect(renamed.displayName).toBe("Jane Q. Doe");
+    expect(d.uow.state.jobs.at(-1)).toMatchObject({ kind: "mailbox.ensure", subjectId: mailbox.id });
+    expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "mailbox.renamed", result: "success" });
+    expect(JSON.stringify(d.uow.state.audit.at(-1))).not.toContain("Jane Q.");
+    expect((await renameMailbox(d, owner, ACCOUNT_A, mailbox.id, { displayName: "" }, req)).displayName).toBeNull();
+    await expect(
+      renameMailbox(d, owner, ACCOUNT_A, mailbox.id, { displayName: "visit example.com" }, req),
+    ).rejects.toThrow(ValidationError);
+    await expect(renameMailbox(d, member, ACCOUNT_A, mailbox.id, { displayName: "X" }, req)).rejects.toThrow(
+      ForbiddenError,
+    );
+    await expect(renameMailbox(d, ownerB, ACCOUNT_A, mailbox.id, { displayName: "X" }, req)).rejects.toThrow(
+      NotFoundError,
+    );
+    await expect(renameMailbox(d, ownerB, ACCOUNT_B, mailbox.id, { displayName: "X" }, req)).rejects.toThrow(
+      NotFoundError,
+    );
   });
 });

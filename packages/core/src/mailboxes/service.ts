@@ -26,6 +26,7 @@ import { authorizeAudited, mutation, type MutationOutcome } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 import { BreachedPasswordError, passwordBreached } from "../security/breached-passwords";
 import type { MailServer } from "../provisioning/ports";
+import { displayName } from "../people/entity";
 import { GB, type Mailbox, type MailboxStatus, normaliseLocalPart } from "./entity";
 import { hashMailboxPassword, mailboxPassword, type PasswordHasher } from "./password-hash";
 import {
@@ -45,6 +46,8 @@ export type MailboxView = {
   status: MailboxStatus;
   quotaBytes: number;
   owner: { userId: string; email: string } | null;
+  /** The sender name ("Name <address>"); null when none is set. */
+  displayName: string | null;
   /** While `deleting`: when it is removed for good (it can be restored until then). */
   purgeAfter: Date | null;
   /**
@@ -76,6 +79,7 @@ async function views(repos: Repositories, accountId: string, list: Mailbox[]): P
     status: m.status,
     quotaBytes: m.quotaBytes,
     owner: m.userId && members.has(m.userId) ? { userId: m.userId, email: members.get(m.userId) ?? "" } : null,
+    displayName: m.displayName ?? null,
     purgeAfter: m.purgeAfter,
     applyFailed: m.lastError !== null,
     createdAt: m.createdAt,
@@ -470,6 +474,41 @@ const BEING_DELETED = "This mailbox is being deleted. Restore it first.";
  * Changes a mailbox's quota within the account's pool: from what it holds (rounded up to the next GB, at least 1 GB)
  * to its current quota plus the unassigned pool. The worker applies it to the mail server.
  */
+/**
+ * "Edit name" (`mailbox.manage`): the mailbox's display name, the sender name in "Name <address>". Applied to the mail
+ * server as the account description (the worker's `mailbox.ensure`), which names the sending identities it creates;
+ * an identity that already exists keeps its name until the person changes it in the webmail's settings. Empty clears
+ * it. The name itself is personal data: the audit entry records only that it changed.
+ */
+export async function renameMailbox(
+  deps: Deps,
+  actor: Actor,
+  accountId: string,
+  id: string,
+  input: { displayName?: unknown },
+  req: RequestMeta,
+): Promise<MailboxView> {
+  return mutation(
+    deps,
+    actor,
+    req,
+    { action: "mailbox.renamed", permission: "mailbox.manage", accountId, target: { type: "mailbox", id } },
+    async (repos) => {
+      const m = await scoped(repos, accountId, id);
+      if (m.status === "deleting") throw new ConflictError(BEING_DELETED);
+      const raw = typeof input.displayName === "string" ? input.displayName.trim() : "";
+      const name = raw === "" ? null : displayName(raw);
+      await repos.mailboxes.setDisplayName(m.id, name);
+      await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: m.id, runAfter: deps.clock.now() });
+      return {
+        result: await viewOf(repos, accountId, { ...m, displayName: name }),
+        target: { label: m.address },
+        meta: { cleared: name === null },
+      };
+    },
+  );
+}
+
 export async function setMailboxQuota(
   deps: Deps,
   actor: Actor,

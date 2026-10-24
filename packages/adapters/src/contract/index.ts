@@ -242,6 +242,10 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         await expect(uow.run((r) => r.mailboxes.insert({ ...m, id: randomUUID() }))).rejects.toThrow();
         await uow.run((r) => r.mailboxes.setQuota(m.id, 2048));
         expect((await uow.run((r) => r.mailboxes.get(a.id, m.id)))?.quotaBytes).toBe(2048);
+        await uow.run((r) => r.mailboxes.setDisplayName(m.id, "Renamed"));
+        expect((await uow.run((r) => r.mailboxes.get(a.id, m.id)))?.displayName).toBe("Renamed");
+        await uow.run((r) => r.mailboxes.setDisplayName(m.id, null));
+        expect((await uow.run((r) => r.mailboxes.get(a.id, m.id)))?.displayName).toBeNull();
 
         // Aliases: account-scoped, counted by kind, unique addresses (a duplicate is a conflict, not a crash).
         const alias = {

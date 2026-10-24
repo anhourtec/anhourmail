@@ -17,6 +17,8 @@ export type MailboxRepository = {
   setQuota(id: string, quotaBytes: number): Promise<void>;
   /** Sets or clears the webmail's first-sign-in password change (`Mailbox.mustChangePassword`). */
   setPasswordChangeRequired(id: string, required: boolean): Promise<void>;
+  /** Sets or clears (null) the display name. */
+  setDisplayName(id: string, displayName: string | null): Promise<void>;
   /**
    * Moves a mailbox from one of `from` to `to` (suspend, resume, schedule deletion, restore), sets `purgeAfter` and
    * clears `lastError` (a new intent).

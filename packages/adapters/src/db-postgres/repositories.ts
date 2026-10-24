@@ -812,6 +812,10 @@ class PgMailboxRepository implements MailboxRepository {
     await this.x.update(mailbox).set({ mustChangePassword: required }).where(eq(mailbox.id, id));
   }
 
+  async setDisplayName(id: string, displayName: string | null): Promise<void> {
+    await this.x.update(mailbox).set({ displayName }).where(eq(mailbox.id, id));
+  }
+
   async setQuota(id: string, quotaBytes: number): Promise<void> {
     await this.x.update(mailbox).set({ quotaBytes }).where(eq(mailbox.id, id));
   }
