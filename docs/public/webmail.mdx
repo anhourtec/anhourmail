@@ -68,7 +68,48 @@ tile to switch. You can have up to five open at once. **Sign out** signs out of 
 - **Undo send:** after you choose **Send**, you have a few seconds to choose **Undo** — the message goes back to your
   drafts and nothing is delivered.
 - You can send to up to <Value of="recipientsPerMessage" /> people per message, and each person counts toward your
-  [sending limits](/docs/sending-limits). Writing is plain text for now.
+  [sending limits](/docs/sending-limits).
+
+## Rich text and HTML email
+
+New messages start in **Rich text**. The toolbar above the message has bold, italic, underline, links, bulleted and
+numbered lists, quotes and **Clear formatting**; the usual shortcuts (`Ctrl`/`⌘` + `B`, `I`, `U`) work too. Switch to
+**Plain text** at the bottom of the message to send text only (formatting is dropped when you switch).
+
+Rich messages are sent with a plain-text copy alongside, so mail apps that don't show formatting still show your
+words. Replies and forwards quote the original with its formatting.
+
+**Pasting:** formatted text you paste keeps its safe formatting (headings, lists, tables, links, colours). Anything
+else is removed, including the toolbars and buttons some pages and browser extensions add.
+
+**Insert HTML:** the code button in the toolbar opens **Insert HTML**. Paste HTML or upload an `.html` file (up to
+
+<Value of="htmlMaxSize" />
+). You see a preview of exactly what will be sent, a list of anything that was removed, and a warning if it loads images
+from another server. Choose **Insert** to add it where your cursor was.
+
+### What is removed from HTML you send
+
+Mail you send is shown by other people's mail apps, so we only send HTML that is safe for them to open. Every
+message is cleaned in your browser while you write and again on our servers before it is saved, so nothing can skip
+the check.
+
+- **Kept:** paragraphs and line breaks, headings, bold, italic, underline, strikethrough, lists, quotes, code,
+  tables, horizontal rules, images and links, and inline styles for colours, fonts, spacing, borders, alignment and
+  sizes.
+- **Removed:** scripts and event handlers, forms and their fields and buttons, embedded frames, objects and plugins,
+  SVG, style sheets (`<style>` and `<link>`; inline styles are kept), and elements we don't recognise (their text
+  is kept).
+- **Links** must start with `https://`, `http://`, `mailto:` or `tel:`, and always open in a new tab.
+- **Images** must be `https://` addresses or pictures embedded in the message (PNG, JPEG, GIF or WebP, up to
+  <Value of="htmlInlineImage" /> each).
+- **Styles** that could cover the page or load code (such as fixed positioning, `expression()` or `@import`) are
+  removed; background images keep only `https://` addresses.
+
+<Callout type="warn">
+  Images loaded from another server can tell whoever runs that server when and where your message was opened. Insert
+  HTML warns you when the HTML has them; embed pictures in the message instead if you'd rather not.
+</Callout>
 
 ## Organising mail
 
