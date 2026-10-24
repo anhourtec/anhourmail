@@ -9,6 +9,7 @@ import { AppPasswordList } from "../app-passwords/app-password-list";
 import { CopyValue } from "../copy-value";
 import { ActionLink, DetailHeader, DetailTabs, Field, FieldGrid, PanelSection, TabLink } from "../console/flyout";
 import { initialsOf } from "../console/initials";
+import { EditMailboxName } from "./edit-mailbox-name";
 import { DeleteMailbox, RestoreMailbox, SuspendMailbox } from "./mailbox-lifecycle";
 import { MailboxStatus } from "./mailbox-status";
 import { QuotaForm } from "./quota-form";
@@ -83,6 +84,14 @@ export function MailboxPanel({
           <FieldGrid>
             <Field label="Address">
               <CopyValue value={m.address} label="address" />
+            </Field>
+            <Field label="Display name">
+              <EditMailboxName
+                accountId={accountId}
+                mailboxId={m.id}
+                name={m.displayName}
+                canEdit={canManage && !deleting}
+              />
             </Field>
             <Field
               label="Sign-in and delivery"

@@ -152,6 +152,15 @@ export const ROUTES: readonly RouteSpec[] = [
     // The harness sends no names: allowed callers get a validation error.
     probeStatus: 400,
   },
+  // "Edit name": the mailbox's display name (sender name). Random ids → 404 for allowed callers.
+  {
+    method: "PUT",
+    path: "/api/accounts/:accountId/mailboxes/:mailboxId/name",
+    file: "app/api/accounts/[accountId]/mailboxes/[mailboxId]/name/route.ts",
+    guard: "mailbox.manage",
+    accountParam: "accountId",
+    probeStatus: 404,
+  },
   // Free platform-domain addresses (ADR-0021): is a name available (no name → the rule it breaks, 200).
   {
     method: "GET",
