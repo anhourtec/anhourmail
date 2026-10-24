@@ -90,7 +90,7 @@ export function MailboxPanel({
                 accountId={accountId}
                 mailboxId={m.id}
                 name={m.displayName}
-                canEdit={canManage && !deleting}
+                canEdit={canManage && !deleting && !m.lifecycleLocked}
               />
             </Field>
             <Field

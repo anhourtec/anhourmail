@@ -478,7 +478,8 @@ const BEING_DELETED = "This mailbox is being deleted. Restore it first.";
  * "Edit name" (`mailbox.manage`): the mailbox's display name, the sender name in "Name <address>". Applied to the mail
  * server as the account description (the worker's `mailbox.ensure`), which names the sending identities it creates;
  * an identity that already exists keeps its name until the person changes it in the webmail's settings. Empty clears
- * it. The name itself is personal data: the audit entry records only that it changed.
+ * it. Like suspending or setting a password, renaming an Owner's or an admin's mailbox takes an Owner (403, audited as
+ * denied). The name itself is personal data: the audit entry records only that it changed.
  */
 export async function renameMailbox(
   deps: Deps,
@@ -488,13 +489,16 @@ export async function renameMailbox(
   input: { displayName?: unknown },
   req: RequestMeta,
 ): Promise<MailboxView> {
-  return mutation(
+  const out = await mutation<MailboxView | null>(
     deps,
     actor,
     req,
     { action: "mailbox.renamed", permission: "mailbox.manage", accountId, target: { type: "mailbox", id } },
     async (repos) => {
       const m = await scoped(repos, accountId, id);
+      if (lifecycleLocked(actor, accountId, m, await repos.access.members(accountId))) {
+        return { result: null, target: { label: m.address }, denied: { code: "forbidden" } };
+      }
       if (m.status === "deleting") throw new ConflictError(BEING_DELETED);
       const raw = typeof input.displayName === "string" ? input.displayName.trim() : "";
       const name = raw === "" ? null : displayName(raw);
@@ -507,6 +511,10 @@ export async function renameMailbox(
       };
     },
   );
+  if (out === null) {
+    throw new ForbiddenError("Only an owner can rename a mailbox that belongs to an owner or an admin.");
+  }
+  return out;
 }
 
 export async function setMailboxQuota(

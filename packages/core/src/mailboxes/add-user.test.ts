@@ -235,6 +235,19 @@ describe("addUser", () => {
     await expect(renameMailbox(d, member, ACCOUNT_A, mailbox.id, { displayName: "X" }, req)).rejects.toThrow(
       ForbiddenError,
     );
+    // An admin's mailbox: a User Administrator may not rename it (audited as denied); an Owner may.
+    const admin = await add(d, owner, { localPart: "boss", role: "user_admin" });
+    const adminActor = user({ id: admin.userId, account: [[ACCOUNT_A, "user_admin"]] });
+    await expect(
+      renameMailbox(d, userAdmin, ACCOUNT_A, admin.mailbox.id, { displayName: "Someone Else" }, req),
+    ).rejects.toThrow(/Only an owner/);
+    expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "mailbox.renamed", result: "denied" });
+    expect(
+      (await renameMailbox(d, adminActor, ACCOUNT_A, admin.mailbox.id, { displayName: "Boss" }, req)).displayName,
+    ).toBe("Boss");
+    expect(
+      (await renameMailbox(d, owner, ACCOUNT_A, admin.mailbox.id, { displayName: "Big Boss" }, req)).displayName,
+    ).toBe("Big Boss");
     await expect(renameMailbox(d, ownerB, ACCOUNT_A, mailbox.id, { displayName: "X" }, req)).rejects.toThrow(
       NotFoundError,
     );
