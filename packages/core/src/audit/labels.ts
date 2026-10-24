@@ -115,6 +115,7 @@ const EXPLICIT: Partial<Record<AuditAction, string>> = {
   "account.invite_resent": "Invite sent again",
   "account.invite_revoked": "Invite revoked",
   "account.member_added": "Person added",
+  "account.user_added": "User added",
   "account.member_removed": "Person removed",
   "account.role_changed": "Role changed",
   "account.ownership_transferred": "Ownership transferred",

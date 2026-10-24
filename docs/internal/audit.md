@@ -17,9 +17,9 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | Area | Actions |
 | --- | --- |
 | `auth` | `auth.sign_in`, `auth.sign_in_failed`, `auth.sign_out`, `auth.password_changed`, `auth.password_reset`, `auth.password_reset_requested`, `auth.two_factor_enabled`, `auth.two_factor_disabled`, `auth.app_password_created`, `auth.app_password_revoked`, `auth.session_revoked`, `auth.locked_out`, `auth.mail_client_sign_in`, `auth.mail_client_sign_in_failed`, `auth.two_factor_reset`, `auth.backup_code_used`, `auth.sessions_revoked_all`, `auth.new_device`, `auth.passkey_added`, `auth.passkey_renamed`, `auth.passkey_removed`, `auth.recovery_codes_regenerated`, `auth.identity_confirmed`, `auth.email_verification_sent`, `auth.email_verified` |
-| `account` | `account.created`, `account.deleted`, `account.updated`, `account.invite_sent`, `account.invite_accepted`, `account.invite_resent`, `account.invite_revoked`, `account.member_added`, `account.member_removed`, `account.role_changed`, `account.ownership_transferred`, `account.sign_in_policy_changed`, `account.sign_in_factor_added` |
+| `account` | `account.created`, `account.deleted`, `account.updated`, `account.invite_sent`, `account.invite_accepted`, `account.invite_resent`, `account.invite_revoked`, `account.member_added`, `account.user_added`, `account.member_removed`, `account.role_changed`, `account.ownership_transferred`, `account.sign_in_policy_changed`, `account.sign_in_factor_added` |
 | `domain` | `domain.added`, `domain.verified`, `domain.verify_failed`, `domain.removed`, `domain.dns_state_changed` |
-| `mailbox` | `mailbox.created`, `mailbox.suspended`, `mailbox.unsuspended`, `mailbox.deleted`, `mailbox.quota_changed`, `mailbox.deletion_scheduled`, `mailbox.restored`, `mailbox.password_reset`, `mailbox.password_changed` |
+| `mailbox` | `mailbox.created`, `mailbox.renamed`, `mailbox.suspended`, `mailbox.unsuspended`, `mailbox.deleted`, `mailbox.quota_changed`, `mailbox.deletion_scheduled`, `mailbox.restored`, `mailbox.password_reset`, `mailbox.password_changed` |
 | `alias` | `alias.created`, `alias.toggled`, `alias.deleted` |
 | `masked_alias` | `masked_alias.created`, `masked_alias.toggled`, `masked_alias.deleted` |
 | `catch_all` | `catch_all.changed` |
@@ -110,6 +110,14 @@ the catch-all's mailbox ends up `failed`. The reconciler's app password check wr
 `unexpectedAppPasswordPermissions`, `missingAppPasswords`, `apiKeysOnMailboxes`, `mailboxesUnreachable`; counts only,
 no addresses), and the managed-script check another (target label `managed sieve scripts`; meta `scriptsChecked`,
 `scriptsNotOurs`, `unconfirmedRedirects`, `foreignScripts`, `mailboxesUnreachable`, `requeued`).
+
+"Add a user": `account.user_added` (target = the new mailbox, label its address; meta: `userId`, `role`, `quotaGb`,
+`passwordGenerated`, `requirePasswordChange`, `profileFields` — the names of the optional profile fields given, never
+their values — and `platformAddress` for a free address). One entry covers the mailbox, the console login, the
+membership and the owner link, written in the same transaction. A User Administrator asking for a role other than
+Member is recorded as `denied`. Never the password (generated or chosen). `mailbox.renamed` (meta: none; the name is
+personal data) when an admin edits a mailbox's display name. `auth.password_changed` carries `firstPasswordReplaced:
+true` when it lifts the first-sign-in password change.
 
 People: `account.invite_sent`, `account.invite_resent`, `account.invite_revoked` (target label = the invited
 address, meta = role; never the token), `account.invite_accepted` (meta: role, `newLogin`, the user id; the actor is

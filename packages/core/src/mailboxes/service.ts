@@ -277,23 +277,9 @@ export async function createMailbox(
     async (repos): Promise<MutationOutcome<MailboxView | "act_as" | "email_unverified">> => {
       if (actor.kind === "user" && actor.actingAs) return { result: "act_as", denied: { code: "act_as" } };
       await repos.accounts.lock(accountId); // the mailbox ceiling holds under concurrent creates
-      const onPlatform = input.domainId === PLATFORM_DOMAIN_ID;
-      let domainName: string;
-      let local: string;
-      if (onPlatform) {
-        assertCustomerPlatform(deps.platform);
-        if (actor.kind === "user" && !(await repos.access.emailVerified(actor.userId))) {
-          return { result: "email_unverified", denied: { code: "email_unverified" } };
-        }
-        local = normalisePlatformLocalPart(input.localPart);
-        domainName = deps.platform.domain;
-      } else {
-        local = normaliseLocalPart(input.localPart);
-        const domainId = typeof input.domainId === "string" ? input.domainId : "";
-        const domain = isId(domainId) ? await repos.domains.get(accountId, domainId) : null;
-        if (domain?.status !== "active") throw new ValidationError("Choose one of your active domains.");
-        domainName = domain.name;
-      }
+      const target = await newMailboxAddress(deps, actor, repos, accountId, input);
+      if (target === "email_unverified") return { result: "email_unverified", denied: { code: "email_unverified" } };
+      const { onPlatform, address } = target;
       let userId: string | null = null;
       if (input.ownerUserId !== undefined && input.ownerUserId !== null && input.ownerUserId !== "") {
         const members = await repos.access.members(accountId);
@@ -301,21 +287,10 @@ export async function createMailbox(
         if (!owner) throw new ValidationError("Choose someone in this account.");
         userId = owner.userId;
       }
-      if (onPlatform) await assertPlatformAllowance(repos, deps.platform, accountId);
-      if ((await repos.mailboxes.count(accountId)) >= MAX_MAILBOXES) {
-        throw new PlanLimitError(
-          `Your plan includes ${String(MAX_MAILBOXES)} mailboxes. More mailboxes come with billing, which isn't open yet.`,
-        );
-      }
-      const quotaBytes = newMailboxQuota(await poolOf(repos, accountId), input.quotaGb);
-      const address = `${local}@${domainName}`;
+      const quotaBytes = await assertRoomForMailbox(deps, repos, accountId, onPlatform, input.quotaGb);
       const password = mailboxPassword(input.password, address);
       if (breached) throw new BreachedPasswordError();
-      await repos.mailboxes.lockAddress(address); // mailboxes and aliases share one address space
-      const free = onPlatform
-        ? await platformAddressFree(repos, address, accountId)
-        : !(await repos.mailboxes.addressTaken(address));
-      if (!free) throw new ConflictError("That address is already in use.");
+      await assertAddressFree(repos, accountId, address, onPlatform);
       const mailbox = newMailbox(deps, accountId, userId, address, quotaBytes);
       await repos.mailboxes.insert(mailbox);
       // The worker sets it when it creates the account (`MailServer.ensureMailbox` `initialPasswordHash`).
@@ -338,7 +313,64 @@ export async function createMailbox(
   return out;
 }
 
-function newMailbox(deps: Deps, accountId: string, userId: string | null, address: string, quotaBytes: number) {
+/**
+ * The address for a new mailbox: a local part on one of the account's active domains, or on the platform domain
+ * (`domainId: "platform"`, a free address; needs the actor's email confirmed — "email_unverified" otherwise).
+ */
+export async function newMailboxAddress(
+  deps: Deps,
+  actor: Actor,
+  repos: Repositories,
+  accountId: string,
+  input: { localPart?: unknown; domainId?: unknown },
+): Promise<{ address: string; onPlatform: boolean } | "email_unverified"> {
+  if (input.domainId === PLATFORM_DOMAIN_ID) {
+    assertCustomerPlatform(deps.platform);
+    if (actor.kind === "user" && !(await repos.access.emailVerified(actor.userId))) return "email_unverified";
+    return { address: `${normalisePlatformLocalPart(input.localPart)}@${deps.platform.domain}`, onPlatform: true };
+  }
+  const local = normaliseLocalPart(input.localPart);
+  const domainId = typeof input.domainId === "string" ? input.domainId : "";
+  const domain = isId(domainId) ? await repos.domains.get(accountId, domainId) : null;
+  if (domain?.status !== "active") throw new ValidationError("Choose one of your active domains.");
+  return { address: `${local}@${domain.name}`, onPlatform: false };
+}
+
+/**
+ * Room for one more mailbox (call under the account lock): the platform allowance, the mailbox ceiling and the storage
+ * pool. Returns the new mailbox's storage (the default share, or `quotaGb`).
+ */
+export async function assertRoomForMailbox(
+  deps: Deps,
+  repos: Repositories,
+  accountId: string,
+  onPlatform: boolean,
+  quotaGb: unknown,
+): Promise<number> {
+  if (onPlatform) await assertPlatformAllowance(repos, deps.platform, accountId);
+  if ((await repos.mailboxes.count(accountId)) >= MAX_MAILBOXES) {
+    throw new PlanLimitError(
+      `Your plan includes ${String(MAX_MAILBOXES)} mailboxes. More mailboxes come with billing, which isn't open yet.`,
+    );
+  }
+  return newMailboxQuota(await poolOf(repos, accountId), quotaGb);
+}
+
+/** Holds the address for this transaction and refuses one in use (or, on the platform domain, ever held elsewhere). */
+export async function assertAddressFree(
+  repos: Repositories,
+  accountId: string,
+  address: string,
+  onPlatform: boolean,
+): Promise<void> {
+  await repos.mailboxes.lockAddress(address); // mailboxes and aliases share one address space
+  const free = onPlatform
+    ? await platformAddressFree(repos, address, accountId)
+    : !(await repos.mailboxes.addressTaken(address));
+  if (!free) throw new ConflictError("That address is already in use.");
+}
+
+export function newMailbox(deps: Deps, accountId: string, userId: string | null, address: string, quotaBytes: number) {
   const mailbox: Mailbox = {
     id: randomUUID(),
     accountId,
@@ -496,7 +528,7 @@ export async function setMailboxQuota(
 const DAY_MS = 24 * 3600_000;
 
 /** One view of a mailbox after a lifecycle change, from inside the same unit of work. */
-async function viewOf(repos: Repositories, accountId: string, m: Mailbox): Promise<MailboxView> {
+export async function viewOf(repos: Repositories, accountId: string, m: Mailbox): Promise<MailboxView> {
   const [v] = await views(repos, accountId, [m]);
   if (!v) throw new NotFoundError();
   return v;

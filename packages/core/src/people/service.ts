@@ -137,7 +137,8 @@ export async function listPeople(deps: Deps, actor: Actor, accountId: string): P
 /** What the route needs to email the link. The token never leaves the server except in that email. */
 export type SentInvite = { invite: InviteView; token: string; accountName: string };
 
-async function assertRoom(repos: Repositories, accountId: string, now: Date, exclude?: string): Promise<void> {
+/** Room for one more person: the plan allows people, and people plus live invites stay under the ceiling. */
+export async function assertRoom(repos: Repositories, accountId: string, now: Date, exclude?: string): Promise<void> {
   const account = await accountOf(repos, accountId);
   const plan = PLANS[account.plan];
   if (!plan.addPeople) {
