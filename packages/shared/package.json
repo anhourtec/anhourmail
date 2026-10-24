@@ -11,6 +11,7 @@
     "./names": "./src/names.ts",
     "./platform": "./src/platform.ts",
     "./plans": "./src/plans.ts",
+    "./profile": "./src/profile.ts",
     "./sending": "./src/sending.ts",
     "./dns": "./src/dns.ts",
     "./credits": "./src/credits.generated.ts",

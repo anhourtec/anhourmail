@@ -26,7 +26,13 @@ export type ForwardingTarget = {
 };
 
 /** The mailbox a webmail session belongs to, found by its address (addresses are unique across accounts). */
-export type WebmailMailbox = { id: string; accountId: string; address: string };
+export type WebmailMailbox = {
+  id: string;
+  accountId: string;
+  address: string;
+  /** Set by "Add a user": the webmail asks for a new password before the inbox. */
+  mustChangePassword: boolean;
+};
 
 export type WebmailSettingsRepository = {
   mailboxByAddress(address: string): Promise<WebmailMailbox | null>;

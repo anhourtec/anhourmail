@@ -2,6 +2,13 @@
 import type { AccountRole } from "@anhourmail/shared/rbac";
 import { ACCOUNT_ROLES } from "@anhourmail/shared/rbac";
 import { nameProblem } from "@anhourmail/shared/names";
+import {
+  isCountryCode,
+  PHONE_PATTERN,
+  PROFILE_FIELD_INFO,
+  PROFILE_FIELDS,
+  type ProfileDetails,
+} from "@anhourmail/shared/profile";
 
 import { ValidationError } from "../errors";
 
@@ -79,4 +86,46 @@ export function checkPassword(input: unknown): string {
     throw new ValidationError(`Use at most ${String(PASSWORD_MAX)} characters for your password.`);
   }
   return input;
+}
+
+/** A display name (the sender name in "Name <address>"): required, 1–80 characters, by the shared name rules. */
+export function displayName(input: unknown): string {
+  const v = clean(input, 200);
+  if (v === "") throw new ValidationError("Enter a display name.");
+  if (v.length > 80) throw new ValidationError("Use at most 80 characters for the display name.");
+  const problem = nameProblem(v);
+  if (problem) throw new ValidationError(problem);
+  return v;
+}
+
+/**
+ * Optional profile details ("Add a user", step 3): known fields only, trimmed, empty ones left out. Free-text fields
+ * follow the shared name rules except that web addresses and `@` are allowed nowhere either; phones take digits and
+ * + ( ) - . / and spaces; the country is an ISO 3166-1 alpha-2 code from the static list. Never logged or audited.
+ */
+export function profileDetails(input: unknown): ProfileDetails {
+  if (input === undefined || input === null) return {};
+  if (typeof input !== "object" || Array.isArray(input)) throw new ValidationError("Check the profile details.");
+  const raw = input as Record<string, unknown>;
+  const out: ProfileDetails = {};
+  for (const field of PROFILE_FIELDS) {
+    const value = raw[field];
+    if (value === undefined || value === null) continue;
+    if (typeof value !== "string")
+      throw new ValidationError(`Check the ${PROFILE_FIELD_INFO[field].label.toLowerCase()}.`);
+    const v = value.trim().replace(/\s+/g, " ");
+    if (v === "") continue;
+    const { label, max } = PROFILE_FIELD_INFO[field];
+    if (v.length > max) throw new ValidationError(`${label} is too long.`);
+    if (field === "country") {
+      if (!isCountryCode(v)) throw new ValidationError("Choose a country or region from the list.");
+    } else if (field === "officePhone" || field === "mobilePhone") {
+      if (!PHONE_PATTERN.test(v)) throw new ValidationError(`${label}: use digits, spaces and + ( ) - only.`);
+    } else {
+      const problem = nameProblem(v);
+      if (problem) throw new ValidationError(`${label}: ${problem.charAt(0).toLowerCase()}${problem.slice(1)}`);
+    }
+    out[field] = v;
+  }
+  return out;
 }

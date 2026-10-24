@@ -224,9 +224,16 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
           lastError: null,
           purgeAfter: null,
           createdAt: new Date(),
+          displayName: "Box Example",
+          mustChangePassword: true,
         };
         await uow.run((r) => r.mailboxes.insert(m));
-        expect(await uow.run((r) => r.mailboxes.get(a.id, m.id))).toMatchObject({ address: m.address, userId });
+        expect(await uow.run((r) => r.mailboxes.get(a.id, m.id))).toMatchObject({
+          address: m.address,
+          userId,
+          displayName: "Box Example",
+          mustChangePassword: true,
+        });
         expect(await uow.run((r) => r.mailboxes.get(b.id, m.id))).toBeNull();
         expect(await uow.run((r) => r.mailboxes.count(a.id))).toBe(1);
         expect((await uow.run((r) => r.mailboxes.listByAccount(a.id))).map((x) => x.id)).toEqual([m.id]);
@@ -658,6 +665,23 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         const { id } = await uow.run((r) => r.people.createLogin(login));
         expect(await uow.run((r) => r.people.userByEmail(login.email))).toEqual({ id, name: "Cee Example" });
         await expect(uow.run((r) => r.people.createLogin(login))).rejects.toThrow("already has a login");
+
+        // "Add a user": a login that must choose its own password first, and optional profile details.
+        expect(await uow.run((r) => r.people.passwordChangeRequired(id))).toBe(false);
+        const fresh = await uow.run((r) =>
+          r.people.createLogin({ ...login, email: `dd-${tag}@example.com`, mustChangePassword: true }),
+        );
+        expect(await uow.run((r) => r.people.passwordChangeRequired(fresh.id))).toBe(true);
+        await uow.run((r) => r.people.setPasswordChangeRequired(fresh.id, false));
+        expect(await uow.run((r) => r.people.passwordChangeRequired(fresh.id))).toBe(false);
+        await uow.run((r) => r.people.setPasswordChangeRequired(id, true));
+        expect(await uow.run((r) => r.people.passwordChangeRequired(id))).toBe(true);
+        expect(await uow.run((r) => r.people.profile(fresh.id))).toEqual({});
+        await uow.run((r) => r.people.setProfile(fresh.id, { jobTitle: "Editor", country: "CA" }));
+        expect(await uow.run((r) => r.people.profile(fresh.id))).toEqual({ jobTitle: "Editor", country: "CA" });
+        await uow.run((r) => r.people.setProfile(fresh.id, { city: "Halifax" }));
+        expect(await uow.run((r) => r.people.profile(fresh.id))).toEqual({ city: "Halifax" });
+        expect(await uow.run((r) => r.people.profile(id))).toEqual({});
       } finally {
         await cleanup();
       }
@@ -955,8 +979,14 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         const address = `owner@${domain}`;
         const { mailboxId } = await seedMail({ domain, address, alias: `hi@${domain}`, quotaBytes: 1024 });
         const found = await uow.run((r) => r.webmailSettings.mailboxByAddress(address.toUpperCase()));
-        expect(found).toMatchObject({ id: mailboxId, address });
+        expect(found).toMatchObject({ id: mailboxId, address, mustChangePassword: false });
         expect(await uow.run((r) => r.webmailSettings.mailboxByAddress(`nobody@${domain}`))).toBeNull();
+        await uow.run((r) => r.mailboxes.setPasswordChangeRequired(mailboxId, true));
+        expect(await uow.run((r) => r.webmailSettings.mailboxByAddress(address))).toMatchObject({
+          mustChangePassword: true,
+        });
+        await uow.run((r) => r.mailboxes.setPasswordChangeRequired(mailboxId, false));
+        expect((await uow.run((r) => r.webmailSettings.mailboxByAddress(address)))?.mustChangePassword).toBe(false);
 
         expect(await uow.run((r) => r.webmailSettings.preferences(mailboxId))).toBeNull();
         expect(await uow.run((r) => r.webmailSettings.preferences("not-a-uuid"))).toBeNull();

@@ -24,6 +24,10 @@ export type Mailbox = {
   /** Set while `deleting`: when the scheduler removes it for good. */
   purgeAfter: Date | null;
   createdAt: Date;
+  /** The sender name ("Name <address>"), also the mail server account's description. Absent or null: none. */
+  displayName?: string | null;
+  /** Set by "Add a user": the webmail asks for a new password before the inbox (cleared by the person's change). */
+  mustChangePassword?: boolean;
 };
 
 export const GB = 1024 ** 3;

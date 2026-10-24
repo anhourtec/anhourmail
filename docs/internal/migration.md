@@ -35,6 +35,7 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 | #    | Migration                          | Commit      | Date       | Change                                                                                                   | Rollback        |
 | ---- | ---------------------------------- | ----------- | ---------- | -------------------------------------------------------------------------------------------------------- | --------------- |
+| 0018 | `0018_add_user`                    | uncommitted | 2026-10-24 | `mailbox.display_name`, `mailbox.must_change_password`; `user_profile.must_change_password` + profile    | Safe            |
 | 0017 | `0017_staff_suspension`            | uncommitted | 2026-10-23 | `mailbox_staff_hold`; suspension reason, note, time and staff id on `customer_account`, `user_profile`   | Safe            |
 | 0016 | `0016_mailbox_storage_used`        | uncommitted | 2026-10-23 | `mailbox.storage_used_bytes`, `mailbox.storage_checked_at` (last storage measurement; sizes only)        | Safe            |
 | 0015 | `0015_platform_addresses`          | uncommitted | 2026-10-23 | `retired_platform_address` (platform-domain addresses never reissued to another account)                 | Safe            |
@@ -74,6 +75,17 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0018_add_user · uncommitted · 2026-10-24 · Safe
+
+- Added: `mailbox.display_name` (sender name, nullable), `mailbox.must_change_password` (bool, default false);
+  `user_profile.must_change_password` (bool, default false) and optional profile details `job_title`, `department`,
+  `office`, `office_phone`, `mobile_phone`, `street_address`, `city`, `region`, `postal_code`, `country` (text,
+  nullable; personal data, removed with the person by the existing cascade).
+- Changed: —
+- Removed: —
+- Data: none. Existing mailboxes and people get no name, no flag and no details.
+- Rollback: drop the thirteen columns (the flags and names are lost; nobody is forced to change a password after).
 
 ### 0017_staff_suspension · uncommitted · 2026-10-23 · Safe
 

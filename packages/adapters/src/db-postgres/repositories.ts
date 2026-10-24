@@ -6,6 +6,7 @@ import { and, desc, eq, gte, inArray, isNotNull, lt, lte, or, type SQL, sql } fr
 import { type AccessRepository, ConflictError, type Repositories, type UnitOfWork } from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
 import type { AliasKind, AliasRepository, MailAlias } from "@anhourmail/core/aliases";
+import { PROFILE_FIELDS, type ProfileDetails, type ProfileField } from "@anhourmail/shared/profile";
 import type { Invite, InviteRepository, InviteStatus, MemberRecord, PeopleRepository } from "@anhourmail/core/people";
 import type {
   AccountSummary,
@@ -645,6 +646,8 @@ function toMailbox(r: typeof mailbox.$inferSelect): Mailbox {
     lastError: r.lastError,
     purgeAfter: r.purgeAfter,
     createdAt: r.createdAt,
+    displayName: r.displayName,
+    mustChangePassword: r.mustChangePassword,
   };
 }
 
@@ -798,8 +801,14 @@ class PgMailboxRepository implements MailboxRepository {
         lastError: m.lastError,
         purgeAfter: m.purgeAfter,
         createdAt: m.createdAt,
+        displayName: m.displayName ?? null,
+        mustChangePassword: m.mustChangePassword === true,
       }),
     );
+  }
+
+  async setPasswordChangeRequired(id: string, required: boolean): Promise<void> {
+    await this.x.update(mailbox).set({ mustChangePassword: required }).where(eq(mailbox.id, id));
   }
 
   async setQuota(id: string, quotaBytes: number): Promise<void> {
@@ -976,6 +985,7 @@ class PgPeopleRepository implements PeopleRepository {
     firstName: string;
     lastName: string | null;
     passwordHash: string;
+    mustChangePassword?: boolean;
   }): Promise<{ id: string }> {
     const id = randomUUID();
     try {
@@ -999,7 +1009,48 @@ class PgPeopleRepository implements PeopleRepository {
       userId: id,
       password: input.passwordHash,
     });
+    if (input.mustChangePassword === true) {
+      await this.x.insert(userProfile).values({ userId: id, mustChangePassword: true });
+    }
     return { id };
+  }
+
+  async setProfile(userId: string, details: ProfileDetails): Promise<void> {
+    const values = Object.fromEntries(PROFILE_FIELDS.map((f) => [f, details[f] ?? null])) as Record<
+      ProfileField,
+      string | null
+    >;
+    await this.x
+      .insert(userProfile)
+      .values({ userId, ...values })
+      .onConflictDoUpdate({ target: userProfile.userId, set: { ...values, updatedAt: new Date() } });
+  }
+
+  async profile(userId: string): Promise<ProfileDetails> {
+    const [r] = await this.x.select().from(userProfile).where(eq(userProfile.userId, userId)).limit(1);
+    if (!r) return {};
+    const out: ProfileDetails = {};
+    for (const f of PROFILE_FIELDS) {
+      const v = r[f];
+      if (v !== null) out[f] = v;
+    }
+    return out;
+  }
+
+  async passwordChangeRequired(userId: string): Promise<boolean> {
+    const [r] = await this.x
+      .select({ v: userProfile.mustChangePassword })
+      .from(userProfile)
+      .where(eq(userProfile.userId, userId))
+      .limit(1);
+    return r?.v === true;
+  }
+
+  async setPasswordChangeRequired(userId: string, required: boolean): Promise<void> {
+    await this.x
+      .insert(userProfile)
+      .values({ userId, mustChangePassword: required })
+      .onConflictDoUpdate({ target: userProfile.userId, set: { mustChangePassword: required, updatedAt: new Date() } });
   }
 }
 

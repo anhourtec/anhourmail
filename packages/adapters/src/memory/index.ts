@@ -39,6 +39,7 @@ import {
 } from "@anhourmail/core/audit";
 import type { PasskeyRecord, SecurityRepository, SessionRecord } from "@anhourmail/core/security";
 import type { ForwardingTarget, WebmailSettingsRepository } from "@anhourmail/core/webmail";
+import type { ProfileDetails } from "@anhourmail/shared/profile";
 import type { PlanId } from "@anhourmail/shared/plans";
 import type { SignInPolicy } from "@anhourmail/shared/security";
 import type { AccountRole, PlatformRole } from "@anhourmail/shared/rbac";
@@ -105,6 +106,10 @@ export type MemoryState = {
   personSuspensions: Record<string, SuspensionRecord>;
   /** Mailboxes a staff suspension holds suspended (Postgres: `mailbox_staff_hold`). */
   mailboxHolds: { mailboxId: string; kind: MailboxHoldKind }[];
+  /** Optional profile details by user id (Postgres: columns on `user_profile`). */
+  profiles: Record<string, ProfileDetails>;
+  /** People who must choose a new console password first (Postgres: `user_profile.must_change_password`). */
+  mustChangePassword: string[];
 };
 
 export const emptyState = (): MemoryState => ({
@@ -140,6 +145,8 @@ export const emptyState = (): MemoryState => ({
   accountSuspensions: {},
   personSuspensions: {},
   mailboxHolds: [],
+  profiles: {},
+  mustChangePassword: [],
 });
 
 const EPOCH = new Date(0);
@@ -472,6 +479,10 @@ function repositories(s: MemoryState): Repositories {
       const m = s.mailboxes.find((x) => x.id === id);
       if (m) m.quotaBytes = quotaBytes;
     },
+    setPasswordChangeRequired: async (id, required) => {
+      const m = s.mailboxes.find((x) => x.id === id);
+      if (m) m.mustChangePassword = required;
+    },
     transition: async (id, from, to, purgeAfter) => {
       const m = s.mailboxes.find((x) => x.id === id && from.includes(x.status));
       if (!m) return false;
@@ -551,7 +562,7 @@ function repositories(s: MemoryState): Repositories {
       const id = Object.keys(s.userEmails).find((k) => s.userEmails[k]?.toLowerCase() === email.toLowerCase());
       return id ? { id, name: s.userNames[id] ?? s.userEmails[id] ?? id } : null;
     },
-    createLogin: async ({ email, name, passwordHash }) => {
+    createLogin: async ({ email, name, passwordHash, mustChangePassword }) => {
       if (Object.values(s.userEmails).some((e) => e.toLowerCase() === email.toLowerCase())) {
         throw new ConflictError("That address already has a login.");
       }
@@ -559,7 +570,17 @@ function repositories(s: MemoryState): Repositories {
       s.userEmails[id] = email;
       s.userNames[id] = name;
       s.logins.push({ userId: id, passwordHash });
+      if (mustChangePassword === true) s.mustChangePassword.push(id);
       return { id };
+    },
+    setProfile: async (userId, details) => {
+      s.profiles[userId] = clone(details);
+    },
+    profile: async (userId) => clone(s.profiles[userId] ?? {}),
+    passwordChangeRequired: async (userId) => s.mustChangePassword.includes(userId),
+    setPasswordChangeRequired: async (userId, required) => {
+      s.mustChangePassword = s.mustChangePassword.filter((x) => x !== userId);
+      if (required) s.mustChangePassword.push(userId);
     },
   };
 
@@ -824,7 +845,9 @@ function repositories(s: MemoryState): Repositories {
   const webmailSettings: WebmailSettingsRepository = {
     mailboxByAddress: async (address) => {
       const m = s.mailboxes.find((x) => x.address === address.trim().toLowerCase());
-      return m ? { id: m.id, accountId: m.accountId, address: m.address } : null;
+      return m
+        ? { id: m.id, accountId: m.accountId, address: m.address, mustChangePassword: m.mustChangePassword === true }
+        : null;
     },
     preferences: async (mailboxId) => clone(s.webmailPreferences.find((p) => p.mailboxId === mailboxId)?.prefs ?? null),
     savePreferences: async (mailboxId, prefs, at) => {

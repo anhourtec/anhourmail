@@ -33,7 +33,12 @@ export class PgWebmailSettingsRepository implements WebmailSettingsRepository {
 
   async mailboxByAddress(address: string): Promise<WebmailMailbox | null> {
     const [r] = await this.x
-      .select({ id: mailbox.id, accountId: mailbox.accountId, address: mailbox.address })
+      .select({
+        id: mailbox.id,
+        accountId: mailbox.accountId,
+        address: mailbox.address,
+        mustChangePassword: mailbox.mustChangePassword,
+      })
       .from(mailbox)
       .where(eq(mailbox.address, address.trim().toLowerCase()))
       .limit(1);

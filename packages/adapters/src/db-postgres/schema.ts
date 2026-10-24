@@ -161,6 +161,22 @@ export const userProfile = pgTable("user_profile", {
   suspendedAt: timestamp("suspended_at", { withTimezone: true }),
   suspendedBy: text("suspended_by"),
   trustTier: text("trust_tier").notNull().default("new"),
+  /** Set by "Add a user" (initial password chosen by an admin): the console asks for a new password before anything else. */
+  mustChangePassword: boolean("must_change_password").notNull().default(false),
+  /**
+   * Optional profile details an admin may record when adding a user (personal data: never logged or audited by
+   * value; removed with the person, `ON DELETE CASCADE`).
+   */
+  jobTitle: text("job_title"),
+  department: text("department"),
+  office: text("office"),
+  officePhone: text("office_phone"),
+  mobilePhone: text("mobile_phone"),
+  streetAddress: text("street_address"),
+  city: text("city"),
+  region: text("region"),
+  postalCode: text("postal_code"),
+  country: text("country"),
   updatedAt: updatedAt(),
 });
 
@@ -276,6 +292,12 @@ export const mailbox = pgTable(
       .references(() => customerAccount.id, { onDelete: "cascade" }),
     userId: text("user_id").references(() => authUser.id, { onDelete: "set null" }),
     address: text("address").notNull().unique(),
+    /** The sender name ("Name <address>"), also the mail server account's description. Null: none set. */
+    displayName: text("display_name"),
+    /**
+     * Set by "Add a user": the webmail asks for a new password before the inbox; cleared when the person changes it.
+     */
+    mustChangePassword: boolean("must_change_password").notNull().default(false),
     stalwartId: text("stalwart_id"),
     /**
      * provisioning | active | failed | suspended | deleting. Suspend, resume, delete and restore set it from the

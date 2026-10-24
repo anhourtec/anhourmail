@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import type { ProfileDetails } from "@anhourmail/shared/profile";
 import type { AccountRole } from "@anhourmail/shared/rbac";
 
 import type { Invite, MemberRecord } from "./entity";
@@ -23,7 +24,16 @@ export type PeopleRepository = {
     firstName: string;
     lastName: string | null;
     passwordHash: string;
+    /** "Add a user": the password was chosen by an admin and the person must choose their own at first sign-in. */
+    mustChangePassword?: boolean;
   }): Promise<{ id: string }>;
+  /** Replaces the person's optional profile details (only the given fields are kept). */
+  setProfile(userId: string, details: ProfileDetails): Promise<void>;
+  /** The person's optional profile details. */
+  profile(userId: string): Promise<ProfileDetails>;
+  /** Whether the person must choose a new console password before anything else. */
+  passwordChangeRequired(userId: string): Promise<boolean>;
+  setPasswordChangeRequired(userId: string, required: boolean): Promise<void>;
 };
 
 /** Account invites. Only token hashes are stored; reads by id are scoped to the account. */
