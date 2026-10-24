@@ -257,6 +257,19 @@ describe("changing one's own mailbox password (webmail)", () => {
     expect(await passwordJobState(d, out.jobId)).toBe("pending");
   });
 
+  it("ends the webmail's first-sign-in password step", async () => {
+    const { d } = setup();
+    const box = d.uow.state.mailboxes.find((m) => m.id === MBX_MEMBER);
+    if (box) box.mustChangePassword = true;
+    expect((await d.uow.run((r) => r.webmailSettings.mailboxByAddress("kid@family.ca")))?.mustChangePassword).toBe(
+      true,
+    );
+    await changeOwnMailboxPassword(d, fakeHasher, "kid@family.ca", { password: MAILBOX_PW }, req);
+    expect((await d.uow.run((r) => r.webmailSettings.mailboxByAddress("kid@family.ca")))?.mustChangePassword).toBe(
+      false,
+    );
+  });
+
   it("refuses unknown addresses, inactive mailboxes and weak passwords", async () => {
     const { d } = setup();
     await expect(

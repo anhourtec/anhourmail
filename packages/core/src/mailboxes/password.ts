@@ -160,6 +160,8 @@ export async function changeOwnMailboxPassword(
       const password = mailboxPassword(input.password, m.address);
       if (breached) throw new BreachedPasswordError();
       const job = await queuePassword(deps, repos, hasher, m, password);
+      // The person has chosen their own password: the webmail's first-sign-in step is done.
+      if (m.mustChangePassword === true) await repos.mailboxes.setPasswordChangeRequired(m.id, false);
       // The person's console identity (if the mailbox belongs to someone) gets the change notice.
       const owner = m.userId
         ? ((await repos.access.members(m.accountId)).find((x) => x.userId === m.userId)?.email ?? null)

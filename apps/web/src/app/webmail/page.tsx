@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { FirstPasswordStep } from "@/components/webmail/first-password";
 import { SIDEBAR_COOKIE, WebmailApp } from "@/components/webmail/webmail-app";
 import { env } from "@/server/env";
 import { settingsService, webmail, webmailCookieName } from "@/server/webmail/instance";
@@ -44,6 +45,10 @@ export default async function WebmailPage() {
       .mailbox(session.username)
       .catch(() => null),
   ]);
+  // "Add a user" with a first-sign-in password change: the new password comes before the inbox.
+  if (mailbox?.mustChangePassword) {
+    return <FirstPasswordStep address={session.username} account={session.accountId} signInHref={`${base}/sign-in`} />;
+  }
   const app = env().APP_URL.replace(/\/$/, "");
   return (
     <WebmailApp
