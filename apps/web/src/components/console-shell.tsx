@@ -44,7 +44,7 @@ async function navCounts(actor: UserActor, accountId: string | undefined): Promi
 function primaryAction(actor: UserActor, accountId: string | undefined): PrimaryAction | null {
   const base = accountId ? `/accounts/${accountId}` : "";
   if (accountId && can(actor, "mailbox.manage", accountId))
-    return { label: "New mailbox", href: `${base}/mailboxes?new=1`, icon: "mailbox" };
+    return { label: "Add a user", href: `${base}/mailboxes/new`, icon: "person" };
   if (accountId && can(actor, "member.manage", accountId))
     return { label: "New invite", href: `${base}/people?new=1`, icon: "person" };
   if (accountId && can(actor, "alias.manage.own", accountId))

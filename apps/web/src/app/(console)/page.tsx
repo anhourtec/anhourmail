@@ -229,10 +229,10 @@ function recommendations(actor: UserActor, accountId: string, o: Overview, freeD
     cards.push({
       id: "first-mailbox",
       icon: Inbox,
-      title: "Create your first mailbox",
-      text: "An address on your domain with its own storage. Add one for each person who needs mail.",
-      href: `${base}/mailboxes?new=1`,
-      action: "Add a mailbox",
+      title: "Add your first user",
+      text: "Each user gets an address on your domain, their own storage and a sign-in. Add one for each person who needs mail.",
+      href: `${base}/mailboxes/new`,
+      action: "Add a user",
       tone: "info",
     });
   }
@@ -505,7 +505,7 @@ export default async function ConsoleHome() {
     if (canClaimFree(actor, current, o, freeDomain))
       quick.push({ href: `${base}/mailboxes?claim=1`, icon: <AtSign />, label: "Get your free address" });
     if (can(actor, "mailbox.manage", current) && o.domains?.some((d) => d.status === "active"))
-      quick.push({ href: `${base}/mailboxes?new=1`, icon: <Inbox />, label: "Add a mailbox" });
+      quick.push({ href: `${base}/mailboxes/new`, icon: <UserPlus />, label: "Add a user" });
     if (can(actor, "member.manage", current) && o.people?.limits.addPeople)
       quick.push({ href: `${base}/people?new=1`, icon: <UserPlus />, label: "Invite someone" });
     if (can(actor, "domain.manage", current) && o.allowance?.allowed)
