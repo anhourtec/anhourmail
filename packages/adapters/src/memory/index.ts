@@ -301,6 +301,7 @@ function repositories(s: MemoryState): Repositories {
         status: m.status,
         stalwartId: m.stalwartId,
         purgeAfter: m.purgeAfter,
+        displayName: m.displayName ?? null,
         aliases: s.aliases
           .filter((a) => a.mailboxId === m.id)
           .sort((a, b) => a.address.localeCompare(b.address))

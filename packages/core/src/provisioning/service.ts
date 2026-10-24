@@ -107,6 +107,7 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
     quotaBytes: mailbox.quotaBytes,
     // Suspended and deleting mailboxes keep their mail but nobody can sign in, and their mail is refused.
     suspended: mailbox.status === "suspended" || deleting,
+    description: mailbox.displayName,
     // A deleting mailbox's aliases go with it: off the mail server, still reserved in the control plane.
     aliases: deleting
       ? []

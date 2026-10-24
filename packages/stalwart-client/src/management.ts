@@ -41,6 +41,8 @@ export type UserInput = {
    */
   suspended?: boolean;
   aliases?: { name: string; domain: string; enabled: boolean; description?: string }[];
+  /** The account's description (our mailbox display name); null clears it, omitted leaves it as it is. */
+  description?: string | null;
 };
 
 /**
@@ -261,6 +263,7 @@ export class StalwartManagement {
       ...(input.suspended === undefined
         ? {}
         : { permissions: input.suspended ? SUSPENDED_PERMISSIONS : CUSTOMER_PERMISSIONS }),
+      ...(input.description === undefined ? {} : { description: input.description }),
       aliases: list(
         (input.aliases ?? []).map((a) => ({
           name: a.name,

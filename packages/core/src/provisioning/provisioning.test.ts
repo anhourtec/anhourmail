@@ -10,6 +10,7 @@ type Box = {
   address: string;
   quotaBytes: number;
   aliases: string[];
+  description: string | null;
   suspended: boolean;
   /** The argon2id hash the account was created with or last given (null: a random one). */
   passwordHash: string | null;
@@ -51,9 +52,15 @@ function fakeMailServer(opts: { failTimes?: number } = {}): MailServer & {
       }
       state.revoked.push(input);
     },
-    ensureMailbox: async ({ address, quotaBytes, suspended, aliases, initialPasswordHash }) => {
+    ensureMailbox: async ({ address, quotaBytes, suspended, aliases, initialPasswordHash, description }) => {
       const existing = state.boxes.find((b) => b.address === address);
-      const box = { address, quotaBytes, suspended, aliases: aliases.map((a) => a.address) };
+      const box = {
+        address,
+        quotaBytes,
+        suspended,
+        aliases: aliases.map((a) => a.address),
+        description: description ?? null,
+      };
       if (existing) Object.assign(existing, box);
       else state.boxes.push({ ...box, passwordHash: initialPasswordHash, passwordCredentialId: "a" });
       const now = state.boxes.find((b) => b.address === address);
@@ -157,10 +164,17 @@ describe("provisioning jobs", () => {
         quotaBytes: 1000,
         aliases: ["hello@example.test"],
         suspended: false,
+        description: null,
         passwordHash: null,
         passwordCredentialId: "a",
       },
     ]);
+    // The display name becomes the account's description (the sender name Stalwart seeds identities with).
+    const m1 = d.uow.state.mailboxes.find((m) => m.id === "m1");
+    if (m1) m1.displayName = "Owner Example";
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(mail.boxes[0]?.description).toBe("Owner Example");
     // The new account's Password credential is recorded for the reconciler.
     expect(d.uow.state.mailboxPasswords).toEqual([{ mailboxId: "m1", pendingHash: null, credentialId: "a" }]);
     expect(d.uow.state.domains[0]?.stalwartId).toBe("dom:example.test");

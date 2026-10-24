@@ -32,6 +32,8 @@ export type MailboxState = {
   stalwartId: string | null;
   /** Set while `deleting`: when the scheduler removes it for good. */
   purgeAfter: Date | null;
+  /** The sender name, applied as the mail server account's description (null: none). */
+  displayName: string | null;
   aliases: AliasState[];
   /**
    * A new mailbox password waiting for the worker, as a salted argon2id PHC string (never the password itself; rule

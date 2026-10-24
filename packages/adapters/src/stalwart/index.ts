@@ -156,7 +156,15 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
       await mgmt.revokeAppPasswordCredential(externalId, credentialId, createdAt);
     },
 
-    async ensureMailbox({ externalId: known, initialPasswordHash, address, quotaBytes, suspended, aliases }) {
+    async ensureMailbox({
+      externalId: known,
+      initialPasswordHash,
+      address,
+      quotaBytes,
+      suspended,
+      aliases,
+      description,
+    }) {
       const [local, domain] = split(address);
       // A new mailbox never takes over an account that already exists on the mail server: it may hold someone's
       // mail from before (e.g. a domain that changed hands). That needs a person to look at it.
@@ -175,6 +183,7 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
         quotaBytes,
         // Suspension disables sign-in, sending and delivery; credentials and mail are kept (SUSPENDED_PERMISSIONS).
         suspended,
+        ...(description === undefined ? {} : { description }),
         // A turned-off alias isn't sent at all, so the server refuses it as an unknown recipient and won't accept
         // it as a sender, without relying on how it treats a disabled alias. The address stays held in Postgres.
         aliases: aliases

@@ -97,6 +97,17 @@ describe("StalwartManagement", () => {
     ).toBe("u1");
     const lastUpdate = sets.at(-1) as { update: Record<string, { credentials?: unknown; quotas: unknown }> };
     expect(lastUpdate.update.u1?.credentials).toEqual({ "0": { "@type": "Password", secret: "pw2" } });
+    expect(lastUpdate.update.u1).not.toHaveProperty("description");
+    await m.upsertUser({
+      name: "alice",
+      domain: "a.test",
+      password: "pw",
+      quotaBytes: 20,
+      description: "Alice Example",
+    });
+    expect((sets.at(-1) as { update: Record<string, { description?: unknown }> }).update.u1?.description).toBe(
+      "Alice Example",
+    );
     await expect(m.upsertUser({ name: "x", domain: "missing.test", password: "p", quotaBytes: 1 })).rejects.toThrow(
       /Unknown domain/,
     );

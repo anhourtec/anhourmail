@@ -62,6 +62,8 @@ export type MailServer = {
      */
     suspended: boolean;
     aliases: { address: string; enabled: boolean; description: string | null }[];
+    /** The account's description: the mailbox's display name (Stalwart seeds the sending identity's name from it). */
+    description?: string | null;
   }): Promise<{
     externalId: string;
     /** True when the account was created by this call. */
