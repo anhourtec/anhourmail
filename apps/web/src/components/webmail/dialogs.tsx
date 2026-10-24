@@ -16,11 +16,14 @@ export function Modal({
   onClose,
   children,
   wide = false,
+  size,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
+  /** "lg" for content with a preview (e.g. Insert HTML). */
+  size?: "lg";
 }) {
   return (
     <div
@@ -43,7 +46,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={`relative w-full rounded-2xl border bg-popover p-5 shadow-2xl ${wide ? "max-w-md" : "max-w-sm"}`}
+        className={`relative w-full rounded-2xl border bg-popover p-5 shadow-2xl ${size === "lg" ? "max-w-2xl" : wide ? "max-w-md" : "max-w-sm"}`}
       >
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 className="am-h3">{title}</h2>

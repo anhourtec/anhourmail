@@ -10,6 +10,8 @@ import type { Address } from "@/server/webmail/view";
 import { Tooltip } from "@/components/tooltip";
 
 import { displayName, fileSize } from "./format";
+import { loadOutgoing, type Outgoing, RichEditor, useOutgoing } from "./rich-editor";
+import { SIGNATURE_ATTR, signatureHtml, signatureInner, textToHtml } from "./rich-text";
 import {
   type Attachment,
   type DraftPayload,
@@ -38,7 +40,13 @@ export type ComposeSeed = {
   focus: "to" | "body";
   /** Add the sender's signature (new messages, replies and forwards; not when reopening a draft). */
   signature?: boolean;
+  /** The body as HTML for rich text (a quoted original, or a draft's HTML); sanitised before the editor shows it. */
+  html?: string;
+  /** Rich text (the default) or plain text (e.g. reopening a plain-text draft). */
+  mode?: ComposeFormat;
 };
+
+export type ComposeFormat = "rich" | "plain";
 
 /** The block a signature adds to a plain-text message: the conventional "-- " separator line, then the text. */
 export const signatureBlock = (signature: string | undefined): string =>
@@ -242,8 +250,8 @@ function AddressField({
 type SaveState = "idle" | "saving" | "saved" | "error";
 
 /**
- * Writing mail: To/Cc/Bcc with suggestions, From (own identities only — the BFF re-checks), subject, plain-text
- * body, attachments (uploaded through the BFF, 20 MB each). Drafts autosave two seconds after you stop typing
+ * Writing mail: To/Cc/Bcc with suggestions, From (own identities only — the BFF re-checks), subject, a rich-text
+ * (default) or plain-text body, attachments (uploaded through the BFF, 20 MB each). Drafts autosave two seconds after you stop typing
  * (one draft per message, replaced each time). Send saves the draft and hands it to the BFF, which holds it for a
  * few seconds so "Undo" can cancel it.
  *
@@ -318,6 +326,60 @@ export function Composer({
   const body = useRef<HTMLTextAreaElement>(null);
   const file = useRef<HTMLInputElement>(null);
 
+  // Rich text: the editor's DOM is the working copy; `richVersion` counts edits (for autosave). Every save sends it
+  // through the outgoing sanitiser, and the server sanitises it again.
+  const outgoing = useOutgoing();
+  const [format, setFormat] = useState<ComposeFormat>(seed.mode ?? "rich");
+  const editor = useRef<HTMLDivElement>(null);
+  const [richSource, setRichSource] = useState(() => ({
+    body: seed.html ?? textToHtml(seed.text),
+    signature: seed.signature === true,
+    key: 0,
+  }));
+  const [richVersion, setRichVersion] = useState(0);
+  const initialHtml = useMemo(
+    () => (outgoing ? outgoing.sanitizeOutgoingHtml(richSource.body).html : null),
+    [outgoing, richSource.body],
+  );
+  /** The signature text the editor holds; null until the editor has been filled. */
+  const appliedSig = useRef<string | undefined | null>(null);
+  const richReady = format === "rich" && initialHtml !== null;
+  useEffect(() => {
+    const el = editor.current;
+    if (!richReady || !el) return;
+    const raw = identities.find((i) => i.id === identityId)?.signature;
+    const want = raw && raw.trim() !== "" ? raw : undefined;
+    if (appliedSig.current === null) {
+      // First fill: the signature goes above the quoted text, as in plain text.
+      if (richSource.signature && want) el.insertAdjacentHTML("afterbegin", signatureHtml(want));
+      appliedSig.current = want;
+      return;
+    }
+    if (appliedSig.current === want) return;
+    const block = el.querySelector(`[${SIGNATURE_ATTR}]`);
+    if (block && want) block.innerHTML = signatureInner(want);
+    else if (block) block.remove();
+    else if (want && richSource.signature) el.insertAdjacentHTML("afterbegin", signatureHtml(want));
+    appliedSig.current = want;
+    setRichVersion((v) => v + 1);
+  }, [richReady, identityId, identities, richSource]);
+
+  const switchFormat = (next: ComposeFormat) => {
+    if (next === format) return;
+    if (next === "plain") {
+      const raw = editor.current?.innerHTML ?? "";
+      setText(
+        outgoing ? outgoing.outgoingText(outgoing.sanitizeOutgoingHtml(raw).html) : (editor.current?.textContent ?? ""),
+      );
+    } else {
+      // The signature is already in the text: the editor starts from it as is.
+      const raw = identities.find((i) => i.id === identityId)?.signature;
+      appliedSig.current = raw && raw.trim() !== "" ? raw : undefined;
+      setRichSource((r) => ({ body: textToHtml(text), signature: false, key: r.key + 1 }));
+    }
+    setFormat(next);
+  };
+
   useEffect(() => {
     if (seed.focus === "body") {
       body.current?.focus();
@@ -325,20 +387,30 @@ export function Composer({
     }
   }, [seed.focus]);
 
+  /** The draft to save; null when the rich body is over the HTML cap. */
   const payload = useCallback(
-    (): DraftPayload => ({
-      ...(draftId.current ? { replaces: draftId.current } : {}),
-      identityId,
-      to,
-      cc,
-      bcc,
-      subject,
-      text,
-      ...(seed.inReplyTo?.length ? { inReplyTo: seed.inReplyTo } : {}),
-      ...(seed.references?.length ? { references: seed.references } : {}),
-      attachments,
-    }),
-    [identityId, to, cc, bcc, subject, text, attachments, seed.inReplyTo, seed.references],
+    (mod: Outgoing): DraftPayload | null => {
+      let content: { text: string; html?: string } = { text };
+      if (format === "rich") {
+        const clean = mod.sanitizeOutgoingHtml(editor.current?.innerHTML ?? "");
+        if (clean.tooLarge) return null;
+        // The server writes the text/plain part from the HTML.
+        content = { text: "", html: clean.html };
+      }
+      return {
+        ...(draftId.current ? { replaces: draftId.current } : {}),
+        identityId,
+        to,
+        cc,
+        bcc,
+        subject,
+        ...content,
+        ...(seed.inReplyTo?.length ? { inReplyTo: seed.inReplyTo } : {}),
+        ...(seed.references?.length ? { references: seed.references } : {}),
+        attachments,
+      };
+    },
+    [format, identityId, to, cc, bcc, subject, text, attachments, seed.inReplyTo, seed.references],
   );
 
   /** Saves now (waiting for any save in flight first, so drafts are replaced in order). */
@@ -348,7 +420,13 @@ export function Composer({
     const run = (async () => {
       setSave("saving");
       try {
-        const { id } = await client.saveDraft(payload());
+        const draft = payload(await loadOutgoing());
+        if (!draft) {
+          setSave("error");
+          setError("This message is too long to save. Shorten it or remove some images.");
+          return undefined;
+        }
+        const { id } = await client.saveDraft(draft);
         draftId.current = id;
         dirty.current = false;
         setSave("saved");
@@ -384,10 +462,14 @@ export function Composer({
     return () => {
       window.clearTimeout(t);
     };
-  }, [to, cc, bcc, subject, text, attachments, identityId, saveNow]);
+  }, [to, cc, bcc, subject, text, richVersion, format, attachments, identityId, saveNow]);
 
+  const bodyHasContent = () =>
+    format === "rich"
+      ? (editor.current?.textContent ?? "").trim() !== "" || editor.current?.querySelector("img") != null
+      : text.trim() !== "";
   const hasContent = () =>
-    to.length + cc.length + bcc.length > 0 || subject.trim() !== "" || text.trim() !== "" || attachments.length > 0;
+    to.length + cc.length + bcc.length > 0 || subject.trim() !== "" || bodyHasContent() || attachments.length > 0;
 
   const close = async () => {
     const saved =
@@ -604,19 +686,34 @@ export function Composer({
           className="h-8 min-w-0 flex-1 bg-transparent text-[14px] outline-none"
         />
       </div>
-      <label htmlFor="compose-body" className="sr-only">
-        Message
-      </label>
-      <textarea
-        id="compose-body"
-        ref={body}
-        value={text}
-        onChange={(e) => {
-          setText(e.target.value);
-        }}
-        placeholder="Write your message"
-        className="min-h-32 flex-1 resize-none bg-transparent px-4 py-3 text-[14px] leading-6 outline-none"
-      />
+      {format === "rich" ? (
+        <RichEditor
+          key={richSource.key}
+          editorRef={editor}
+          initialHtml={initialHtml}
+          outgoing={outgoing}
+          onChange={() => {
+            setRichVersion((v) => v + 1);
+          }}
+          autoFocus={seed.focus === "body" || richSource.key > 0}
+        />
+      ) : (
+        <>
+          <label htmlFor="compose-body" className="sr-only">
+            Message
+          </label>
+          <textarea
+            id="compose-body"
+            ref={body}
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+            }}
+            placeholder="Write your message"
+            className="min-h-32 flex-1 resize-none bg-transparent px-4 py-3 text-[14px] leading-6 outline-none"
+          />
+        </>
+      )}
       {(attachments.length > 0 || uploading > 0) && (
         <ul aria-label="Attachments" className="flex flex-wrap gap-2 border-t px-4 py-2.5">
           {attachments.map((a) => (
@@ -663,8 +760,29 @@ export function Composer({
           {sending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Send className="size-4" aria-hidden />}
           Send
         </button>
-        <span className="am-micro ml-2 hidden sm:inline">⌘/Ctrl + Enter</span>
+        <span className="am-micro ml-2 hidden lg:inline">⌘/Ctrl + Enter</span>
         <span className="flex-1" />
+        <div role="radiogroup" aria-label="Message format" className="mr-1 inline-flex rounded-lg border p-0.5">
+          {(
+            [
+              ["rich", "Rich text"],
+              ["plain", "Plain text"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={format === value}
+              onClick={() => {
+                switchFormat(value);
+              }}
+              className={`h-7 rounded-md px-2 text-[12.5px] whitespace-nowrap ${format === value ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <input
           ref={file}
           type="file"

@@ -47,6 +47,7 @@ import {
   replySubject,
   setDateStyle,
 } from "./format";
+import { quoteHtml } from "./rich-text";
 import {
   createMailClient,
   type Folder,
@@ -962,6 +963,7 @@ function Mailroom({
           bcc: [],
           subject: replySubject(m.subject, mode),
           text: quoteBody(m, mode),
+          html: quoteHtml(m, mode),
           ...(mode !== "forward" && m.messageId.length > 0
             ? { inReplyTo: m.messageId, references: [...m.references, ...m.messageId].slice(-50) }
             : {}),
@@ -988,6 +990,8 @@ function Mailroom({
           bcc: m.bcc,
           subject: m.subject,
           text: m.text ?? m.quote,
+          // A draft written in rich text reopens in rich text; a plain one stays plain.
+          ...(m.html !== null ? { html: m.html } : { mode: "plain" as const }),
           attachments: m.attachments,
           draftId: m.id,
           ...(m.from[0] ? { fromEmail: m.from[0].email } : {}),

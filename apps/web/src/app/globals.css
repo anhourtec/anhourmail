@@ -603,3 +603,45 @@ html[data-motion="reduced"] *::after {
   transition-duration: 0.01ms !important;
   scroll-behavior: auto !important;
 }
+
+/* ---- rich-text composer (components/webmail/rich-editor.tsx) ---------------------------------------
+   Tailwind's reset removes list markers and quote styling; the editor shows them as they will be sent. */
+.am-rich:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+.am-rich ul {
+  list-style: disc;
+  padding-left: 1.5rem;
+}
+.am-rich ol {
+  list-style: decimal;
+  padding-left: 1.5rem;
+}
+.am-rich blockquote {
+  margin: 0 0 0 0.25rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--border);
+  color: var(--muted-foreground);
+}
+.am-rich a {
+  color: var(--primary);
+  text-decoration: underline;
+}
+.am-rich img {
+  max-width: 100%;
+  height: auto;
+}
+.am-rich table {
+  max-width: 100%;
+}
+.am-rich pre {
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+}
+.am-rich h1,
+.am-rich h2,
+.am-rich h3 {
+  font-weight: 500;
+}

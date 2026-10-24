@@ -60,6 +60,8 @@ export type DraftPayload = {
   bcc: Address[];
   subject: string;
   text: string;
+  /** Rich-text body, already sanitised by the composer (the server sanitises it again). */
+  html?: string;
   inReplyTo?: string[];
   references?: string[];
   attachments: Attachment[];
