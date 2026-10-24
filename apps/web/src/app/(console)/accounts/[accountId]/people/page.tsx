@@ -66,7 +66,7 @@ export default async function PeoplePage({
     <>
       <PageHeader
         title="People and roles"
-        description="Who can manage this account in the console, and what each of them can do. Mailboxes are separate: removing someone keeps their mail."
+        description="Who can sign in to this account in the console, and what each of them can do. Users added on the Mailboxes page appear here too. Removing someone keeps their mail."
         breadcrumbs={crumbs}
       />
       {limits.addPeople && (

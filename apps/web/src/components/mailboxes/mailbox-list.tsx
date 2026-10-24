@@ -2,7 +2,7 @@
 "use client";
 
 import type { MailboxStatus as Status } from "@anhourmail/core/mailboxes";
-import { BookOpen, HardDrive, Info, Pause, Play, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { BookOpen, HardDrive, Info, Pause, Play, Plus, RefreshCw, Trash2, UserPlus } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
@@ -53,7 +53,8 @@ const bulkAction =
   "inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-[14px] transition-colors hover:bg-accent disabled:opacity-50 [&>svg]:size-4 [&>svg]:text-primary";
 
 /**
- * The mailboxes list (console page template): command bar with "Add a mailbox", refresh, search and more; status
+ * The mailboxes list (console page template): command bar with "Add a user", "Add a mailbox" (a shared address, or
+ * another address for someone already in the account), refresh, search and more; status
  * chips; a sortable list with a checkbox column and bulk suspend / resume / delete for people who manage
  * mailboxes, and a ⋮ menu per row. The address opens the details panel (`?mailbox=`).
  */
@@ -63,6 +64,7 @@ export function MailboxList({
   canManage,
   openId,
   createHref,
+  addUserHref,
   docsHref,
   graceDays,
 }: {
@@ -70,8 +72,10 @@ export function MailboxList({
   rows: MailboxRow[];
   canManage: boolean;
   openId: string | null;
-  /** Where "Add a mailbox" goes, or null when a mailbox can't be added now. */
+  /** Where "Add a mailbox" goes (a shared address, or another for someone here), or null when it can't be added now. */
   createHref: string | null;
+  /** Where "Add a user" goes (a person with their own mailbox), or null when one can't be added now. */
+  addUserHref: string | null;
   docsHref: string;
   graceDays: number;
 }) {
@@ -139,6 +143,11 @@ export function MailboxList({
           </>
         }
       >
+        {addUserHref && (
+          <CommandLink href={addUserHref} icon={<UserPlus />}>
+            Add a user
+          </CommandLink>
+        )}
         {createHref && (
           <CommandLink href={createHref} icon={<Plus />}>
             Add a mailbox

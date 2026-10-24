@@ -35,6 +35,16 @@ export const ROLE_LABELS: Readonly<Record<`platform:${PlatformRole}` | `account:
   "account:auditor": "Read-only (Auditor)",
 };
 
+/** One line per account role, for role pickers ("Add a user", invites). The grants below are what counts. */
+export const ACCOUNT_ROLE_SUMMARIES: Readonly<Record<AccountRole, string>> = {
+  owner: "Everything in the account, including admins, billing and deleting it",
+  domain_admin: "Adds and verifies domains; manages domain mail settings",
+  user_admin: "Adds users and mailboxes, sets their passwords, invites and removes Members",
+  billing_admin: "Plans, payments and invoices",
+  member: "Uses their own mailbox; no account settings",
+  auditor: "Reads settings and the audit log; changes nothing",
+};
+
 /** Account states that are not roles but change what a person can do. */
 export const USER_STATES = ["anonymous", "invited", "free", "paid", "suspended"] as const;
 export type UserState = (typeof USER_STATES)[number];

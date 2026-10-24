@@ -5,6 +5,7 @@ import Link from "next/link";
 import { can } from "@anhourmail/core";
 import { listMailboxAppPasswords } from "@anhourmail/core/app-passwords";
 import { getMailbox, listMailboxes, mailboxOptions, mailboxStoragePool } from "@anhourmail/core/mailboxes";
+import { grantableRoles } from "@anhourmail/core/people";
 import { MAILBOX_DELETE_GRACE_DAYS, MAX_MAILBOXES } from "@anhourmail/shared/plans";
 import { storageCheckedAgo } from "@anhourmail/shared/storage";
 import { PageHeader } from "@anhourmail/ui/page-header";
@@ -26,8 +27,9 @@ export const metadata: Metadata = { title: "Mailboxes" };
 const dateFmt = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium" });
 
 /**
- * Mailboxes (console page template). The details panel (`?mailbox=<id>`, optional `&tab=`) and the "Add a mailbox"
- * panel (`?new=1`) live in the URL so they can be linked, reloaded and closed with Back. The old
+ * Mailboxes (console page template). "Add a user" is its own page (`/mailboxes/new`). The details panel
+ * (`?mailbox=<id>`, optional `&tab=`) and the "Add a mailbox" panel for shared addresses (`?new=1`) live in the URL
+ * so they can be linked, reloaded and closed with Back. The old
  * `/mailboxes/<id>` address redirects here.
  */
 export default async function MailboxesPage({
@@ -73,7 +75,7 @@ export default async function MailboxesPage({
     <>
       <PageHeader
         title="Mailboxes"
-        description="Each mailbox is an address with its share of the account's storage. Aliases point more addresses at it."
+        description="Each mailbox is an address with its share of the account's storage. Users you add here get their own mailbox and console sign-in, and appear in People and roles."
         breadcrumbs={crumbs}
       />
       <StoragePoolSummary pool={pool} />
@@ -132,6 +134,7 @@ export default async function MailboxesPage({
         canManage={canManage}
         openId={open?.id ?? null}
         createHref={canAdd ? `${path}?new=1` : null}
+        addUserHref={canAdd && grantableRoles(actor, accountId).length > 0 ? `${path}/new` : null}
         docsHref={`${env().SITE_URL.replace(/\/$/, "")}/docs/mailboxes`}
         graceDays={MAILBOX_DELETE_GRACE_DAYS}
       />
@@ -180,7 +183,8 @@ export default async function MailboxesPage({
             <div className="flex flex-col gap-1.5">
               <h2 className="am-h2">Add a mailbox</h2>
               <p className="am-small">
-                An address on one of your domains
+                A shared address like support@ or info@, or one more address for someone already here, on one of your
+                domains
                 {creating.platform.allowed ? (
                   <>
                     {" "}

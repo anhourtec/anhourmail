@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ACCOUNT_GRANTS,
+  ACCOUNT_ROLE_SUMMARIES,
   ACCOUNT_ROLES,
   ACT_AS_ROLES,
   ALL_PERMISSIONS,
@@ -20,6 +21,7 @@ describe("permission matrix invariants", () => {
   it("every role has a label", () => {
     for (const r of PLATFORM_ROLES) expect(ROLE_LABELS[`platform:${r}`]).toBeTruthy();
     for (const r of ACCOUNT_ROLES) expect(ROLE_LABELS[`account:${r}`]).toBeTruthy();
+    for (const r of ACCOUNT_ROLES) expect(ACCOUNT_ROLE_SUMMARIES[r]).toMatch(/^[A-Z]/);
   });
 
   it("grants only use permissions of the right scope", () => {
