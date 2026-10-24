@@ -126,16 +126,26 @@ export function draftProblem(d: DraftInput): ComposeProblem | null {
   return null;
 }
 
+/**
+ * The display name for the From header ("Name <addr>"): the identity's name (Stalwart seeds it from the account's
+ * description, which is the mailbox's display name), or none when it is blank or just repeats the address.
+ */
+export function senderName(identity: Identity): string | null {
+  const name = identity.name.replace(/[\r\n"<>]/g, " ").trim();
+  return name === "" || name.toLowerCase() === identity.email.toLowerCase() ? null : name;
+}
+
 /** The JMAP Email for a draft, in Drafts, from one of the person's own identities. */
 export function draftEmail(d: DraftInput, identity: Identity, draftsId: string): Record<string, unknown> {
   const addr = (list: DraftInput["to"]) => list.map((a) => ({ name: a.name ?? null, email: a.email.toLowerCase() }));
   return {
     mailboxIds: { [draftsId]: true },
     keywords: { $draft: true, $seen: true, [COMPOSED_KEYWORD]: true },
-    from: [{ name: identity.name === identity.email ? null : identity.name, email: identity.email }],
-    to: addr(d.to),
-    cc: addr(d.cc),
-    bcc: addr(d.bcc),
+    from: [{ name: senderName(identity), email: identity.email }],
+    // An empty list would still be written as an empty header (`Cc:`), so empty lists are left out entirely.
+    ...(d.to.length ? { to: addr(d.to) } : {}),
+    ...(d.cc.length ? { cc: addr(d.cc) } : {}),
+    ...(d.bcc.length ? { bcc: addr(d.bcc) } : {}),
     subject: d.subject,
     ...(d.inReplyTo?.length ? { inReplyTo: d.inReplyTo } : {}),
     ...(d.references?.length ? { references: d.references } : {}),

@@ -17,6 +17,7 @@ import {
   draftProblem,
   MAX_RECIPIENTS,
   sendCheck,
+  senderName,
   type StoredDraft,
   UNDO_SECONDS,
   uploadType,
@@ -107,6 +108,33 @@ describe("draft validation", () => {
     expect(draftEmail(DraftInput.parse(base), { id: "i", name: "a@x.test", email: "a@x.test" }, "d").from).toEqual([
       { name: null, email: "a@x.test" },
     ]);
+  });
+
+  it("never writes an empty Cc, Bcc or To header", () => {
+    const e = draftEmail(DraftInput.parse({ ...base, to: [{ email: "s@x.test" }] }), identity, "drafts");
+    expect(e).not.toHaveProperty("cc");
+    expect(e).not.toHaveProperty("bcc");
+    expect(e).not.toHaveProperty("replyTo");
+    expect(draftEmail(DraftInput.parse(base), identity, "drafts")).not.toHaveProperty("to");
+    const all = draftEmail(
+      DraftInput.parse({
+        ...base,
+        to: [{ email: "s@x.test" }],
+        cc: [{ email: "c@x.test" }],
+        bcc: [{ email: "b@x.test" }],
+      }),
+      identity,
+      "drafts",
+    );
+    expect(all).toMatchObject({ cc: [{ email: "c@x.test" }], bcc: [{ email: "b@x.test" }] });
+  });
+
+  it("puts the sender's display name in From, and none when it is blank", () => {
+    expect(senderName({ id: "i", name: "  Alex Doe ", email: "a@x.test" })).toBe("Alex Doe");
+    expect(senderName({ id: "i", name: "", email: "a@x.test" })).toBeNull();
+    expect(senderName({ id: "i", name: "   ", email: "a@x.test" })).toBeNull();
+    expect(senderName({ id: "i", name: "A@X.test", email: "a@x.test" })).toBeNull();
+    expect(senderName({ id: "i", name: 'Alex "<x>"\r\nBcc: y', email: "a@x.test" })).not.toMatch(/[\r\n"<>]/);
   });
 
   it("only sends a real draft, from the chosen identity, to 1..max recipients, within the size cap", () => {
