@@ -40,6 +40,9 @@ export function systemResolver(opts: { timeoutMs?: number; servers?: string[] } 
   };
 }
 
+/** A placeholder public key: dev `.test` domains never send DKIM-checked mail anywhere. */
+const DEV_DKIM_KEY = "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAdev";
+
 /**
  * Development only: `.test` names (a reserved TLD that can never resolve on the internet) answer as if the
  * customer published every record correctly — except names starting with `unverified-`, which have none, so both
@@ -66,6 +69,13 @@ export function devResolver(
           if (r.type !== type || (r.name === "@" ? domain : `${r.name}.${domain}`) !== name) continue;
           answers.add(r.type === "MX" ? `${String(r.priority ?? 10)} ${r.value}` : r.value);
         }
+      }
+      // The key behind each DKIM CNAME (a real resolver follows the CNAME for the TXT lookup).
+      if (type === "TXT" && answers.size === 0) {
+        const dkim = customerDomainRecords(domain, "", platform).some(
+          (r) => r.purpose === "dkim" && `${r.name}.${domain}` === name,
+        );
+        if (dkim) answers.add(DEV_DKIM_KEY);
       }
       return [...answers];
     },

@@ -17,7 +17,29 @@ export type DnsResolver = {
 /** `ok`: as expected. `missing`: nothing there. `wrong`: something else is there. `error`: lookup failed. */
 export type RecordState = "ok" | "missing" | "wrong" | "error";
 
-export type CheckedRecord = DnsRecordTemplate & { fqdn: string; state: RecordState; found: string[] };
+/** `problem`: a plain-language reason shown next to the record when it doesn't pass (DKIM only, for now). */
+export type CheckedRecord = DnsRecordTemplate & { fqdn: string; state: RecordState; found: string[]; problem?: string };
+
+export const DKIM_NOT_FOUND = "DKIM not found in DNS — mail will fail DKIM.";
+export const DKIM_KEY_NOT_PUBLISHED =
+  "DKIM not found in DNS — mail will fail DKIM. Your record is right; the key it points to isn't published yet.";
+
+/** A published DKIM public key: a `v=DKIM1` TXT (the tag is optional) with a non-empty `p=` (empty means revoked). */
+export function isDkimKey(answer: string): boolean {
+  const tags = new Map(
+    answer
+      .split(";")
+      .map((t) => t.trim())
+      .filter((t) => t.includes("="))
+      .map((t) => {
+        const i = t.indexOf("=");
+        return [t.slice(0, i).trim().toLowerCase(), t.slice(i + 1).replace(/\s+/g, "")] as const;
+      }),
+  );
+  const v = tags.get("v");
+  if (v !== undefined && v.toUpperCase() !== "DKIM1") return false;
+  return (tags.get("p") ?? "") !== "";
+}
 
 const lower = (s: string) => s.trim().toLowerCase();
 const host = (s: string) => lower(s).replace(/\.?$/, ".");
@@ -63,7 +85,13 @@ export async function checkRecords(
       try {
         const found = await dns.lookup(r.type, fqdn);
         const state: RecordState = found.length === 0 ? "missing" : found.some((a) => matches(r, a)) ? "ok" : "wrong";
-        return { ...r, fqdn, state, found: found.slice(0, 5) };
+        if (r.purpose !== "dkim") return { ...r, fqdn, state, found: found.slice(0, 5) };
+        if (state !== "ok") return { ...r, fqdn, state, found: found.slice(0, 5), problem: DKIM_NOT_FOUND };
+        // The CNAME is right; DKIM only passes if the key behind it resolves (a TXT lookup follows the CNAME).
+        const keys = await dns.lookup("TXT", fqdn);
+        return keys.some(isDkimKey)
+          ? { ...r, fqdn, state: "ok", found: found.slice(0, 5) }
+          : { ...r, fqdn, state: "missing", found: found.slice(0, 5), problem: DKIM_KEY_NOT_PUBLISHED };
       } catch {
         return { ...r, fqdn, state: "error", found: [] };
       }

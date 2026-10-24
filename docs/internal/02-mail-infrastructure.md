@@ -41,6 +41,11 @@ The template is **code**: `customerDomainRecords(domain, verifyToken, platform)`
 - **Required:** ownership TXT (`_anhourmail`), MX → `mx1`, SPF include, two DKIM CNAMEs.
 - **Recommended:** DMARC, autoconfig and autodiscover CNAMEs, client SRV records.
 
+DKIM passes only when the CNAME matches **and** a TXT lookup of the same name (which follows the CNAME) returns a
+DKIM key with a non-empty `p=` (`checkRecords` in `packages/core/src/domains/dns.ts`); otherwise the record shows
+"DKIM not found in DNS — mail will fail DKIM" and the domain stays pending. The keys behind
+`<selector>.<domain>.<dkimZone>` must therefore be published for every listed selector before a domain activates.
+
 We compare against Stalwart's own expectation (`x:Domain/get dnsZoneFile`) so the two never drift.
 
 ### DKIM

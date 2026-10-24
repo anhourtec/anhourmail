@@ -42,6 +42,7 @@ function RecordRow({ r }: { r: CheckedRecord }) {
           label={`${r.type} value`}
         />
         <span className="am-small">{r.why}</span>
+        {r.problem !== undefined && <span className="am-small text-destructive">{r.problem}</span>}
         {r.state === "wrong" && r.found.length > 0 && (
           <span className="am-micro break-all">Found instead: {r.found.join(", ")}</span>
         )}

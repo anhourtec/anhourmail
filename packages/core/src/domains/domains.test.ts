@@ -21,7 +21,16 @@ import {
   UnauthenticatedError,
   ValidationError,
 } from "../errors";
-import { checkRecords, type DnsResolver, type LookupType, matches } from "./dns";
+import {
+  checkRecords,
+  DKIM_KEY_NOT_PUBLISHED,
+  DKIM_NOT_FOUND,
+  type DnsResolver,
+  isDkimKey,
+  type LookupType,
+  matches,
+  requiredPass,
+} from "./dns";
 import { normaliseDomain } from "./entity";
 import {
   AUTO_RECHECK_MS,
@@ -59,6 +68,8 @@ function publishAll(z: ReturnType<typeof zone>, domain: string, token: string) {
   for (const r of customerDomainRecords(domain, token, TEST_PLATFORM).filter((x) => x.required)) {
     const fqdn = r.name === "@" ? domain : `${r.name}.${domain}`;
     z.publish(r.type, fqdn, r.type === "MX" ? `${String(r.priority)} ${r.value}` : r.value);
+    // The key behind each DKIM CNAME (a real resolver follows the CNAME for the TXT lookup).
+    if (r.purpose === "dkim") z.publish("TXT", fqdn, "v=DKIM1; k=rsa; p=MIIBIjANBgkq");
   }
 }
 
@@ -129,6 +140,50 @@ describe("record matching", () => {
     expect(graded.find((r) => r.purpose === "ownership")?.state).toBe("missing");
     z.fail = true;
     expect((await checkRecords(z, "x.org", "t", TEST_PLATFORM)).every((r) => r.state === "error")).toBe(true);
+  });
+});
+
+describe("DKIM verification", () => {
+  it("recognises a published key and refuses revoked or foreign TXT records", () => {
+    expect(isDkimKey("v=DKIM1; k=rsa; p=MIIBIjANBgkq")).toBe(true);
+    expect(isDkimKey("k=ed25519; p=11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=")).toBe(true);
+    expect(isDkimKey("v=DKIM1; k=rsa; p=")).toBe(false);
+    expect(isDkimKey("v=spf1 -all")).toBe(false);
+    expect(isDkimKey("v=DKIM2; p=abc")).toBe(false);
+  });
+
+  it("passes DKIM only when every listed selector's key resolves", async () => {
+    const z = zone();
+    publishAll(z, "x.org", "t");
+    const dkim = customerDomainRecords("x.org", "t", TEST_PLATFORM).filter((r) => r.purpose === "dkim");
+    expect(dkim.length).toBeGreaterThanOrEqual(2);
+    expect(requiredPass(await checkRecords(z, "x.org", "t", TEST_PLATFORM))).toBe(true);
+
+    // The CNAME is right but nothing is published behind the second selector.
+    z.publish("TXT", `${dkim[1]!.name}.x.org`);
+    const graded = await checkRecords(z, "x.org", "t", TEST_PLATFORM);
+    const second = graded.find((r) => r.name === dkim[1]!.name);
+    expect(second).toMatchObject({ state: "missing", problem: DKIM_KEY_NOT_PUBLISHED });
+    expect(graded.find((r) => r.name === dkim[0]!.name)).toMatchObject({ state: "ok" });
+    expect(graded.find((r) => r.name === dkim[0]!.name)).not.toHaveProperty("problem");
+    expect(requiredPass(graded)).toBe(false);
+
+    // No CNAME at all.
+    z.publish("CNAME", `${dkim[0]!.name}.x.org`);
+    expect((await checkRecords(z, "x.org", "t", TEST_PLATFORM)).find((r) => r.name === dkim[0]!.name)).toMatchObject({
+      state: "missing",
+      problem: DKIM_NOT_FOUND,
+    });
+  });
+
+  it("does not verify a domain whose DKIM key is missing", async () => {
+    const d = setup();
+    const z = zone();
+    const added = await addDomain(d, domainAdmin, ACCOUNT_A, { name: "nokey.example.ca" }, req);
+    publishAll(z, added.name, d.uow.state.domains.find((x) => x.id === added.id)!.verifyToken);
+    for (const r of added.records.filter((x) => x.purpose === "dkim")) z.publish("TXT", `${r.name}.${added.name}`);
+    const checked = await checkDomain(d, z, domainAdmin, ACCOUNT_A, added.id, req);
+    expect(checked.domain.status).not.toBe("active");
   });
 });
 
