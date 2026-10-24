@@ -78,6 +78,17 @@ export class EnrolmentRequiredError extends DomainError {
 }
 
 /**
+ * The person's console password was set by an admin ("Add a user", "Require password change at first sign-in") and
+ * they haven't chosen their own yet. Until they do, only `self` permissions work (HTTP 403 with its own code, so the
+ * console can send them to the change-password page).
+ */
+export class PasswordChangeRequiredError extends DomainError {
+  constructor() {
+    super("Choose a new password to continue.", "password_change_required");
+  }
+}
+
+/**
  * The action needs the person to have confirmed it's them in the last few minutes (password, a current code or a
  * fresh sign-in). HTTP 403 with its own code, so the console can ask and retry.
  */

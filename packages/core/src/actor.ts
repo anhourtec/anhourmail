@@ -13,6 +13,7 @@ import {
   AccountSuspendedError,
   EnrolmentRequiredError,
   ForbiddenError,
+  PasswordChangeRequiredError,
   NotFoundError,
   UnauthenticatedError,
 } from "./errors";
@@ -36,6 +37,11 @@ export type UserActor = {
    * `self` permissions pass: everything else answers `EnrolmentRequiredError` until they enrol.
    */
   mustEnrol?: "two_factor" | "passkey";
+  /**
+   * Their console password was set by an admin who asked for a change at first sign-in ("Add a user"). While set,
+   * only `self` permissions pass: everything else answers `PasswordChangeRequiredError` until they choose their own.
+   */
+  mustChangePassword?: true;
   /** How the current console session was signed in (shared/security.ts), when known. */
   signInMethod?: SignInMethod;
   /**
@@ -78,10 +84,15 @@ const accountSuspended = (actor: Actor, permission: Permission, accountId?: stri
   PERMISSIONS[permission].scope === "account" &&
   (actor.suspendedAccountIds?.includes(accountId) ?? false);
 
+/** True while the person must choose their own password first (everything but `self`). */
+const passwordGated = (actor: Actor, permission: Permission): boolean =>
+  actor.kind === "user" && actor.mustChangePassword === true && PERMISSIONS[permission].scope !== "self";
+
 export function can(actor: Actor, permission: Permission, accountId?: string): boolean {
   return (
     granted(actor, permission, accountId) &&
     !gated(actor, permission) &&
+    !passwordGated(actor, permission) &&
     !accountSuspended(actor, permission, accountId)
   );
 }
@@ -95,6 +106,7 @@ export function can(actor: Actor, permission: Permission, accountId?: string): b
 export function authorize(actor: Actor, permission: Permission, accountId?: string): void {
   if (granted(actor, permission, accountId)) {
     if (accountSuspended(actor, permission, accountId)) throw new AccountSuspendedError();
+    if (passwordGated(actor, permission)) throw new PasswordChangeRequiredError();
     if (gated(actor, permission)) throw new EnrolmentRequiredError(actor.mustEnrol);
     return;
   }

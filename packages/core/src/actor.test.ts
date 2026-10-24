@@ -3,7 +3,13 @@ import { describe, expect, it } from "vitest";
 
 import { ACCOUNT_A, ACCOUNT_B, anonymous, user } from "./__tests__/helpers";
 import { authorize, can } from "./actor";
-import { EnrolmentRequiredError, ForbiddenError, NotFoundError, UnauthenticatedError } from "./errors";
+import {
+  EnrolmentRequiredError,
+  ForbiddenError,
+  NotFoundError,
+  PasswordChangeRequiredError,
+  UnauthenticatedError,
+} from "./errors";
 
 describe("can / authorize", () => {
   it("anonymous gets 401 for everything", () => {
@@ -100,5 +106,21 @@ describe("can / authorize", () => {
       authorize(member, "alias.manage.own", ACCOUNT_A);
     }).toThrow(/requires a passkey/);
     expect(new EnrolmentRequiredError("two_factor").code).toBe("enrolment_required");
+  });
+
+  it("a required password change blocks everything but the person's own pages, and still hides other accounts", () => {
+    const fresh = { ...user({ account: [[ACCOUNT_A, "member"]] }), mustChangePassword: true as const };
+    expect(can(fresh, "self.security.manage")).toBe(true);
+    expect(can(fresh, "alias.manage.own", ACCOUNT_A)).toBe(false);
+    expect(() => {
+      authorize(fresh, "alias.manage.own", ACCOUNT_A);
+    }).toThrow(PasswordChangeRequiredError);
+    expect(() => {
+      authorize(fresh, "alias.manage.own", ACCOUNT_B);
+    }).toThrow(NotFoundError);
+    expect(() => {
+      authorize(fresh, "mailbox.manage", ACCOUNT_A);
+    }).toThrow(ForbiddenError);
+    expect(new PasswordChangeRequiredError().code).toBe("password_change_required");
   });
 });

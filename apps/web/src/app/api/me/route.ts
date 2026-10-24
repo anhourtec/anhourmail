@@ -17,6 +17,8 @@ export const GET = route(async ({ req }) => {
     memberships: actor.memberships,
     // A sign-in factor one of their accounts requires and they still have to set up (null when none).
     mustEnrol: actor.mustEnrol ?? null,
+    // Their password was set by an admin and they must choose their own before anything else.
+    mustChangePassword: actor.mustChangePassword === true,
     permissions: ALL_PERMISSIONS.filter((p) => can(actor, p)),
   });
 });

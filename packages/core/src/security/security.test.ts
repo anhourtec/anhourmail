@@ -447,6 +447,18 @@ describe("afterPasswordChange", () => {
     expect(s.trustedDevices.filter((t) => t.userId === "sam")).toEqual([]);
     expect(s.audit.at(-1)).toMatchObject({ action: "auth.password_changed", actor: { type: "user", userId: "sam" } });
   });
+
+  it("lifts the first-sign-in password change once the person has chosen their own", async () => {
+    const { d, s } = world();
+    s.mustChangePassword.push("sam", "lee");
+    await afterPasswordChange(
+      d,
+      { userId: "sam", email: "sam@example.test", via: "change", keepSessionId: "s-here" },
+      req,
+    );
+    expect(s.mustChangePassword).toEqual(["lee"]);
+    expect(s.audit.at(-1)?.meta).toMatchObject({ firstPasswordReplaced: true });
+  });
 });
 
 describe("sign-in method and requirements", () => {

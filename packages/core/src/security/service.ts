@@ -466,6 +466,9 @@ export async function afterPasswordChange(
       // No session id is ever empty, so a reset signs out every session.
       const sessions = await r.security.revokeOtherSessions(input.userId, input.keepSessionId ?? "");
       const trustedDevices = await r.security.forgetTrustedDevices(input.userId);
+      // A password chosen by an admin ("Add a user") is replaced now: the first-sign-in gate lifts.
+      const wasRequired = await r.people.passwordChangeRequired(input.userId);
+      if (wasRequired) await r.people.setPasswordChangeRequired(input.userId, false);
       let passkeysRemoved = 0;
       let passkeysRemovalRefused = false;
       if (input.removePasskeys === true) {
@@ -482,6 +485,7 @@ export async function afterPasswordChange(
           trustedDevices,
           passkeysRemoved,
           ...(passkeysRemovalRefused ? { passkeysRemovalRefused: true } : {}),
+          ...(wasRequired ? { firstPasswordReplaced: true } : {}),
         },
       };
     },

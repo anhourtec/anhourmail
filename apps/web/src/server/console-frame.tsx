@@ -14,13 +14,18 @@ import { container } from "./container";
 /** Where someone goes when one of their accounts requires a sign-in factor they haven't set up. */
 export const ENROL_PATH = "/security?setup=required";
 
+/** Where someone goes whose password an admin set with "Require password change at first sign-in". */
+export const CHANGE_PASSWORD_PATH = "/change-password";
+
 /**
- * The signed-in person, or a redirect to sign-in. For console pages. A person who still has to set up a factor their
- * account requires is sent to their Security page first (`enrolling`: the pages that let them do it).
+ * The signed-in person, or a redirect to sign-in. For console pages. A person whose password an admin set and who must
+ * choose their own goes to the change-password page first (`changingPassword`: that page); a person who still has to
+ * set up a factor their account requires is sent to their Security page (`enrolling`: the pages that let them do it).
  */
-export async function requireUser(opts: { enrolling?: boolean } = {}): Promise<UserActor> {
+export async function requireUser(opts: { enrolling?: boolean; changingPassword?: boolean } = {}): Promise<UserActor> {
   const actor = await getActor(await headers());
   if (actor.kind !== "user") redirect("/sign-in");
+  if (actor.mustChangePassword && !opts.changingPassword) redirect(CHANGE_PASSWORD_PATH);
   if (actor.mustEnrol && !opts.enrolling) redirect(ENROL_PATH);
   return actor;
 }
