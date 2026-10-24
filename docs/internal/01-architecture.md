@@ -96,6 +96,15 @@ Two identities, deliberately separate:
 
 We **never store mailbox passwords** (rule 23). Stalwart hashes them.
 
+**"Add a user"** (`packages/core/src/mailboxes/add-user.ts`) creates both identities at once: a mailbox and a console
+login whose sign-in email is the new address (verified, no invite), with a membership and the owner link, in one audited
+transaction. The initial password (generated server-side by default, shown once) is stored only as two argon2id hashes:
+the console's credential and the mailbox's pending hash for the worker. With "Require password change at first
+sign-in", `user_profile.must_change_password` gates the console (only `self` permissions, every page → `/change-password`;
+cleared by `afterPasswordChange`) and `mailbox.must_change_password` gates the webmail page (a change-password step
+before the inbox; cleared by `changeOwnMailboxPassword`). The two passwords then diverge as usual. The mailbox's
+display name is sent to Stalwart as the account `description`, which seeds the sending identity's name.
+
 Every new console or mailbox password passes a breached-password check first (core port `BreachedPasswords`, Pwned
 Passwords range adapter with k-anonymity, better-auth `hooks.before` plugin for console endpoints; fail open; the web
 container is the only caller and the browser never is — `07-security.md` "Breached-password check").

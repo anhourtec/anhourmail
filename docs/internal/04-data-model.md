@@ -77,6 +77,13 @@ customer), `suspension_note` (staff-only, never shown to the customer or emailed
 (mailbox_id, kind `account` | `person`, created_at; pk both) marks each mailbox a suspension suspended, so lifting
 resumes only those, and only once no hold is left.
 
+**Add a user** (migration 0018; `packages/core/src/mailboxes/add-user.ts`): `mailbox.display_name` (sender name, sent
+to Stalwart as the account description) and `mailbox.must_change_password` (webmail first-sign-in step);
+`user_profile.must_change_password` (console gate) and the optional profile details `job_title`, `department`,
+`office`, `office_phone`, `mobile_phone`, `street_address`, `city`, `region`, `postal_code`, `country` (ISO 3166-1
+alpha-2 from `packages/shared/src/profile.ts`). Profile details are personal data: never logged, audited only by field
+name, and removed with the person (`user_profile` cascades from `auth_user`).
+
 Member profile fields used by signature placeholders (`display_name`, `job_title`, `phone`) live on
 `account_membership` (per account, editable by the member and by User Admins).
 

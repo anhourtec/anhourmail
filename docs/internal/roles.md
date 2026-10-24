@@ -113,7 +113,11 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
    (audited as `denied`) for those mailboxes, except their own; the console hides the actions for them. This is a
    per-mailbox check in the service (`packages/core/src/mailboxes/service.ts`), not a separate permission, so the
    matrix and the RBAC harness (random ids → 404) are unchanged; unit tests cover it.
-9. **People and invites** (`packages/core/src/people/service.ts`, checked in the service, unit-tested):
+9. **People and invites** (`packages/core/src/people/service.ts`, checked in the service, unit-tested). "Add a user"
+   (`mailboxes/add-user.ts`) needs `mailbox.manage` and grants only `grantableRoles` (Owner: any; User Admin: Member;
+   anything else **403**, audited as `denied`); no new permission, so the matrix and harness keep their shape (the
+   route is in `routes.ts` with guard `mailbox.manage`). A user added this way with the Member role sees only their own
+   pages in the console (Aliases, App passwords, Security): no domains, people, billing or audit.
    - `member.read` (Owner, Domain Admin, User Admin, Auditor) sees People and roles; `member.manage` (Owner, User
      Admin) invites people **as Member**, resends and revokes Member invites and removes Members;
    - every other role is Owner-only (`account.admins.manage` ★): inviting with it, resending or revoking such an
