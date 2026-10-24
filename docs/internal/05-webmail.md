@@ -64,7 +64,8 @@ frame-ancestors 'none'` unless the route sets its own sandboxing one). `next.con
 - **The proxy never creates or sends mail.** Drafts go through `PUT /api/webmail/drafts`: the BFF validates the input
   (`compose.ts`: addresses, header-safe subject and names, Message-IDs, ≤ recipients per message, attachments per
   file and per message from `WEBMAIL_ATTACHMENTS`), checks the From identity is one of the mailbox's own
-  (`Identity/get`, cached a minute), and builds the Email itself (in Drafts, `$draft`, plain text). Replacing a
+  (`Identity/get`, cached a minute), and builds the Email itself (in Drafts, `$draft`, plain text or text + sanitised
+  HTML, see "Rich text and HTML" below). Replacing a
   draft checks the old one is a draft in Drafts.
 - **Send** (`POST /api/webmail/send`, `sending` tier fail-closed per webmail session and again per mailbox) re-reads
   the draft and checks: in Drafts with `$draft`, exactly one From equal to the chosen identity, 1..max recipients,
@@ -85,7 +86,19 @@ frame-ancestors 'none'` unless the route sets its own sandboxing one). `next.con
 - **Undo** (`POST /api/webmail/send/undo`) cancels the held submission and moves the message back to Drafts; once it
   is released Stalwart refuses the cancel and the person sees "It has already been sent".
 - **Uploads** (`POST /api/webmail/upload`) are capped while reading the body; the content type is reduced to a plain
-  MIME token pair. Plain text only in this slice: no HTML is ever sent from the webmail yet.
+  MIME token pair.
+- **Rich text and HTML (2026-10-24).** The composer starts in rich text (a toggle switches to plain text). The
+  editor is a contentEditable area with a small toolbar (bold, italic, underline, link with `linkUrl` validation,
+  lists, quote, clear formatting). One allow-list sanitiser, `server/webmail/outgoing-html.ts`
+  (`sanitizeOutgoingHtml`, isomorphic, sanitize-html engine like the reader's, lazy-loaded in the browser), runs on
+  every paste and drop, on "Insert HTML" (pasted source or an `.html` file ≤ `WEBMAIL_HTML.maxMb`, previewed with the
+  reader's frame document in an iframe with `sandbox=""`, listing what was removed and warning about remote images)
+  and on the whole body before each save; `PUT /api/webmail/drafts` sanitises `html` again (`draftBody` in
+  `compose.ts`) and stores `textBody` + `htmlBody` (multipart/alternative), generating the text part from the HTML
+  when the person wrote none. Rules and their reasons: 07-security.md "Outgoing HTML". Replies and forwards quote the
+  reading view's sanitised HTML (no remote images; ≤ 256 KB, else the text). Drafts reopen in the format they were
+  written in. Known limits: a reopened rich draft loses its https images (the reading view blocks them); Quote has no
+  toggle-off (undo works).
 - **Proxy allow-list changes:** `Email/set` may now update `keywords/*` and `mailboxIds` (moves) and `destroy`, and
   the service checks every destroyed message is only in Trash or Junk before forwarding. No `create`, no
   `EmailSubmission/*`, no `Mailbox/set`, no other properties (tests in `webmail.test.ts` cover each refusal).
@@ -178,7 +191,7 @@ keywords (`settings/sections.ts`), so "vacation", "spam" or "24-hour" still find
 - **Not offered (no real behaviour yet), recorded rather than shown as placeholders:** loading remote images
   ("always ask" / "allow for contacts") needs the image proxy — the Reading panel states that remote images are
   blocked; read receipts — Stalwart v0.16.27 doesn't advertise JMAP MDN, and the webmail never sends them (stated);
-  "basic formatted" messages — the composer sends plain text only (stated); "empty Deleted after N days" — JMAP
+  "basic formatted" messages — superseded: the composer writes rich text by default (2026-10-24); "empty Deleted after N days" — JMAP
   doesn't expose when a message was moved to Trash, so a correct per-person policy needs the worker-side
   `folder_policy` (phase 6); the server-wide 30-day clean-up applies meanwhile. "Empty Trash when I sign out" is
   offered: it is explicit and runs from the browser through the proxy's Trash-only delete.

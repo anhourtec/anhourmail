@@ -154,7 +154,9 @@ Built in Phase 4 slice 1 (2026-10-22; ADR-0018):
    methods, `Email/set` for keyword updates only; ≤ 16 calls; ≤ 256 KB; `accountId` must be the session's), attaches the Bearer token, and
    forwards through a **per-user queue with ≤ 4 in flight**, retrying `limit` errors with jittered backoff. Message
    bodies come from `/api/webmail/messages/:id`, **sanitised on the server** (`server/webmail/sanitize.ts`) and shown in
-   a sandboxed `srcdoc` frame; attachments stream from `/api/webmail/download/:blobId` as `attachment`, `nosniff`.
+   a sandboxed `srcdoc` frame. Mail the webmail sends may carry HTML: the composer and the drafts route both run it
+   through the stricter outgoing allow-list (`server/webmail/outgoing-html.ts`) and send multipart/alternative with a
+   text part. Attachments stream from `/api/webmail/download/:blobId` as `attachment`, `nosniff`.
    **The browser never sees a Stalwart token.** Webmail pages get a nonce-based CSP from `src/proxy.ts` (console pages
    get their own, stricter one there too; `07-security.md` "Standards"), which
    also sends visits to the webmail app page without a session cookie straight to sign-in (presence only; the page

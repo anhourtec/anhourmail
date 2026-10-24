@@ -323,6 +323,34 @@ the emailed reset link and verify-email.
   sign-in `next` query, never in an API response or our logs (`logPath` redacts it). Pages carrying it send no
   referrer. **Production NGINX must not log the `/invite/<token>` path or the `next` query** (`deploy/README.md`).
 
+## Outgoing HTML
+
+Decision 2026-10-24: HTML the webmail sends goes through one allow-list sanitiser, `sanitizeOutgoingHtml` in
+`apps/web/src/server/webmail/outgoing-html.ts`. It is a pure function shared by the composer (paste, drop, Insert
+HTML, every save) and the drafts route, which sanitises again because the client is never trusted. Other people's
+mail apps render what we send, so the list is stricter than the reader's (`sanitize.ts`):
+
+- **Elements:** structural and text formatting, tables, `img`, `a`, `font`, `center` only. Script, `style` (dropped
+  with its content: mail apps strip or rewrite it and it carries `@import` and remote fonts), `template`, form
+  controls, frames, `object`/`embed`/`applet`, SVG, MathML, `noscript` and `summary` go with their content; unknown
+  and custom elements are unwrapped and keep their text. Comments and CDATA are dropped.
+- **Attributes:** an allow-list per element (`href`, `src`, `alt`, `title`, sizes, table layout, colours, `dir`,
+  `lang`, `style`); no `on*`, `class`, `id`, `srcdoc`, `formaction` or `data-*`.
+- **URLs:** links http, https, mailto, tel (control characters and entities decoded first; relative and
+  protocol-relative removed), always `target="_blank" rel="noopener noreferrer"`. Images https, `cid:` or raster
+  `data:` (PNG, JPEG, GIF, WebP) up to `WEBMAIL_HTML.inlineImageKb`; an image without a valid source is removed.
+- **CSS:** escapes and comments decoded first; declarations split outside quotes and parentheses; a property
+  allow-list; values with `<>{}@\`, unbalanced quotes, a `;` outside `url()`, `expression()`, `javascript:`,
+  `vbscript:`, `behavior`, `-moz-binding`, `image-set()` or `element()` are dropped; `url()` only for https and
+  raster data images; `position` only `static`/`relative`. Style attributes over 8 KB are dropped.
+- **Size:** input over `WEBMAIL_HTML.maxMb` is refused (the drafts schema and the composer both check).
+- **In the editor:** sanitised HTML sits in the page's own document while it is edited; the webmail CSP (nonce
+  scripts only, same-origin images) is the backstop, so a sanitiser miss can't run script or fetch remote images
+  there. Remote images are counted and the person is warned they may be trackers; they are sent as written.
+- Tests: `outgoing-html.test.ts` (XSS corpus: script/SVG/MathML, encoded and whitespace `javascript:` variants,
+  `data:text/html`, `srcdoc`, `formaction`, CSS `url(javascript:)` and escapes, mutation-XSS nesting, comments and
+  CDATA, idempotence).
+
 ## Review process
 
 1. Every change: the author runs `/security-review` on what they wrote (rule 5) and the full test suite (rule 37).
