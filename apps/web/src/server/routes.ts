@@ -141,6 +141,17 @@ export const ROUTES: readonly RouteSpec[] = [
     // The harness sends no address: allowed callers get a validation error.
     probeStatus: 400,
   },
+  // "Add a user": a mailbox plus a console login with a role, in one step (packages/core/src/mailboxes/add-user.ts).
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/users",
+    file: "app/api/accounts/[accountId]/users/route.ts",
+    guard: "mailbox.manage",
+    accountParam: "accountId",
+    audits: "account.user_added",
+    // The harness sends no names: allowed callers get a validation error.
+    probeStatus: 400,
+  },
   // Free platform-domain addresses (ADR-0021): is a name available (no name → the rule it breaks, 200).
   {
     method: "GET",
