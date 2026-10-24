@@ -64,7 +64,7 @@ export function Menu({
           ref={panel}
           className={`absolute z-50 ${align === "end" ? "right-0" : "left-0"} ${side === "bottom" ? "top-full mt-1" : "bottom-full mb-1"}`}
         >
-          <PanelSurface className="max-h-[min(24rem,70vh)] min-w-52 overflow-y-auto">
+          <PanelSurface className="max-h-[min(40rem,calc(100dvh-6rem))] min-w-52 overflow-y-auto overscroll-contain">
             <div role="menu" aria-label={label} onKeyDown={menuKeys} className="flex flex-col">
               {items.map((item, i) => {
                 if ("separator" in item) {
