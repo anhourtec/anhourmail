@@ -9,6 +9,8 @@
  *      with TLS, plus greetings on SMTP 587 (STARTTLS) and ManageSieve (4190).
  *   6. Sender identity (ADR-0019): an authenticated submission with a forged header From, two From lines or a
  *      null envelope sender is refused.
+ *   7. A submitted message reaches a local mailbox without any Authentication-Results header, so a sender can't
+ *      plant results our server never produced (07-security.md "Authentication results in the webmail").
  *
  *   npm run stack:verify      (after `npm run stack:up` and `npm run db:seed`)
  */
@@ -174,7 +176,11 @@ await protocolCheck("SMTP 465: TLS AUTH PLAIN", async () => {
   return res.startsWith("235");
 });
 /** SMTP AUTH submission as alice with a given header From; resolves to the DATA reply (ADR-0019). */
-async function submitWithHeaderFrom(headerFrom: string): Promise<string> {
+async function submitWithHeaderFrom(
+  headerFrom: string,
+  opts: { to?: string; subject?: string; extra?: string } = {},
+): Promise<string> {
+  const to = opts.to ?? `sender-check-${randomUUID().slice(0, 8)}@example.com`;
   const w = await wire(port("STALWART_SUBMISSIONS_PORT", 465), true);
   await w.read(/^220 /m);
   w.send("EHLO verify.local");
@@ -183,11 +189,12 @@ async function submitWithHeaderFrom(headerFrom: string): Promise<string> {
   await w.read(/^\d{3} /m);
   w.send(`MAIL FROM:<${user}>`);
   await w.read(/^\d{3} /m);
-  w.send(`RCPT TO:<sender-check-${randomUUID().slice(0, 8)}@example.com>`);
+  w.send(`RCPT TO:<${to}>`);
   await w.read(/^\d{3} /m);
   w.send("DATA");
   await w.read(/^354 /m);
-  w.send(`From: ${headerFrom}\r\nTo: sender-check@example.com\r\nSubject: sender identity check\r\n\r\nx\r\n.`);
+  const subject = opts.subject ?? "sender identity check";
+  w.send(`From: ${headerFrom}\r\nTo: ${to}\r\nSubject: ${subject}\r\n${opts.extra ?? ""}\r\nx\r\n.`);
   const res = await w.read(/^\d{3} /m);
   w.send("QUIT");
   w.close();
@@ -214,6 +221,20 @@ await protocolCheck("Sender identity: authenticated null sender (MAIL FROM:<>) r
   w.send("QUIT");
   w.close();
   return /^5\d\d /m.test(res);
+});
+await protocolCheck("Submission: Authentication-Results headers stripped before local delivery", async () => {
+  const subject = `stack-verify results ${randomUUID().slice(0, 8)}`;
+  const forged = `Authentication-Results: mail.${DEV_DOMAIN}; dkim=pass header.d=bank.example; dmarc=pass\r\n`;
+  const reply = await submitWithHeaderFrom(user, { to: `bob@${DEV_DOMAIN}`, subject, extra: forged });
+  if (!reply.startsWith("250") || !inbox) return false;
+  const delivered = await waitFor(async () => (await bob.listEmails(inbox.id, 20)).find((e) => e.subject === subject));
+  if (!delivered) return false;
+  const res = await bob.request([
+    ["Email/get", { accountId: await bob.accountId(), ids: [delivered.id], properties: ["headers"] }, "g"],
+  ]);
+  const list = (res.get("g")?.list ?? []) as { headers?: { name: string }[] }[];
+  const names = (list[0]?.headers ?? []).map((h) => h.name.toLowerCase());
+  return names.includes("from") && !names.includes("authentication-results");
 });
 await protocolCheck("IMAP 143: greeting + STARTTLS offered", async () => {
   const w = await wire(port("STALWART_IMAP_PORT", 143), false);
