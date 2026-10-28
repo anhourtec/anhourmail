@@ -109,7 +109,10 @@ test("a signature set in settings is added to new messages", async ({ page }) =>
 
   await page.keyboard.press("c");
   const composer = page.getByRole("dialog", { name: "New message" });
-  await expect(composer.getByRole("textbox", { name: "Message" })).toHaveValue(`\n\n-- \n${signature}`);
+  // New messages start in rich text: the signature block sits under an empty line, after the "-- " separator.
+  const message = composer.getByRole("textbox", { name: "Message", exact: true });
+  await expect(message).toHaveAttribute("contenteditable", "true");
+  await expect(message.locator("[data-am-signature]")).toHaveText(`-- ${signature}`);
   await composer.getByRole("button", { name: "Discard draft" }).click();
 
   // Clear it again.
