@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { type Actor, can } from "../actor";
 import { maskEmail } from "../audit/record";
-import { ConflictError, ForbiddenError, NotFoundError, StepUpRequiredError } from "../errors";
+import {
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  PasswordChangePendingError,
+  StepUpRequiredError,
+} from "../errors";
 import { mutation, type MutationOutcome } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 import { BreachedPasswordError, passwordBreached } from "../security/breached-passwords";
@@ -108,6 +114,7 @@ export async function resetMailboxPassword(
       ) {
         return refuse("step_up_required");
       }
+      await repos.accounts.lock(accountId); // serialised with the mailbox's own change (`changeOwnMailboxPassword`)
       const job = await queuePassword(deps, repos, hasher, m, password);
       const ownerEmail = m.userId ? (members.find((x) => x.userId === m.userId)?.email ?? null) : null;
       const owner = m.userId && ownerEmail ? { userId: m.userId, email: ownerEmail } : null;
@@ -137,6 +144,11 @@ export async function resetMailboxPassword(
  * webmail). Returns the job that applies it, so the caller can wait for it and keep its own session signed in. A
  * first-sign-in password change (`mustChangePassword`) ends only when the worker has applied this password to the mail
  * server (`runNextJob`), never here: until then the administrator's password is still the mailbox's password.
+ *
+ * Refused (409 `password_change_pending`, audited as denied) while a password an administrator set is still waiting
+ * for the mail server, or never reached it: the "current" password proved here is then the one being replaced, so
+ * whoever knew it (e.g. everyone who used a shared address that "Make this a user" handed to one person) could
+ * otherwise overwrite the administrator's password and lock the new person out (docs/internal/07-security.md).
  */
 export async function changeOwnMailboxPassword(
   deps: Deps,
@@ -150,7 +162,7 @@ export async function changeOwnMailboxPassword(
   if (!found) throw new NotFoundError();
   const actor: Actor = { kind: "system", name: found.address };
   const breached = await passwordBreached(hasher.breaches, input.password); // before the unit of work (no lock held)
-  return mutation(
+  const out = await mutation(
     deps,
     actor,
     req,
@@ -160,11 +172,17 @@ export async function changeOwnMailboxPassword(
       accountId: found.accountId,
       target: { type: "mailbox", id: found.id, label: found.address },
     },
-    async (repos) => {
+    async (repos): Promise<MutationOutcome<{ jobId: string; ownerEmail: string | null } | "pending">> => {
       const m = await repos.mailboxes.get(found.accountId, found.id);
       if (!m) throw new NotFoundError();
       if (m.status !== "active" || m.stalwartId === null) {
         throw new ConflictError("This mailbox can't change its password right now.");
+      }
+      // Serialised with an administrator setting one (reset, "Make this a user"), so this check can't pass just before
+      // their password is recorded and then overwrite it.
+      await repos.accounts.lock(m.accountId);
+      if (await adminPasswordWaiting(repos, m.id)) {
+        return { result: "pending", meta: { by: "self" }, denied: { code: "password_change_pending" } };
       }
       const password = mailboxPassword(input.password, m.address);
       if (breached) throw new BreachedPasswordError();
@@ -176,6 +194,18 @@ export async function changeOwnMailboxPassword(
       return { result: { jobId: job.id, ownerEmail: owner }, meta: { by: "self" } };
     },
   );
+  if (out === "pending") throw new PasswordChangePendingError();
+  return out;
+}
+
+/**
+ * A password an administrator set (a reset, "Add a user" or "Make this a user") is waiting for the mail server, or
+ * its job gave up and it is kept so the console can ask for it again (`runNextJob`): the mailbox's current password is
+ * the one being replaced.
+ */
+async function adminPasswordWaiting(repos: Repositories, mailboxId: string): Promise<boolean> {
+  const state = await repos.directory.getMailbox(mailboxId);
+  return state?.pendingPasswordHash != null && !state.pendingPasswordByOwner;
 }
 
 /** Where a password job is: still waiting or running, applied, or given up. */
@@ -190,14 +220,32 @@ export async function passwordJobState(deps: Deps, jobId: string): Promise<Passw
 }
 
 /**
- * For the webmail's first-sign-in step: whether the last password job of the mailbox at `address` gave up, so the
- * step can say the previous change didn't go through (the mailbox keeps the password it had, and the step stays).
- * Read-only; unknown addresses are false.
+ * For the webmail's first-sign-in step: whether the person's own last password change gave up, so the step can say
+ * the previous change didn't go through (the mailbox keeps the password it had, and the step stays). False while an
+ * administrator's password is waiting or failed (that is for the administrator to set again; the change itself is
+ * refused meanwhile). Read-only; unknown addresses are false.
  */
 export async function lastPasswordChangeFailed(deps: Deps, address: string): Promise<boolean> {
   return deps.uow.run(async (r) => {
     const m = await r.webmailSettings.mailboxByAddress(address.trim().toLowerCase());
     if (!m) return false;
+    if (await adminPasswordWaiting(r, m.id)) return false;
     return (await r.provisioning.latest("mailbox.password", m.id))?.status === "failed";
+  });
+}
+
+/**
+ * Whether a console password reset for the login `email` must not be sent: the address is a mailbox in this
+ * deployment that is between owners — its first-sign-in password change is still required, or a password an
+ * administrator set hasn't reached the mail server. The reset email would land in that mailbox, which whoever knew
+ * its previous password may still be able to read ("Make this a user" on a shared address; docs/internal/07-security.md
+ * "Mailbox passwords"). The person asks an administrator instead, or resets once they've chosen their own mailbox
+ * password. Read-only; any other address is false.
+ */
+export async function consoleResetHeld(deps: Deps, email: string): Promise<boolean> {
+  return deps.uow.run(async (r) => {
+    const m = await r.webmailSettings.mailboxByAddress(email.trim().toLowerCase());
+    if (!m) return false;
+    return m.mustChangePassword || (await adminPasswordWaiting(r, m.id));
   });
 }

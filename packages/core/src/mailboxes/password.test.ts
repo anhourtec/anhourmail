@@ -19,12 +19,19 @@ import {
   ConflictError,
   ForbiddenError,
   NotFoundError,
+  PasswordChangePendingError,
   StepUpRequiredError,
   UnauthenticatedError,
   ValidationError,
 } from "../errors";
 import type { Mailbox } from "./entity";
-import { changeOwnMailboxPassword, lastPasswordChangeFailed, passwordJobState, resetMailboxPassword } from "./password";
+import {
+  changeOwnMailboxPassword,
+  consoleResetHeld,
+  lastPasswordChangeFailed,
+  passwordJobState,
+  resetMailboxPassword,
+} from "./password";
 import { hashMailboxPassword, mailboxPassword } from "./password-hash";
 import { getMailbox } from "./service";
 
@@ -233,6 +240,18 @@ describe("resetting a mailbox password (admins)", () => {
     expect(d.uow.state.mailboxes.find((m) => m.id === MBX_MEMBER)?.status).toBe("suspended");
   });
 
+  it("shows the console when the password it set never reached the mail server, until it is set again", async () => {
+    const { d } = setup();
+    const view = () => getMailbox(d, owner, ACCOUNT_A, MBX_MEMBER);
+    expect(await view()).toMatchObject({ passwordPending: false, passwordApplyFailed: false });
+    const { jobId } = await reset(d, owner, ACCOUNT_A, MBX_MEMBER);
+    expect(await view()).toMatchObject({ passwordPending: true, passwordApplyFailed: false });
+    await d.uow.run((r) => r.provisioning.giveUp(jobId, "mail server unavailable", new Date())); // hash kept
+    expect(await view()).toMatchObject({ passwordPending: false, passwordApplyFailed: true });
+    await reset(d, owner, ACCOUNT_A, MBX_MEMBER, "another new password");
+    expect(await view()).toMatchObject({ passwordPending: true, passwordApplyFailed: false });
+  });
+
   it("an owner may set their own mailbox's password (recorded as their own)", async () => {
     const { d } = setup();
     const out = await reset(d, owner, ACCOUNT_A, MBX_OWNER);
@@ -282,6 +301,39 @@ describe("changing one's own mailbox password (webmail)", () => {
     expect(await lastPasswordChangeFailed(d, "kid@family.ca")).toBe(false);
     expect(await lastPasswordChangeFailed(d, "mum@family.ca")).toBe(false);
     expect(await lastPasswordChangeFailed(d, "nobody@family.ca")).toBe(false);
+  });
+
+  it("is refused (409, audited as denied) while an administrator's password is waiting or never applied", async () => {
+    const { d } = setup();
+    const { jobId } = await reset(d, owner, ACCOUNT_A, MBX_MEMBER, "the admin's new one");
+    const before = d.uow.state.audit.length;
+    const attempt = changeOwnMailboxPassword(d, fakeHasher, "kid@family.ca", { password: MAILBOX_PW }, req);
+    await expect(attempt).rejects.toThrow(PasswordChangePendingError);
+    await expect(
+      changeOwnMailboxPassword(d, fakeHasher, "kid@family.ca", { password: MAILBOX_PW }, req),
+    ).rejects.toMatchObject({ code: "password_change_pending" });
+    expect(d.uow.state.audit.slice(before)[0]).toMatchObject({
+      action: "mailbox.password_changed",
+      result: "denied",
+      target: { id: MBX_MEMBER },
+    });
+    // The administrator's password is untouched (not overwritten, not marked as the person's own).
+    expect(await d.uow.run((r) => r.directory.getMailbox(MBX_MEMBER))).toMatchObject({
+      pendingPasswordHash: await fakeHasher.hash("the admin's new one"),
+      pendingPasswordByOwner: false,
+    });
+    // Gave up: still refused (the hash is kept), and the first-sign-in step doesn't blame the person's change.
+    await d.uow.run((r) => r.provisioning.giveUp(jobId, "mail server unavailable", new Date()));
+    await expect(
+      changeOwnMailboxPassword(d, fakeHasher, "kid@family.ca", { password: MAILBOX_PW }, req),
+    ).rejects.toThrow(PasswordChangePendingError);
+    expect(await lastPasswordChangeFailed(d, "kid@family.ca")).toBe(false);
+    // Once it is on the mail server, the person may change it.
+    await d.uow.run((r) => r.directory.passwordApplied(MBX_MEMBER, null, "cred"));
+    await d.uow.run((r) => r.directory.clearPendingPassword(MBX_MEMBER));
+    await expect(
+      changeOwnMailboxPassword(d, fakeHasher, "kid@family.ca", { password: MAILBOX_PW }, req),
+    ).resolves.toMatchObject({ ownerEmail: "member@example.ca" });
   });
 
   it("refuses unknown addresses, inactive mailboxes and weak passwords", async () => {
@@ -391,6 +443,23 @@ describe("breached mailbox passwords", () => {
     await expect(
       changeOwnMailboxPassword(d, hasher, "kid@family.ca", { password: MAILBOX_PW }, req),
     ).resolves.toBeTruthy();
+  });
+});
+
+describe("console password reset for a mailbox's login", () => {
+  it("is held while the mailbox's first-sign-in change is required or an administrator's password is waiting", async () => {
+    const { d } = setup();
+    expect(await consoleResetHeld(d, "kid@family.ca")).toBe(false);
+    expect(await consoleResetHeld(d, "someone@elsewhere.ca")).toBe(false); // not a mailbox here
+    d.uow.state.mailboxes.find((m) => m.id === MBX_MEMBER)!.mustChangePassword = true;
+    expect(await consoleResetHeld(d, " KID@family.ca ")).toBe(true);
+    d.uow.state.mailboxes.find((m) => m.id === MBX_MEMBER)!.mustChangePassword = false;
+    await reset(d, owner, ACCOUNT_A, MBX_MEMBER);
+    expect(await consoleResetHeld(d, "kid@family.ca")).toBe(true);
+    // The person's own change waiting is not a reason (it is their password).
+    await d.uow.run((r) => r.directory.clearPendingPassword(MBX_MEMBER));
+    await changeOwnMailboxPassword(d, fakeHasher, "kid@family.ca", { password: MAILBOX_PW }, req);
+    expect(await consoleResetHeld(d, "kid@family.ca")).toBe(false);
   });
 });
 

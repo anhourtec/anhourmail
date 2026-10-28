@@ -108,3 +108,17 @@ export class AccountSuspendedError extends ForbiddenError {
     super("This account is suspended. Its mail is kept; see the notice in the console for how to appeal.");
   }
 }
+
+/**
+ * An administrator set a new password for this mailbox that hasn't reached the mail server yet (or never did: the
+ * console then asks them to set it again). Until it has, the mailbox's own password change is refused, so someone who
+ * only knows the password being replaced can't override the administrator's (HTTP 409 with its own code).
+ */
+export class PasswordChangePendingError extends ConflictError {
+  override readonly code = "password_change_pending";
+  constructor() {
+    super(
+      "Your administrator has set a new password for this mailbox that isn't in use yet. Sign in again with it in a minute, or ask them to set it again.",
+    );
+  }
+}
