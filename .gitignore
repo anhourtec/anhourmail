@@ -1,5 +1,7 @@
 # dependencies
 node_modules/
+# A symlinked node_modules (a git worktree sharing another checkout's) is a file, not a directory
+node_modules
 
 # build output
 .next/
