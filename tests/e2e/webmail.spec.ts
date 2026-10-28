@@ -69,6 +69,19 @@ async function findBySearch(page: Page, query: string, text: string) {
   }).toPass({ timeout: 40_000 });
 }
 
+test("a person staff suspended can't use the webmail and is told how to appeal", async ({ page }) => {
+  // Not checking console errors here: the browser logs the expected 401.
+  const SUSPENDED = "suspended@demo-group.test";
+  await page.goto(`${urls.webmail}/sign-in`);
+  await page.getByLabel("Mailbox address").fill(SUSPENDED);
+  await page.getByLabel("Password", { exact: true }).fill(demoPassword(SUSPENDED));
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  const alert = page.getByRole("alert").filter({ hasText: "Your AnhourMail sign-in is suspended" });
+  await expect(alert).toBeVisible({ timeout: SIGN_IN_TIMEOUT });
+  await expect(alert).toContainText(/support@anhourtec\.com/);
+  await expect(page.getByRole("heading", { name: "Sign in to your mailbox" })).toBeVisible();
+});
+
 test.describe("deliberate wrong passwords", () => {
   // Their own client address from the documentation range (RFC 5737), random per run: the dev forwarder passes a
   // loopback client's address through, so the mail server counts (and may ban) this address — never the shared
@@ -135,6 +148,8 @@ test("a person signs in to the webmail, reads mail with remote images blocked, a
   const [download] = await Promise.all([page.waitForEvent("download"), pdf.click()]);
   expect(download.suggestedFilename()).toBe("garden-plan.pdf");
   await expect(reader.getByRole("list", { name: "Conversation" }).getByRole("listitem")).toHaveCount(2);
+  // The rich reply quoted the original as a citation, which the reader folds behind a toggle.
+  await expect(reader.locator("iframe").last().contentFrame().locator("details[data-am-quote]")).toHaveCount(1);
 
   // Sign out from the folder sidebar (a drawer on small screens).
   await showList(page);
@@ -289,7 +304,8 @@ async function expectComposerLayout(page: Page, composer: ReturnType<Page["getBy
 test("the composer fits the screen (full screen on phones) and sends", async ({ page, consoleErrors }) => {
   const tag = `m-${Date.now().toString(36)}`;
   await signInWebmail(page, OWNER);
-  await showFolders(page);
+  // New email is in the sidebar on wide screens and floats over the list on phones (no drawer needed).
+  await expect(page.getByRole("button", { name: "New email" })).toHaveCount(1);
   await page.getByRole("button", { name: "New email" }).click();
   const composer = page.getByRole("dialog", { name: "New message" });
   await expectComposerLayout(page, composer);

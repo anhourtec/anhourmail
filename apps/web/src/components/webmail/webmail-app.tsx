@@ -1736,8 +1736,9 @@ function Mailroom({
                 />
               )}
             </div>
-            {/* Phones and tablets have no sidebar: New email floats over the list (hidden while selecting). */}
-            {composer === null && checked.size === 0 && (
+            {/* Phones and tablets have no sidebar: New email floats over the list (not while selecting or with the
+                folders drawer open, which has its own). */}
+            {composer === null && checked.size === 0 && !drawer && (
               <button
                 type="button"
                 onClick={compose}
