@@ -3,7 +3,7 @@
 
 import { Check, Keyboard, LifeBuoy, LogOut, type LucideIcon } from "lucide-react";
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { type ReactNode, useId } from "react";
 
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Tooltip } from "@/components/tooltip";
@@ -93,10 +93,10 @@ export function SidebarIdentity({
   );
 }
 
-const primaryClass = (collapsed: boolean) =>
-  `inline-flex h-9 items-center justify-center gap-2 rounded-lg border bg-background font-medium text-[13.5px] shadow-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${
-    collapsed ? "w-9" : "w-full"
-  }`;
+const primaryClass = (collapsed: boolean, disabled = false) =>
+  `inline-flex h-9 items-center justify-center gap-2 rounded-lg border bg-background font-medium text-[13.5px] shadow-xs transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
+    disabled ? "cursor-not-allowed opacity-60" : "hover:bg-accent"
+  } ${collapsed ? "w-9" : "w-full"}`;
 
 /** The one prominent action (New email, Add a mailbox, …): a link or a button. */
 export function SidebarPrimaryAction({
@@ -106,6 +106,7 @@ export function SidebarPrimaryAction({
   href,
   onClick,
   shortcut,
+  disabledReason,
 }: {
   label: string;
   icon: LucideIcon;
@@ -113,13 +114,41 @@ export function SidebarPrimaryAction({
   href?: string;
   onClick?: () => void;
   shortcut?: string;
+  /**
+   * The action exists but can't be used now (the account is full): shown disabled, with this reason beside it (in
+   * the rail, as its tooltip and description).
+   */
+  disabledReason?: string | undefined;
 }) {
+  const reasonId = useId();
   const body = (
     <>
       <Icon className="size-4" aria-hidden />
       <span className={collapsed ? "sr-only" : undefined}>{label}</span>
     </>
   );
+  if (disabledReason) {
+    return (
+      <div className={`flex flex-col gap-1 ${collapsed ? "items-center" : ""}`}>
+        <Tooltip
+          label={collapsed ? `${label}: ${disabledReason}` : disabledReason}
+          side={collapsed ? "right" : "bottom"}
+        >
+          <button
+            type="button"
+            aria-disabled="true"
+            aria-describedby={reasonId}
+            className={primaryClass(collapsed, true)}
+          >
+            {body}
+          </button>
+        </Tooltip>
+        <span id={reasonId} className={collapsed ? "sr-only" : "am-micro"}>
+          {disabledReason}
+        </span>
+      </div>
+    );
+  }
   return (
     <Tooltip label={label} {...(shortcut ? { shortcut } : {})} side={collapsed ? "right" : "bottom"}>
       {href ? (

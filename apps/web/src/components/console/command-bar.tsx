@@ -3,12 +3,15 @@
 
 import { MoreHorizontal, Search } from "lucide-react";
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { type ReactNode, useId } from "react";
 
 import { menuKeys, PanelSurface, usePopover } from "../popover";
+import { Tooltip } from "../tooltip";
 
 const action =
   "inline-flex h-9 shrink-0 items-center gap-2 rounded-md px-2.5 text-[14px] text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:hover:bg-transparent";
+const unavailable =
+  "inline-flex h-9 shrink-0 cursor-not-allowed items-center gap-2 rounded-md px-2.5 text-[14px] text-foreground opacity-50 outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 /**
  * The command bar under a page title (console page template): a hairline above, icon + text actions on the left,
@@ -57,6 +60,35 @@ export function CommandLink({ href, icon, children }: { href: string; icon: Reac
       <Glyph icon={icon} />
       {children}
     </Link>
+  );
+}
+
+/**
+ * A command bar action that exists but can't be used now (the account is full): disabled, never a dead link, with the
+ * reason as its tooltip and description. Pages also show the reason as text near the bar for touch screens.
+ */
+export function CommandUnavailable({
+  icon,
+  reason,
+  children,
+}: {
+  icon: ReactNode;
+  reason: string;
+  children: ReactNode;
+}) {
+  const id = useId();
+  return (
+    <>
+      <Tooltip label={reason}>
+        <button type="button" aria-disabled="true" aria-describedby={id} className={unavailable}>
+          <Glyph icon={icon} />
+          {children}
+        </button>
+      </Tooltip>
+      <span id={id} className="sr-only">
+        {reason}
+      </span>
+    </>
   );
 }
 
