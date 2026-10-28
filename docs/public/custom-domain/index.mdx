@@ -22,6 +22,15 @@ look like for `example.com`:
 **Required** records are needed before the domain works. **Recommended** records make mail apps set themselves
 up and help your mail reach inboxes.
 
+### DKIM keys
+
+DKIM lets receivers check that mail from your domain really came from AnhourMail. Your domain gets its own two
+signing keys (one RSA, one Ed25519), and you publish each as a **TXT** record. The keys are created once the
+ownership and MX records are found, so the console shows a placeholder until then: add the other records, press
+**Check now**, and the two DKIM records appear within a minute with their exact names (like
+`v1-rsa-20261028._domainkey`) and values. Copy each value whole; it is long, and some DNS providers split it into
+several quoted parts, which is fine.
+
 ## How long does it take?
 
 DNS changes usually show up within minutes, but some providers take a few hours. The console re-checks a new
@@ -36,9 +45,12 @@ Once the required records are found, the domain shows **Setting up** for a minut
   already, enter only the part before it.
 - **There is already an SPF record.** A domain can have only one. Merge ours into the existing one instead of
   adding a second.
-- **"DKIM not found in DNS — mail will fail DKIM."** Each DKIM record only counts once the signing key it points to
-  answers in DNS. Check the name and value of both DKIM records; if the console says your record is right, the key
-  behind it isn't published yet and the domain stays pending until it is, so your mail isn't sent unsigned.
+- **"DKIM not found in DNS — mail will fail DKIM."** The TXT record for that key isn't there yet. Check the name
+  (only the part before your domain, if your provider adds the domain itself) and that the value was pasted whole.
+- **"The DKIM key in DNS is not this one."** Something else is published at that name, often an older key. Replace
+  the value with the one shown in the console.
+- **You connected your domain before October 28, 2026.** Earlier setups used DKIM CNAME records. Delete those
+  (`am1._domainkey` and `am2._domainkey`) and add the TXT records the console shows now.
 - **Verification is still pending after a day.** Make sure there is no typo in the verification code, then press
   **Check now**.
 
