@@ -105,6 +105,13 @@ cleared by `afterPasswordChange`) and `mailbox.must_change_password` gates the w
 before the inbox; cleared by `changeOwnMailboxPassword`). The two passwords then diverge as usual. The mailbox's
 display name is sent to Stalwart as the account `description`, which seeds the sending identity's name.
 
+**"Make this a user"** (`mailboxes/make-user.ts`) does the same for an existing unassigned mailbox (a shared address):
+login, membership, profile, owner link (`mailboxes.assignOwner`, conditional on no owner) and display name in one
+audited transaction, plus a new generated password queued as a `mailbox.password` job (with the management-proxy
+grant) and both first-sign-in flags set. It needs a fresh step-up because it replaces a password in use. Profile
+details stay editable afterwards (`people/profile-service.ts`): by the person (`self.profile.manage`) or the account's
+admins (`member.manage` for Members, Owners for anyone).
+
 Every new console or mailbox password passes a breached-password check first (core port `BreachedPasswords`, Pwned
 Passwords range adapter with k-anonymity, better-auth `hooks.before` plugin for console endpoints; fail open; the web
 container is the only caller and the browser never is — `07-security.md` "Breached-password check").
