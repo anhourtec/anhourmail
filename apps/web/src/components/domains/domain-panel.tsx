@@ -22,7 +22,12 @@ const STATE: Record<RecordState, { label: string; tone: Tone }> = {
 
 function RecordRow({ r }: { r: CheckedRecord }) {
   // A missing recommended record isn't a problem to fix now: say "Not set", not a warning.
-  const state = !r.required && r.state === "missing" ? { label: "Not set", tone: "neutral" as const } : STATE[r.state];
+  // The DKIM keys don't exist yet: nothing the customer can publish until they appear.
+  const state = r.placeholder
+    ? { label: "Not ready yet", tone: "neutral" as const }
+    : !r.required && r.state === "missing"
+      ? { label: "Not set", tone: "neutral" as const }
+      : STATE[r.state];
   return (
     <li className="flex flex-col gap-3 border-b py-4 xl:grid xl:grid-cols-[4.5rem_minmax(0,1fr)_minmax(0,1.6fr)_8.5rem] xl:items-start xl:gap-4">
       <div className="flex items-center gap-2 xl:flex-col xl:items-start">
@@ -31,20 +36,31 @@ function RecordRow({ r }: { r: CheckedRecord }) {
       </div>
       <div className="flex min-w-0 flex-col gap-1">
         <span className="am-micro xl:hidden">Name</span>
-        <CopyValue value={r.name} label={`${r.type} name`} />
+        {r.placeholder ? (
+          // The DKIM keys don't exist yet: nothing to copy (the problem line says when they appear).
+          <code className="am-code min-w-0 break-all text-muted-foreground">{r.name}</code>
+        ) : (
+          <CopyValue value={r.name} label={`${r.type} name`} />
+        )}
       </div>
       <div className="flex min-w-0 flex-col gap-1">
         <span className="am-micro xl:hidden">
           Value{r.priority !== undefined && r.type === "MX" ? " (priority)" : ""}
         </span>
-        <CopyValue
-          value={r.type === "MX" ? `${String(r.priority ?? 10)} ${r.value}` : r.value}
-          label={`${r.type} value`}
-        />
+        {r.placeholder ? (
+          <code className="am-code min-w-0 break-all text-muted-foreground">{r.value}</code>
+        ) : (
+          <CopyValue
+            value={r.type === "MX" ? `${String(r.priority ?? 10)} ${r.value}` : r.value}
+            label={r.purpose === "dkim" ? `DKIM value for ${r.name}` : `${r.type} value`}
+          />
+        )}
         <span className="am-small">{r.why}</span>
-        {r.problem !== undefined && <span className="am-small text-destructive">{r.problem}</span>}
+        {r.problem !== undefined && (
+          <span className={r.placeholder ? "am-small" : "am-small text-destructive"}>{r.problem}</span>
+        )}
         {r.state === "wrong" && r.found.length > 0 && (
-          <span className="am-micro break-all">Found instead: {r.found.join(", ")}</span>
+          <span className="am-micro break-all font-mono">Found instead: {r.found.join(", ")}</span>
         )}
       </div>
       <div>

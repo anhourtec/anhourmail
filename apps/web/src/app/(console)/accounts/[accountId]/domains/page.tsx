@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { can } from "@anhourmail/core";
 import {
   type CheckedRecord,
+  DKIM_KEYS_PENDING,
   domainAllowance,
   getCatchAll,
   getDomain,
@@ -55,7 +56,11 @@ export default async function DomainsPage({
     if (live) return { ...(await inspectDomain(deps, container().dns, actor, accountId, id)), live };
     return {
       domain,
-      records: records.map((r): CheckedRecord => ({ ...r, fqdn: r.name, state: "error", found: [] })),
+      records: records.map((r): CheckedRecord =>
+        r.placeholder
+          ? { ...r, fqdn: r.name, state: "missing", found: [], problem: DKIM_KEYS_PENDING }
+          : { ...r, fqdn: r.name, state: "error", found: [] },
+      ),
       live,
     };
   };
