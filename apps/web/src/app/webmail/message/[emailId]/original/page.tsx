@@ -11,7 +11,7 @@ import { LocalTime, OriginalActions } from "@/components/webmail/original-action
 import { container } from "@/server/container";
 import { env } from "@/server/env";
 import { platform } from "@/server/platform";
-import { webmail, webmailCookieName } from "@/server/webmail/instance";
+import { passwordChangeGate, webmail, webmailCookieName } from "@/server/webmail/instance";
 import {
   authLabel,
   authResults,
@@ -63,6 +63,8 @@ export default async function OriginalMessagePage({ params }: { params: Promise<
     : null;
   if (session === "blocked") redirect(`${base}/sign-in?reason=unavailable`);
   if (!session || !sessionId) redirect(`${base}/sign-in`);
+  // The first-sign-in password change comes before any mail (the webmail page shows that step).
+  if (await passwordChangeGate().required(session.username)) redirect(base === "" ? "/" : base);
   if (!isJmapId(emailId)) notFound();
 
   const limit = LIMITS.webmailDownload;

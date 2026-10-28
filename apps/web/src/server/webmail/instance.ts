@@ -2,7 +2,7 @@
 import "server-only";
 
 import { db, pgMailboxStatusLookup } from "@anhourmail/adapters/postgres";
-import { MailboxAccessGate, WebmailSettingsService } from "@anhourmail/core/webmail";
+import { MailboxAccessGate, PasswordChangeGate, WebmailSettingsService } from "@anhourmail/core/webmail";
 import { keyRingFromEnv } from "@anhourmail/server/keyring";
 import { type FailureStore, redisFailureStore, redisSlidingQuota } from "@anhourmail/server/rate-limit";
 import { redis } from "@anhourmail/server/redis";
@@ -113,6 +113,16 @@ export function webmail(): WebmailService {
     });
   }
   return instance;
+}
+
+let passwordGate: PasswordChangeGate | null = null;
+/** Whether a mailbox must change its password before using the webmail (`./password-gate`). */
+export function passwordChangeGate(): PasswordChangeGate {
+  passwordGate ??= new PasswordChangeGate(
+    async (address) =>
+      (await container().deps.uow.run((r) => r.webmailSettings.mailboxByAddress(address)))?.mustChangePassword === true,
+  );
+  return passwordGate;
 }
 
 let settingsCore: WebmailSettingsService | null = null;

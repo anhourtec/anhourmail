@@ -69,5 +69,5 @@ export const POST = route(
       return res;
     });
   },
-  { session: "webmail", limit: "mailboxPassword" },
+  { session: "webmail", limit: "mailboxPassword", passwordChange: "allowed" },
 );

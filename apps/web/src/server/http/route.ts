@@ -13,11 +13,13 @@ import { type RequestContext, requestIdFrom, runWithRequestContext } from "@anho
 import { API_CSP } from "../console-csp";
 import { container } from "../container";
 import { env } from "../env";
+import { PASSWORD_CHANGE_REQUIRED, passwordChangeBlock } from "../webmail/password-gate";
 
 /**
  * Every API handler goes through `route()` (CLAUDE.md rules 12–14):
  *   request id + one access-log line, rate limit (tier per route), same-origin check on writes (CSRF for
- *   cookie auth: writes must come from this origin), domain-error → HTTP mapping.
+ *   cookie auth: writes must come from this origin), the webmail's first-sign-in password change (webmail routes),
+ *   domain-error → HTTP mapping.
  * Permission and ownership checks happen in the service layer (packages/core), never only here.
  */
 
@@ -40,6 +42,11 @@ export type RouteOptions = {
   limit?: LimitName;
   /** Which session identifies the caller for per-caller limits: the console's (default) or the webmail's. */
   session?: "console" | "webmail";
+  /**
+   * Webmail routes only: still answered while the session's mailbox must change its password first. Only the
+   * password change itself and sign-out set it; every other webmail route answers 403 `password_change_required`.
+   */
+  passwordChange?: "allowed";
 };
 
 export type RouteContext = { req: Request; meta: RequestMeta };
@@ -139,8 +146,15 @@ export function route(handler: Handler, opts: RouteOptions = {}) {
           errorCode = "forbidden";
           res = errorBody("forbidden", "Cross-origin request blocked.", 403);
         } else {
-          const meta: RequestMeta = { requestId, ip, userAgent: req.headers.get("user-agent") };
-          res = await handler({ req, meta }, params);
+          const blocked =
+            opts.session === "webmail" && opts.passwordChange !== "allowed" ? await passwordChangeBlock(req) : null;
+          if (blocked) {
+            errorCode = PASSWORD_CHANGE_REQUIRED;
+            res = blocked;
+          } else {
+            const meta: RequestMeta = { requestId, ip, userAgent: req.headers.get("user-agent") };
+            res = await handler({ req, meta }, params);
+          }
           for (const [k, v] of Object.entries(rl.headers)) res.headers.set(k, v);
         }
       } catch (err) {

@@ -13,6 +13,14 @@ import { resetEnvForTests } from "../env";
 import { logPath, ok, readJson, route, routeTemplate } from "./route";
 
 vi.mock("../auth/actor", () => ({ getActor: async () => ANONYMOUS }));
+// The gate itself is tested in webmail/password-gate.test.ts; here only whether route() consults it.
+vi.mock("../webmail/password-gate", () => ({
+  PASSWORD_CHANGE_REQUIRED: "password_change_required",
+  passwordChangeBlock: async (req: Request) =>
+    req.headers.get("cookie")?.includes("am.webmail=flagged")
+      ? Response.json({ error: { code: "password_change_required", message: "x" } }, { status: 403 })
+      : null,
+}));
 
 const params = { params: Promise.resolve({}) };
 const noDns = { lookup: async () => [] };
@@ -174,5 +182,34 @@ describe("security hardening (audit 2026-10-21)", () => {
     // Static routes get no params from Next.
     const plain = await route(async () => ok(true))(new Request("http://localhost:43200/api/me"), {});
     expect(plain.status).toBe(200);
+  });
+});
+
+describe("webmail first-sign-in password change", () => {
+  const get = (cookie: string) =>
+    new Request("http://localhost:43300/api/webmail/session", { headers: { cookie, host: "localhost:43300" } });
+
+  it("blocks every webmail route while the mailbox must change its password, before the handler runs", async () => {
+    let ran = false;
+    const handler = route(
+      async () => {
+        ran = true;
+        return ok(true);
+      },
+      { session: "webmail", limit: "webmail" },
+    );
+    const res = await handler(get("am.webmail=flagged"), params);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: { code: "password_change_required" } });
+    expect(res.headers.get("X-Request-Id")).toBeTruthy();
+    expect(ran).toBe(false);
+    expect((await handler(get("am.webmail=fine"), params)).status).toBe(200);
+  });
+
+  it("answers the routes that opt in (password change, sign-out) and never gates console routes", async () => {
+    const allowed = route(async () => ok(true), { session: "webmail", passwordChange: "allowed" });
+    expect((await allowed(get("am.webmail=flagged"), params)).status).toBe(200);
+    const consoleRoute = route(async () => ok(true));
+    expect((await consoleRoute(get("am.webmail=flagged"), params)).status).toBe(200);
   });
 });
