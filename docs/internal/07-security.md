@@ -151,6 +151,24 @@ audit rows are written right after (in the same request) rather than in the same
 logged. Changes made through core services (sessions, passkey names/removal, the account requirement, the follow-up to
 a password reset or change) commit with their audit row.
 
+## Pending custom domains
+
+A pending domain is put on Stalwart once its ownership TXT and MX records are found (for its DKIM keys), and Stalwart
+then treats the name as local. Two risks follow, both handled in the control plane (`02-mail-infrastructure.md`
+"Pending domains don't hold a name for good"):
+
+- **An abandoned claim holding the name** (blocking the real owner and keeping our other customers' mail for it
+  inside Stalwart): released when another account proves the name and the claim's own ownership TXT is gone, or by
+  the daily `domain-expiry` job when it isn't verified within `PENDING_DOMAIN.onMailServerDays` or its ownership or MX
+  record is gone; never on a failed lookup. Unverified rows never put on Stalwart are deleted after
+  `PENDING_DOMAIN.unverifiedDays`. Audited by the system in the released account (`domain.released`,
+  `domain.expired`), never with the other account's details. The numbers are public (custom-domain guide).
+- **Two claims racing onto Stalwart:** the Stalwart id is recorded under a per-name advisory lock with a re-check in
+  the same transaction; removal leaves the name on Stalwart while another row is recorded there.
+
+Open: there is no account deletion path yet. When one is built it must queue `domain.remove` for every domain on
+Stalwart (active and pending) before the rows cascade (`04-data-model.md`).
+
 ## Mailbox passwords
 
 Built 2026-10-23 (ADR-0020 "Mailbox passwords"). Code: `packages/core/src/mailboxes/{password,password-hash}.ts`,
@@ -173,6 +191,13 @@ Built 2026-10-23 (ADR-0020 "Mailbox passwords"). Code: `packages/core/src/mailbo
 - **Admin reset:** `mailbox.password.reset` ★ (Owner, User Admin), fresh step-up, guard rail 8, refused during act-as;
   audited `mailbox.password_reset` (masked owner, never a secret); the mailbox's person is emailed at their console
   address. Webmail sessions end (Stalwart derives OAuth tokens from the password, so every token is revoked).
+- **Make this a user** (a shared, person-less mailbox becomes someone's, `mailboxes/make-user.ts`): fresh step-up,
+  asked **before** anything is looked up about the address (otherwise a session without one could learn which
+  addresses have a console login); then a new generated password for the console and the mailbox. Whoever used the
+  shared address keeps no way in: its webmail sessions and OAuth tokens end when the `mailbox.password` job applies
+  (as for a reset; tokens are derived from the password, verified in `passwords.int.test.ts`), and its app passwords,
+  which survive a password replacement, are moved to `revoking` with an `app_password.revoke` job in the same
+  transaction (`mailbox.made_user` meta `appPasswordsRevoked`).
 - **Own change (webmail):** customer accounts can't change their own Password on Stalwart (`sysAccountPassword*` is in
   `CUSTOMER_DENIALS` — kept: otherwise a stolen webmail token could change the password). So the BFF proves the current
   password with a Stalwart sign-in (wrong ones count towards `webmailSignInAddress`), the control plane queues the

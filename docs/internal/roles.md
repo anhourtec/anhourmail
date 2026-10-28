@@ -120,12 +120,16 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
    pages in the console (Aliases, App passwords, Security): no domains, people, billing or audit.
    "Make this a user" (`mailboxes/make-user.ts`, `POST …/mailboxes/:mailboxId/user`) has the same gate on an
    unassigned mailbox, **plus a fresh step-up** (it replaces the password of a mailbox already in use, like
-   `mailbox.password.reset`); another account's mailbox is **404**.
+   `mailbox.password.reset`), asked before anything is looked up about the address; another account's mailbox is
+   **404**. The mailbox's app passwords are revoked in the same step.
    - Profile details ("Edit profile", `people/profile-service.ts`): the person themself always
      (`self.profile.manage`, a `self` permission: their Profile page `PUT /api/me/profile`, or their own person panel);
      on the People page `member.manage` edits a Member's (`PUT …/people/:userId/profile`) and anyone else's needs an
      Owner (`account.admins.manage`; a User Admin gets **403**, audited as `denied`); someone outside the account is
-     **404**. Viewing them needs `member.read`.
+     **404**. Viewing them needs `member.read`. The details belong to the person, not the account: someone who also
+     belongs to another account is edited only by themself (admins get **403** "This person also belongs to another
+     account, so only they can change their profile.", audited as `denied` `other_account`; the panel hides Edit), so
+     one account's admins can't change what another account sees.
    - `member.read` (Owner, Domain Admin, User Admin, Auditor) sees People and roles; `member.manage` (Owner, User
      Admin) invites people **as Member**, resends and revokes Member invites and removes Members;
    - every other role is Owner-only (`account.admins.manage` ★): inviting with it, resending or revoking such an

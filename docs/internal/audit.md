@@ -102,6 +102,15 @@ queued again — or `all: true` and `count` for "revoke all"). Refusals are `den
 code: `step_up_required` (no recent confirmation on that session), `act_as` (staff acting as the person),
 `forbidden` (someone else's mailbox, or a User Administrator on an Owner's or admin's mailbox). The removal from the
 mail server is the worker's job and isn't audited again (a job that gives up writes `platform.provisioning_failed`).
+Pending custom domains (`02-mail-infrastructure.md` "Pending domains don't hold a name for good"), written by the
+system **in the domain's own account scope** (target = the domain, label its name; meta `reason`, `onMailServer`):
+`domain.released` when a pending claim on the mail server lost its records — `ownership_proven_elsewhere` (another
+account proved the name and this claim's ownership record is gone; actor `domain-claims`; nothing about the other
+account is recorded) or `records_not_found` (the daily check; actor `domain-expiry`) — and `domain.expired` (actor
+`domain-expiry`, `not_verified_in_time`) when one wasn't verified in time: released from the mail server
+(`onMailServer: true`) or deleted (`false`). A domain that changed meanwhile is recorded as `failed` (`conflict`) and
+tried again the next day. The other account's check that triggered a release records `heldElsewhere` in its own
+`domain.verify_failed` meta.
 Catch-all: `catch_all.changed` (target = the domain; meta `enabled`, `mailbox` (masked address) and `changed`).
 Suspending or deleting the catch-all's mailbox turns it off in the same entry: `mailbox.suspended` /
 `mailbox.deletion_scheduled` meta `catchAllOff` (the domain names), and so does `platform.provisioning_failed` when
@@ -120,14 +129,16 @@ personal data) when an admin edits a mailbox's display name. `auth.password_chan
 true` when it lifts the first-sign-in password change.
 
 "Make this a user" (a person-less mailbox): `mailbox.made_user` (target = the mailbox, label its address; meta:
-`userId`, `role`, `profileFields` — names only). One entry covers the console login, the membership, the owner link,
-the display name and the new generated password (never recorded). Denied entries: a role the actor may not grant
+`userId`, `role`, `profileFields` — names only — and `appPasswordsRevoked`, how many of the mailbox's app passwords
+were moved to revoking). One entry covers the console login, the membership, the owner link, the display name, the
+new generated password (never recorded) and the app password revocation. Denied entries: a role the actor may not grant
 (`forbidden`), a staff act-as session (`act_as`) and a missing step-up (`step_up_required`).
 
 Profile details: `account.profile_changed` (target = the person, label their sign-in email; meta: `fields` — the names
 of the optional profile fields that changed, never their values — and `self`). An admin's edit is written to that
 account's log; the person's own edit from their Profile page is written to every account they belong to (the platform
-log when they belong to none), so its admins see it. A User Administrator editing an admin's profile is `denied`.
+log when they belong to none), so its admins see it. A User Administrator editing an admin's profile is `denied`
+(`forbidden`); an admin editing someone who also belongs to another account is `denied` (`other_account`).
 
 People: `account.invite_sent`, `account.invite_resent`, `account.invite_revoked` (target label = the invited
 address, meta = role; never the token), `account.invite_accepted` (meta: role, `newLogin`, the user id; the actor is
