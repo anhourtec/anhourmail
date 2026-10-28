@@ -6,7 +6,7 @@
  * switch mailboxes. Demo passwords are read from the local credentials.md and never printed.
  */
 import { demoPassword } from "../support/demo-credentials";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 import { e2eUsers, expect, SIGN_IN_TIMEOUT, test, urls } from "./fixtures";
 
@@ -52,6 +52,13 @@ async function signInWebmail(page: Page, address: string) {
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible({ timeout: SIGN_IN_TIMEOUT });
   await hideDevOverlay(page);
+}
+
+/** The composer's message field, once the rich-text editor is ready (its sanitiser loads on first use). */
+async function messageField(composer: Locator) {
+  const field = composer.getByRole("textbox", { name: "Message", exact: true });
+  await expect(field).toHaveAttribute("contenteditable", "true");
+  return field;
 }
 
 /** Searches (from the search box) until a conversation with `text` shows up; mail takes a few seconds to arrive. */
@@ -205,7 +212,7 @@ test("write, send, receive in a second mailbox, reply, search and switch back @d
   await composer.getByLabel("To", { exact: true }).press("Enter");
   await expect(composer.getByRole("button", { name: `Remove ${MEMBER}` })).toBeVisible();
   await composer.getByLabel("Subject").fill(`Plans ${tag}`);
-  await composer.getByLabel("Message", { exact: true }).fill("Are we still on for Saturday?");
+  await (await messageField(composer)).fill("Are we still on for Saturday?");
   await composer.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Message sent." })).toBeVisible();
   await expect(composer).toBeHidden();
@@ -234,8 +241,9 @@ test("write, send, receive in a second mailbox, reply, search and switch back @d
   const reply = page.getByRole("dialog", { name: "Reply" });
   await expect(reply.getByRole("button", { name: `Remove ${OWNER}` })).toBeVisible();
   await expect(reply.getByLabel("Subject")).toHaveValue(`Re: Plans ${tag}`);
-  await reply.getByLabel("Message", { exact: true }).press("Home");
-  await reply.getByLabel("Message", { exact: true }).pressSequentially("Yes, see you at 10.");
+  const replyField = await messageField(reply);
+  await replyField.press("Home");
+  await replyField.pressSequentially("Yes, see you at 10.");
   await reply.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Message sent." })).toBeVisible();
 
@@ -311,7 +319,7 @@ test("the composer fits the screen (full screen on phones) and sends", async ({ 
   await expectComposerLayout(page, composer);
   await composer.getByLabel("To", { exact: true }).fill(`${recipient().address},`);
   await composer.getByLabel("Subject").fill(`Phone ${tag}`);
-  await composer.getByLabel("Message", { exact: true }).fill("Sent from the composer test.");
+  await (await messageField(composer)).fill("Sent from the composer test.");
   await composer.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Message sent." })).toBeVisible();
   expect(consoleErrors).toEqual([]);
