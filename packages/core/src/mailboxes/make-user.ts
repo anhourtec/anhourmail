@@ -40,7 +40,9 @@ type Refusal = "act_as" | "role" | "step_up_required";
  * account controls it), the membership with the chosen role, the optional profile details, the owner link, the display
  * name, and a new generated password for both the console (salted argon2id, `hashLogin`) and the mailbox (its own
  * argon2id hash, applied by the worker's `mailbox.password` job), with the first-sign-in change required in both.
- * The password is returned once and never stored, queued, logged or audited (rule 23).
+ * The mailbox's app passwords are revoked (`app_password.revoke`), and its webmail sessions and tokens end when the new
+ * password reaches the mail server, so nobody who used the shared address keeps a way in. The password is returned
+ * once and never stored, queued, logged or audited (rule 23).
  *
  * Same gate as `addUser`: `mailbox.manage` (403 without it, 404 for another account's id or mailbox) and a role the
  * actor may grant (`grantableRoles`; 403 audited as denied). Refused during a staff act-as session, on plans without
@@ -129,6 +131,13 @@ export async function makeMailboxUser(
         hasher.grant?.({ externalId: m.stalwartId, passwordHash: phc }) ?? null,
       );
       const now = deps.clock.now();
+      // The new password ends every webmail session and OAuth token of the mailbox (the mail server derives them from
+      // the password); app passwords don't depend on it, so the ones made for the shared address go too: whoever made
+      // them keeps no way in once it belongs to this person.
+      const revoked = await repos.appPasswords.markRevoking(m.id, null);
+      if (revoked.length > 0) {
+        await repos.provisioning.enqueue({ kind: "app_password.revoke", subjectId: m.id, runAfter: now });
+      }
       await repos.provisioning.enqueue({ kind: "mailbox.password", subjectId: m.id, runAfter: now });
       // The display name becomes the mail server account's description.
       await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: m.id, runAfter: now });
@@ -145,6 +154,7 @@ export async function makeMailboxUser(
           role,
           // Which optional details were given, never their values (personal data).
           profileFields: Object.keys(profile),
+          appPasswordsRevoked: revoked.length,
         },
       };
     },

@@ -203,6 +203,42 @@ describe("makeMailboxUser", () => {
     expect(d.uow.state.mailboxes.find((m) => m.id === SHARED)?.userId).toBeNull();
   });
 
+  it("revokes the shared address's app passwords in the same step (the new password ends its sessions)", async () => {
+    const d = setup();
+    const s = d.uow.state;
+    const app = (id: string, mailboxId: string, status: "active" | "revoking" = "active") => ({
+      id,
+      accountId: ACCOUNT_A,
+      mailboxId,
+      name: `Phone ${id}`,
+      protocols: ["imap" as const],
+      credentialId: `c-${id}`,
+      credentialCreatedAt: new Date(0),
+      createdAt: new Date(0),
+      createdBy: "uadmin",
+      status,
+    });
+    s.appPasswords.push(app("p1", SHARED), app("p2", SHARED), app("p3", OWNED));
+    const out = await make(d, owner);
+    expect(s.appPasswords.filter((p) => p.mailboxId === SHARED).map((p) => p.status)).toEqual(["revoking", "revoking"]);
+    expect(s.appPasswords.find((p) => p.id === "p3")?.status).toBe("active");
+    expect(s.jobs.map((j) => [j.kind, j.subjectId])).toEqual([
+      ["app_password.revoke", SHARED],
+      ["mailbox.password", SHARED],
+      ["mailbox.ensure", SHARED],
+    ]);
+    expect(s.audit.at(-1)).toMatchObject({
+      action: "mailbox.made_user",
+      meta: { userId: out.userId, appPasswordsRevoked: 2 },
+    });
+
+    // None to revoke: no job for it.
+    const plain = setup();
+    await make(plain, owner);
+    expect(plain.uow.state.jobs.map((j) => j.kind)).toEqual(["mailbox.password", "mailbox.ensure"]);
+    expect(plain.uow.state.audit.at(-1)).toMatchObject({ meta: { appPasswordsRevoked: 0 } });
+  });
+
   it("refuses an owned, unready or deleting mailbox, an existing login, bad names, act-as and plans without people", async () => {
     const d = setup();
     await expect(make(d, owner, {}, { mailboxId: OWNED })).rejects.toThrow(/already belongs/);
