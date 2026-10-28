@@ -5,8 +5,10 @@ import { redirect } from "next/navigation";
 
 import { FirstPasswordStep } from "@/components/webmail/first-password";
 import { SIDEBAR_COOKIE, WebmailApp } from "@/components/webmail/webmail-app";
+import { container } from "@/server/container";
 import { env } from "@/server/env";
 import { settingsService, webmail, webmailCookieName } from "@/server/webmail/instance";
+import { lastPasswordChangeFailed } from "@anhourmail/core/mailboxes";
 import { DEFAULT_PREFERENCES } from "@anhourmail/shared/webmail";
 import { trustedAuthservIds } from "@/server/webmail/original";
 import { webmailBasePath } from "@/server/webmail/paths";
@@ -45,9 +47,18 @@ export default async function WebmailPage() {
       .mailbox(session.username)
       .catch(() => null),
   ]);
-  // "Add a user" with a first-sign-in password change: the new password comes before the inbox.
+  // "Add a user" with a first-sign-in password change: the new password comes before the inbox (the webmail API
+  // refuses everything else meanwhile). It ends once the worker has applied the new password.
   if (mailbox?.mustChangePassword) {
-    return <FirstPasswordStep address={session.username} account={session.accountId} signInHref={`${base}/sign-in`} />;
+    const lastFailed = await lastPasswordChangeFailed(container().deps, session.username).catch(() => false);
+    return (
+      <FirstPasswordStep
+        address={session.username}
+        account={session.accountId}
+        signInHref={`${base}/sign-in`}
+        lastFailed={lastFailed}
+      />
+    );
   }
   const app = env().APP_URL.replace(/\/$/, "");
   return (

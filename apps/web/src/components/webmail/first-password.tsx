@@ -17,17 +17,21 @@ const fieldClass =
  * The webmail's first-sign-in step ("Add a user" with "Require password change at first sign-in"): shown instead of
  * the inbox until the person replaces the password their administrator set. It uses the same change path as Settings →
  * Account → Password (current password checked by the mail server, the new one hashed by the control plane and applied
- * by the worker), which also clears the requirement; then the inbox loads.
+ * by the worker). The requirement ends only once the worker has applied the new password; until then the webmail API
+ * refuses everything but this change and sign-out. If the last change gave up, the step says so.
  */
 export function FirstPasswordStep({
   address,
   account,
   signInHref,
+  lastFailed = false,
 }: {
   address: string;
   /** The JMAP account of this session (the server refuses a change for another mailbox). */
   account: string;
   signInHref: string;
+  /** The last password change for this mailbox didn't reach the mail server. */
+  lastFailed?: boolean;
 }) {
   const id = useId();
   const [current, setCurrent] = useState("");
@@ -71,13 +75,19 @@ export function FirstPasswordStep({
             only you know to open your mail. Mail apps and app passwords aren&apos;t affected.
           </p>
         </div>
+        {lastFailed && done === null && (
+          <p role="alert" className="am-small rounded-lg border border-destructive/40 px-3 py-2 text-destructive">
+            Your last password change didn&apos;t go through, so the password you were given still works. Choose a new
+            one again.
+          </p>
+        )}
         {done === "sign_in_again" ? (
           <p role="status" className="am-body rounded-lg border bg-muted px-4 py-3">
             Your new password is being applied. In a minute,{" "}
             <a href={signInHref} className="font-medium underline underline-offset-2">
               sign in again
             </a>{" "}
-            with it.
+            with it. If it doesn&apos;t work yet, sign in with the password you were given.
           </p>
         ) : (
           <form onSubmit={(e) => void save(e)} className="flex flex-col gap-3" noValidate>
