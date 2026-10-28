@@ -121,6 +121,15 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
 export const MAX_CUSTOM_DOMAINS = 20;
 
 /**
+ * How long an unverified custom domain is kept. One already on the mail server (its ownership and MX records were
+ * found, so its DKIM keys exist) must be verified within `onMailServerDays` of being added, and keep its ownership and
+ * MX records published meanwhile (checked daily), or it is taken off the mail server and removed: an abandoned claim
+ * must not hold the name, or its mail, for good. Any other unverified domain is removed after `unverifiedDays`. The
+ * docs render both (`<Value of="pendingDomainSetupDays" />`, `<Value of="pendingDomainDays" />`).
+ */
+export const PENDING_DOMAIN = { onMailServerDays: 14, unverifiedDays: 30 } as const;
+
+/**
  * Mailboxes an account can create today: the ten paid plans include (`includedMailboxes`); they share the account's
  * storage pool (`storagePoolGb`). Extra mailboxes (`extraMailboxPrice`) can't be added until billing exists (Phase 5), so this stays the
  * ceiling until then (docs/internal/06-pricing-and-billing.md).
