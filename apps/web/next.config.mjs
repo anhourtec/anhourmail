@@ -46,7 +46,8 @@ const nextConfig = {
   // Dev only: no persistent Turbopack cache for this app. Twice on 2026-10-23 the on-disk dev cache got into a state
   // where every page load triggered an HMR "restart" of the entry chunk list and an endless "HMR hash mismatch" reload
   // (a clean cache on the same tree loaded once). Cold dev starts compile from scratch instead.
-  experimental: { turbopackFileSystemCacheForDev: false },
+  // `authInterrupts`: `forbidden()` in console layouts, so a page a role lacks answers 403 (server/route-guard.ts).
+  experimental: { turbopackFileSystemCacheForDev: false, authInterrupts: true },
   outputFileTracingRoot: root,
   transpilePackages: [
     "@anhourmail/adapters",
