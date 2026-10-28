@@ -38,8 +38,14 @@ person's own mailbox. Open it, and on its **Overview** choose **Make this a user
 are the same as **Add a user**, without the address and storage: their name and display name, a role, and the optional
 profile details. Before finishing you confirm it's you with your console password or a code, because this replaces
 the mailbox's password: we create a new one, show it to you once, and the person chooses their own the first time they
-sign in to the webmail or the console. Anyone still using the old password is signed out, and the mailbox's
-[app passwords](/docs/clients/app-passwords) are revoked, so nobody who used the shared address keeps a way in.
+sign in to the webmail or the console. Anyone still using the old password is signed out of the webmail, and the
+mailbox's [app passwords](/docs/clients/app-passwords) are revoked, so nobody who used the shared address keeps a way
+in. One exception: a mail app that is already connected with the old password (IMAP) stays connected until it
+disconnects, so if the address was shared widely, assume the people who used it can still see new mail for a while.
+
+Until the person has chosen their own password, the mailbox can't change its password with the old one, and a
+"Forgot password" request for their console login sends no email (it would land in this mailbox). If they forget the
+new password in the meantime, set it again from the **Password** tab.
 
 ## Add a shared address
 
@@ -125,8 +131,12 @@ When someone forgets their mailbox password, or a mailbox passes to someone new,
 **Password** tab (or **Set password**), type or generate a new password and choose **Save new password**. If you
 haven't confirmed it's you in the last few minutes, the console asks for your console password or a code first.
 
-- The new password works within a minute. The old one stops working.
-- Everyone signed in to the webmail with that mailbox is signed out. App passwords keep working.
+- The new password works within a minute. The old one stops working. Until it does, the mailbox can't change its own
+  password from the webmail.
+- If the new password couldn't be applied, the **Password** tab says so and the old password still works: set it
+  again.
+- Everyone signed in to the webmail with that mailbox is signed out. App passwords keep working. A mail app already
+  connected with the old password (IMAP) stays connected until it disconnects.
 - The person the mailbox belongs to gets an email saying its password was changed (never the password itself), and
   the change appears in the account's audit log.
 - Staff never set a mailbox password while helping you in your account.
