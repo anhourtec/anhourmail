@@ -80,6 +80,7 @@ function fakeMail(): MailServer {
   const unused = () => Promise.reject(new Error("not used"));
   return {
     ensureDomain: unused,
+    domainDkimKeys: unused,
     ensureMailbox: unused,
     removeDomain: unused,
     listDomains: unused,

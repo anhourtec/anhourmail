@@ -99,6 +99,7 @@ function fakeMail(fail = false): MailServer & { destroyed: { externalId: string 
   return {
     destroyed,
     ensureDomain: unused,
+    domainDkimKeys: unused,
     ensureMailbox: unused,
     removeDomain: unused,
     listDomains: unused,

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import type { DkimKey } from "@anhourmail/shared/dns";
+
 import type { DesiredMailbox, DomainState, JobKind, MailboxState, ProvisioningJob } from "./types";
 
 /** The provisioning queue. `claimNext` is atomic: two workers never get the same job. */
@@ -18,9 +20,15 @@ export type MailDirectoryRepository = {
   getDomain(id: string): Promise<DomainState | null>;
   /** Locks the mailbox for the rest of the unit of work, so a status read here and written back can't undo a change. */
   getMailbox(id: string): Promise<MailboxState | null>;
-  markDomain(id: string, update: { stalwartId?: string; lastError: string | null }): Promise<void>;
+  /** `dkimKeys`: the keys just read from the mail server (omitted: left as they are). */
+  markDomain(
+    id: string,
+    update: { stalwartId?: string; lastError: string | null; dkimKeys?: DkimKey[] },
+  ): Promise<void>;
   /** Account holding a verified claim (active or removing) on this domain name, or null if none does. */
   claimedDomainOwner(name: string): Promise<string | null>;
+  /** Whether a domain row other than `exceptId` with this name is on the mail server (has a mail-server id). */
+  domainOnMailServerElsewhere(name: string, exceptId: string): Promise<boolean>;
   /** Deletes the domain row once the mail server no longer has it (`removing` domains only). */
   deleteDomain(id: string): Promise<void>;
   markMailbox(id: string, update: { status: string; stalwartId?: string; lastError: string | null }): Promise<void>;
@@ -31,7 +39,10 @@ export type MailDirectoryRepository = {
   passwordApplied(id: string, applied: string | null, credentialId: string): Promise<void>;
   /** Drops a waiting password (its job gave up, or the mailbox is going away): the hash isn't kept around. */
   clearPendingPassword(id: string): Promise<void>;
-  /** Active domains and every mailbox (for the reconciler, which decides what each status means). */
+  /**
+   * Domains that belong on the mail server (active, or pending but already added there for their DKIM keys) and every
+   * mailbox (for the reconciler, which decides what each status means).
+   */
   desired(): Promise<{ domains: string[]; mailboxes: DesiredMailbox[] }>;
 };
 
@@ -46,6 +57,11 @@ export type MailServer = {
    * mailbox of the same account); null or omitted, unknown recipients are refused during the SMTP conversation.
    */
   ensureDomain(name: string, catchAllAddress?: string | null): Promise<{ externalId: string }>;
+  /**
+   * The DKIM keys the mail server signs the domain's mail with, as TXT records (selector + `v=DKIM1; k=…; p=…`).
+   * A domain just added may not list its RSA key for a second or two.
+   */
+  domainDkimKeys(externalId: string): Promise<DkimKey[]>;
   ensureMailbox(input: {
     /** The mail server's id once created; null for a new mailbox, which must not adopt an existing account. */
     externalId: string | null;

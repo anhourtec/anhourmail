@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { randomUUID } from "node:crypto";
 
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, or, type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, or, type SQL, sql } from "drizzle-orm";
 
 import { type AccessRepository, ConflictError, type Repositories, type UnitOfWork } from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
@@ -43,6 +43,7 @@ import {
   GENESIS_HASH,
   hashEntry,
 } from "@anhourmail/core/audit";
+import type { DkimKey } from "@anhourmail/shared/dns";
 import { isSuspensionReason } from "@anhourmail/shared/platform";
 import { PLAN_ORDER, type PlanId } from "@anhourmail/shared/plans";
 import { ACCOUNT_ROLES, type AccountRole, PLATFORM_ROLES, type PlatformRole } from "@anhourmail/shared/rbac";
@@ -419,7 +420,7 @@ class PgMailDirectoryRepository implements MailDirectoryRepository {
   async getDomain(id: string): Promise<DomainState | null> {
     if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
     const [r] = await this.x.select().from(customerDomain).where(eq(customerDomain.id, id));
-    return r ? { id: r.id, name: r.name, status: r.status, stalwartId: r.stalwartId } : null;
+    return r ? { id: r.id, accountId: r.accountId, name: r.name, status: r.status, stalwartId: r.stalwartId } : null;
   }
 
   async getMailbox(id: string): Promise<MailboxState | null> {
@@ -475,11 +476,27 @@ class PgMailDirectoryRepository implements MailDirectoryRepository {
       .where(eq(mailbox.id, id));
   }
 
-  async markDomain(id: string, update: { stalwartId?: string; lastError: string | null }): Promise<void> {
+  async markDomain(
+    id: string,
+    update: { stalwartId?: string; lastError: string | null; dkimKeys?: DkimKey[] },
+  ): Promise<void> {
     await this.x
       .update(customerDomain)
-      .set({ lastError: update.lastError, ...(update.stalwartId ? { stalwartId: update.stalwartId } : {}) })
+      .set({
+        lastError: update.lastError,
+        ...(update.stalwartId ? { stalwartId: update.stalwartId } : {}),
+        ...(update.dkimKeys ? { dkimKeys: update.dkimKeys } : {}),
+      })
       .where(eq(customerDomain.id, id));
+  }
+
+  async domainOnMailServerElsewhere(name: string, exceptId: string): Promise<boolean> {
+    const [r] = await this.x
+      .select({ id: customerDomain.id })
+      .from(customerDomain)
+      .where(and(eq(customerDomain.name, name), ne(customerDomain.id, exceptId), isNotNull(customerDomain.stalwartId)))
+      .limit(1);
+    return r !== undefined;
   }
 
   async claimedDomainOwner(name: string): Promise<string | null> {
@@ -514,7 +531,12 @@ class PgMailDirectoryRepository implements MailDirectoryRepository {
     const domains = await this.x
       .select({ name: customerDomain.name })
       .from(customerDomain)
-      .where(eq(customerDomain.status, "active"));
+      .where(
+        or(
+          eq(customerDomain.status, "active"),
+          and(eq(customerDomain.status, "pending_dns"), isNotNull(customerDomain.stalwartId)),
+        ),
+      );
     const mailboxes = await this.x
       .select({
         id: mailbox.id,
@@ -548,6 +570,7 @@ function toDomain(r: typeof customerDomain.$inferSelect): CustomerDomain {
     verifyToken: r.verifyToken,
     stalwartId: r.stalwartId,
     lastError: r.lastError,
+    dkimKeys: r.dkimKeys ?? null,
     createdAt: r.createdAt,
   };
 }
@@ -590,6 +613,7 @@ class PgDomainRepository implements DomainRepository {
       verifyToken: d.verifyToken,
       stalwartId: d.stalwartId,
       lastError: d.lastError,
+      dkimKeys: d.dkimKeys ?? null,
       createdAt: d.createdAt,
     });
   }
@@ -606,7 +630,9 @@ class PgDomainRepository implements DomainRepository {
   async deletePending(id: string): Promise<boolean> {
     const rows = await this.x
       .delete(customerDomain)
-      .where(and(eq(customerDomain.id, id), eq(customerDomain.status, "pending_dns")))
+      .where(
+        and(eq(customerDomain.id, id), eq(customerDomain.status, "pending_dns"), isNull(customerDomain.stalwartId)),
+      )
       .returning({ id: customerDomain.id });
     return rows.length > 0;
   }
@@ -630,6 +656,23 @@ class PgDomainRepository implements DomainRepository {
       .from(customerDomain)
       .where(and(eq(customerDomain.status, "pending_dns"), gte(customerDomain.createdAt, since)))
       .orderBy(sql`random()`)
+      .limit(limit);
+    return rows.map(toDomain);
+  }
+
+  async missingDkimKeys(limit: number): Promise<CustomerDomain[]> {
+    const rows = await this.x
+      .select()
+      .from(customerDomain)
+      .where(
+        and(
+          ne(customerDomain.status, "removing"),
+          isNotNull(customerDomain.stalwartId),
+          isNull(customerDomain.dkimKeys),
+          isNull(customerDomain.lastError),
+        ),
+      )
+      .orderBy(customerDomain.createdAt)
       .limit(limit);
     return rows.map(toDomain);
   }

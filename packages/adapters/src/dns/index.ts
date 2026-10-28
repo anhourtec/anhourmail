@@ -2,7 +2,7 @@
 import { Resolver } from "node:dns/promises";
 
 import type { DnsResolver, LookupType } from "@anhourmail/core/domains";
-import { customerDomainRecords } from "@anhourmail/shared/dns";
+import { customerDomainRecords, type DkimKey } from "@anhourmail/shared/dns";
 import type { Platform } from "@anhourmail/shared/platform";
 
 /** "Doesn't exist" answers become `[]`; anything else (timeout, SERVFAIL, refused) is a failed lookup. */
@@ -40,18 +40,17 @@ export function systemResolver(opts: { timeoutMs?: number; servers?: string[] } 
   };
 }
 
-/** A placeholder public key: dev `.test` domains never send DKIM-checked mail anywhere. */
-const DEV_DKIM_KEY = "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAdev";
-
 /**
  * Development only: `.test` names (a reserved TLD that can never resolve on the internet) answer as if the
  * customer published every record correctly — except names starting with `unverified-`, which have none, so both
- * console states can be tried. Records point at `platform` (the configured platform domain), so they pass the same
- * checks the console runs. Everything else goes to `fallback`. Never wired up in production.
+ * console states can be tried. Records point at `platform` (the configured platform domain) and carry each claim's
+ * own ownership token and the DKIM keys the dev mail server gave it, so they pass the same checks the console runs
+ * (DKIM only once the worker has read the keys, as in production). Everything else goes to `fallback`. Never wired up
+ * in production.
  */
 export function devResolver(
   fallback: DnsResolver,
-  tokens: (domain: string) => Promise<string[]>,
+  claims: (domain: string) => Promise<{ verifyToken: string; dkimKeys: readonly DkimKey[] | null }[]>,
   platform: Platform,
 ): DnsResolver {
   return {
@@ -62,20 +61,13 @@ export function devResolver(
       // The customer domain is the last two labels (dev domains are always second-level under .test).
       const domain = labels.slice(-2).join(".");
       if (domain.startsWith("unverified-")) return [];
-      // Every account that added the name gets its own ownership TXT (as if each had published it).
+      // Every account that added the name gets its own records (as if each had published them).
       const answers = new Set<string>();
-      for (const token of await tokens(domain)) {
-        for (const r of customerDomainRecords(domain, token, platform)) {
-          if (r.type !== type || (r.name === "@" ? domain : `${r.name}.${domain}`) !== name) continue;
+      for (const claim of await claims(domain)) {
+        for (const r of customerDomainRecords(domain, claim.verifyToken, platform, claim.dkimKeys)) {
+          if (r.placeholder || r.type !== type || (r.name === "@" ? domain : `${r.name}.${domain}`) !== name) continue;
           answers.add(r.type === "MX" ? `${String(r.priority ?? 10)} ${r.value}` : r.value);
         }
-      }
-      // The key behind each DKIM CNAME (a real resolver follows the CNAME for the TXT lookup).
-      if (type === "TXT" && answers.size === 0) {
-        const dkim = customerDomainRecords(domain, "", platform).some(
-          (r) => r.purpose === "dkim" && `${r.name}.${domain}` === name,
-        );
-        if (dkim) answers.add(DEV_DKIM_KEY);
       }
       return [...answers];
     },

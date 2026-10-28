@@ -76,6 +76,17 @@ Each migration gets a section in this shape:
 - Rollback:
 ```
 
+### 0019_customer_domain_dkim_keys · uncommitted · 2026-10-28 · Safe
+
+- Added: `customer_domain.dkim_keys jsonb` (nullable): the DKIM public keys the mail server signs the domain with
+  (`[{ selector, value }]`, read from `x:Domain/get` → `dnsZoneFile` by the worker's `domain.ensure`). Public halves
+  only; private keys never leave Stalwart.
+- Changed: —
+- Removed: —
+- Data: none. Existing domains start with null; the domain-recheck scheduler queues `domain.ensure` for every domain
+  already on the mail server, which fills it in (no manual backfill).
+- Rollback: drop the column (the console shows the DKIM placeholder again until it is re-added and re-filled).
+
 ### 0018_add_user · uncommitted · 2026-10-24 · Safe
 
 - Added: `mailbox.display_name` (sender name, nullable), `mailbox.must_change_password` (bool, default false);

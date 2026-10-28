@@ -19,7 +19,7 @@ export type ProvisioningJob = {
   runAfter: Date;
 };
 
-export type DomainState = { id: string; name: string; status: string; stalwartId: string | null };
+export type DomainState = { id: string; accountId: string; name: string; status: string; stalwartId: string | null };
 
 export type AliasState = { address: string; kind: "alias" | "masked"; enabled: boolean; description: string | null };
 

@@ -19,6 +19,8 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
+import type { DkimKey } from "@anhourmail/shared/dns";
+
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updatedAt = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
 
@@ -271,6 +273,11 @@ export const customerDomain = pgTable(
      * off (unknown recipients refused). Cleared when that mailbox is suspended or deleted.
      */
     catchAllMailboxId: uuid("catch_all_mailbox_id").references(() => mailbox.id, { onDelete: "set null" }),
+    /**
+     * The DKIM keys the mail server signs with (public halves: `[{ selector, value }]`, read from its zone file by the
+     * worker); null until the domain is on the mail server and they were read. Never private keys.
+     */
+    dkimKeys: jsonb("dkim_keys").$type<DkimKey[]>(),
     createdAt: createdAt(),
   },
   (t) => [

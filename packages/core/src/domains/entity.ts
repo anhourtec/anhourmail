@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { domainToASCII } from "node:url";
 
+import type { DkimKey } from "@anhourmail/shared/dns";
 import { COMPANY_DOMAIN, PRODUCT_DOMAIN } from "@anhourmail/shared/platform";
 
 import { ValidationError } from "../errors";
 
 /**
- * A customer domain. `pending_dns` until the required records check out, then `active` (the worker adds it to the
- * mail server). `removing` while the worker takes it off the mail server; the row goes once that succeeds.
+ * A customer domain. `pending_dns` until the required records check out, then `active`. The worker adds it to the
+ * mail server once its ownership and MX records are found (still pending, so its DKIM keys exist to publish), or at
+ * activation. `removing` while the worker takes it off the mail server; the row goes once that succeeds.
  */
 export type DomainStatus = "pending_dns" | "active" | "removing";
 
@@ -21,6 +23,11 @@ export type CustomerDomain = {
   verifyToken: string;
   stalwartId: string | null;
   lastError: string | null;
+  /**
+   * The DKIM keys the mail server signs this domain's mail with (public halves, from its zone file), cached by the
+   * worker's `domain.ensure`. Null (or absent) until the domain is on the mail server and its keys were read.
+   */
+  dkimKeys?: DkimKey[] | null;
   createdAt: Date;
 };
 

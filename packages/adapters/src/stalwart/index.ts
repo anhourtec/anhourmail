@@ -152,6 +152,10 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
       };
     },
 
+    async domainDkimKeys(externalId) {
+      return mgmt.domainDkimRecords(externalId);
+    },
+
     async revokeAppPassword({ externalId, credentialId, createdAt }) {
       await mgmt.revokeAppPasswordCredential(externalId, credentialId, createdAt);
     },

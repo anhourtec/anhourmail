@@ -51,7 +51,7 @@ export async function listDomains(deps: Deps, actor: Actor, accountId: string): 
 export async function getDomain(deps: Deps, actor: Actor, accountId: string, id: string): Promise<DomainDetail> {
   authorize(actor, "domain.read", accountId);
   const d = await deps.uow.run((r) => scoped(r, accountId, id));
-  return { ...view(d), records: customerDomainRecords(d.name, d.verifyToken, deps.platform) };
+  return { ...view(d), records: customerDomainRecords(d.name, d.verifyToken, deps.platform, d.dkimKeys) };
 }
 
 /**
@@ -94,6 +94,7 @@ export async function addDomain(
         verifyToken: randomBytes(16).toString("hex"),
         stalwartId: null,
         lastError: null,
+        dkimKeys: null,
         createdAt: deps.clock.now(),
       };
       await repos.domains.insert(domain);
@@ -106,6 +107,21 @@ export async function addDomain(
 }
 
 export type CheckResult = { domain: DomainView; records: CheckedRecord[]; activated: boolean };
+
+const found = (records: readonly CheckedRecord[], purpose: CheckedRecord["purpose"]) =>
+  records.some((r) => r.purpose === purpose && r.state === "ok");
+
+/**
+ * Whether the worker should (re)read the domain's DKIM keys: none cached yet, and either it is on the mail server
+ * already (a domain from before keys were cached, or a read that came too early) or it is pending with its ownership
+ * and MX records found — proof enough to add it to the mail server, which creates its keys. Never before: a domain on
+ * the mail server is local to it, so an unproven name could divert our other customers' mail for that domain.
+ */
+function needsDkimKeys(d: CustomerDomain, records: readonly CheckedRecord[]): boolean {
+  if (d.status === "removing" || (d.dkimKeys ?? []).length > 0) return false;
+  if (d.stalwartId !== null) return true;
+  return d.status === "pending_dns" && found(records, "ownership") && found(records, "inbound");
+}
 
 /**
  * Checks every record live. When all required records pass on a pending domain, it becomes active and the
@@ -122,18 +138,23 @@ export async function checkDomain(
   const spec = { permission: "domain.manage", accountId, target: { type: "domain", id } } as const;
   await authorizeAudited(deps, actor, req, { ...spec, action: "domain.verified" });
   const before = await deps.uow.run((r) => scoped(r, accountId, id));
-  const records = await checkRecords(dns, before.name, before.verifyToken, deps.platform);
+  const records = await checkRecords(dns, before.name, before.verifyToken, deps.platform, before.dkimKeys);
   const pass = requiredPass(records);
   const failing = records.filter((r) => r.required && r.state !== "ok").map((r) => r.purpose);
+  // The DKIM keys come from the mail server: the worker adds the domain there (or re-reads it) and caches them.
+  const prepare = needsDkimKeys(before, records);
+  const enqueueEnsure = (repos: Repositories) =>
+    repos.provisioning.enqueue({ kind: "domain.ensure", subjectId: before.id, runAfter: deps.clock.now() });
 
   if (before.status !== "pending_dns" || !pass) {
     // Audit the manual check that didn't activate anything (scheduler re-checks are not audited).
     if (before.status === "pending_dns" && actor.kind === "user") {
-      await mutation(deps, actor, req, { ...spec, action: "domain.verify_failed" }, async () => ({
-        result: null,
-        target: { id: before.id, label: before.name },
-        meta: { failing },
-      }));
+      await mutation(deps, actor, req, { ...spec, action: "domain.verify_failed" }, async (repos) => {
+        if (prepare) await enqueueEnsure(repos);
+        return { result: null, target: { id: before.id, label: before.name }, meta: { failing } };
+      });
+    } else if (prepare) {
+      await deps.uow.run(enqueueEnsure);
     }
     return { domain: view(before), records, activated: false };
   }
@@ -171,17 +192,24 @@ export async function removeDomain(deps: Deps, actor: Actor, accountId: string, 
           "Remove or move the mailboxes and aliases on this domain first. A deleted mailbox keeps its address until it's permanently removed.",
         );
       }
-      if (d.status === "pending_dns") {
+      if (d.status === "pending_dns" && d.stalwartId === null) {
         if (!(await repos.domains.deletePending(d.id))) {
           throw new ConflictError("This domain changed while you were removing it. Try again.");
         }
+      } else if (d.status === "pending_dns") {
+        // Pending but already on the mail server (for its DKIM keys): the worker takes it off, then deletes the row.
+        if (!(await repos.domains.transition(d.id, "pending_dns", "removing"))) {
+          throw new ConflictError("This domain changed while you were removing it. Try again.");
+        }
+        await repos.provisioning.enqueue({ kind: "domain.remove", subjectId: d.id, runAfter: deps.clock.now() });
       } else {
         if (!(await repos.domains.transition(d.id, "active", "removing"))) {
           throw new ConflictError("This domain changed while you were removing it. Try again.");
         }
         await repos.provisioning.enqueue({ kind: "domain.remove", subjectId: d.id, runAfter: deps.clock.now() });
       }
-      return { result: { status: d.status === "pending_dns" ? "removed" : "removing" }, target: { label: d.name } };
+      const gone = d.status === "pending_dns" && d.stalwartId === null;
+      return { result: { status: gone ? "removed" : "removing" }, target: { label: d.name } };
     },
   );
 }
@@ -218,6 +246,21 @@ export async function recheckPendingDomains(deps: Deps, dns: DnsResolver, limits
   return activated;
 }
 
+/**
+ * Scheduler: domains on the mail server whose DKIM keys were never read (added before the keys were cached, or read
+ * too early) get a `domain.ensure` job, which reads and caches them, so their DNS records show without anyone acting.
+ * Returns how many were queued.
+ */
+export async function backfillDkimKeys(deps: Deps, limit = RECHECK_LIMITS.total): Promise<number> {
+  return deps.uow.run(async (r) => {
+    const missing = await r.domains.missingDkimKeys(limit);
+    for (const d of missing) {
+      await r.provisioning.enqueue({ kind: "domain.ensure", subjectId: d.id, runAfter: deps.clock.now() });
+    }
+    return missing.length;
+  });
+}
+
 /** Read-only live view of the records (`domain.read`): no state change, no audit — for rendering the page. */
 export async function inspectDomain(
   deps: Deps,
@@ -228,7 +271,7 @@ export async function inspectDomain(
 ): Promise<{ domain: DomainView; records: CheckedRecord[] }> {
   authorize(actor, "domain.read", accountId);
   const d = await deps.uow.run((r) => scoped(r, accountId, id));
-  return { domain: view(d), records: await checkRecords(dns, d.name, d.verifyToken, deps.platform) };
+  return { domain: view(d), records: await checkRecords(dns, d.name, d.verifyToken, deps.platform, d.dkimKeys) };
 }
 
 /** Whether the account's plan includes custom domains, and the per-account ceiling (`domain.read`). */

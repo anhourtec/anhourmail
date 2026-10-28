@@ -3,7 +3,7 @@ import "server-only";
 
 import { createMailer, type Mailer } from "@anhourmail/adapters/mail";
 import { devResolver, systemResolver } from "@anhourmail/adapters/dns";
-import { db, domainVerifyTokens, PgUnitOfWork } from "@anhourmail/adapters/postgres";
+import { db, devDomainClaims, PgUnitOfWork } from "@anhourmail/adapters/postgres";
 import { type Deps, systemClock } from "@anhourmail/core";
 import type { DnsResolver } from "@anhourmail/core/domains";
 import type { PasswordHasher } from "@anhourmail/core/mailboxes";
@@ -46,7 +46,7 @@ export function container(): Container {
     dns:
       env().NODE_ENV === "production"
         ? systemResolver()
-        : devResolver(systemResolver(), (name) => domainVerifyTokens(db(), name), platform()),
+        : devResolver(systemResolver(), (name) => devDomainClaims(db(), name), platform()),
     passwords: mailboxPasswords(env().MAILBOX_PASSWORD_GRANT_KEY, breaches),
     breaches,
   };

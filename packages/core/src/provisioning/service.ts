@@ -66,22 +66,50 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
   }
   if (job.kind === "domain.ensure") {
     const domain = await deps.uow.run((r) => r.directory.getDomain(job.subjectId));
-    if (!domain) throw new Error("domain not found");
+    if (!domain) return; // removed while still pending: nothing to add
     // Removed before the worker got to it: nothing to add.
     if (domain.status === "removing") return;
-    // Only verified domains reach the mail server (DNS ownership proven first).
-    if (domain.status !== "active") throw new Error(`domain not verified (status ${domain.status})`);
-    // The catch-all as it is now (only while its mailbox is active; turned off otherwise).
-    const catchAll = await deps.uow.run((r) => r.catchAll.targetAddress(domain.id));
+    // Active (verified), or pending with its ownership and MX records found, which is when this job is queued for a
+    // pending domain (`checkDomain`): the mail server creates its DKIM keys, which the customer then publishes.
+    if (domain.status !== "active" && domain.status !== "pending_dns") {
+      throw new Error(`domain not verified (status ${domain.status})`);
+    }
+    const pending = domain.status === "pending_dns";
+    // Never touch a name another account has verified, and never share one mail-server domain between two pending
+    // claims (removing one would take it from the other).
+    const owner = await deps.uow.run((r) => r.directory.claimedDomainOwner(domain.name));
+    if (owner !== null && owner !== domain.accountId) throw new Error("domain belongs to another account");
+    if (pending && (await deps.uow.run((r) => r.directory.domainOnMailServerElsewhere(domain.name, domain.id)))) {
+      throw new Error("domain is being set up by another account");
+    }
+    // The catch-all as it is now (only while its mailbox is active; turned off otherwise; never while pending).
+    const catchAll = pending ? null : await deps.uow.run((r) => r.catchAll.targetAddress(domain.id));
     const { externalId } = await mail.ensureDomain(domain.name, catchAll);
-    // Marked for removal while we were adding it: take it off again so the mail server keeps no orphan. If the row
-    // is already gone, do nothing by name — another account may hold the name by now; the reconciler reports drift.
+    // Deleted (still pending) while we were adding it: take it off again unless someone else holds the name now.
+    const offAgainUnlessHeld = async () => {
+      const held = await deps.uow.run(
+        async (r) =>
+          (await r.directory.claimedDomainOwner(domain.name)) !== null ||
+          (await r.directory.domainOnMailServerElsewhere(domain.name, domain.id)),
+      );
+      if (!held) await mail.removeDomain(domain.name);
+    };
     const now = await deps.uow.run((r) => r.directory.getDomain(domain.id));
-    if (now?.status !== "active") {
-      if (now?.status === "removing") await mail.removeDomain(domain.name);
+    if (!now) return offAgainUnlessHeld();
+    // Marked for removal while we were adding it: take it off again so the mail server keeps no orphan.
+    if (now.status === "removing") {
+      await mail.removeDomain(domain.name);
       return;
     }
+    // From now on a removal goes through a job that takes the domain off the mail server; a pending row deleted in
+    // the moment before this (it had no mail-server id yet) is caught by the second read.
     await deps.uow.run((r) => r.directory.markDomain(domain.id, { stalwartId: externalId, lastError: null }));
+    if (!(await deps.uow.run((r) => r.directory.getDomain(domain.id)))) return offAgainUnlessHeld();
+    const keys = await mail.domainDkimKeys(externalId);
+    // The RSA key (the one every receiver checks) is created a moment after the domain: retry until it is there, so
+    // the customer is never shown a partial set.
+    if (!keys.some((k) => /(^|;)\s*k=rsa\s*(;|$)/i.test(k.value))) throw new Error("DKIM keys not ready yet");
+    await deps.uow.run((r) => r.directory.markDomain(domain.id, { lastError: null, dkimKeys: keys }));
     return;
   }
   const first = await deps.uow.run((r) => r.directory.getMailbox(job.subjectId));

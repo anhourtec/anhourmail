@@ -1,0 +1,1 @@
+ALTER TABLE "customer_domain" ADD COLUMN "dkim_keys" jsonb;

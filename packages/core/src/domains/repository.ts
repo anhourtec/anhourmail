@@ -10,12 +10,20 @@ export type DomainRepository = {
   insert(domain: CustomerDomain): Promise<void>;
   /** Conditional transition; false if the domain was no longer in `from` (a concurrent change won). */
   transition(id: string, from: DomainStatus, to: DomainStatus): Promise<boolean>;
-  /** Deletes a domain only while it is still pending; false if it changed meanwhile (e.g. a check activated it). */
+  /**
+   * Deletes a domain only while it is still pending and not on the mail server; false if it changed meanwhile (a
+   * check activated it, or the worker added it to the mail server, which then needs a removal job).
+   */
   deletePending(id: string): Promise<boolean>;
   /** Mailboxes and aliases whose address is on this domain. */
   addressCount(name: string): Promise<number>;
   /** Pending domains created after `since`, in no fixed order (the scheduler samples them so none starves). */
   pending(since: Date, limit: number): Promise<CustomerDomain[]>;
+  /**
+   * Domains on the mail server (and not being removed) whose DKIM keys haven't been read yet and whose last job didn't
+   * fail (a failure waits for the customer's next check instead of retrying forever), for the backfill.
+   */
+  missingDkimKeys(limit: number): Promise<CustomerDomain[]>;
 };
 
 /**

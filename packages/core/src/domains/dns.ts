@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { customerDomainRecords, type DnsRecordTemplate } from "@anhourmail/shared/dns";
+import { customerDomainRecords, type DkimKey, type DnsRecordTemplate } from "@anhourmail/shared/dns";
 import type { Platform } from "@anhourmail/shared/platform";
 
 /** Record types we look up. */
@@ -21,24 +21,36 @@ export type RecordState = "ok" | "missing" | "wrong" | "error";
 export type CheckedRecord = DnsRecordTemplate & { fqdn: string; state: RecordState; found: string[]; problem?: string };
 
 export const DKIM_NOT_FOUND = "DKIM not found in DNS — mail will fail DKIM.";
-export const DKIM_KEY_NOT_PUBLISHED =
-  "DKIM not found in DNS — mail will fail DKIM. Your record is right; the key it points to isn't published yet.";
+export const DKIM_KEY_DIFFERENT =
+  "The DKIM key in DNS is not this one — mail will fail DKIM. Replace the value with the one shown.";
+export const DKIM_KEYS_PENDING =
+  "Your DKIM keys appear here about a minute after the ownership and MX records are found. Add them, then check again.";
 
-/** A published DKIM public key: a `v=DKIM1` TXT (the tag is optional) with a non-empty `p=` (empty means revoked). */
-export function isDkimKey(answer: string): boolean {
-  const tags = new Map(
+/** A DKIM key record's tags (`v=DKIM1; k=rsa; p=…`): names lowercased; values without whitespace or stray quotes. */
+function dkimTags(answer: string): Map<string, string> {
+  return new Map(
     answer
       .split(";")
       .map((t) => t.trim())
       .filter((t) => t.includes("="))
       .map((t) => {
         const i = t.indexOf("=");
-        return [t.slice(0, i).trim().toLowerCase(), t.slice(i + 1).replace(/\s+/g, "")] as const;
+        return [t.slice(0, i).trim().toLowerCase(), t.slice(i + 1).replace(/[\s"]+/g, "")] as const;
       }),
   );
+}
+
+/** A published DKIM public key: a `v=DKIM1` TXT (the tag is optional) with a non-empty `p=` (empty means revoked). */
+export function isDkimKey(answer: string): boolean {
+  const tags = dkimTags(answer);
   const v = tags.get("v");
   if (v !== undefined && v.toUpperCase() !== "DKIM1") return false;
   return (tags.get("p") ?? "") !== "";
+}
+
+/** Does a TXT answer publish the same DKIM public key as `expected`? Only `p=` decides; spacing and quotes don't. */
+export function sameDkimKey(answer: string, expected: string): boolean {
+  return isDkimKey(answer) && dkimTags(answer).get("p") === dkimTags(expected).get("p");
 }
 
 const lower = (s: string) => s.trim().toLowerCase();
@@ -60,6 +72,8 @@ export function matches(record: DnsRecordTemplate, answer: string): boolean {
       return /^v=dmarc1;/i.test(answer.replace(/\s+/g, ""));
     case "ownership":
       return answer.trim() === record.value;
+    case "dkim":
+      return !record.placeholder && sameDkimKey(answer, record.value);
     default:
       break;
   }
@@ -72,26 +86,27 @@ export function matches(record: DnsRecordTemplate, answer: string): boolean {
   return host(answer) === host(record.value);
 }
 
-/** Looks up every record for a domain in parallel and grades each one. */
+/**
+ * Looks up every record for a domain in parallel and grades each one. `dkim`: the domain's keys from the mail server
+ * (null until known: the DKIM record is a placeholder that can't pass yet).
+ */
 export async function checkRecords(
   dns: DnsResolver,
   domain: string,
   verifyToken: string,
   platform: Platform,
+  dkim: readonly DkimKey[] | null = null,
 ): Promise<CheckedRecord[]> {
   return Promise.all(
-    customerDomainRecords(domain, verifyToken, platform).map(async (r): Promise<CheckedRecord> => {
+    customerDomainRecords(domain, verifyToken, platform, dkim).map(async (r): Promise<CheckedRecord> => {
+      if (r.placeholder) return { ...r, fqdn: domain, state: "missing", found: [], problem: DKIM_KEYS_PENDING };
       const fqdn = fqdnOf(r.name, domain);
       try {
         const found = await dns.lookup(r.type, fqdn);
         const state: RecordState = found.length === 0 ? "missing" : found.some((a) => matches(r, a)) ? "ok" : "wrong";
-        if (r.purpose !== "dkim") return { ...r, fqdn, state, found: found.slice(0, 5) };
-        if (state !== "ok") return { ...r, fqdn, state, found: found.slice(0, 5), problem: DKIM_NOT_FOUND };
-        // The CNAME is right; DKIM only passes if the key behind it resolves (a TXT lookup follows the CNAME).
-        const keys = await dns.lookup("TXT", fqdn);
-        return keys.some(isDkimKey)
-          ? { ...r, fqdn, state: "ok", found: found.slice(0, 5) }
-          : { ...r, fqdn, state: "missing", found: found.slice(0, 5), problem: DKIM_KEY_NOT_PUBLISHED };
+        const graded = { ...r, fqdn, state, found: found.slice(0, 5) };
+        if (r.purpose !== "dkim" || state === "ok") return graded;
+        return { ...graded, problem: state === "wrong" ? DKIM_KEY_DIFFERENT : DKIM_NOT_FOUND };
       } catch {
         return { ...r, fqdn, state: "error", found: [] };
       }

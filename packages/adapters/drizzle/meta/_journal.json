@@ -134,6 +134,13 @@
       "when": 1792815724266,
       "tag": "0018_add_user",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1793194365438,
+      "tag": "0019_customer_domain_dkim_keys",
+      "breakpoints": true
     }
   ]
 }

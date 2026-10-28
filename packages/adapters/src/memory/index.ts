@@ -288,7 +288,15 @@ function repositories(s: MemoryState): Repositories {
   const directory: MailDirectoryRepository = {
     getDomain: async (id) => {
       const d = s.domains.find((x) => x.id === id);
-      return d ? clone<DomainState>({ id: d.id, name: d.name, status: d.status, stalwartId: d.stalwartId }) : null;
+      return d
+        ? clone<DomainState>({
+            id: d.id,
+            accountId: d.accountId,
+            name: d.name,
+            status: d.status,
+            stalwartId: d.stalwartId,
+          })
+        : null;
     },
     getMailbox: async (id) => {
       const m = s.mailboxes.find((x) => x.id === id);
@@ -333,10 +341,13 @@ function repositories(s: MemoryState): Repositories {
         Object.assign(d, {
           lastError: update.lastError,
           ...(update.stalwartId ? { stalwartId: update.stalwartId } : {}),
+          ...(update.dkimKeys ? { dkimKeys: clone(update.dkimKeys) } : {}),
         });
     },
     claimedDomainOwner: async (name) =>
       s.domains.find((d) => d.name === name && d.status !== "pending_dns")?.accountId ?? null,
+    domainOnMailServerElsewhere: async (name, exceptId) =>
+      s.domains.some((d) => d.name === name && d.id !== exceptId && d.stalwartId !== null),
     deleteDomain: async (id) => {
       s.domains = s.domains.filter((d) => !(d.id === id && d.status === "removing"));
       s.catchAll = s.catchAll.filter((c) => s.domains.some((d) => d.id === c.domainId));
@@ -352,7 +363,9 @@ function repositories(s: MemoryState): Repositories {
       }
     },
     desired: async () => ({
-      domains: s.domains.filter((d) => d.status === "active").map((d) => d.name),
+      domains: s.domains
+        .filter((d) => d.status === "active" || (d.status === "pending_dns" && d.stalwartId !== null))
+        .map((d) => d.name),
       mailboxes: s.mailboxes.map((m) => ({
         id: m.id,
         address: m.address,
@@ -370,7 +383,7 @@ function repositories(s: MemoryState): Repositories {
     nameTaken: async (name) => s.domains.some((d) => d.name === name && d.status !== "pending_dns"),
     insert: async (d) => {
       if (s.domains.some((x) => x.accountId === d.accountId && x.name === d.name)) throw new Error("duplicate domain");
-      s.domains.push(clone(d));
+      s.domains.push({ ...clone(d), dkimKeys: d.dkimKeys ?? null });
     },
     transition: async (id, from, to) => {
       const d = s.domains.find((x) => x.id === id && x.status === from);
@@ -386,7 +399,7 @@ function repositories(s: MemoryState): Repositories {
     },
     deletePending: async (id) => {
       const before = s.domains.length;
-      s.domains = s.domains.filter((d) => !(d.id === id && d.status === "pending_dns"));
+      s.domains = s.domains.filter((d) => !(d.id === id && d.status === "pending_dns" && d.stalwartId === null));
       s.catchAll = s.catchAll.filter((c) => c.domainId !== id || s.domains.some((d) => d.id === id));
       return s.domains.length < before;
     },
@@ -398,6 +411,15 @@ function repositories(s: MemoryState): Repositories {
         s.domains
           .filter((d) => d.status === "pending_dns" && d.createdAt >= since)
           .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+          .slice(0, limit),
+      ),
+    missingDkimKeys: async (limit) =>
+      clone(
+        s.domains
+          .filter(
+            (d) =>
+              d.status !== "removing" && d.stalwartId !== null && (d.dkimKeys ?? null) === null && d.lastError === null,
+          )
           .slice(0, limit),
       ),
   };

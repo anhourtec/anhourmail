@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { devResolver, systemResolver } from "@anhourmail/adapters/dns";
-import { createDb, domainVerifyTokens, PgUnitOfWork } from "@anhourmail/adapters/postgres";
+import { createDb, devDomainClaims, PgUnitOfWork } from "@anhourmail/adapters/postgres";
 import { stalwartMailServer } from "@anhourmail/adapters/stalwart";
 import { type Deps, systemClock } from "@anhourmail/core";
 import type { DnsResolver } from "@anhourmail/core/domains";
@@ -32,7 +32,7 @@ export function runtime(kind: WorkerProcess = "job"): {
     dns:
       process.env.NODE_ENV === "production"
         ? systemResolver()
-        : devResolver(systemResolver(), (name) => domainVerifyTokens(db, name), platform),
+        : devResolver(systemResolver(), (name) => devDomainClaims(db, name), platform),
     close: () => pool.end(),
   };
 }
