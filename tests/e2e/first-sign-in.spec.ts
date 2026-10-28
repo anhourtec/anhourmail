@@ -15,7 +15,8 @@ test("a user added with a required password change chooses their own at first si
   test.setTimeout(90_000);
   const u = e2eUsers();
   const fs = u.firstSignIn[testInfo.project.name] ?? { owner: "", domain: "" };
-  const localPart = `robin${String(testInfo.retry)}`;
+  // Starts with the run id, so the fixture cleanup removes the login it creates.
+  const localPart = `${u.run}-robin${String(testInfo.retry)}`;
   const address = `${localPart}@${fs.domain}`;
   await signIn(page, fs.owner, u.password);
 
