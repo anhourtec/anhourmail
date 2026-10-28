@@ -5,7 +5,7 @@ import Link from "next/link";
 import { can } from "@anhourmail/core";
 import { listMailboxAppPasswords } from "@anhourmail/core/app-passwords";
 import { getMailbox, listMailboxes, mailboxOptions, mailboxStoragePool } from "@anhourmail/core/mailboxes";
-import { grantableRoles } from "@anhourmail/core/people";
+import { addUserAvailability, grantableRoles, listPeople } from "@anhourmail/core/people";
 import { MAILBOX_DELETE_GRACE_DAYS, MAX_MAILBOXES } from "@anhourmail/shared/plans";
 import { storageCheckedAgo } from "@anhourmail/shared/storage";
 import { PageHeader } from "@anhourmail/ui/page-header";
@@ -20,6 +20,7 @@ import { requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
 import { env } from "@/server/env";
 import { forPage } from "@/server/page-guard";
+import { mailboxRoom } from "@/server/people-actions";
 import { param } from "@/server/search-params";
 
 export const metadata: Metadata = { title: "Mailboxes" };
@@ -50,6 +51,7 @@ export default async function MailboxesPage({
     mailboxes: await listMailboxes(deps, actor, accountId),
     pool: await mailboxStoragePool(deps, actor, accountId),
     options: canManage ? await mailboxOptions(deps, actor, accountId) : null,
+    people: canManage && can(actor, "member.read", accountId) ? await listPeople(deps, actor, accountId) : null,
     open: openId ? await getMailbox(deps, actor, accountId, openId) : null,
     appPasswords: openId ? await listMailboxAppPasswords(deps, actor, accountId, openId) : null,
     // When the page was read, for "Updated 5 minutes ago" (storage is measured every ~10 minutes).
@@ -74,6 +76,11 @@ export default async function MailboxesPage({
     : options !== null && options.remaining <= 0
       ? "This account now has all the mailboxes its plan includes."
       : "Shared addresses need one of your own domains, or the plan's free address.";
+  const addUser = addUserAvailability({
+    permitted: canManage && grantableRoles(actor, accountId).length > 0,
+    people: data.people?.limits ?? null,
+    mailboxes: options ? mailboxRoom(options) : null,
+  });
   // The free platform address (ADR-0021): offered until the account has one, while the plan has room.
   const canClaim = options !== null && options.platform.used === 0 && options.platform.allowed;
   const claiming = canClaim && param(sp, "claim") === "1" ? options : null;
@@ -126,6 +133,8 @@ export default async function MailboxesPage({
           mailboxes come with billing, which isn&apos;t open yet.
         </p>
       )}
+      {/* Why "Add a user" is disabled, as text too (the mailbox ceiling has its own line above). */}
+      {addUser.state === "full" && addUser.code !== "mailboxes_full" && <p className="am-small">{addUser.reason}</p>}
       <MailboxList
         accountId={accountId}
         rows={mailboxes.map((m) => ({
@@ -141,7 +150,13 @@ export default async function MailboxesPage({
         canManage={canManage}
         openId={open?.id ?? null}
         createHref={canAdd ? `${path}?new=1` : null}
-        addUserHref={canAdd && grantableRoles(actor, accountId).length > 0 ? `${path}/new` : null}
+        addUser={
+          addUser.state === "ready"
+            ? { href: `${path}/new` }
+            : addUser.state === "full"
+              ? { reason: addUser.reason }
+              : null
+        }
         docsHref={`${env().SITE_URL.replace(/\/$/, "")}/docs/mailboxes`}
         graceDays={MAILBOX_DELETE_GRACE_DAYS}
       />

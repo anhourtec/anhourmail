@@ -9,7 +9,14 @@ import { useMemo, useState, useTransition } from "react";
 
 import { callApi } from "../api";
 import { bulkMessage, runBulk } from "../console/bulk";
-import { CommandBar, CommandButton, CommandLink, ListSearch, OverflowMenu } from "../console/command-bar";
+import {
+  CommandBar,
+  CommandButton,
+  CommandLink,
+  CommandUnavailable,
+  ListSearch,
+  OverflowMenu,
+} from "../console/command-bar";
 import {
   BulkBar,
   Checkbox,
@@ -64,7 +71,7 @@ export function MailboxList({
   canManage,
   openId,
   createHref,
-  addUserHref,
+  addUser,
   docsHref,
   graceDays,
 }: {
@@ -74,8 +81,11 @@ export function MailboxList({
   openId: string | null;
   /** Where "Add a shared address" (⋯ menu) goes, or null when one can't be added now. */
   createHref: string | null;
-  /** Where "Add a user" goes (a person with their own mailbox), or null when one can't be added now. */
-  addUserHref: string | null;
+  /**
+   * "Add a user" (a person with their own mailbox): where it goes, or why it's disabled (the account is full), or null
+   * when it isn't offered here (core `addUserAvailability`).
+   */
+  addUser: { href: string } | { reason: string } | null;
   docsHref: string;
   graceDays: number;
 }) {
@@ -148,10 +158,15 @@ export function MailboxList({
           </>
         }
       >
-        {addUserHref && (
-          <CommandLink href={addUserHref} icon={<UserPlus />}>
+        {addUser && "href" in addUser && (
+          <CommandLink href={addUser.href} icon={<UserPlus />}>
             Add a user
           </CommandLink>
+        )}
+        {addUser && "reason" in addUser && (
+          <CommandUnavailable icon={<UserPlus />} reason={addUser.reason}>
+            Add a user
+          </CommandUnavailable>
         )}
         <CommandButton
           icon={<RefreshCw />}
