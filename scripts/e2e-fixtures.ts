@@ -63,6 +63,8 @@ if (mode === "create") {
   > = {};
   const passwords: Record<string, { owner: string; member: string }> = {};
   const suspension: Record<string, { accountName: string; owner: string; member: string }> = {};
+  const firstSignIn: Record<string, { owner: string; domain: string }> = {};
+  const mgmt = stalwartDevAdmin();
   for (const project of ["desktop", "mobile"]) {
     const [secAccount] = await db
       .insert(schema.customerAccount)
@@ -118,6 +120,24 @@ if (mode === "create") {
       { accountId: suspAccount.id, userId: suspMember.id, role: "member" },
     ]);
     suspension[project] = { accountName: suspAccount.name, owner: suspOwner.email, member: suspMember.email };
+    // First-sign-in password change journey: an account per project with a domain already verified (on the mail
+    // server and active here), where its Owner adds a user who must choose their own password.
+    const [fsAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} First sign-in ${project}`, plan: "plus" })
+      .returning();
+    if (!fsAccount) throw new Error("first sign-in account not created");
+    const fsOwner = await addLogin(`fs-${project}-owner`);
+    await db.insert(schema.accountMembership).values({ accountId: fsAccount.id, userId: fsOwner.id, role: "owner" });
+    const fsDomain = `${run}-fs-${project}.test`;
+    await db.insert(schema.customerDomain).values({
+      accountId: fsAccount.id,
+      name: fsDomain,
+      status: "active",
+      verifyToken: `${run}-fs-${project}`,
+      stalwartId: await mgmt.upsertDomain({ name: fsDomain }),
+    });
+    firstSignIn[project] = { owner: fsOwner.email, domain: fsDomain };
     security[project] = {
       totp: logins.totp.email,
       passkey: logins.passkey.email,
@@ -133,7 +153,6 @@ if (mode === "create") {
   // control plane (active, so the webmail's access gate admits it); `delete` removes both (names carry the run id).
   const recipientDomain = `${run}.test`;
   const recipient = { address: `inbox@${recipientDomain}`, password: `${randomBytes(12).toString("base64url")}-E2e` };
-  const mgmt = stalwartDevAdmin();
   const domainStalwartId = await mgmt.upsertDomain({ name: recipientDomain });
   const userStalwartId = await mgmt.upsertUser({
     name: "inbox",
@@ -159,7 +178,7 @@ if (mode === "create") {
   writeFileSync(
     FILE,
     JSON.stringify(
-      { run, password, accountName: account.name, users, recipient, security, passwords, suspension },
+      { run, password, accountName: account.name, users, recipient, security, passwords, suspension, firstSignIn },
       null,
       2,
     ),
