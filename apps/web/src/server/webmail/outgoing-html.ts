@@ -304,6 +304,12 @@ export function sanitizeOutgoingHtml(input: string): OutgoingHtml {
 
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", nbsp: " " };
 
+/**
+ * The most "> " levels a line gets: deeper quotes keep this many. Bounds the text part to a small multiple of the
+ * HTML however deeply someone nests quotes (each line's prefix would otherwise grow with the depth).
+ */
+export const MAX_QUOTE_PREFIX = 8;
+
 /** Private-use markers for the start and end of a quote while the text is built (removed from the input first). */
 const QUOTE_OPEN = "\uE000";
 const QUOTE_CLOSE = "\uE001";
@@ -346,7 +352,7 @@ function quoteLines(text: string): string {
     } else {
       if (separate && depth === 0) out.push("");
       separate = false;
-      out.push(depth > 0 ? `${">".repeat(depth)} ${item.text}`.trimEnd() : item.text);
+      out.push(depth > 0 ? `${">".repeat(Math.min(depth, MAX_QUOTE_PREFIX))} ${item.text}`.trimEnd() : item.text);
     }
   }
   return out.join("\n");

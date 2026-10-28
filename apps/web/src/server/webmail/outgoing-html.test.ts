@@ -6,6 +6,7 @@ import {
   MAX_DATA_IMAGE_BYTES,
   MAX_OUTGOING_HTML,
   MAX_OUTGOING_STYLE,
+  MAX_QUOTE_PREFIX,
   outgoingText,
   sanitizeOutgoingHtml,
 } from "./outgoing-html";
@@ -319,6 +320,16 @@ describe("outgoingText", () => {
         .join("\n")
         .replace("-- \n", "--\n"),
     );
+  });
+
+  it("caps the quote prefix, so deeply nested quotes can't blow up the text part", () => {
+    const depth = 5000;
+    const html = `${"<blockquote>x".repeat(depth)}${"</blockquote>".repeat(depth)}`;
+    const text = outgoingText(html);
+    const lines = text.split("\n");
+    expect(lines).toHaveLength(depth);
+    expect(lines.at(-1)).toBe(`${">".repeat(MAX_QUOTE_PREFIX)} x`);
+    expect(text.length).toBeLessThan(html.length);
   });
 
   it("ignores stray quote markers in the input", () => {
