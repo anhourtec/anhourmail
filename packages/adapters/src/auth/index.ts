@@ -52,6 +52,14 @@ export type AuthOptions = {
   onUserCreated?: (user: { id: string; email: string; name: string }) => Promise<void>;
   /** Sends the reset link. Must not reveal whether the address has an account (the endpoint answers the same). */
   sendPasswordReset: (input: { email: string; name: string; url: string }) => Promise<void>;
+  /**
+   * Whether a reset for this login must not be sent (its address is a mailbox between owners; core `consoleResetHeld`).
+   * When true, nothing is sent, `onPasswordResetHeld` runs, and the endpoint answers exactly as it does for any address.
+   * A failing check holds the reset too (password reset fails closed).
+   */
+  holdPasswordReset?: (user: { id: string; email: string }) => Promise<boolean>;
+  /** A reset that was held (audit and log without the address). */
+  onPasswordResetHeld?: (user: { id: string }, reason: "held" | "check_failed") => Promise<void>;
   /** After a successful reset (audit, notifications). */
   onPasswordReset?: (user: { id: string; email: string }) => Promise<void>;
   /**
@@ -124,6 +132,16 @@ export function createAuth(opts: AuthOptions) {
       resetPasswordTokenExpiresIn: 60 * 60,
       revokeSessionsOnPasswordReset: true,
       sendResetPassword: async ({ user, url }) => {
+        if (opts.holdPasswordReset) {
+          const held = await opts.holdPasswordReset({ id: user.id, email: user.email }).then(
+            (h) => (h ? ("held" as const) : null),
+            () => "check_failed" as const,
+          );
+          if (held) {
+            await opts.onPasswordResetHeld?.({ id: user.id }, held);
+            return;
+          }
+        }
         await opts.sendPasswordReset({ email: user.email, name: user.name, url });
       },
       onPasswordReset: async ({ user }) => {

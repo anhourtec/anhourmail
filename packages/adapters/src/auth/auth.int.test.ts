@@ -555,6 +555,71 @@ describe("breached passwords (fake check, no network)", () => {
   });
 });
 
+describe("a held password reset (the address is a mailbox between owners)", () => {
+  const sent: string[] = [];
+  const held: { id: string; reason: string }[] = [];
+  let hold: (email: string) => Promise<boolean> = async () => false;
+  const holdingAuth = createAuth({
+    db,
+    secret: randomBytes(32).toString("base64url"),
+    baseURL: ORIGIN,
+    trustedOrigins: [ORIGIN],
+    secureCookies: false,
+    signUp: "closed",
+    sendPasswordReset: async ({ email }) => {
+      sent.push(email);
+    },
+    holdPasswordReset: (user) => hold(user.email),
+    onPasswordResetHeld: async (user, reason) => {
+      held.push({ id: user.id, reason });
+    },
+    sealer: createKeyRing([{ id: "int", key: randomBytes(32) }]),
+    relyingParty: { id: "localhost", name: "AnhourMail", origin: ORIGIN },
+    trustProxy: false,
+    security: {
+      onEvent: async () => undefined,
+      removalRefusal: async () => null,
+      factors: async () => ({ totp: false, passkeys: 0 }),
+      factorAdded: async () => undefined,
+      codes: { claim: async () => true },
+      passwordChanged: async () => undefined,
+      sessionRefusal: async () => null,
+    },
+    breachedPasswords: memoryBreachedPasswords(),
+  });
+
+  it("sends nothing, reports the hold, and answers exactly as for an unknown address", async () => {
+    const email = `int-held-${randomUUID()}@example.com`;
+    const userId = randomUUID();
+    await db.insert(schema.authUser).values({ id: userId, name: "Int", email, emailVerified: true });
+    try {
+      const call = client(holdingAuth);
+      const ask = (to: string) => call("POST", "/request-password-reset", { email: to, redirectTo: "/reset-password" });
+      const unknown = await ask(`int-nobody-${randomUUID()}@example.com`);
+
+      hold = async () => true;
+      const heldRes = await ask(email);
+      expect([heldRes.status, heldRes.json]).toEqual([unknown.status, unknown.json]);
+      expect(sent).toEqual([]);
+      expect(held).toEqual([{ id: userId, reason: "held" }]);
+
+      // A failing check holds it too (password reset fails closed), with the same answer.
+      hold = () => Promise.reject(new Error("database unavailable"));
+      const failed = await ask(email);
+      expect([failed.status, failed.json]).toEqual([unknown.status, unknown.json]);
+      expect(sent).toEqual([]);
+      expect(held.at(-1)).toEqual({ id: userId, reason: "check_failed" });
+
+      // Not held: sent as usual.
+      hold = async () => false;
+      expect((await ask(email)).status).toBe(200);
+      expect(sent).toEqual([email]);
+    } finally {
+      await db.delete(schema.authUser).where(eq(schema.authUser.id, userId));
+    }
+  });
+});
+
 describe("names and redirect targets at the identity endpoints (XSS audit run-28 N2, N3)", () => {
   const openAuth = createAuth({
     db,
