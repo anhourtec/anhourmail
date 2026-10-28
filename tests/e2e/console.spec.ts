@@ -264,16 +264,15 @@ test("the person's details open in a flyout panel that closes with Escape and ke
 test("a details panel for an id outside the account is a 404", async ({ page }) => {
   const u = e2eUsers();
   await signIn(page, u.users.owner, u.password);
-  // Another account's pages answer with a real 404 status.
-  const other = await page.goto(`${urls.app}/accounts/00000000-0000-4000-8000-000000000000/mailboxes`);
-  expect(other?.status()).toBe(404);
-  await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
-  await page.goto(urls.app);
   const people = await (await openNav(page)).getByRole("link", { name: "People and roles" }).getAttribute("href");
   await page.goto(`${urls.app}${people ?? ""}?person=00000000-0000-4000-8000-000000000000`);
   await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
   const mailboxes = (people ?? "").replace(/people$/, "mailboxes");
   await page.goto(`${urls.app}${mailboxes}?mailbox=00000000-0000-4000-8000-000000000000`);
+  await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
+  // Another account's pages answer with a real 404 status.
+  const other = await page.goto(`${urls.app}/accounts/00000000-0000-4000-8000-000000000000/mailboxes`);
+  expect(other?.status()).toBe(404);
   await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
 });
 
