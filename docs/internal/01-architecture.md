@@ -109,7 +109,10 @@ display name is sent to Stalwart as the account `description`, which seeds the s
 **"Make this a user"** (`mailboxes/make-user.ts`) does the same for an existing unassigned mailbox (a shared address):
 login, membership, profile, owner link (`mailboxes.assignOwner`, conditional on no owner) and display name in one
 audited transaction, plus a new generated password queued as a `mailbox.password` job (with the management-proxy
-grant) and both first-sign-in flags set. It needs a fresh step-up because it replaces a password in use. Profile
+grant) and both first-sign-in flags set. It needs a fresh step-up because it replaces a password in use. Until an
+administrator's password is applied, the mailbox's own change is refused (409 `password_change_pending`) and console
+reset emails to the address are held (`consoleResetHeld`); a job that gives up keeps the hash and the console asks for
+it again (07-security.md "Mailbox passwords"). Profile
 details stay editable afterwards (`people/profile-service.ts`): by the person (`self.profile.manage`) or the account's
 admins (`member.manage` for Members, Owners for anyone).
 
@@ -333,7 +336,8 @@ provisioning ──worker──► active ──suspend──► suspended ─�
   `domain.remove`, `mailbox.ensure` (account + quota + suspension + aliases, including masked aliases; a new account
   gets the argon2id hash chosen at creation), `mailbox.password` (subject: a mailbox; replaces its one Password
   credential with the waiting argon2id hash — an admin's reset or the person's own change from the webmail — and
-  records the credential id for the reconciler; 07-security.md "Mailbox passwords"),
+  records the credential id for the reconciler; giving up drops the person's own change but keeps an administrator's
+  hash, marked by the failed job; 07-security.md "Mailbox passwords"),
   `app_password.revoke` (subject: a mailbox; destroys its `revoking` app passwords, matching id and creation time,
   then deletes the rows). Every call is idempotent (upsert by natural key), so retries and duplicate jobs are safe.
 - **App passwords are the exception to "provisioning is a job"** (ADR-0020): creating one calls Stalwart inside the

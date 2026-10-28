@@ -127,6 +127,13 @@ membership and the owner link, written in the same transaction. A User Administr
 Member is recorded as `denied`. Never the password (generated or chosen). `mailbox.renamed` (meta: none; the name is
 personal data) when an admin edits a mailbox's display name. `auth.password_changed` carries `firstPasswordReplaced:
 true` when it lifts the first-sign-in password change.
+Mailbox handovers (`07-security.md` "Mailbox passwords"): the webmail's own change while an administrator's password
+is waiting or never applied is `mailbox.password_changed` `denied` `password_change_pending` (written as the mailbox,
+meta `by: "self"`). A console reset held because the login's address is a mailbox between owners is
+`auth.password_reset_requested` `denied` `mailbox_password_pending` in the platform log, with the user id as target
+and **no address** (meta `reason`: `held`, or `check_failed` when the check itself failed). A `mailbox.password` job
+that gives up on an administrator's password writes `platform.provisioning_failed` with meta `adminPasswordKept: true`
+(the hash stays so the console can ask for it again).
 
 "Make this a user" (a person-less mailbox): `mailbox.made_user` (target = the mailbox, label its address; meta:
 `userId`, `role`, `profileFields` — names only — and `appPasswordsRevoked`, how many of the mailbox's app passwords
