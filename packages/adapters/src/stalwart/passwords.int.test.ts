@@ -13,6 +13,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { type Actor, systemClock } from "@anhourmail/core";
 import { createAppPassword, reconcileAppPasswords } from "@anhourmail/core/app-passwords";
+import { PasswordChangePendingError } from "@anhourmail/core";
 import {
   changeOwnMailboxPassword,
   createMailbox,
@@ -34,6 +35,7 @@ import { hashPassword, mailboxPasswordHasher } from "../auth/password";
 import { createDb, schema } from "../db-postgres/client";
 import { PgUnitOfWork } from "../db-postgres/repositories";
 import { stalwartAppPasswordInventory, stalwartAppPasswords, stalwartMailServer } from ".";
+import { imapSession } from "./int-imap";
 import { issueTestKeys } from "./int-keys";
 
 const dbUrl = process.env.TEST_DATABASE_URL;
@@ -206,6 +208,10 @@ describe("mailbox passwords against Stalwart", () => {
     const token1 = await signIn(address, first);
     expect(token1).not.toBeNull();
     expect(await session(`Bearer ${token1 ?? ""}`)).toBe(200);
+    // A mail app signed in over IMAP with the password, kept open across the password replacements below.
+    const imap = await imapSession();
+    expect(await imap.run(`LOGIN "${address}" "${first}"`)).toMatch(/^t1 OK/m);
+    expect(await imap.run("SELECT INBOX")).toMatch(/^t2 OK/m);
     // An app password (the person's own, made with the operations key) before the reset.
     const app = await createAppPassword(
       deps,
@@ -272,8 +278,18 @@ describe("mailbox passwords against Stalwart", () => {
         waiting?.pendingPasswordHash ?? "",
       ),
     ).toBe(true);
+    // Until the administrator's password is applied, the mailbox can't change its own with the old one.
+    await expect(
+      changeOwnMailboxPassword(deps, mailboxPasswordHasher, address, { password: `x ${second}` }, meta),
+    ).rejects.toThrow(PasswordChangePendingError);
     await drain(created.id);
     expect(await passwordJobState(deps, reset.jobId)).toBe("applied");
+    // Known limitation, pinned here so an upgrade that changes it is noticed (docs/internal/07-security.md "Mailbox
+    // passwords"): the IMAP session signed in with the replaced password keeps working after both replacements (out of
+    // band and the reset); the mail server ends it only when the client disconnects or it times out.
+    expect(await imap.run("NOOP")).toMatch(/^t3 OK/m);
+    expect(await imap.run("STATUS INBOX (MESSAGES)")).toMatch(/^t4 OK/m);
+    imap.close();
     const row2 = (await db.select().from(schema.mailbox).where(eq(schema.mailbox.id, created.id)))[0];
     expect(row2?.pendingPasswordHash).toBeNull();
     expect(row2?.pendingPasswordGrant).toBeNull();
@@ -303,6 +319,7 @@ describe("mailbox passwords against Stalwart", () => {
       "mailbox.created:success",
       "auth.app_password_created:success",
       "mailbox.password_reset:success",
+      "mailbox.password_changed:denied",
       "mailbox.password_changed:success",
     ]);
     const audit = JSON.stringify(await deps.uow.run((r) => r.audit.chain(`account:${accountId}`)));

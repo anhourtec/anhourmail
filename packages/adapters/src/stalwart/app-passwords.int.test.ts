@@ -42,6 +42,7 @@ import { hashPassword } from "../auth/password";
 import { createDb, schema } from "../db-postgres/client";
 import { PgUnitOfWork } from "../db-postgres/repositories";
 import { stalwartAppPasswordInventory, stalwartAppPasswords, stalwartMailServer, stalwartManagedScripts } from ".";
+import { imapSession } from "./int-imap";
 import { issueTestKeys } from "./int-keys";
 
 const dbUrl = process.env.TEST_DATABASE_URL;
@@ -178,6 +179,18 @@ const smtpSend = async (secret: string): Promise<boolean> => {
   ]);
   return replies.some((r) => /^235 /m.test(r)) && replies.some((r) => /^250 2\.1\.0/m.test(r));
 };
+
+const FORGED = [
+  "Received: from mx.example.net by mail.dev.test with ESMTPS id ABC; Wed, 1 Jan 2020 10:00:00 +0000",
+  "Authentication-Results: mail.dev.test; dkim=pass header.d=bank.example; spf=pass smtp.mailfrom=bank.example; dmarc=pass header.from=bank.example",
+  "From: bank@bank.example",
+  "To: someone@example.test",
+  "Subject: planted-results",
+  "Date: Wed, 1 Jan 2020 10:00:00 +0000",
+  "",
+  "hello",
+  "",
+].join("\r\n");
 
 const basic = (secret: string) => `Basic ${Buffer.from(`${address}:${secret}`).toString("base64")}`;
 
@@ -397,6 +410,50 @@ describe("app passwords on Stalwart", () => {
         [["Calendar/set", { accountId: stalwartId, create: { c: { name: "Shared" } } }, "s"]],
       ),
     ).toEqual(["error:forbidden"]);
+    // No IMAP sharing either (`imapAclSet` is off): granting another account rights on a folder ends the connection,
+    // so nobody can be given insert rights on someone else's folder to plant messages there.
+    const login = `a1 LOGIN "${address}" "${mailboxPassword}"`;
+    const setAcl = await converse(port("STALWART_IMAPS_PORT", 993), true, [
+      login,
+      `a2 SETACL INBOX "plain@${domain}" lrsi`,
+      "a3 LOGOUT",
+    ]);
+    expect(setAcl.some((r) => /^a1 OK/m.test(r))).toBe(true);
+    expect(setAcl.some((r) => /^a2 OK/m.test(r))).toBe(false);
+    // The mailbox's own credentials can APPEND a message with a planted Received plus results pair and any internal
+    // date, which becomes its JMAP `receivedAt` — so neither the headers nor `receivedAt` tell an appended message
+    // from a delivered one (docs/internal/07-security.md "Authentication results in the webmail").
+    const append = await converse(port("STALWART_IMAPS_PORT", 993), true, [
+      login,
+      `a2 APPEND INBOX "01-Jan-2020 10:00:00 +0000" {${String(Buffer.byteLength(FORGED))}+}\r\n${FORGED}`,
+      "a3 LOGOUT",
+    ]);
+    expect(append.some((r) => /^a2 OK/m.test(r))).toBe(true);
+    const appended = await fetch(`${stalwartUrl}/jmap`, {
+      method: "POST",
+      headers: { Authorization: pw, "Content-Type": "application/json", "X-Forwarded-For": clientAddress },
+      body: JSON.stringify({
+        using: mailCaps,
+        methodCalls: [
+          ["Email/query", { accountId: stalwartId, filter: { subject: "planted-results" } }, "q"],
+          [
+            "Email/get",
+            {
+              accountId: stalwartId,
+              "#ids": { resultOf: "q", name: "Email/query", path: "/ids" },
+              properties: ["receivedAt", "headers"],
+            },
+            "g",
+          ],
+        ],
+      }),
+    });
+    const got = (await appended.json()) as {
+      methodResponses: [string, { list?: { receivedAt: string; headers: { name: string }[] }[] }, string][];
+    };
+    const planted = got.methodResponses[1]?.[1].list?.[0];
+    expect(planted?.receivedAt).toBe("2020-01-01T10:00:00Z");
+    expect(planted?.headers.slice(0, 2).map((h) => h.name)).toEqual(["Received", "Authentication-Results"]);
     const books = await call(
       pw,
       ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:contacts"],
@@ -495,8 +552,16 @@ describe("app passwords on Stalwart", () => {
 
     // Revoke one: the job takes it off the mail server, then the row goes.
     expect(await sessionStatus(phone.secret)).toBe(200);
+    const phoneImap = await imapSession(); // a mail app already signed in with it
+    expect(await phoneImap.run(`LOGIN "${address}" "${phone.secret}"`)).toMatch(/^t1 OK/m);
+    expect(await phoneImap.run("SELECT INBOX")).toMatch(/^t2 OK/m);
     await revokeAppPasswords(deps, actor, accountId, m.id, phone.appPassword.id, meta);
     await drain(m.id);
+    // A mail app already signed in with it is cut off too: its next mailbox command gets no answer and the
+    // connection ends (a NOOP still answers; docs/internal/07-security.md "Mailbox passwords").
+    expect(await phoneImap.run("STATUS INBOX (MESSAGES)")).toMatch(/<(closed|no reply)>$/);
+    expect(await phoneImap.run("SELECT INBOX")).toMatch(/<(closed|no reply)>$/);
+    phoneImap.close();
     expect((await mgmt.listAppPasswords(stalwartId)).map((a) => a.description).sort()).toEqual(["Mail app", "Printer"]);
     expect(await sessionStatus(phone.secret)).toBe(401);
     expect(
