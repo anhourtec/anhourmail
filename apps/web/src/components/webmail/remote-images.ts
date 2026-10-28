@@ -9,8 +9,8 @@
  * blocked images); a CSS background with a remote `url()` keeps its original style in `data-am-style`.
  * `unparkRemoteImages` puts everything back before the HTML is sanitised and saved.
  *
- * Both work on outgoing-sanitiser output or the editor's `innerHTML` (attributes double-quoted, `"` escaped), and are
- * linear. The `data-am-*` attributes never leave the browser: the outgoing sanitiser drops every `data-*` attribute.
+ * Both work on outgoing-sanitiser output or the editor's `innerHTML` (attributes double-quoted, `"` escaped), scan
+ * each tag once, and insert addresses with replacer functions (a `$&` in a URL stays literal). The `data-am-*` attributes never leave the browser: the outgoing sanitiser drops every `data-*` attribute.
  */
 
 /**
@@ -20,7 +20,8 @@
 export const PLACEHOLDER_SRC = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E";
 
 const IMG_TAG = /<img\b[^>]*>/gi;
-const STYLED_TAG = /<[a-z][a-z0-9]*\b[^>]*\sstyle="[^"]*"[^>]*>/gi;
+/** Any start tag (one linear scan; attributes are then looked up inside the matched tag). */
+const START_TAG = /<[a-z][a-z0-9]*\b[^>]*>/gi;
 const SRC_ATTR = /\ssrc="([^"]*)"/i;
 const STYLE_ATTR = /\sstyle="([^"]*)"/i;
 const PARKED_SRC = /\sdata-am-src="([^"]*)"/i;
@@ -34,14 +35,14 @@ export function parkRemoteImages(html: string): string {
   const imgs = html.replace(IMG_TAG, (tag) => {
     const src = SRC_ATTR.exec(tag)?.[1];
     if (src === undefined || /^data:/i.test(src.trim()) || PARKED_SRC.test(tag)) return tag;
-    return tag.replace(SRC_ATTR, ` src="${PLACEHOLDER_SRC}" data-am-src="${src}" data-am-blocked="1"`);
+    return tag.replace(SRC_ATTR, () => ` src="${PLACEHOLDER_SRC}" data-am-src="${src}" data-am-blocked="1"`);
   });
-  return imgs.replace(STYLED_TAG, (tag) => {
+  return imgs.replace(START_TAG, (tag) => {
     const style = STYLE_ATTR.exec(tag)?.[1];
     if (style === undefined || PARKED_STYLE.test(tag)) return tag;
     const shown = style.replace(REMOTE_URL, "none");
     if (shown === style) return tag;
-    return tag.replace(STYLE_ATTR, ` style="${shown}" data-am-style="${style}"`);
+    return tag.replace(STYLE_ATTR, () => ` style="${shown}" data-am-style="${style}"`);
   });
 }
 
@@ -52,14 +53,15 @@ export function unparkRemoteImages(html: string): string {
     if (src === undefined) return tag;
     const bare = tag.replace(PARKED_SRC, "").replace(BLOCKED_ATTR, "");
     return SRC_ATTR.test(bare)
-      ? bare.replace(SRC_ATTR, ` src="${src}"`)
-      : bare.replace(/^<img\b/i, `<img src="${src}"`);
+      ? bare.replace(SRC_ATTR, () => ` src="${src}"`)
+      : bare.replace(/^<img\b/i, () => `<img src="${src}"`);
   });
-  return imgs.replace(/<[a-z][a-z0-9]*\b[^>]*\sdata-am-style="[^"]*"[^>]*>/gi, (tag) => {
-    const style = PARKED_STYLE.exec(tag)?.[1] ?? "";
+  return imgs.replace(START_TAG, (tag) => {
+    const style = PARKED_STYLE.exec(tag)?.[1];
+    if (style === undefined) return tag;
     const bare = tag.replace(PARKED_STYLE, "");
     return STYLE_ATTR.test(bare)
-      ? bare.replace(STYLE_ATTR, ` style="${style}"`)
-      : bare.replace(/^<([a-z][a-z0-9]*)\b/i, `<$1 style="${style}"`);
+      ? bare.replace(STYLE_ATTR, () => ` style="${style}"`)
+      : bare.replace(/^<([a-z][a-z0-9]*)\b/i, (_m, name: string) => `<${name} style="${style}"`);
   });
 }

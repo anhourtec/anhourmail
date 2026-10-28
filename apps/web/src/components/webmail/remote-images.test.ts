@@ -51,4 +51,9 @@ describe("remote images while writing", () => {
       '<img src="https://a.example/x.png" />',
     );
   });
+
+  it("keeps addresses with $ patterns literal", () => {
+    const html = clean('<img src="https://cdn.example/a$&amp;b$1.png">');
+    expect(unparkRemoteImages(parkRemoteImages(html))).toBe(html);
+  });
 });
