@@ -270,6 +270,32 @@ sha256(phc) | expiry)>`, expiry ≤ 1 h, stored beside the waiting hash and sent
   **Limit (verified 2026-10-23):** Stalwart changes the id on the first replacement after creation but keeps it on
   later ones, so a replacement after one of our own resets isn't visible this way. Needs a better signal (open item).
 
+## Webmail sign-in and suspension
+
+Built 2026-10-28. Code: `apps/web/src/server/webmail/known-mailboxes.ts`, `apps/web/src/app/api/webmail/auth/route.ts`,
+`apps/web/src/server/webmail/access-block.ts`, `packages/core/src/webmail/access.ts`.
+
+- **The problem:** Stalwart refuses a suspended account's **right** password exactly like a wrong one (`/api/auth`
+  answers `200 {"type":"failure"}` for both, and for unknown addresses; verified on v0.16.27 with a throwaway domain,
+  2026-10-28). So a fresh sign-in can't prove the password, and our post-sign-in check never runs.
+- **Options weighed:** (1) name the suspension to anyone who types a suspended address — an enumeration oracle for
+  outsiders (which addresses exist, which are suspended) without knowing any password; (2) prove the password some
+  other way — we hold no mailbox password or hash (rule 23) and reading Stalwart's credential secrets would widen the
+  management surface; (3) name it only to a browser that has **already proven** a sign-in to that address.
+- **Chosen: (3).** A successful webmail sign-in sets `am.webmail_known`: up to 5 tags, each HMAC-SHA256 of the
+  normalised address under the server secret, cut to 128 bits — never the address; it can't be read back or forged for
+  another address. HttpOnly, SameSite=Lax, `Path=/api/webmail/auth` (sent nowhere else), Secure on https, 180 days.
+  When Stalwart refuses a sign-in and the browser holds the address's tag, the control plane is asked; if the mailbox
+  is blocked (`person_suspended`, `suspended`, `deleting`, `gone`) the answer is `401 mailbox_unavailable` with that
+  reason's message (support address for a person's suspension). Otherwise — and for every browser without the tag —
+  the generic "Mailbox address or password is wrong." The control-plane lookup happens only when the tag matches, so
+  its timing tells an outsider nothing. The failed attempt still counts against the per-address wrong-password limit.
+- **Residual risk (accepted):** someone using a browser where the mailbox signed in before (a shared computer) learns
+  the mailbox is blocked without the password — information the mailbox's own user had there anyway. A person on a
+  new device sees the generic error; the public docs tell them what a suspension looks like and whom to ask.
+- **Already signed in:** a session whose mailbox becomes blocked ends on its next request (`route()` + the BFF,
+  ≤ 30 s cache) and the sign-in page names the reason (05-webmail.md "Who may use the webmail").
+
 ## App passwords
 
 Built 2026-10-22 (ADR-0020). Code: `packages/core/src/app-passwords`, `packages/stalwart-client/src/app-passwords.ts`

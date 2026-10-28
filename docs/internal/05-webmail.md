@@ -312,10 +312,9 @@ JMAP proxy still refuses every `SieveScript/*`, `VacationResponse/*`, `Identity/
 
 ### Security notes from the slice 1 review (2026-10-22)
 
-- **Account-level suspension must gate the webmail too.** Today the BFF's `MailboxAccessGate` checks the mailbox's
-  own status (`suspended`, `deleting`, unknown). When account-level suspension (a whole customer account) lands, the
-  same gate must also refuse mailboxes of a suspended account — extend `MailboxStatusLookup` rather than adding a
-  second check, so sign-in and every session use stay covered.
+- **Account-level suspension must gate the webmail too.** Done: a staff suspension of an account or a person suspends
+  their mailboxes (status `suspended`, with a hold), and `MailboxStatusLookup` also returns whether the mailbox's
+  person is suspended, so sign-in, every session use and `route()` refuse both ("Who may use the webmail").
 - **Attachment names never travel in URLs.** `/api/webmail/download/:blobId` carries only the blob id; the link's
   `download` attribute names the file (the sanitised name the reader shows) and the response is a bare
   `Content-Disposition: attachment`. Our access log records paths only; NGINX must not log query strings for
@@ -393,6 +392,32 @@ on v0.16.27 (2026-10-21):
 The mailbox secret therefore comes from the user at webmail sign-in; it is used once and never stored (mailbox
 passwords are argon2id PHC strings in Stalwart, so we cannot derive tokens without the user). The console → webmail
 handoff (ADR-0003) pre-fills the address only.
+
+### Who may use the webmail (control-plane access, 2026-10-28)
+
+Stalwart's own suspension disables sign-in, but tokens issued before it — and mailboxes our control plane blocks
+without Stalwart knowing — are our responsibility. `MailboxAccessGate` (`packages/core/src/webmail/access.ts`, cached
+≤ 30 s per address) answers one of:
+
+| State              | When                                                                                                | What the person is told                                              |
+| ------------------ | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `ok`               | the mailbox exists, isn't suspended or deleting, and its person isn't suspended                     | —                                                                    |
+| `person_suspended` | staff suspended the person the mailbox belongs to (`user_profile.suspended`, as the console checks) | their sign-in is suspended, mail kept, appeal to the support address |
+| `suspended`        | the mailbox is suspended (by its account, or by a staff suspension of the account/person)           | the mailbox is suspended, mail kept; ask the admin or support        |
+| `deleting`         | the mailbox is waiting out its deletion grace period                                                | it is being deleted; ask the admin to restore it in time             |
+| `gone`             | no mailbox has that address                                                                         | it no longer exists                                                  |
+
+It is checked at sign-in (after Stalwart accepted the password), on every use of a session in the BFF
+(`WebmailService.session`), and **centrally in `route()`** for every route with `session: "webmail"` — before the
+first-sign-in password gate, sign-out and the password change included — so a route that never reaches Stalwart
+(preferences, contacts settings) can't serve a blocked session either (`server/webmail/access-block.ts`). A blocked
+session is ended (record deleted, cookie cleared) and answered `401 mailbox_unavailable` with the state's message; a
+short-lived notice cookie lets the sign-in page show it. Every open session of a suspended person ends on its next
+request, within the 30 s cache.
+
+A fresh sign-in to a mailbox Stalwart already disabled fails at Stalwart with the same answer as a wrong password, so
+it can't reach the check above; the suspension is named only to a browser that signed in to that address before
+(07-security.md "Webmail sign-in and suspension").
 
 ### Push
 
