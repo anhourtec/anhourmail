@@ -106,7 +106,7 @@ export function demoPeople(platformAdminEmail: string): SeedPerson[] {
       state: "suspended",
       suspended: true,
       account: { key: "group", role: "member" },
-      tryThis: "Signs in but every action is refused; the console says the account is suspended",
+      tryThis: "Can't sign in: the console and the webmail refuse it with the suspension notice and the appeal address",
       mailbox: true,
     },
   ];
