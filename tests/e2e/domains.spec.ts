@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * Domains (Phase 3). Development DNS answers for `.test` names as if every record were published, except names
- * starting with `unverified-` (adapters/dns devResolver), so both paths run without real DNS.
+ * starting with `unverified-` (adapters/dns devResolver), so both paths run without real DNS. DKIM keys exist only
+ * once the worker has added the domain to the mail server (after ownership and MX pass), so verifying takes a check,
+ * the worker, and a second check, as for a customer.
  */
 import { e2eUsers, expect, openNav, panel, panelReady, signIn, test, urls } from "./fixtures";
 
@@ -22,7 +24,21 @@ test("an owner adds a domain, verifies it, sees it set up, then removes it", asy
   await expect(details.getByText("Waiting for DNS")).toBeVisible();
   await expect(details.getByRole("tab", { name: "DNS records" })).toHaveAttribute("aria-selected", "true");
   const required = details.getByRole("region", { name: "Required records" });
-  await expect(required.getByText("Found")).toHaveCount(5);
+  // Ownership, MX and SPF are found; the DKIM keys don't exist yet.
+  await expect(required.getByText("Found")).toHaveCount(3);
+  await expect(required.getByText("Not ready yet")).toBeVisible();
+
+  await details.getByRole("button", { name: "Check now" }).click();
+  await expect(details.getByRole("status").filter({ hasText: "Your DKIM keys are being created" })).toBeVisible();
+  // The worker adds the domain to the mail server and caches its two keys (Ed25519 and RSA), shown as TXT records.
+  await expect(async () => {
+    await page.reload();
+    await expect(panel(page, name).getByRole("region", { name: "Required records" }).getByText("Found")).toHaveCount(
+      5,
+      { timeout: 2000 },
+    );
+  }).toPass({ timeout: 30_000, intervals: [2000, 3000, 5000] });
+  await expect(details.getByRole("button", { name: /^Copy DKIM value for v1-rsa-\d{8}\._domainkey$/ })).toBeVisible();
 
   await details.getByRole("button", { name: "Check now" }).click();
   await expect(details.getByRole("status").filter({ hasText: "Verified." })).toBeVisible();
@@ -52,11 +68,13 @@ test("a domain without its DNS records stays waiting and says what's missing", a
   await page.getByRole("button", { name: "Add domain" }).click();
   const details = panel(page, name);
   await expect(details.getByRole("heading", { name, level: 2 })).toBeVisible();
-  await expect(details.getByRole("region", { name: "Required records" }).getByText("Missing")).toHaveCount(5);
+  const required = details.getByRole("region", { name: "Required records" });
+  await expect(required.getByText("Missing")).toHaveCount(3);
+  await expect(required.getByText("Not ready yet")).toBeVisible();
 
   await details.getByRole("button", { name: "Check now" }).click();
   await expect(
-    details.getByRole("status").filter({ hasText: "5 required records are not in place yet" }),
+    details.getByRole("status").filter({ hasText: "4 required records are not in place yet" }),
   ).toBeVisible();
   await expect(details.getByText("Waiting for DNS")).toBeVisible();
 
