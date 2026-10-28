@@ -2,9 +2,8 @@
 
 /**
  * "Show original": pure helpers for the summary above a message's source. The source itself is only ever rendered as
- * text. Authentication results are read from the topmost `Authentication-Results` header, and only when its
- * authserv-id is our own mail server (RFC 8601 §5): anything below it, or stamped by another host, could have been
- * written by the sender.
+ * text. Authentication results are trusted only when our own mail server wrote them (RFC 8601 §5): see
+ * `authResults` for how that is decided.
  */
 
 export type RawHeader = { name: string; value: string };
@@ -98,18 +97,47 @@ const domainOf = (v: string | undefined): string | null => {
   return d || null;
 };
 
+/** The host in a `Received` header's `by` clause, lower-cased, or null. */
+export function receivedBy(value: string): string | null {
+  const m = /(?:^|\s)by\s+([^\s;]+)/i.exec(stripComments(value));
+  return m?.[1]?.toLowerCase() ?? null;
+}
+
 /**
- * SPF, DKIM and DMARC as our mail server recorded them, or null when the topmost `Authentication-Results` header is
- * missing or was stamped by anyone else (sent mail, imported mail, or a forgery). A method our server didn't report
- * is `none`.
+ * The `Authentication-Results` header our mail server wrote, or null. Stalwart (verified on v0.16.27) writes it only
+ * for mail arriving on port 25, directly below the `Received` header it prepends there, and writes neither for
+ * authenticated submission (SMTP 465/587 or JMAP) — so a header in a locally sent message is always the sender's.
+ * The header is trusted only when the topmost `Received` was stamped `by` one of our hosts and is followed
+ * immediately (ARC headers aside) by an `Authentication-Results` carrying our authserv-id. A header with our id
+ * anywhere else was written by the sender, or by another hop, and is ignored. The submission Sieve script also strips
+ * every `Authentication-Results` header from submitted mail (`@anhourmail/stalwart-client` sender identity), so a
+ * forged `Received` plus results pair can't be planted from inside either.
  */
-export function authResults(headers: RawHeader[], trustedIds: readonly string[]): AuthSummary | null {
-  const top = headers.find((h) => h.name.toLowerCase() === "authentication-results");
-  if (!top) return null;
-  const [idPart = "", ...rest] = splitOutsideQuotes(stripComments(top.value), ";");
-  const authservId = idPart.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+export function ourAuthResultsHeader(headers: readonly RawHeader[], trustedIds: readonly string[]): string | null {
   const trusted = new Set(trustedIds.map((t) => t.trim().toLowerCase()).filter(Boolean));
-  if (!authservId || !trusted.has(authservId)) return null;
+  const at = headers.findIndex((h) => h.name.toLowerCase() === "received");
+  const received = headers[at];
+  if (!received) return null;
+  const by = receivedBy(received.value);
+  if (!by || !trusted.has(by)) return null;
+  let i = at + 1;
+  while (headers[i]?.name.toLowerCase().startsWith("arc-")) i++;
+  const ar = headers[i];
+  if (ar?.name.toLowerCase() !== "authentication-results") return null;
+  const [idPart = ""] = splitOutsideQuotes(stripComments(ar.value), ";");
+  const authservId = idPart.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+  return authservId && trusted.has(authservId) ? ar.value : null;
+}
+
+/**
+ * SPF, DKIM and DMARC as our mail server recorded them, or null when it recorded nothing (mail sent from inside
+ * AnhourMail, sent or imported copies) or the only results were written by someone else (`ourAuthResultsHeader`).
+ * A method our server didn't report is `none`.
+ */
+export function authResults(headers: readonly RawHeader[], trustedIds: readonly string[]): AuthSummary | null {
+  const value = ourAuthResultsHeader(headers, trustedIds);
+  if (value === null) return null;
+  const [, ...rest] = splitOutsideQuotes(stripComments(value), ";");
   const infos = rest.map(parseResInfo).filter((r): r is ResInfo => r !== null);
   const of = (method: string) => infos.filter((r) => r.method === method);
 
