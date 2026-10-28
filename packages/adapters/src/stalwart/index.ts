@@ -157,10 +157,12 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
     },
 
     async domainDkimKeys(externalId) {
-      // Stalwart creates the RSA key a second or two after the domain (verified on v0.16.27): wait briefly for it so a
-      // new domain's job finishes in one run instead of a retry. Gone domains (no keys at all) answer at once.
+      // Stalwart creates the keys just after the domain, the RSA one up to a second or two later (verified on
+      // v0.16.27; right after the create the zone file can list no key at all): wait briefly for the RSA key so a new
+      // domain's job finishes in one run instead of a ten-second retry. A domain that is gone answers at once.
       let keys = await mgmt.domainDkimRecords(externalId);
-      for (let i = 0; i < RSA_KEY_WAIT_TRIES && keys.length > 0 && !keys.some(isRsaKey); i++) {
+      for (let i = 0; i < RSA_KEY_WAIT_TRIES && !keys.some(isRsaKey); i++) {
+        if (keys.length === 0 && !(await mgmt.listDomains()).some((d) => d.id === externalId)) return keys;
         await new Promise((r) => setTimeout(r, RSA_KEY_WAIT_MS));
         keys = await mgmt.domainDkimRecords(externalId);
       }
