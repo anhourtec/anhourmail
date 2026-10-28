@@ -1290,15 +1290,22 @@ const contains = (q: string) => `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 class PgPlatformAccountRepository implements PlatformAccountRepository {
   constructor(private readonly x: Executor) {}
 
+  /**
+   * The outer row's id, always table-qualified: in a single-table select drizzle writes `${customerAccount.id}` as a
+   * bare `"id"`, which inside `(select … from mailbox where account_id = "id")` means the mailbox's own id — every count
+   * came out 0 for tables with an `id` column.
+   */
+  private static readonly accountId = sql.raw(`"customer_account"."id"`);
+
   private readonly columns = {
     id: customerAccount.id,
     name: customerAccount.name,
     plan: customerAccount.plan,
     status: customerAccount.status,
     createdAt: customerAccount.createdAt,
-    members: sql<number>`(select count(*)::int from ${accountMembership} where ${accountMembership.accountId} = ${customerAccount.id})`,
-    mailboxes: sql<number>`(select count(*)::int from ${mailbox} where ${mailbox.accountId} = ${customerAccount.id})`,
-    domains: sql<number>`(select count(*)::int from ${customerDomain} where ${customerDomain.accountId} = ${customerAccount.id})`,
+    members: sql<number>`(select count(*)::int from ${accountMembership} am where am.account_id = ${PgPlatformAccountRepository.accountId})`,
+    mailboxes: sql<number>`(select count(*)::int from ${mailbox} mb where mb.account_id = ${PgPlatformAccountRepository.accountId})`,
+    domains: sql<number>`(select count(*)::int from ${customerDomain} cd where cd.account_id = ${PgPlatformAccountRepository.accountId})`,
   };
 
   private static toSummary(r: {

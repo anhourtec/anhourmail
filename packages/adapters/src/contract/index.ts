@@ -999,6 +999,35 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         const newer = await uow.run((r) => r.accounts.create({ name: `Platform ${tag} newer`, plan: "free" }));
         const person = await createUser(`find-${tag}@example.com`);
         await uow.run((r) => r.accounts.addMember({ accountId: older.id, userId: person, role: "owner" }));
+        // One domain and two mailboxes in the older account (the counts once read 0 on Postgres).
+        await uow.run(async (r) => {
+          await r.domains.insert({
+            id: randomUUID(),
+            accountId: older.id,
+            name: `p-${tag}.example.ca`,
+            status: "pending_dns",
+            verifyToken: randomUUID(),
+            stalwartId: null,
+            lastError: null,
+            createdAt: new Date(),
+          });
+          for (const local of ["one", "two"]) {
+            await r.mailboxes.insert({
+              id: randomUUID(),
+              accountId: older.id,
+              userId: null,
+              address: `${local}-${tag}@p-${tag}.example.ca`,
+              status: "active",
+              quotaBytes: 1024,
+              stalwartId: null,
+              lastError: null,
+              purgeAfter: null,
+              createdAt: new Date(),
+              displayName: null,
+              mustChangePassword: false,
+            });
+          }
+        });
 
         const byName = await uow.run((r) =>
           r.platformAccounts.search({ query: `platform ${tag}`, limit: 10, offset: 0 }),
@@ -1009,9 +1038,10 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
           name: `Platform ${tag} older_%`,
           plan: "plus",
           members: 1,
-          mailboxes: 0,
-          domains: 0,
+          mailboxes: 2,
+          domains: 1,
         });
+        expect(byName.rows[0]).toMatchObject({ members: 0, mailboxes: 0, domains: 0 });
         const paged = await uow.run((r) =>
           r.platformAccounts.search({ query: `platform ${tag}`, limit: 1, offset: 1 }),
         );
@@ -1029,7 +1059,12 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         expect(byId.rows.map((x) => x.id)).toEqual([newer.id]);
         const all = await uow.run((r) => r.platformAccounts.search({ query: null, limit: 1, offset: 0 }));
         expect(all.total).toBeGreaterThanOrEqual(2);
-        expect(await uow.run((r) => r.platformAccounts.summary(older.id))).toMatchObject({ id: older.id, members: 1 });
+        expect(await uow.run((r) => r.platformAccounts.summary(older.id))).toMatchObject({
+          id: older.id,
+          members: 1,
+          mailboxes: 2,
+          domains: 1,
+        });
         expect(await uow.run((r) => r.platformAccounts.summary(randomUUID()))).toBeNull();
         expect(await uow.run((r) => r.platformAccounts.summary("not-a-uuid"))).toBeNull();
       } finally {
