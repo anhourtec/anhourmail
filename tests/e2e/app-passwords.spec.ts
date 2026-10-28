@@ -24,15 +24,16 @@ test("an owner creates an app password for their own mailbox, sees it once, and 
   await expect(page.getByRole("status").filter({ hasText: "Verified." })).toBeVisible();
   await page.keyboard.press("Escape");
   await (await openNav(page)).getByRole("link", { name: "Mailboxes" }).click();
-  await page.getByRole("link", { name: "Add a mailbox" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Add a shared address" }).click();
   await page.getByLabel("Address").fill("me");
   await page.getByLabel("Domain").selectOption({ label: domain });
   await page.getByLabel("Belongs to").selectOption({ label: u.users.owner });
   await page.getByLabel("Password", { exact: true }).fill("e2e mailbox password");
-  await page.getByRole("button", { name: "Create mailbox" }).click();
-  await expect(panel(page, "Add a mailbox").getByRole("status").filter({ hasText: address })).toBeVisible();
-  await panel(page, "Add a mailbox").getByRole("link", { name: "Close" }).click();
-  await expect(panel(page, "Add a mailbox")).toHaveCount(0);
+  await page.getByRole("button", { name: "Create shared address" }).click();
+  await expect(panel(page, "Add a shared address").getByRole("status").filter({ hasText: address })).toBeVisible();
+  await panel(page, "Add a shared address").getByRole("link", { name: "Close" }).click();
+  await expect(panel(page, "Add a shared address")).toHaveCount(0);
   const row = page.getByRole("row", { name: new RegExp(address) });
   await expect(async () => {
     await page.reload();

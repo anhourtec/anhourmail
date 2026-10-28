@@ -24,9 +24,10 @@ type Options = {
 };
 
 /**
- * New mailbox (in the "Add a mailbox" panel): local part @ one of the account's active domains or the platform domain
- * (a free address, with its own naming rules and the plan's allowance), optionally for a member, with a quota and the
- * password its person signs in to the webmail with (typed or generated, shown once). The panel stays open after
+ * New shared address (in the "Add a shared address" panel): a mailbox that isn't one person's console sign-in, like
+ * support@ — local part @ one of the account's active domains or the platform domain (a free address, with its own
+ * naming rules and the plan's allowance), optionally belonging to a member, with a quota and the password it signs in
+ * to the webmail with (typed or generated, shown once). The panel stays open after
  * creating one, so several can be added in a row.
  */
 export function CreateMailboxForm({ accountId, options }: { accountId: string; options: Options }) {
@@ -135,7 +136,7 @@ export function CreateMailboxForm({ accountId, options }: { accountId: string; o
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="flex flex-col gap-1.5">
-          <span className="am-h4">Belongs to</span>
+          <span className="am-h4">Belongs to (optional)</span>
           <select name="ownerUserId" className={inputClass}>
             <option value="">Nobody yet</option>
             {options.members.map((m) => (
@@ -184,7 +185,7 @@ export function CreateMailboxForm({ accountId, options }: { accountId: string; o
       )}
       <button type="submit" disabled={pending || poolFull} className={`${primaryButtonClass} w-fit`}>
         <Plus className="size-4" aria-hidden />
-        {pending ? "Creating…" : "Create mailbox"}
+        {pending ? "Creating…" : "Create shared address"}
       </button>
     </form>
   );

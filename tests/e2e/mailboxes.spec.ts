@@ -23,15 +23,16 @@ test("an owner creates a mailbox, changes its storage, suspends, resumes, delete
   await page.keyboard.press("Escape");
   await (await openNav(page)).getByRole("link", { name: "Mailboxes" }).click();
   await expect(page.getByRole("heading", { name: "Mailboxes", level: 1 })).toBeVisible();
-  await page.getByRole("link", { name: "Add a mailbox" }).click();
-  const adding = panel(page, "Add a mailbox");
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Add a shared address" }).click();
+  const adding = panel(page, "Add a shared address");
   await expect(adding).toBeVisible();
   await page.getByLabel("Address").fill("Jane");
   await page.getByLabel("Domain").selectOption({ label: domain });
   await page.getByLabel("Belongs to").selectOption({ label: u.users.member });
   await page.getByLabel("Storage (GB)").fill("5");
   await page.getByLabel("Password", { exact: true }).fill("e2e mailbox password");
-  await page.getByRole("button", { name: "Create mailbox" }).click();
+  await page.getByRole("button", { name: "Create shared address" }).click();
   await expect(adding.getByRole("status").filter({ hasText: `jane@${domain}` })).toBeVisible();
 
   const row = page.getByRole("row", { name: new RegExp(`jane@${domain}`) });
@@ -41,7 +42,7 @@ test("an owner creates a mailbox, changes its storage, suspends, resumes, delete
   await page.getByLabel("Address").fill("jane");
   await page.getByLabel("Domain").selectOption({ label: domain });
   await page.getByLabel("Password", { exact: true }).fill("e2e mailbox password");
-  await page.getByRole("button", { name: "Create mailbox" }).click();
+  await page.getByRole("button", { name: "Create shared address" }).click();
   await expect(page.getByRole("alert").filter({ hasText: "That address is already in use." })).toBeVisible();
   await adding.getByRole("link", { name: "Close" }).click();
   await expect(adding).toHaveCount(0);

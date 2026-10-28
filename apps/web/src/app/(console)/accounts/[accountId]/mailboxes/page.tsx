@@ -28,8 +28,9 @@ const dateFmt = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium" });
 
 /**
  * Mailboxes (console page template). "Add a user" is its own page (`/mailboxes/new`). The details panel
- * (`?mailbox=<id>`, optional `&tab=`) and the "Add a mailbox" panel for shared addresses (`?new=1`) live in the URL
- * so they can be linked, reloaded and closed with Back. The old
+ * (`?mailbox=<id>`, optional `&tab=`) and the "Add a shared address" panel (`?new=1`, opened from the ⋯ menu: an
+ * address that isn't one person's sign-in, like support@) live in the URL so they can be linked, reloaded and closed
+ * with Back. The old
  * `/mailboxes/<id>` address redirects here.
  */
 export default async function MailboxesPage({
@@ -178,20 +179,19 @@ export default async function MailboxesPage({
         </UrlFlyout>
       )}
       {creating && (
-        <UrlFlyout label="Add a mailbox" closeHref={path} size="md">
+        <UrlFlyout label="Add a shared address" closeHref={path} size="md">
           <div className="flex flex-col gap-6">
             <div className="flex flex-col gap-1.5">
-              <h2 className="am-h2">Add a mailbox</h2>
+              <h2 className="am-h2">Add a shared address</h2>
               <p className="am-small">
-                A shared address like support@ or info@, or one more address for someone already here, on one of your
-                domains
+                An address that isn&apos;t one person&apos;s sign-in, like support@ or info@, on one of your domains
                 {creating.platform.allowed ? (
                   <>
                     {" "}
                     or at <span className="am-code">{creating.platform.domain}</span>
                   </>
                 ) : null}
-                , with its own storage and password.
+                , with its own storage and password. To add a person with their own sign-in, use Add a user instead.
               </p>
             </div>
             <CreateMailboxForm accountId={accountId} options={creating} />

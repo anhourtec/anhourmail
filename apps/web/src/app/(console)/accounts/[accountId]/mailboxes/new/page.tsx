@@ -52,7 +52,7 @@ export default async function AddUserPage({ params }: { params: Promise<{ accoun
       <>
         The {people.limits.planName} plan is for one person. Upgrade to add users, or{" "}
         <Link href={`${mailboxes}?new=1`} className="text-primary underline-offset-2 hover:underline">
-          add a shared mailbox
+          add a shared address
         </Link>{" "}
         instead.
       </>,

@@ -55,8 +55,9 @@ test("create with a password, sign in, change it in the webmail, and an owner's 
 
   // Create with a generated password, shown once.
   await (await openNav(page)).getByRole("link", { name: "Mailboxes" }).click();
-  await page.getByRole("link", { name: "Add a mailbox" }).click();
-  const adding = panel(page, "Add a mailbox");
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Add a shared address" }).click();
+  const adding = panel(page, "Add a shared address");
   await page.getByLabel("Address").fill("pat");
   await page.getByLabel("Domain").selectOption({ label: domain });
   await page.getByLabel("Belongs to").selectOption({ label: people.member });
@@ -65,7 +66,7 @@ test("create with a password, sign in, change it in the webmail, and an owner's 
   const generated = (await adding.getByTestId("generated-password").textContent()) ?? "";
   expect(generated).toMatch(/^[A-Za-z2-9]{20}$/);
   await expect(page.getByLabel("Password", { exact: true })).toHaveValue(generated);
-  await page.getByRole("button", { name: "Create mailbox" }).click();
+  await page.getByRole("button", { name: "Create shared address" }).click();
   await expect(adding.getByRole("status").filter({ hasText: address })).toBeVisible();
   await expect(adding.getByTestId("generated-password")).toHaveCount(0);
   await expect(page.getByLabel("Password", { exact: true })).toHaveValue("");

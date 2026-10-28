@@ -313,8 +313,8 @@ function AccountTabs({ actor, accountId, o }: { actor: UserActor; accountId: str
               <>
                 <TabBar>
                   {can(actor, "mailbox.manage", accountId) && (
-                    <CommandLink href={`${base}/mailboxes?new=1`} icon={<Plus />}>
-                      Add a mailbox
+                    <CommandLink href={`${base}/mailboxes/new`} icon={<UserPlus />}>
+                      Add a user
                     </CommandLink>
                   )}
                   <CommandLink href={`${base}/mailboxes`} icon={<Inbox />}>
