@@ -351,6 +351,35 @@ mail apps render what we send, so the list is stricter than the reader's (`sanit
   `data:text/html`, `srcdoc`, `formaction`, CSS `url(javascript:)` and escapes, mutation-XSS nesting, comments and
   CDATA, idempotence).
 
+## Authentication results in the webmail
+
+Decision 2026-10-28: "Show original" (SPF, DKIM, DMARC) and the reader's "mailed-by" / "signed-by" show only the
+`Authentication-Results` header our own mail server wrote (RFC 8601 section 5); anything else reads "Not checked".
+Validated on the dev stack against Stalwart v0.16.27:
+
+- **Mail from outside (port 25):** Stalwart prepends `Delivered-To`, `X-Spam-Status`, its `Received` (`by` its
+  hostname), then its `Authentication-Results`, `Received-SPF`, `X-Spam-*` and `Return-Path`, above the sender's own
+  headers. A forged `Authentication-Results` carrying our authserv-id stays in the message, below that block; Stalwart
+  does not remove it.
+- **Authenticated submission (SMTP 465/587 and JMAP `EmailSubmission`) to a local mailbox:** Stalwart adds no
+  `Received` and no `Authentication-Results` (`MtaStageData.addReceivedHeader` / `addAuthResultsHeader` are
+  `local_port == 25`), so before this change a sender's forged header with our authserv-id was the topmost one and
+  the recipient saw "PASS" for a domain the sender doesn't control.
+
+Two layers:
+
+1. **Parser** (`ourAuthResultsHeader` in `apps/web/src/server/webmail/original.ts`): the topmost `Received` must be
+   stamped `by` one of our authserv-ids and be followed directly (ARC headers aside) by an `Authentication-Results`
+   with our authserv-id; otherwise nothing is trusted. The reader fetches the ordered `headers` list for this.
+2. **Strip on submission:** the sender identity Sieve script (`@anhourmail/stalwart-client` `sender.ts`, run at DATA
+   for authenticated sessions in dev and production) deletes every `Authentication-Results` header, so a submitted
+   message can't carry a forged `Received` plus results pair into a local mailbox either. `npm run stack:verify`
+   checks it.
+
+Residual: messages delivered before the strip was applied could still carry a planted `Received` + results pair at
+the top of the sender's headers; the reader would trust it. Mail from outside with a forged header below ours is
+handled by the parser; stripping those on port 25 would need a hostname-aware inbound script and is not done.
+
 ## Review process
 
 1. Every change: the author runs `/security-review` on what they wrote (rule 5) and the full test suite (rule 37).

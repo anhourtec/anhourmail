@@ -158,6 +158,13 @@ and 175 more`. Without `impersonate` these permissions apply to its own account 
   discovery documents** (`/api/auth` turns an app password into an account-wide token; `deploy/README.md`). The
   webmail never uses that host: its JMAP goes through our BFF, not a pass-through.
 - Add a 587 submission listener (not created by default). Keep the default POP3S listener on 995: IMAP, POP3, SMTP submission, ManageSieve and JMAP are all offered (`packages/shared/src/platform.ts` `CLIENT_ENDPOINTS`).
+- **Authentication-Results on submitted mail** (verified 2026-10-28 on v0.16.27): Stalwart adds `Received` and
+  `Authentication-Results` only on port 25 (`MtaStageData.addReceivedHeader` / `addAuthResultsHeader` default
+  `local_port == 25`), directly after one another, and never strips sender-supplied results headers. The sender
+  identity Sieve script (ADR-0019, `packages/stalwart-client/src/sender.ts`) therefore also runs
+  `deleteheader "Authentication-Results"` (`editheader`) on every authenticated submission, so locally sent mail
+  can't carry results our server never produced; the webmail trusts only the results header directly below our own
+  topmost `Received` (`07-security.md` "Authentication results in the webmail"). `stack:verify` checks the strip.
 - Outbound spam scanning of authenticated mail is **off by default** in Stalwart (`MtaStageData.enableSpamFilter`). We turn it on and pair it with control-plane limits (`03-anti-spam-and-abuse.md`).
 - **Transport security** (ADR-0016, ADR-0018; verified 2026-10-21): listeners allow only TLS 1.2/1.3 (`TlsVersion` has
   no older values; 993 negotiated TLS 1.2 ECDHE-ECDSA-AES256-GCM and 587 STARTTLS negotiated TLS 1.3); set
