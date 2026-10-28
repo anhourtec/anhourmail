@@ -195,6 +195,65 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
       }
     });
 
+    it("domains: cached DKIM keys, pending domains on the mail server, backfill candidates", async () => {
+      const { uow, cleanup } = await factory();
+      try {
+        const a = await uow.run((r) => r.accounts.create({ name: "Contract dkim A", plan: "plus" }));
+        const b = await uow.run((r) => r.accounts.create({ name: "Contract dkim B", plan: "plus" }));
+        const name = `dkim-${randomUUID().slice(0, 8)}.example.ca`;
+        const make = (accountId: string) => ({
+          id: randomUUID(),
+          accountId,
+          name,
+          status: "pending_dns" as const,
+          verifyToken: randomUUID(),
+          stalwartId: null,
+          lastError: null,
+          createdAt: new Date(),
+        });
+        const mine = make(a.id);
+        const theirs = make(b.id);
+        await uow.run(async (r) => {
+          await r.domains.insert(mine);
+          await r.domains.insert(theirs);
+        });
+        expect(await uow.run((r) => r.domains.get(a.id, mine.id))).toMatchObject({ dkimKeys: null });
+        expect(await uow.run((r) => r.directory.getDomain(mine.id))).toMatchObject({ accountId: a.id });
+        expect(await uow.run((r) => r.directory.domainOnMailServerElsewhere(name, theirs.id))).toBe(false);
+
+        // The worker adds mine to the mail server while it is still pending: theirs now sees it there, the
+        // reconciler expects it, and it can only go through a removal job (no direct delete).
+        await uow.run((r) => r.directory.markDomain(mine.id, { stalwartId: "s-dkim", lastError: null }));
+        expect(await uow.run((r) => r.directory.domainOnMailServerElsewhere(name, theirs.id))).toBe(true);
+        expect(await uow.run((r) => r.directory.domainOnMailServerElsewhere(name, mine.id))).toBe(false);
+        expect((await uow.run((r) => r.directory.desired())).domains).toContain(name);
+        expect(await uow.run((r) => r.domains.deletePending(mine.id))).toBe(false);
+        const backfill = async () => (await uow.run((r) => r.domains.missingDkimKeys(1000))).map((d) => d.id);
+        expect(await backfill()).toContain(mine.id);
+        expect(await backfill()).not.toContain(theirs.id);
+
+        const keys = [
+          { selector: "v1-ed25519-20261028", value: "v=DKIM1; k=ed25519; h=sha256; p=ed" },
+          { selector: "v1-rsa-20261028", value: "v=DKIM1; k=rsa; h=sha256; p=MIIB" },
+        ];
+        await uow.run((r) => r.directory.markDomain(mine.id, { lastError: null, dkimKeys: keys }));
+        expect(await uow.run((r) => r.domains.get(a.id, mine.id))).toMatchObject({
+          stalwartId: "s-dkim",
+          dkimKeys: keys,
+        });
+        // A later mark without keys leaves them as they are.
+        await uow.run((r) => r.directory.markDomain(mine.id, { lastError: "x" }));
+        expect((await uow.run((r) => r.domains.get(a.id, mine.id)))?.dkimKeys).toEqual(keys);
+        expect(await backfill()).not.toContain(mine.id);
+
+        expect(await uow.run((r) => r.domains.transition(mine.id, "pending_dns", "removing"))).toBe(true);
+        await uow.run((r) => r.directory.deleteDomain(mine.id));
+        expect(await uow.run((r) => r.domains.deletePending(theirs.id))).toBe(true);
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("mailboxes and members: account-scoped reads, global address check, quota, members by email", async () => {
       const { uow, cleanup, createUser } = await factory();
       try {

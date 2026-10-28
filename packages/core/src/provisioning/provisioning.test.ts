@@ -21,13 +21,20 @@ type Box = {
 
 type Revoked = { externalId: string; credentialId: string; createdAt: Date };
 
-function fakeMailServer(opts: { failTimes?: number } = {}): MailServer & {
+/** The keys the fake mail server gives a domain: Ed25519 at once, RSA unless `rsaLate` (as Stalwart, a moment later). */
+const fakeKeys = (name: string, rsa = true) => [
+  { selector: "v1-ed25519-20261028", value: `v=DKIM1; k=ed25519; h=sha256; p=ed-${name}` },
+  ...(rsa ? [{ selector: "v1-rsa-20261028", value: `v=DKIM1; k=rsa; h=sha256; p=rsa-${name}` }] : []),
+];
+
+function fakeMailServer(opts: { failTimes?: number; rsaLate?: number } = {}): MailServer & {
   domains: string[];
   boxes: Box[];
   catchAll: Map<string, string | null>;
   revoked: Revoked[];
 } {
   let failures = opts.failTimes ?? 0;
+  let rsaLate = opts.rsaLate ?? 0;
   const state = {
     domains: [] as string[],
     boxes: [] as Box[],
@@ -44,6 +51,13 @@ function fakeMailServer(opts: { failTimes?: number } = {}): MailServer & {
       if (!state.domains.includes(name)) state.domains.push(name);
       state.catchAll.set(name, catchAllAddress ?? null);
       return { externalId: `dom:${name}` };
+    },
+    domainDkimKeys: async (externalId) => {
+      const name = externalId.replace(/^dom:/, "");
+      if (!state.domains.includes(name)) return [];
+      const rsa = rsaLate <= 0;
+      rsaLate -= 1;
+      return fakeKeys(name, rsa);
     },
     revokeAppPassword: async (input) => {
       if (failures > 0) {
@@ -178,6 +192,7 @@ describe("provisioning jobs", () => {
     // The new account's Password credential is recorded for the reconciler.
     expect(d.uow.state.mailboxPasswords).toEqual([{ mailboxId: "m1", pendingHash: null, credentialId: "a" }]);
     expect(d.uow.state.domains[0]?.stalwartId).toBe("dom:example.test");
+    expect(d.uow.state.domains[0]?.dkimKeys).toEqual(fakeKeys("example.test"));
     expect(d.uow.state.mailboxes[0]).toMatchObject({ status: "active", stalwartId: "acc:owner@example.test" });
     expect(d.uow.state.jobs.every((j) => j.status === "succeeded")).toBe(true);
     expect(d.uow.state.audit).toHaveLength(0);
@@ -209,14 +224,53 @@ describe("provisioning jobs", () => {
     expect(d.uow.state.audit.map((e) => e.action)).toEqual(["platform.provisioning_failed"]);
   });
 
-  it("refuses to provision an unverified domain", async () => {
+  it("adds a pending domain for its DKIM keys (no catch-all) and caches the keys once the RSA key exists", async () => {
+    const { d, clock } = setup();
+    d.uow.state.domains[0]!.status = "pending_dns";
+    d.uow.state.catchAll.push({ domainId: "d1", mailboxId: "m1" });
+    const mail = fakeMailServer({ rsaLate: 1 });
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await runNextJob(d, mail);
+    expect(mail.domains).toEqual(["example.test"]);
+    expect(mail.catchAll.get("example.test")).toBeNull();
+    // On the mail server (so a removal goes through the worker), but only the Ed25519 key so far: retried.
+    expect(d.uow.state.domains[0]).toMatchObject({ stalwartId: "dom:example.test", status: "pending_dns" });
+    expect(d.uow.state.domains[0]?.dkimKeys ?? null).toBeNull();
+    expect(d.uow.state.jobs[0]).toMatchObject({ status: "queued", lastError: "Error: DKIM keys not ready yet" });
+
+    clock.set(new Date(clock.now().getTime() + backoffMs(1)));
+    await runNextJob(d, mail);
+    expect(d.uow.state.domains[0]?.dkimKeys).toEqual(fakeKeys("example.test"));
+    expect(d.uow.state.domains[0]?.lastError).toBeNull();
+    expect(d.uow.state.audit).toHaveLength(0);
+  });
+
+  it("never adds a pending domain another account holds or has already put on the mail server", async () => {
     const { d } = setup();
     d.uow.state.domains[0]!.status = "pending_dns";
+    d.uow.state.domains.push({ ...d.uow.state.domains[0]!, id: "d2", accountId: "a2", stalwartId: "dom:example.test" });
     const mail = fakeMailServer();
     await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
     await runNextJob(d, mail);
     expect(mail.domains).toEqual([]);
-    expect(d.uow.state.jobs[0]?.lastError).toContain("domain not verified");
+    expect(d.uow.state.jobs[0]?.lastError).toContain("domain is being set up by another account");
+
+    d.uow.state.domains[1]!.status = "active";
+    d.uow.state.jobs = [];
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await runNextJob(d, mail);
+    expect(mail.domains).toEqual([]);
+    expect(d.uow.state.jobs[0]?.lastError).toContain("domain belongs to another account");
+  });
+
+  it("does nothing for a domain that is already gone", async () => {
+    const { d } = setup();
+    d.uow.state.domains = [];
+    const mail = fakeMailServer();
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await runNextJob(d, mail);
+    expect(mail.domains).toEqual([]);
+    expect(d.uow.state.jobs[0]?.status).toBe("succeeded");
   });
 
   it("keeps a suspended mailbox suspended, and suspends it on the mail server with its aliases kept", async () => {
@@ -757,6 +811,23 @@ describe("domain removal job", () => {
 });
 
 describe("domain removed while being added", () => {
+  it("takes a pending domain deleted meanwhile off the mail server, unless another claim holds the name", async () => {
+    const { d } = setup();
+    d.uow.state.mailboxes = [];
+    d.uow.state.domains[0]!.status = "pending_dns";
+    const mail = fakeMailServer();
+    const ensure = mail.ensureDomain.bind(mail);
+    mail.ensureDomain = async (name) => {
+      const out = await ensure(name);
+      d.uow.state.domains = d.uow.state.domains.filter((x) => x.id !== "d1"); // the customer removed it meanwhile
+      return out;
+    };
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await runNextJob(d, mail);
+    expect(mail.domains).toEqual([]);
+    expect(d.uow.state.jobs[0]?.status).toBe("succeeded");
+  });
+
   it("takes it off the mail server again instead of leaving an orphan", async () => {
     const { d } = setup();
     d.uow.state.mailboxes = [];

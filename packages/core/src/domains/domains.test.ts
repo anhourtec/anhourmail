@@ -23,13 +23,15 @@ import {
 } from "../errors";
 import {
   checkRecords,
-  DKIM_KEY_NOT_PUBLISHED,
+  DKIM_KEY_DIFFERENT,
+  DKIM_KEYS_PENDING,
   DKIM_NOT_FOUND,
   type DnsResolver,
   isDkimKey,
   type LookupType,
   matches,
   requiredPass,
+  sameDkimKey,
 } from "./dns";
 import { normaliseDomain } from "./entity";
 import {
@@ -63,14 +65,25 @@ function zone(): DnsResolver & { publish(type: LookupType, fqdn: string, ...valu
   };
 }
 
-/** Publishes every required record for `domain`, exactly as the template says. */
+/** The keys the mail server gave `domain` (as the worker caches them from its zone file). */
+const keysFor = (domain: string) => [
+  { selector: "v1-ed25519-20261028", value: `v=DKIM1; k=ed25519; h=sha256; p=ed${domain}` },
+  { selector: "v1-rsa-20261028", value: `v=DKIM1; k=rsa; h=sha256; p=MIIB${domain}` },
+];
+
+/** Publishes every required record for `domain`, exactly as the template says, DKIM keys included. */
 function publishAll(z: ReturnType<typeof zone>, domain: string, token: string) {
-  for (const r of customerDomainRecords(domain, token, TEST_PLATFORM).filter((x) => x.required)) {
+  for (const r of customerDomainRecords(domain, token, TEST_PLATFORM, keysFor(domain)).filter((x) => x.required)) {
     const fqdn = r.name === "@" ? domain : `${r.name}.${domain}`;
     z.publish(r.type, fqdn, r.type === "MX" ? `${String(r.priority)} ${r.value}` : r.value);
-    // The key behind each DKIM CNAME (a real resolver follows the CNAME for the TXT lookup).
-    if (r.purpose === "dkim") z.publish("TXT", fqdn, "v=DKIM1; k=rsa; p=MIIBIjANBgkq");
   }
+}
+
+/** What the worker's `domain.ensure` leaves behind: the domain on the mail server, its DKIM keys cached. */
+function onMailServer(d: ReturnType<typeof setup>, id: string) {
+  const row = d.uow.state.domains.find((x) => x.id === id)!;
+  row.stalwartId = `dom:${row.name}`;
+  row.dkimKeys = keysFor(row.name);
 }
 
 function setup() {
@@ -139,7 +152,9 @@ describe("record matching", () => {
     expect(graded.find((r) => r.purpose === "inbound")?.state).toBe("wrong");
     expect(graded.find((r) => r.purpose === "ownership")?.state).toBe("missing");
     z.fail = true;
-    expect((await checkRecords(z, "x.org", "t", TEST_PLATFORM)).every((r) => r.state === "error")).toBe(true);
+    // Every lookup fails; only the DKIM placeholder (nothing to look up yet) isn't an error.
+    const failed = await checkRecords(z, "x.org", "t", TEST_PLATFORM);
+    expect(failed.filter((r) => !r.placeholder).every((r) => r.state === "error")).toBe(true);
   });
 });
 
@@ -152,38 +167,125 @@ describe("DKIM verification", () => {
     expect(isDkimKey("v=DKIM2; p=abc")).toBe(false);
   });
 
-  it("passes DKIM only when every listed selector's key resolves", async () => {
-    const z = zone();
-    publishAll(z, "x.org", "t");
-    const dkim = customerDomainRecords("x.org", "t", TEST_PLATFORM).filter((r) => r.purpose === "dkim");
-    expect(dkim.length).toBeGreaterThanOrEqual(2);
-    expect(requiredPass(await checkRecords(z, "x.org", "t", TEST_PLATFORM))).toBe(true);
-
-    // The CNAME is right but nothing is published behind the second selector.
-    z.publish("TXT", `${dkim[1]!.name}.x.org`);
-    const graded = await checkRecords(z, "x.org", "t", TEST_PLATFORM);
-    const second = graded.find((r) => r.name === dkim[1]!.name);
-    expect(second).toMatchObject({ state: "missing", problem: DKIM_KEY_NOT_PUBLISHED });
-    expect(graded.find((r) => r.name === dkim[0]!.name)).toMatchObject({ state: "ok" });
-    expect(graded.find((r) => r.name === dkim[0]!.name)).not.toHaveProperty("problem");
-    expect(requiredPass(graded)).toBe(false);
-
-    // No CNAME at all.
-    z.publish("CNAME", `${dkim[0]!.name}.x.org`);
-    expect((await checkRecords(z, "x.org", "t", TEST_PLATFORM)).find((r) => r.name === dkim[0]!.name)).toMatchObject({
-      state: "missing",
-      problem: DKIM_NOT_FOUND,
-    });
+  it("compares the public key only, whatever the spacing, quoting or other tags", () => {
+    const want = "v=DKIM1; k=rsa; h=sha256; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxXpp";
+    expect(sameDkimKey(want, want)).toBe(true);
+    expect(sameDkimKey('v=DKIM1;k=rsa;p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A" "MIIBCgKCAQEAxXpp', want)).toBe(true);
+    expect(sameDkimKey("v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A MIIBCgKCAQEAxXpp", want)).toBe(true);
+    expect(sameDkimKey("v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAother", want)).toBe(false);
+    expect(sameDkimKey("v=DKIM1; k=rsa; p=", "v=DKIM1; k=rsa; p=")).toBe(false);
   });
 
-  it("does not verify a domain whose DKIM key is missing", async () => {
+  it("passes DKIM only when every key is published with its own value, and says what's wrong", async () => {
+    const z = zone();
+    const keys = keysFor("x.org");
+    publishAll(z, "x.org", "t");
+    const dkim = customerDomainRecords("x.org", "t", TEST_PLATFORM, keys).filter((r) => r.purpose === "dkim");
+    expect(dkim.map((r) => [r.type, r.name])).toEqual(keys.map((k) => ["TXT", `${k.selector}._domainkey`]));
+    expect(requiredPass(await checkRecords(z, "x.org", "t", TEST_PLATFORM, keys))).toBe(true);
+
+    // Nothing published for the second key; a different key for the first.
+    z.publish("TXT", `${dkim[1]!.name}.x.org`);
+    z.publish("TXT", `${dkim[0]!.name}.x.org`, "v=DKIM1; k=ed25519; p=someoneelse");
+    const graded = await checkRecords(z, "x.org", "t", TEST_PLATFORM, keys);
+    expect(graded.find((r) => r.name === dkim[1]!.name)).toMatchObject({ state: "missing", problem: DKIM_NOT_FOUND });
+    expect(graded.find((r) => r.name === dkim[0]!.name)).toMatchObject({
+      state: "wrong",
+      problem: DKIM_KEY_DIFFERENT,
+      found: ["v=DKIM1; k=ed25519; p=someoneelse"],
+    });
+    expect(requiredPass(graded)).toBe(false);
+  });
+
+  it("shows a placeholder that can't pass until the mail server has made the keys", async () => {
+    const z = zone();
+    publishAll(z, "x.org", "t");
+    const graded = await checkRecords(z, "x.org", "t", TEST_PLATFORM, null);
+    expect(graded.filter((r) => r.purpose === "dkim")).toEqual([
+      expect.objectContaining({ placeholder: true, state: "missing", problem: DKIM_KEYS_PENDING, found: [] }),
+    ]);
+    expect(requiredPass(graded)).toBe(false);
+  });
+
+  it("does not verify a domain whose DKIM keys are missing", async () => {
     const d = setup();
     const z = zone();
     const added = await addDomain(d, domainAdmin, ACCOUNT_A, { name: "nokey.example.ca" }, req);
+    onMailServer(d, added.id);
     publishAll(z, added.name, d.uow.state.domains.find((x) => x.id === added.id)!.verifyToken);
-    for (const r of added.records.filter((x) => x.purpose === "dkim")) z.publish("TXT", `${r.name}.${added.name}`);
+    for (const k of keysFor(added.name)) z.publish("TXT", `${k.selector}._domainkey.${added.name}`);
     const checked = await checkDomain(d, z, domainAdmin, ACCOUNT_A, added.id, req);
     expect(checked.domain.status).not.toBe("active");
+  });
+});
+
+describe("DKIM keys from the mail server", () => {
+  it("queues the worker once ownership and MX are found, never before", async () => {
+    const d = setup();
+    const z = zone();
+    const added = await addDomain(d, owner, ACCOUNT_A, { name: "k.example.ca" }, req);
+    const token = d.uow.state.domains[0]!.verifyToken;
+    const ownership = customerDomainRecords(added.name, token, TEST_PLATFORM).find((r) => r.purpose === "ownership")!;
+
+    // Ownership alone isn't enough: the mail server would take the domain's mail from wherever MX points now.
+    z.publish("TXT", `${ownership.name}.${added.name}`, ownership.value);
+    await checkDomain(d, z, owner, ACCOUNT_A, added.id, req);
+    expect(d.uow.state.jobs).toEqual([]);
+
+    publishAll(z, added.name, token);
+    const out = await checkDomain(d, z, owner, ACCOUNT_A, added.id, req);
+    expect(out.activated).toBe(false);
+    expect(out.records.find((r) => r.purpose === "dkim")).toMatchObject({ placeholder: true });
+    expect(d.uow.state.jobs).toEqual([expect.objectContaining({ kind: "domain.ensure", subjectId: added.id })]);
+    // Audited as the failed check it is (the job rides on it).
+    expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "domain.verify_failed", result: "success" });
+
+    // The worker added it and cached the keys: the next check finds them and activates.
+    onMailServer(d, added.id);
+    const done = await checkDomain(d, z, owner, ACCOUNT_A, added.id, req);
+    expect(done).toMatchObject({ activated: true, domain: { status: "active", provisioned: true } });
+    const shown = (await getDomain(d, owner, ACCOUNT_A, added.id)).records.filter((r) => r.purpose === "dkim");
+    expect(shown.map((r) => [r.type, r.value])).toEqual(keysFor(added.name).map((k) => ["TXT", k.value]));
+  });
+
+  it("asks the worker again for a domain on the mail server whose keys weren't read, on a check or on schedule", async () => {
+    const { backfillDkimKeys } = await import("./service");
+    const d = setup();
+    const z = zone();
+    const a = await addDomain(d, owner, ACCOUNT_A, { name: "old.example.ca" }, req);
+    const b = await addDomain(d, owner, ACCOUNT_A, { name: "broken.example.ca" }, req);
+    const c = await addDomain(d, owner, ACCOUNT_A, { name: "fine.example.ca" }, req);
+    for (const [x, status] of [
+      [a, "active"],
+      [b, "active"],
+      [c, "active"],
+    ] as const) {
+      const row = d.uow.state.domains.find((r) => r.id === x.id)!;
+      row.status = status;
+      row.stalwartId = `dom:${row.name}`;
+    }
+    d.uow.state.domains.find((r) => r.id === b.id)!.lastError = "Error: DKIM keys not ready yet";
+    d.uow.state.domains.find((r) => r.id === c.id)!.dkimKeys = keysFor(c.name);
+
+    expect(await backfillDkimKeys(d)).toBe(1);
+    expect(d.uow.state.jobs).toEqual([expect.objectContaining({ kind: "domain.ensure", subjectId: a.id })]);
+
+    // A customer's check of the failed one tries again (no audit entry: checking an active domain changes nothing).
+    const audit = d.uow.state.audit.length;
+    await checkDomain(d, z, owner, ACCOUNT_A, b.id, req);
+    expect(d.uow.state.jobs.map((j) => j.subjectId)).toEqual([a.id, b.id]);
+    expect(d.uow.state.audit.length).toBe(audit);
+    await checkDomain(d, z, owner, ACCOUNT_A, c.id, req);
+    expect(d.uow.state.jobs).toHaveLength(2);
+  });
+
+  it("takes a pending domain that is on the mail server off it through the worker", async () => {
+    const d = setup();
+    const added = await addDomain(d, owner, ACCOUNT_A, { name: "p.example.ca" }, req);
+    onMailServer(d, added.id);
+    expect(await removeDomain(d, owner, ACCOUNT_A, added.id, req)).toEqual({ status: "removing" });
+    expect(d.uow.state.domains[0]?.status).toBe("removing");
+    expect(d.uow.state.jobs.at(-1)).toMatchObject({ kind: "domain.remove", subjectId: added.id });
   });
 });
 
@@ -236,6 +338,7 @@ describe("domains service", () => {
     expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "domain.verify_failed" });
 
     publishAll(z, "a.example.ca", token);
+    onMailServer(d, added.id);
     const second = await checkDomain(d, z, owner, ACCOUNT_A, added.id, req);
     expect(second).toMatchObject({ activated: true, domain: { status: "active" } });
     expect(second.records.filter((r) => !r.required).every((r) => r.state === "missing")).toBe(true);
@@ -254,6 +357,7 @@ describe("domains service", () => {
     const mine = await addDomain(d, owner, ACCOUNT_A, { name: "shared.example.ca" }, req);
     const squat = await addDomain(d, ownerB, ACCOUNT_B, { name: "shared.example.ca" }, req);
     publishAll(z, "shared.example.ca", d.uow.state.domains.find((x) => x.id === mine.id)!.verifyToken);
+    onMailServer(d, mine.id);
     expect((await checkDomain(d, z, ownerB, ACCOUNT_B, squat.id, req)).activated).toBe(false);
     expect((await checkDomain(d, z, owner, ACCOUNT_A, mine.id, req)).activated).toBe(true);
     const later = user({ id: "c", account: [[ACCOUNT_B, "owner"]] });
@@ -270,6 +374,7 @@ describe("domains service", () => {
 
     const active = await addDomain(d, owner, ACCOUNT_A, { name: "a.example.ca" }, req);
     publishAll(z, "a.example.ca", d.uow.state.domains[0]!.verifyToken);
+    onMailServer(d, active.id);
     await checkDomain(d, z, owner, ACCOUNT_A, active.id, req);
     d.uow.state.mailboxes.push({
       id: "m1",
@@ -300,6 +405,8 @@ describe("domains service", () => {
     const fresh = await addDomain(d, owner, ACCOUNT_A, { name: "fresh.example.ca" }, req);
     const tokenOf = (id: string) => d.uow.state.domains.find((x) => x.id === id)!.verifyToken;
     publishAll(z, "old.example.ca", tokenOf(old.id));
+    onMailServer(d, old.id);
+    onMailServer(d, fresh.id);
     const auditBefore = d.uow.state.audit.length;
 
     expect(await recheckPendingDomains(d, z)).toBe(0);
@@ -320,6 +427,7 @@ describe("inspectDomain", () => {
     const z = zone();
     const added = await addDomain(d, owner, ACCOUNT_A, { name: "a.example.ca" }, req);
     publishAll(z, "a.example.ca", d.uow.state.domains[0]!.verifyToken);
+    onMailServer(d, added.id);
     const audit = d.uow.state.audit.length;
     const out = await inspectDomain(d, z, userAdmin, ACCOUNT_A, added.id);
     expect(out.records.filter((r) => r.required).every((r) => r.state === "ok")).toBe(true);
@@ -348,7 +456,10 @@ describe("recheck fairness", () => {
     const z = zone();
     for (let i = 0; i < 8; i++) await addDomain(d, owner, ACCOUNT_A, { name: `a${String(i)}.example.ca` }, req);
     const b = await addDomain(d, ownerB, ACCOUNT_B, { name: "b.example.ca" }, req);
-    for (const x of d.uow.state.domains) publishAll(z, x.name, x.verifyToken);
+    for (const x of d.uow.state.domains) {
+      publishAll(z, x.name, x.verifyToken);
+      onMailServer(d, x.id);
+    }
     expect(await recheckPendingDomains(d, z, { total: 50, perAccount: 5, budgetMs: 60_000 })).toBe(6);
     expect(d.uow.state.domains.find((x) => x.id === b.id)?.status).toBe("active");
     expect(d.uow.state.domains.filter((x) => x.accountId === ACCOUNT_A && x.status === "active")).toHaveLength(5);
