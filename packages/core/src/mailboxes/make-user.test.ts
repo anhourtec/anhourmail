@@ -188,6 +188,21 @@ describe("makeMailboxUser", () => {
     expect(d.uow.state.mailboxes.find((m) => m.id === SHARED)?.userId).toBeNull();
   });
 
+  it("asks for the step-up before saying whether the address already has a console login", async () => {
+    const d = setup();
+    d.uow.state.userEmails.someone = "support@family.ca";
+    await expect(make(d, owner, {}, { sessionId: null })).rejects.toThrow(StepUpRequiredError);
+    expect(d.uow.state.audit.at(-1)).toMatchObject({ result: "denied", errorCode: "step_up_required" });
+    await expect(make(d, owner)).rejects.toThrow(/already has a console login/);
+  });
+
+  it("finds an existing console login whatever the case of its email", async () => {
+    const d = setup();
+    d.uow.state.userEmails.someone = "Support@Family.CA";
+    await expect(make(d, owner)).rejects.toThrow(/already has a console login/);
+    expect(d.uow.state.mailboxes.find((m) => m.id === SHARED)?.userId).toBeNull();
+  });
+
   it("refuses an owned, unready or deleting mailbox, an existing login, bad names, act-as and plans without people", async () => {
     const d = setup();
     await expect(make(d, owner, {}, { mailboxId: OWNED })).rejects.toThrow(/already belongs/);

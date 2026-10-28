@@ -93,16 +93,17 @@ export async function makeMailboxUser(
       const rawShown = typeof input.displayName === "string" ? input.displayName.trim() : "";
       const shown = displayName(rawShown === "" ? (m.displayName ?? names.name) : rawShown);
       const profile = profileDetails(input.profile);
-      await repos.accounts.lock(accountId); // the people ceiling holds under concurrent creates
-      await assertRoom(repos, accountId, deps.clock.now());
-      if (await repos.people.userByEmail(m.address)) {
-        throw new ConflictError("That address already has a console login. Invite that person instead.");
-      }
+      // The step-up comes before anything is looked up about the address (whether it has a console login).
       if (
         !session.sessionId ||
         !(await repos.security.stepUpFresh(actor.userId, session.sessionId, deps.clock.now()))
       ) {
         return refuse("step_up_required");
+      }
+      await repos.accounts.lock(accountId); // the people ceiling holds under concurrent creates
+      await assertRoom(repos, accountId, deps.clock.now());
+      if (await repos.people.userByEmail(m.address)) {
+        throw new ConflictError("That address already has a console login. Invite that person instead.");
       }
       const password = generateMailboxPassword();
       const { id: userId } = await repos.people.createLogin({
