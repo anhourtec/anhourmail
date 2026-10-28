@@ -12,6 +12,8 @@ import { callApi } from "../api";
 type CheckResult = {
   activated: boolean;
   records: { required: boolean; state: string; placeholder?: boolean }[];
+  /** Another account's claim holds the name on the mail server (`held`), or is being taken off it (`releasing`). */
+  heldElsewhere?: "held" | "releasing" | null;
 };
 
 /**
@@ -51,17 +53,27 @@ export function CheckButton({
     setMessage(
       result.activated
         ? { tone: "ok", text: "Verified. Your domain is being set up and will be ready in a minute or two." }
-        : missing === 0
-          ? { tone: "ok", text: "All required records are in place." }
-          : keysOnly
+        : result.heldElsewhere === "held"
+          ? {
+              tone: "warn",
+              text: "Your records are found, but another account is still connected to this domain. Delete any verification record other than the one shown here, then check again, or contact support.",
+            }
+          : result.heldElsewhere === "releasing"
             ? {
                 tone: "warn",
-                text: "The other required records are in place. Your DKIM keys are being created: check again in a minute to see them.",
+                text: "Your records are found. Another account's old setup for this domain is being removed: check again in a few minutes.",
               }
-            : {
-                tone: "warn",
-                text: `${String(missing)} required ${missing === 1 ? "record is" : "records are"} not in place yet. DNS changes can take a while to show up.`,
-              },
+            : missing === 0
+              ? { tone: "ok", text: "All required records are in place." }
+              : keysOnly
+                ? {
+                    tone: "warn",
+                    text: "The other required records are in place. Your DKIM keys are being created: check again in a minute to see them.",
+                  }
+                : {
+                    tone: "warn",
+                    text: `${String(missing)} required ${missing === 1 ? "record is" : "records are"} not in place yet. DNS changes can take a while to show up.`,
+                  },
     );
     router.refresh();
   }
