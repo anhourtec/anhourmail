@@ -22,6 +22,11 @@ export type ProfileView = {
   details: ProfileDetails;
   /** Whether this viewer may edit them. */
   canEdit: boolean;
+  /**
+   * Why an admin looking at someone's details can't edit them (shown beside the read-only details); absent when they
+   * can, and for viewers whose role doesn't manage people anyway.
+   */
+  readOnlyReason?: string;
 };
 
 /** The fields whose value differs (added, changed or removed), in the shared field order. */
@@ -54,6 +59,8 @@ async function editRefusal(
 export const OTHER_ACCOUNT_PROFILE =
   "This person also belongs to another account, so only they can change their profile.";
 
+export const ROLE_PROFILE = "Only an owner can edit the profile of an owner or an admin.";
+
 async function memberOf(repos: Repositories, accountId: string, userId: string) {
   const target =
     userId.length <= 200 ? (await repos.people.list(accountId)).find((m) => m.userId === userId) : undefined;
@@ -71,9 +78,17 @@ export async function getPersonProfile(
   authorize(actor, "member.read", accountId);
   return deps.uow.run(async (repos) => {
     const target = await memberOf(repos, accountId, userId);
+    const refusal = await editRefusal(repos, actor, accountId, target);
+    const reason =
+      refusal === "other_account"
+        ? OTHER_ACCOUNT_PROFILE
+        : refusal === "role" && can(actor, "member.manage", accountId)
+          ? ROLE_PROFILE
+          : null;
     return {
       details: await repos.people.profile(target.userId),
-      canEdit: (await editRefusal(repos, actor, accountId, target)) === null,
+      canEdit: refusal === null,
+      ...(reason ? { readOnlyReason: reason } : {}),
     };
   });
 }
@@ -140,7 +155,7 @@ export async function updatePersonProfile(
       };
     },
   );
-  if (out === "role") throw new ForbiddenError("Only an owner can edit the profile of an owner or an admin.");
+  if (out === "role") throw new ForbiddenError(ROLE_PROFILE);
   if (out === "other_account") throw new ForbiddenError(OTHER_ACCOUNT_PROFILE);
   return out;
 }

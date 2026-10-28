@@ -9,6 +9,7 @@ import {
   getOwnProfile,
   getPersonProfile,
   OTHER_ACCOUNT_PROFILE,
+  ROLE_PROFILE,
   updateOwnProfile,
   updatePersonProfile,
 } from "./profile-service";
@@ -164,10 +165,22 @@ describe("getPersonProfile / own profile", () => {
       details: { jobTitle: "Student", city: "Halifax" },
       canEdit: true,
     });
-    // Someone who also belongs to another account edits their details themself.
-    expect((await getPersonProfile(d, as("owner"), ACCOUNT_A, "kid")).canEdit).toBe(false);
-    expect((await getPersonProfile(d, as("admin"), ACCOUNT_A, "admin2")).canEdit).toBe(false);
-    expect((await getPersonProfile(d, as("auditor"), ACCOUNT_A, "kid")).canEdit).toBe(false);
+    // Someone who also belongs to another account edits their details themself: the admin sees them, and why.
+    expect(await getPersonProfile(d, as("owner"), ACCOUNT_A, "kid")).toEqual({
+      details: { jobTitle: "Student", city: "Halifax" },
+      canEdit: false,
+      readOnlyReason: OTHER_ACCOUNT_PROFILE,
+    });
+    expect(await getPersonProfile(d, as("admin"), ACCOUNT_A, "admin2")).toEqual({
+      details: {},
+      canEdit: false,
+      readOnlyReason: ROLE_PROFILE,
+    });
+    // A role that doesn't manage people reads them without a reason to edit.
+    expect(await getPersonProfile(d, as("auditor"), ACCOUNT_A, "kid")).toEqual({
+      details: { jobTitle: "Student", city: "Halifax" },
+      canEdit: false,
+    });
     expect((await getPersonProfile(d, as("auditor"), ACCOUNT_A, "auditor")).canEdit).toBe(true);
     await expect(getPersonProfile(d, as("kid"), ACCOUNT_A, "kid")).rejects.toThrow(ForbiddenError);
     await expect(getPersonProfile(d, as("owner-b"), ACCOUNT_A, "kid")).rejects.toThrow(NotFoundError);
