@@ -426,7 +426,8 @@ export function MessageList({
       onScroll={(e) => {
         setView({ top: e.currentTarget.scrollTop, height: e.currentTarget.clientHeight });
       }}
-      className="relative min-h-0 flex-1 overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      // Room at the end on phones and tablets so the last row scrolls clear of the floating New email button.
+      className="relative min-h-0 flex-1 overflow-y-auto pb-20 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset lg:pb-0"
     >
       <div className="relative" style={{ height: total > 0 ? rowTop(total - 1) + rh : mainTop }}>
         {showSections && (

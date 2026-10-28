@@ -13,6 +13,7 @@ import {
   Mail,
   MailOpen,
   PanelLeft,
+  PenLine,
   Pin,
   RotateCw,
   Search,
@@ -1735,6 +1736,18 @@ function Mailroom({
                 />
               )}
             </div>
+            {/* Phones and tablets have no sidebar: New email floats over the list (hidden while selecting). */}
+            {composer === null && checked.size === 0 && (
+              <button
+                type="button"
+                onClick={compose}
+                aria-label="New email"
+                className="fixed right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-30 inline-flex h-12 items-center gap-2 rounded-2xl bg-primary px-4 font-medium text-[14px] text-primary-foreground shadow-lg transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none lg:hidden"
+              >
+                <PenLine className="size-4" aria-hidden />
+                New email
+              </button>
+            )}
           </section>
 
           <main className={`min-h-0 ${readerVisibility}`}>
