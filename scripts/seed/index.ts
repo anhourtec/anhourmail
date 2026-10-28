@@ -35,13 +35,13 @@ import {
   MAILBOX_DELETE_GRACE_DAYS,
   parsePlatformDomain,
   platformFacts,
-  PLANS,
 } from "@anhourmail/shared";
 import { type StalwartManagement, stalwartDevAdmin } from "@anhourmail/stalwart-client";
 
 import { applyDevMailPlan, DEV_DOMAIN, DEV_MAILBOXES, devWebmailOrigins } from "../../infra/stalwart/dev-plan";
 import { type CredentialRow, writeCredentials } from "./credentials";
 import { seedRefusal } from "./guard";
+import { demoQuotaBytes } from "./quota";
 import { importSampleContacts } from "./sample-contacts";
 import { importSampleMail, sampleIds } from "./sample-mail";
 import {
@@ -167,7 +167,14 @@ async function upsertMailbox(
     })
     .onConflictDoUpdate({
       target: schema.mailbox.address,
-      set: { stalwartId, accountId: m.accountId, passwordCredentialId, pendingPasswordHash: null },
+      // The quota too: a re-seed brings mailboxes from older seeds (a whole pool each) back to their share.
+      set: {
+        stalwartId,
+        accountId: m.accountId,
+        quotaBytes: m.quotaBytes,
+        passwordCredentialId,
+        pendingPasswordHash: null,
+      },
     })
     .returning();
   if (!row) throw new Error(`mailbox ${m.address} not stored`);
@@ -313,8 +320,7 @@ const special: { label: string; detail: string }[] = [];
 let mailClient: { address: string; appPassword: string; host: string; imapPort: number; smtpPort: number } | null =
   null;
 // An even share of the account's pool per mailbox (1 GB), so demo accounts stay within their pooled storage.
-const quota = (plan: keyof typeof PLANS) =>
-  Math.max(1, Math.floor(PLANS[plan].storagePoolGb / PLANS[plan].includedMailboxes)) * 1024 ** 3;
+const quota = demoQuotaBytes;
 
 const people = demo ? demoPeople(ADMIN_EMAIL) : demoPeople(ADMIN_EMAIL).filter((p) => p.email === ADMIN_EMAIL);
 
@@ -558,6 +564,7 @@ if (demo) {
 
   // Mailbox lifecycle states (console Mailboxes page): one suspended, one deleted and waiting out its grace period.
   // Written as intent and applied by the worker's mailbox.ensure job, like the console does (CLAUDE.md rule 26).
+  // FAMILY_LIFECYCLE_MAILBOXES in ./quota counts these when checking the demo fits the Family pool.
   const lifecycleBoxes = [
     { address: `paused@${fam}`, status: "suspended" as const, purgeAfter: null },
     {
