@@ -34,6 +34,7 @@ type Detail = MailboxView & {
   pool: StoragePool;
   lifecycleLocked: boolean;
   passwordPending: boolean;
+  passwordApplyFailed: boolean;
   canSetPassword: boolean;
 };
 
@@ -276,6 +277,7 @@ export function MailboxPanel({
                 address={m.address}
                 ownerEmail={m.owner?.email ?? null}
                 pending={m.passwordPending}
+                applyFailed={m.passwordApplyFailed}
               />
             ),
           },

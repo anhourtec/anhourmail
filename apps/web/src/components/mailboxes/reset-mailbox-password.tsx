@@ -22,6 +22,7 @@ export function ResetMailboxPassword({
   address,
   ownerEmail,
   pending: applying,
+  applyFailed,
 }: {
   accountId: string;
   mailboxId: string;
@@ -29,6 +30,8 @@ export function ResetMailboxPassword({
   ownerEmail: string | null;
   /** A password set a moment ago is still being applied. */
   pending: boolean;
+  /** The last password set here never reached the mail server (the old one still works): set it again. */
+  applyFailed: boolean;
 }) {
   const router = useRouter();
   const id = useId();
@@ -153,6 +156,11 @@ export function ResetMailboxPassword({
           </>
         ) : null}
       </p>
+      {applyFailed && !done && (
+        <p role="alert" className="am-small rounded-lg border border-destructive/40 px-3 py-2.5 text-destructive">
+          The new password wasn&apos;t applied to the mail server, so the previous password still works. Set it again.
+        </p>
+      )}
       {(applying || done) && (
         <p role="status" className="am-small rounded-lg border bg-muted/40 px-3 py-2.5">
           {done ? "New password set. " : "A new password is being applied. "}
