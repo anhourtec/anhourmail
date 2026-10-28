@@ -198,6 +198,39 @@ Built 2026-10-23 (ADR-0020 "Mailbox passwords"). Code: `packages/core/src/mailbo
   (as for a reset; tokens are derived from the password, verified in `passwords.int.test.ts`), and its app passwords,
   which survive a password replacement, are moved to `revoking` with an `app_password.revoke` job in the same
   transaction (`mailbox.made_user` meta `appPasswordsRevoked`).
+- **Handover window (security review 2026-10-28, needs_validation #1):** until the new password is on Stalwart, the
+  old shared password still signs in, so anyone who knew it could otherwise (a) pass the webmail first-password step
+  using it as "current" and overwrite the administrator's waiting hash, locking the new person out, or (b) ask for a
+  console password reset for the new login, whose email is the mailbox address, and read the link in the mailbox.
+  Closed in three places:
+  1. `changeOwnMailboxPassword` refuses (409 `password_change_pending`, audited `mailbox.password_changed` denied)
+     while an administrator's password is waiting (`pending_password_hash` set, `pending_password_by_owner` false) —
+     after any admin reset, "Add a user" or "Make this a user", not only handovers.
+  2. Console resets are held (`consoleResetHeld` in `mailboxes/password.ts`, wired as better-auth `sendResetPassword`
+     → `holdPasswordReset` in `packages/adapters/src/auth/index.ts`) while the login's address is a mailbox with
+     `must_change_password` set or an administrator's password waiting. Nothing is sent; the endpoint answers exactly
+     as for an unknown address (`auth.int.test.ts`); a failing check also holds it (fail closed). Audited as
+     `auth.password_reset_requested` denied `mailbox_password_pending` with the user id only (never the address) and
+     logged with the user id. The unused reset token better-auth already stored is never delivered and expires
+     after an hour.
+  3. If the `mailbox.password` job gives up on an administrator's password, its hash is **kept** (not dropped as
+     before), so (1) and (2) stay in force; the first-sign-in step stays; the console's Password tab says "The new
+     password wasn't applied to the mail server … Set it again" (`getMailbox` `passwordApplyFailed`: a waiting hash
+     whose latest password job failed); `platform.provisioning_failed` meta `adminPasswordKept`. Setting a password
+     again replaces it. The person's own change that gives up is still dropped (they keep their password).
+- **Sessions that outlive a password change (verified 2026-10-28 on v0.16.27, pinned in `passwords.int.test.ts` and
+  `app-passwords.int.test.ts`):** an IMAP session signed in with the account password **keeps working** after the
+  password is replaced — by our reset, out of band, and even after the Password credential is removed and re-added
+  (`NOOP`, `SELECT`, `STATUS` still answer); suspension doesn't end it either (above). It ends only when the client
+  disconnects or the session times out (an IDLE client can keep it open). An IMAP session signed in with an **app
+  password** is cut off when that app password is revoked (its next mailbox command gets no answer and the connection
+  closes; a `NOOP` still answers). OAuth tokens (webmail) stop at once; HTTP Basic re-checks every request.
+  **Residual (accepted, we can't end IMAP sessions):** after "Make this a user" or a reset, a person who was already
+  signed in over IMAP with the old password keeps reading the mailbox — including new mail and, once the new person
+  has chosen their own mailbox password (which lifts the reset hold), a later console reset email — until their
+  client disconnects. App passwords made for the shared address are revoked in the same transaction (their sessions
+  end). Admins handing over a mailbox that was shared widely should treat the old holders as able to read it for a
+  while; the console copy says what happens to old sessions.
 - **Own change (webmail):** customer accounts can't change their own Password on Stalwart (`sysAccountPassword*` is in
   `CUSTOMER_DENIALS` — kept: otherwise a stolen webmail token could change the password). So the BFF proves the current
   password with a Stalwart sign-in (wrong ones count towards `webmailSignInAddress`), the control plane queues the
@@ -226,7 +259,8 @@ sha256(phc) | expiry)>`, expiry ≤ 1 h, stored beside the waiting hash and sent
   it too. "Required" is never cached; "not required" for at most 30 s. The flag clears only when the worker has
   applied the person's own password (`mailbox.pending_password_by_owner` on the waiting hash; `runNextJob` clears it
   in the same unit of work as `passwordApplied`), never when the change is queued; an admin's reset never clears it,
-  and a job that gives up leaves it set (the step then says the last change didn't go through).
+  and a job that gives up leaves it set (the step then says the person's last change didn't go through; for an
+  administrator's password that never applied, the change itself is refused with 409 `password_change_pending`).
   **Residual (accepted):** Stalwart has no "must change" state, so IMAP, POP3 and SMTP submission keep accepting the
   administrator-set password until the person changes it. We don't disable the mailbox's protocols for it; the
   wizard says so ("Until they change it, the password also works in mail apps").
@@ -416,6 +450,34 @@ Two layers:
 Residual: messages delivered before the strip was applied could still carry a planted `Received` + results pair at
 the top of the sender's headers; the reader would trust it. Mail from outside with a forged header below ours is
 handled by the parser; stripping those on port 25 would need a hostname-aware inbound script and is not done.
+
+Delivery paths re-checked on the dev stack 2026-10-28 (security review needs_validation #2), pinned in
+`catch-all.int.test.ts`, `webmail-settings.int.test.ts` and `app-passwords.int.test.ts`:
+
+- **Port 25 direct and through a catch-all:** `Delivered-To`, `X-Spam-Status`, our `Received`, our
+  `Authentication-Results` directly below it — the pair the parser trusts; a forged results header with our id in the
+  sender's headers stays below and is ignored.
+- **Forwarding (our managed Sieve `redirect`, keeping a copy):** the kept copy is as above. The forwarded copy gets
+  two `DKIM-Signature`s and a new `Received … by <our host> with LMTP` on top, with no results below it, so the parser
+  returns nothing ("Not checked") — never a wrong answer. No path found where our `Received` sits directly above a
+  results header Stalwart didn't write.
+- **Submission:** JMAP `EmailSubmission` (an `Email/set` with `header:Received` and `header:Authentication-Results`)
+  and SMTP 465 with header-name variants (`Authentication-Results :`, lower case, folded value, tab before the colon)
+  all reach the recipient without any results header: the submission Sieve strips them. A planted `Received` stays
+  but has nothing trusted below it.
+- **Writing into someone else's folder:** not possible for customers — IMAP `SETACL` ends the connection
+  (`imapAclSet` off) and `Mailbox/set { shareWith }` is `forbidden` (`CUSTOMER_PERMISSIONS`).
+- **Writing into one's own mailbox:** IMAP `APPEND` (and JMAP `Email/import`) store a planted `Received` + results pair
+  as is, with any internal date, which becomes the JMAP `receivedAt`. So the parser would trust it.
+
+Decision: no further parser rule. A check that `receivedAt` agrees with our `Received` timestamp was considered and
+rejected: the appender chooses both (verified above), and genuine mail can legitimately disagree (Stalwart writes
+`Received` at DATA and `receivedAt` at delivery, which can be hours apart after a deferred local delivery), so it
+would add false "Not checked" without stopping a deliberate plant. The remaining exposure is people who hold the
+mailbox's own credentials: they can only mislead themselves, or the others sharing that mailbox — including the new
+owner after "Make this a user" (messages planted before the handover, or through an IMAP session that outlives it;
+"Mailbox passwords" above). A robust fix would be cryptographic: have the mail server ARC-seal inbound mail and
+verify the seal (our key, configured, no DNS) in the webmail before trusting the results. Open item, not built.
 
 ## Review process
 
