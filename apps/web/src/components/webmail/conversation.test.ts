@@ -1,7 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 
-import { defaultExpanded, fromHere, isMine, recipientLabel, restoreTarget, senderLabel } from "./conversation";
+import {
+  defaultExpanded,
+  fromHere,
+  isMine,
+  type MailChange,
+  mergeExpanded,
+  recipientLabel,
+  restoreTarget,
+  sameThread,
+  senderLabel,
+  touchesThread,
+} from "./conversation";
 
 const mine = new Set(["me@dev.test", "alias@dev.test"]);
 const msg = (id: string, keywords: Record<string, boolean> = { $seen: true }) => ({ id, keywords });
@@ -62,5 +73,44 @@ describe("fromHere", () => {
   it("lists this message and every later one", () => {
     expect(fromHere([{ id: "a" }, { id: "b" }, { id: "c" }], "b")).toEqual(["b", "c"]);
     expect(fromHere([{ id: "a" }], "zzz")).toEqual([]);
+  });
+});
+
+describe("keeping an open conversation current", () => {
+  const change = (patch: Partial<MailChange> = {}): MailChange => ({
+    seq: 1,
+    all: false,
+    threadIds: new Set(),
+    emailIds: new Set(),
+    ...patch,
+  });
+
+  it("loads again for a new message in its thread, a change to a message it shows, or Refresh", () => {
+    expect(touchesThread(change({ threadIds: new Set(["t1"]) }), "t1", ["a"])).toBe(true);
+    expect(touchesThread(change({ emailIds: new Set(["a"]) }), "t1", ["a", "b"])).toBe(true);
+    expect(touchesThread(change({ all: true }), "t1", ["a"])).toBe(true);
+    expect(touchesThread(change({ threadIds: new Set(["t2"]), emailIds: new Set(["z"]) }), "t1", ["a"])).toBe(false);
+  });
+
+  it("notices when nothing it shows changed", () => {
+    const a = { id: "a", keywords: { $seen: true }, mailboxIds: { in: true } };
+    expect(sameThread([a], [{ ...a }])).toBe(true);
+    expect(sameThread([a], [{ ...a, keywords: { $seen: true, $flagged: true } }])).toBe(false);
+    expect(sameThread([a], [{ ...a, mailboxIds: { arch: true } }])).toBe(false);
+    expect(sameThread([a], [a, { ...a, id: "b" }])).toBe(false);
+  });
+
+  it("keeps what the person expanded or collapsed and opens a newly arrived reply", () => {
+    const before = [msg("a"), msg("b"), msg("c")];
+    // The person expanded "a" and collapsed the newest, "c".
+    const expanded = new Set(["a"]);
+    const after = [...before, msg("d", {})];
+    expect([...mergeExpanded(before, after, expanded)].sort()).toEqual(["a", "d"]);
+    // Nothing new: exactly what was expanded (a removed message drops out).
+    expect([...mergeExpanded(before, [msg("a"), msg("c")], new Set(["a", "b"]))]).toEqual(["a"]);
+    // A new message that is already read still opens when it is the newest.
+    expect([...mergeExpanded(before, [...before, msg("e")], new Set())]).toEqual(["e"]);
+    // A new draft doesn't take over from the newest sent message.
+    expect([...mergeExpanded(before, [...before, msg("dr", { $draft: true })], new Set(["c"]))]).toEqual(["c"]);
   });
 });

@@ -17,6 +17,53 @@ export function defaultExpanded(list: Brief[]): Set<string> {
   return out;
 }
 
+/**
+ * A change in the mailbox the open conversation may need to show: `all` when it should load again whatever changed
+ * (Refresh, or the server couldn't list the changes), else the threads of new messages and the ids of changed or
+ * removed ones. `seq` makes each one a new signal.
+ */
+export type MailChange = {
+  seq: number;
+  all: boolean;
+  threadIds: ReadonlySet<string>;
+  emailIds: ReadonlySet<string>;
+};
+
+/** Whether `change` touches the conversation `threadId` showing messages `shownIds`. */
+export function touchesThread(change: MailChange, threadId: string, shownIds: readonly string[]): boolean {
+  return change.all || change.threadIds.has(threadId) || shownIds.some((id) => change.emailIds.has(id));
+}
+
+type Shown = Brief & { mailboxIds?: Record<string, boolean> };
+
+/** Whether two loads of a conversation show the same messages in the same state (no re-render needed). */
+export function sameThread(a: readonly Shown[], b: readonly Shown[]): boolean {
+  if (a.length !== b.length) return false;
+  const key = (e: Shown) => JSON.stringify([e.id, e.keywords, e.mailboxIds ?? null]);
+  return a.every((e, i) => {
+    const other = b[i];
+    return other !== undefined && key(e) === key(other);
+  });
+}
+
+/**
+ * Which messages stay expanded when an open conversation loads again: those still there that the person had
+ * expanded, plus — among the messages that weren't there before — the ones `defaultExpanded` would open (the newest,
+ * unread ones). Messages the person collapsed stay collapsed.
+ */
+export function mergeExpanded(
+  before: readonly Brief[],
+  after: readonly Brief[],
+  expanded: ReadonlySet<string>,
+): Set<string> {
+  const known = new Set(before.map((e) => e.id));
+  const out = new Set(after.filter((e) => expanded.has(e.id)).map((e) => e.id));
+  const fresh = after.filter((e) => !known.has(e.id));
+  if (fresh.length === 0) return out;
+  for (const id of defaultExpanded([...after])) if (!known.has(id)) out.add(id);
+  return out;
+}
+
 /** Whether an address is one of the signed-in person's own (lowercase set). */
 export const isMine = (a: Address | undefined | null, mine: ReadonlySet<string>): boolean =>
   !!a && mine.has(a.email.toLowerCase());
