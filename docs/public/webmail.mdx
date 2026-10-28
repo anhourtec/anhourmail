@@ -24,8 +24,20 @@ created; change it in [Settings → Account](/docs/webmail-settings#account). Ch
 changed it and signs the webmail out everywhere else; when an admin sets a new one, the webmail signs out everywhere.
 Forgot it? Ask an owner or admin of your account to [set a new one](/docs/mailboxes#set-a-new-password).
 
-If you see "This mailbox can't be used right now", the mailbox has been suspended or deleted by your account's admin
-(see [Mailboxes](/docs/mailboxes)). Ask them to resume or restore it.
+If the webmail says a mailbox can't be used, the message says why:
+
+- **The mailbox is suspended** by your account's admin (see [Mailboxes](/docs/mailboxes)) or because Anhourtec
+  [suspended the account](/docs/account-suspended). Its mail is kept. Ask your admin to resume it, or contact
+  <Value of="supportEmail" /> if Anhourtec suspended it.
+- **Your sign-in is suspended:** Anhourtec suspended you, so none of your mailboxes can be used. Contact
+  <Value of="supportEmail" /> if you think this is a mistake.
+- **The mailbox is being deleted:** an admin can still restore it for a while.
+- **The mailbox no longer exists.**
+
+When this happens while you're signed in, the webmail signs you out and shows the reason. A browser where you have
+signed in to that mailbox before also shows it when you sign in again. On a browser you haven't used for it, you see
+"Mailbox address or password is wrong." instead, so nobody can use the sign-in form to find out which mailboxes are
+suspended.
 
 ## Several mailboxes
 
@@ -41,6 +53,8 @@ tile to switch. You can have up to five open at once. **Sign out** signs out of 
 - The list shows the newest first, with how long ago each arrived ("24 minutes ago", "1 day ago", then the date). A
   blue dot after the sender means unread; the number beside a sender is how many messages the conversation holds.
 - Opening a conversation marks it read. Use the arrows at the top of the message to go to the previous or next one.
+- The list checks for new mail every half minute while the webmail is open. When a reply arrives in the conversation
+  you're reading, it appears there too, without closing it; **Refresh** above the list updates both straight away.
 - Plain-text messages keep their line breaks, and links and addresses in them work. Earlier messages quoted in a
   reply are folded away behind **…** — choose it to show them; signatures are shown lighter.
 - Attachments are listed under the sender, with their size. Pictures show a small preview; choose one to see it
@@ -54,7 +68,7 @@ tile to switch. You can have up to five open at once. **Sign out** signs out of 
 
 ## Writing mail
 
-- Choose **New email** in the sidebar (or press `c`). Type addresses in **To**; press Enter or a comma after each
+- Choose **New email** in the sidebar (or press `c`); on a phone or tablet it floats at the bottom of the list. Type addresses in **To**; press Enter or a comma after each
   one, or pick from the suggestions (your [contacts](/docs/contacts) and people you've written to, the ones you
   email most first). **Cc Bcc** adds those fields. People you send to are saved to **Other contacts** automatically
   (you can turn this off).
@@ -74,10 +88,13 @@ tile to switch. You can have up to five open at once. **Sign out** signs out of 
 
 New messages start in **Rich text**. The toolbar above the message has bold, italic, underline, links, bulleted and
 numbered lists, quotes and **Clear formatting**; the usual shortcuts (`Ctrl`/`⌘` + `B`, `I`, `U`) work too. Switch to
-**Plain text** at the bottom of the message to send text only (formatting is dropped when you switch).
+**Plain text** at the bottom of the message to send text only. If your message has formatting, you're asked first:
+switching removes it and keeps your text; **Cancel** leaves the message as it is.
 
 Rich messages are sent with a plain-text copy alongside, so mail apps that don't show formatting still show your
-words. Replies and forwards quote the original with its formatting.
+words. Replies and forwards quote the original with its formatting. A reply's quote is marked as one, so mail apps
+(the webmail included) fold it away, and in the plain-text copy the quoted lines start with `>` under the "On …
+wrote:" line.
 
 **Pasting:** formatted text you paste keeps its safe formatting (headings, lists, tables, links, colours). Anything
 else is removed, including the toolbars and buttons some pages and browser extensions add.
@@ -86,7 +103,8 @@ else is removed, including the toolbars and buttons some pages and browser exten
 
 <Value of="htmlMaxSize" />
 ). You see a preview of exactly what will be sent, a list of anything that was removed, and a warning if it loads images
-from another server. Choose **Insert** to add it where your cursor was.
+from another server. Choose **Insert** to add it where your cursor was. Images from another server show as a placeholder
+in the preview and while you write — nothing is loaded from that server on your device — and are sent as they are.
 
 ### What is removed from HTML you send
 
