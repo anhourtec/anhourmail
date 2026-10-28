@@ -33,7 +33,7 @@ import {
 import { customerDomainRecords, PLAN_ORDER, PLANS, PUBLIC_PLATFORM } from "@anhourmail/shared";
 
 import { AuditMock, ConsoleMock } from "@/components/landing/console-mock";
-import { DkimRotation, SettingsCard } from "@/components/landing/extra-art";
+import { DkimKeys, SettingsCard } from "@/components/landing/extra-art";
 import { AliasToggles, DnsChecks, InstantList, TrackerBlocked } from "@/components/landing/illustrations";
 import { ComposerMock, ContactsMock, WebmailMock } from "@/components/landing/webmail-mock";
 
@@ -67,16 +67,20 @@ const paidWith = (k: "customDomains" | "catchAll") =>
   PLAN_ORDER.filter((id) => PLANS[id][k])
     .map((id) => PLANS[id].name)
     .join(" and ");
-const requiredRecords = customerDomainRecords("example.com", "x", PUBLIC_PLATFORM).filter((r) => r.required).length;
+/** Required records as the console shows them once the domain's keys exist (an RSA and an Ed25519 DKIM key). */
+const requiredRecords = customerDomainRecords("example.com", "x", PUBLIC_PLATFORM, [
+  { selector: "rsa", value: "" },
+  { selector: "ed25519", value: "" },
+]).filter((r) => r.required).length;
 const limit = (n: number | null) => (n === null ? "unlimited" : String(n));
 
 export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
   "custom-domains": {
     eyebrow: "Custom domains",
     title: "Your address, your domain",
-    lead: "Use the domain you already own. We show every DNS record, check each one live, and look after the signing keys.",
+    lead: "Use the domain you already own. We show every DNS record, check each one live, and sign your mail with keys made for your domain.",
     description:
-      "Use your own domain with AnhourMail: guided DNS setup, live per-record checks and automatic DKIM key rotation.",
+      "Use your own domain with AnhourMail: guided DNS setup, live per-record checks and DKIM signing keys made for your domain.",
     heroArt: <ConsoleMock view="home" />,
     rows: [
       {
@@ -95,15 +99,15 @@ export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
       {
         icon: KeyRoundIcon,
         label: "Signing keys",
-        title: "We rotate DKIM keys. You never touch DNS again.",
-        body: "Your domain points two signing records at us once. We publish fresh keys behind them on a schedule, so your mail stays trusted without you lifting a finger.",
+        title: "Signed mail, with keys made for your domain.",
+        body: "We create DKIM signing keys for your domain and show them as ready-to-paste records. Once they’re found, every message you send carries a signature mail providers can check.",
         bullets: [
-          "Two selectors for seamless rotation",
-          "Strong RSA keys mail providers accept",
-          "No DNS changes after setup",
+          "Strong RSA key, plus a modern Ed25519 key",
+          "The exact records, each with a copy button",
+          "A live check that the published key matches",
         ],
         bloom: "cyan",
-        art: <DkimRotation />,
+        art: <DkimKeys />,
       },
     ],
     detailsTitle: "The details that matter",

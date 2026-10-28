@@ -29,6 +29,12 @@ export const stagger = (i: number) => ({ "--i": i }) as CSSProperties;
 
 /** Sample addresses: a placeholder custom domain, never a real person's. */
 export const DEMO_DOMAIN = "yourname.com";
+
+/** Illustrative DKIM keys (shortened, not real): the console shows each domain's own. */
+export const DEMO_DKIM_KEYS = [
+  { selector: "v1-rsa-20261028", value: "v=DKIM1; k=rsa; h=sha256; p=MIIBIjANBgkqhkiG9w0BAQEF…" },
+  { selector: "v1-ed25519-20261028", value: "v=DKIM1; k=ed25519; h=sha256; p=T5HnScT90Bl3e6wO…" },
+];
 export const DEMO_ME = `alex@${DEMO_DOMAIN}`;
 export const DEMO_MASKED = `b4e19c07d2@${DEMO_DOMAIN}`;
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 
-import { customerDomainRecords, DKIM_SELECTORS, dkimTarget, VERIFY_PREFIX } from "./dns";
+import { customerDomainRecords, DKIM_PLACEHOLDER, VERIFY_PREFIX } from "./dns";
 import {
   ACCOUNT_POLICY,
   accountPoolBytes,
@@ -128,15 +128,28 @@ describe("platform and DNS", () => {
     expect(CLIENT_ENDPOINTS.some((e) => e.port === 143 || e.port === 110)).toBe(false);
   });
 
-  it("customer records include ownership, MX, SPF and both DKIM selectors", () => {
-    const records = customerDomainRecords("example.org", "tok123", PUBLIC_PLATFORM);
+  it("customer records include ownership, MX, SPF and one TXT per DKIM key", () => {
+    const keys = [
+      { selector: "v1-ed25519-20261028", value: "v=DKIM1; k=ed25519; h=sha256; p=T5Hn" },
+      { selector: "v1-rsa-20261028", value: "v=DKIM1; k=rsa; h=sha256; p=MIIB" },
+    ];
+    const records = customerDomainRecords("example.org", "tok123", PUBLIC_PLATFORM, keys);
     expect(records.find((r) => r.purpose === "ownership")?.value).toBe(`${VERIFY_PREFIX}tok123`);
     expect(records.find((r) => r.type === "MX")?.value).toBe(`${HOSTS.mx[0]}.`);
-    expect(records.filter((r) => r.purpose === "dkim").map((r) => r.name)).toEqual(
-      DKIM_SELECTORS.map((s) => `${s}._domainkey`),
+    expect(records.filter((r) => r.purpose === "dkim").map((r) => [r.type, r.name, r.value, r.required])).toEqual(
+      keys.map((k) => ["TXT", `${k.selector}._domainkey`, k.value, true]),
     );
-    expect(dkimTarget("am1", "example.org", PUBLIC_PLATFORM)).toBe(`am1.example.org.dkim.${PRODUCT_DOMAIN}`);
+    expect(records.some((r) => r.placeholder)).toBe(false);
     expect(records.filter((r) => r.required).length).toBe(5);
+  });
+
+  it("shows one DKIM placeholder until the keys exist", () => {
+    for (const keys of [null, []]) {
+      const dkim = customerDomainRecords("example.org", "t", PUBLIC_PLATFORM, keys).filter((r) => r.purpose === "dkim");
+      expect(dkim).toEqual([
+        expect.objectContaining({ type: "TXT", ...DKIM_PLACEHOLDER, required: true, placeholder: true }),
+      ]);
+    }
   });
 });
 
@@ -158,7 +171,6 @@ describe("configured platform domain", () => {
     const byPurpose = (p: string) => records.filter((r) => r.purpose === p).map((r) => r.value);
     expect(byPurpose("inbound")).toEqual(["mx1.staging-mail.example.net."]);
     expect(byPurpose("spf")).toEqual(["v=spf1 include:_spf.staging-mail.example.net ~all"]);
-    expect(byPurpose("dkim")).toEqual(DKIM_SELECTORS.map((s) => `${s}.customer.org.dkim.staging-mail.example.net.`));
     expect(byPurpose("autoconfig")).toEqual(["autoconfig.staging-mail.example.net."]);
     expect(byPurpose("autodiscover")).toEqual(["autodiscover.staging-mail.example.net."]);
     expect(byPurpose("client-srv")).toEqual([

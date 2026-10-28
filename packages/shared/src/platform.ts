@@ -142,8 +142,6 @@ export type Platform = {
   hosts: PlatformHosts;
   /** SPF include published on our side; lists every outbound IP. */
   spfInclude: string;
-  /** Zone the per-customer DKIM CNAME targets live under (`<selector>.<customer domain>.<dkimZone>`). */
-  dkimZone: string;
   clientEndpoints: readonly ClientEndpoint[];
   carddav: CardDav;
 };
@@ -152,7 +150,7 @@ const LABEL = /^(?!-)[a-z0-9-]{1,63}(?<!-)$/;
 
 /**
  * A usable platform domain: lowercase ASCII (punycode for internationalised names), at least two labels, no trailing
- * dot, no IP address, short enough to leave room for the per-customer DKIM names under it.
+ * dot, no IP address, at most 120 characters.
  */
 export function isPlatformDomain(value: string): boolean {
   if (value.length < 3 || value.length > 120) return false;
@@ -208,7 +206,6 @@ export function platformFacts(domain: string): Platform {
     freeAddressDomain: domain,
     hosts,
     spfInclude: `_spf.${domain}`,
-    dkimZone: `dkim.${domain}`,
     clientEndpoints: clientEndpoints(hosts),
     carddav: cardDav(hosts),
   };

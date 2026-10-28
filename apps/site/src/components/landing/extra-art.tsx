@@ -5,11 +5,13 @@
  */
 import type { CSSProperties } from "react";
 
-import { KeyRoundIcon, LockIcon, RefreshCwIcon } from "lucide-react";
+import { CheckIcon, KeyRoundIcon, LockIcon } from "lucide-react";
 
-import { CLIENT_ENDPOINTS, DKIM_SELECTORS, dkimTarget, PUBLIC_PLATFORM } from "@anhourmail/shared";
+import { CLIENT_ENDPOINTS } from "@anhourmail/shared";
 
-export function DkimRotation() {
+import { DEMO_DKIM_KEYS } from "./mock-parts";
+
+export function DkimKeys() {
   return (
     <div aria-hidden="true" className="am-site-panel overflow-hidden">
       <div className="flex items-center justify-between border-b px-5 py-3.5">
@@ -18,26 +20,24 @@ export function DkimRotation() {
           Signing keys
         </span>
         <span className="am-site-chip am-site-chip--success">
-          <RefreshCwIcon className="am-site-spin size-3" />
-          Rotating automatically
+          <CheckIcon className="size-3" />
+          Found
         </span>
       </div>
       <ul className="divide-y">
-        {DKIM_SELECTORS.map((sel, i) => (
+        {DEMO_DKIM_KEYS.map((k, i) => (
           <li
-            key={sel}
+            key={k.selector}
             className="am-site-instant grid grid-cols-[minmax(0,1fr)] gap-1 px-5 py-3.5"
             style={{ "--i": i } as CSSProperties}
           >
-            <span className="font-mono text-[12.5px]">{sel}._domainkey.yourname.com</span>
-            <span className="truncate font-mono text-[11.5px] text-muted-foreground">
-              → {dkimTarget(sel, "yourname.com", PUBLIC_PLATFORM)}
-            </span>
+            <span className="font-mono text-[12.5px]">TXT {k.selector}._domainkey.yourname.com</span>
+            <span className="truncate font-mono text-[11.5px] text-muted-foreground">{k.value}</span>
           </li>
         ))}
       </ul>
       <p className="border-t px-5 py-3 text-[12px] text-muted-foreground">
-        You publish these once. New keys need no DNS changes.
+        Your domain’s own keys, with a copy button and a live check each.
       </p>
     </div>
   );

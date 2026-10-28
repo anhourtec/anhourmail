@@ -23,20 +23,39 @@ export type DnsRecordTemplate = {
   required: boolean;
   /** Short plain-language reason, shown next to the record. */
   why: string;
+  /**
+   * DKIM only: the keys aren't known yet (the domain isn't on the mail server). Name and value are placeholders
+   * (`DKIM_PLACEHOLDER`): nothing to copy or look up, and the record can't pass.
+   */
+  placeholder?: true;
 };
 
-/** DKIM selectors. Two are published at once so keys can rotate without customer DNS changes. */
-export const DKIM_SELECTORS = ["am1", "am2"] as const;
+/**
+ * One DKIM key the mail server signs a customer domain's mail with: published as TXT at `<selector>._domainkey`
+ * with `value` (`v=DKIM1; k=rsa|ed25519; …; p=<public key>`). The keys are created by the mail server when the
+ * domain is added there and read from its zone file (`x:Domain/get` → `dnsZoneFile`); the control plane caches them.
+ */
+export type DkimKey = { selector: string; value: string };
 
-/** Customer DKIM CNAME target: we publish and rotate the key behind it. */
-export const dkimTarget = (selector: string, domain: string, platform: Platform) =>
-  `${selector}.${domain}.${platform.dkimZone}`;
+/** Name and value shown in place of the DKIM keys before the mail server has created them (and in the public docs). */
+export const DKIM_PLACEHOLDER = { name: "<selector>._domainkey", value: "v=DKIM1; k=rsa; p=<public key>" } as const;
+
+const DKIM_WHY = "Lets AnhourMail sign your outgoing mail so it isn't marked as spam.";
 
 /** Ownership-check TXT host and value prefix. */
 export const VERIFY_HOST = "_anhourmail";
 export const VERIFY_PREFIX = "anhourmail-verify=";
 
-export function customerDomainRecords(domain: string, verifyToken: string, platform: Platform): DnsRecordTemplate[] {
+/**
+ * The records for `domain`. `dkim`: the domain's keys from the mail server, one required TXT each; null or empty (not
+ * created yet, or the public docs) renders one `placeholder` DKIM record instead.
+ */
+export function customerDomainRecords(
+  domain: string,
+  verifyToken: string,
+  platform: Platform,
+  dkim: readonly DkimKey[] | null = null,
+): DnsRecordTemplate[] {
   const { hosts } = platform;
   const [mx] = hosts.mx;
   return [
@@ -65,14 +84,25 @@ export function customerDomainRecords(domain: string, verifyToken: string, platf
       required: true,
       why: "Tells other servers that AnhourMail may send mail for your domain.",
     },
-    ...DKIM_SELECTORS.map((selector): DnsRecordTemplate => ({
-      purpose: "dkim",
-      type: "CNAME",
-      name: `${selector}._domainkey`,
-      value: `${dkimTarget(selector, domain, platform)}.`,
-      required: true,
-      why: "Lets AnhourMail sign your outgoing mail so it isn't marked as spam.",
-    })),
+    ...(dkim === null || dkim.length === 0
+      ? [
+          {
+            purpose: "dkim",
+            type: "TXT",
+            ...DKIM_PLACEHOLDER,
+            required: true,
+            why: DKIM_WHY,
+            placeholder: true,
+          } as const,
+        ]
+      : dkim.map((k): DnsRecordTemplate => ({
+          purpose: "dkim",
+          type: "TXT",
+          name: `${k.selector}._domainkey`,
+          value: k.value,
+          required: true,
+          why: DKIM_WHY,
+        }))),
     {
       purpose: "dmarc",
       type: "TXT",
