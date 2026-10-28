@@ -20,6 +20,15 @@ export type DomainRepository = {
   /** Pending domains created after `since`, in no fixed order (the scheduler samples them so none starves). */
   pending(since: Date, limit: number): Promise<CustomerDomain[]>;
   /**
+   * Another row with this name (any account) that holds it: verified (active or being removed), or pending but already
+   * on the mail server. A verified one first; null when none does. Not scoped to an account: callers never show it.
+   */
+  otherClaim(name: string, exceptId: string): Promise<CustomerDomain | null>;
+  /** Pending domains on the mail server (for their DKIM keys), oldest first: the daily expiry check. */
+  pendingOnMailServer(limit: number): Promise<CustomerDomain[]>;
+  /** Pending domains not on the mail server that were added before `before`, oldest first: expired claims. */
+  unverifiedBefore(before: Date, limit: number): Promise<CustomerDomain[]>;
+  /**
    * Domains on the mail server (and not being removed) whose DKIM keys haven't been read yet and whose last job didn't
    * fail (a failure waits for the customer's next check instead of retrying forever), for the backfill.
    */

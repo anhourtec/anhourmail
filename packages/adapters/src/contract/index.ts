@@ -399,6 +399,61 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
       }
     });
 
+    it("domains: another claim on a name, pending domains on the mail server, expired unverified domains", async () => {
+      const { uow, cleanup } = await factory();
+      try {
+        const a = await uow.run((r) => r.accounts.create({ name: "Contract claim A", plan: "plus" }));
+        const b = await uow.run((r) => r.accounts.create({ name: "Contract claim B", plan: "plus" }));
+        const name = `claim-${randomUUID().slice(0, 8)}.example.ca`;
+        const old = new Date(Date.UTC(1990, 0, 1) + Math.floor(Math.random() * 1e9));
+        const make = (accountId: string, createdAt: Date) => ({
+          id: randomUUID(),
+          accountId,
+          name,
+          status: "pending_dns" as const,
+          verifyToken: randomUUID(),
+          stalwartId: null,
+          lastError: null,
+          createdAt,
+        });
+        const mine = make(a.id, old);
+        const theirs = make(b.id, new Date(old.getTime() + 1000));
+        await uow.run(async (r) => {
+          await r.domains.insert(mine);
+          await r.domains.insert(theirs);
+        });
+        // Pending and off the mail server, neither holds the name; both are expired once the cutoff passes them.
+        expect(await uow.run((r) => r.domains.otherClaim(name, theirs.id))).toBeNull();
+        const expired = async (before: Date) =>
+          (await uow.run((r) => r.domains.unverifiedBefore(before, 100_000))).map((d) => d.id);
+        expect(await expired(new Date(old.getTime() + 1))).toContain(mine.id);
+        expect(await expired(new Date(old.getTime() + 1))).not.toContain(theirs.id);
+        expect(await expired(old)).not.toContain(mine.id);
+
+        await uow.run((r) => r.directory.markDomain(mine.id, { stalwartId: "s-claim", lastError: null }));
+        expect(await uow.run((r) => r.domains.otherClaim(name, theirs.id))).toMatchObject({
+          id: mine.id,
+          accountId: a.id,
+          status: "pending_dns",
+          stalwartId: "s-claim",
+        });
+        expect(await uow.run((r) => r.domains.otherClaim(name, mine.id))).toBeNull();
+        const onServer = (await uow.run((r) => r.domains.pendingOnMailServer(100_000))).map((d) => d.id);
+        expect(onServer).toContain(mine.id);
+        expect(onServer).not.toContain(theirs.id);
+        expect(await expired(new Date(theirs.createdAt.getTime() + 1))).not.toContain(mine.id); // on the mail server
+
+        expect(await uow.run((r) => r.domains.transition(mine.id, "pending_dns", "active"))).toBe(true);
+        expect((await uow.run((r) => r.domains.pendingOnMailServer(100_000))).map((d) => d.id)).not.toContain(mine.id);
+        expect(await uow.run((r) => r.domains.otherClaim(name, theirs.id))).toMatchObject({ status: "active" });
+        await uow.run((r) => r.domains.transition(mine.id, "active", "removing"));
+        await uow.run((r) => r.directory.deleteDomain(mine.id));
+        expect(await uow.run((r) => r.domains.deletePending(theirs.id))).toBe(true);
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("domains: two pending claims racing onto the mail server under the name lock, exactly one records it", async () => {
       const { uow, cleanup } = await factory();
       try {

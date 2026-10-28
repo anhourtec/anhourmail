@@ -678,6 +678,49 @@ class PgDomainRepository implements DomainRepository {
     return rows.map(toDomain);
   }
 
+  async otherClaim(name: string, exceptId: string): Promise<CustomerDomain | null> {
+    const [r] = await this.x
+      .select()
+      .from(customerDomain)
+      .where(
+        and(
+          eq(customerDomain.name, name),
+          ne(customerDomain.id, exceptId),
+          or(ne(customerDomain.status, "pending_dns"), isNotNull(customerDomain.stalwartId)),
+        ),
+      )
+      // A verified claim first (there is at most one), then one on the mail server.
+      .orderBy(sql`case when ${customerDomain.status} = 'pending_dns' then 1 else 0 end`, customerDomain.createdAt)
+      .limit(1);
+    return r ? toDomain(r) : null;
+  }
+
+  async pendingOnMailServer(limit: number): Promise<CustomerDomain[]> {
+    const rows = await this.x
+      .select()
+      .from(customerDomain)
+      .where(and(eq(customerDomain.status, "pending_dns"), isNotNull(customerDomain.stalwartId)))
+      .orderBy(customerDomain.createdAt)
+      .limit(limit);
+    return rows.map(toDomain);
+  }
+
+  async unverifiedBefore(before: Date, limit: number): Promise<CustomerDomain[]> {
+    const rows = await this.x
+      .select()
+      .from(customerDomain)
+      .where(
+        and(
+          eq(customerDomain.status, "pending_dns"),
+          isNull(customerDomain.stalwartId),
+          lt(customerDomain.createdAt, before),
+        ),
+      )
+      .orderBy(customerDomain.createdAt)
+      .limit(limit);
+    return rows.map(toDomain);
+  }
+
   async missingDkimKeys(limit: number): Promise<CustomerDomain[]> {
     const rows = await this.x
       .select()

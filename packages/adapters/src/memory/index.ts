@@ -422,6 +422,24 @@ function repositories(s: MemoryState): Repositories {
           .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
           .slice(0, limit),
       ),
+    otherClaim: async (name, exceptId) => {
+      const others = s.domains.filter((d) => d.name === name && d.id !== exceptId);
+      return clone(others.find((d) => d.status !== "pending_dns") ?? others.find((d) => d.stalwartId !== null) ?? null);
+    },
+    pendingOnMailServer: async (limit) =>
+      clone(
+        s.domains
+          .filter((d) => d.status === "pending_dns" && d.stalwartId !== null)
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+          .slice(0, limit),
+      ),
+    unverifiedBefore: async (before, limit) =>
+      clone(
+        s.domains
+          .filter((d) => d.status === "pending_dns" && d.stalwartId === null && d.createdAt < before)
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+          .slice(0, limit),
+      ),
     missingDkimKeys: async (limit) =>
       clone(
         s.domains
