@@ -14,6 +14,7 @@ describe("auth endpoint allow-list", () => {
     expect(authEndpoint("GET", "/api/auth/passkey/generate-register-options")).toEqual({ tier: "sensitive" });
     expect(authEndpoint("GET", "/api/auth/reset-password/abcDEF_123-x")).toEqual({ tier: "auth" });
     expect(authEndpoint("GET", "/api/auth/verify-email")).toEqual({ tier: "auth" });
+    expect(authEndpoint("POST", "/api/auth/change-password")).toEqual({ tier: "sensitive" });
   });
 
   it("exposes the emailed confirmation link but never the public send endpoint (the console has its own route)", () => {
@@ -36,6 +37,7 @@ describe("auth endpoint allow-list", () => {
       ["POST", "/api/auth/two-factor/view-backup-codes"],
       ["POST", "/api/auth/update-user"],
       ["GET", "/api/auth/sign-in/email"],
+      ["GET", "/api/auth/change-password"],
       ["GET", "/api/auth/reset-password/../x"],
       ["POST", "/api/other/sign-in/email"],
     ] as const) {

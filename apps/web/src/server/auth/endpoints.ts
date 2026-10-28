@@ -20,6 +20,8 @@ const ENDPOINTS: Record<"GET" | "POST", Record<string, AuthTier>> = {
     "/sign-out": "auth",
     "/request-password-reset": "auth",
     "/reset-password": "auth",
+    // The first-sign-in password change (`/change-password`): needs a session and the current password.
+    "/change-password": "sensitive",
     "/two-factor/verify-totp": "authFactor",
     "/two-factor/verify-backup-code": "authFactor",
     "/passkey/verify-authentication": "authFactor",
