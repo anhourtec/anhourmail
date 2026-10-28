@@ -54,6 +54,18 @@ Once the required records are found, the domain shows **Setting up** for a minut
 - **Verification is still pending after a day.** Make sure there is no typo in the verification code, then press
   **Check now**.
 
+## How long a domain can stay unverified
+
+A domain that isn't verified in time is removed from your account, so an unfinished setup never holds a domain for
+good:
+
+- **Ownership and MX records found:** verify within <Value of="pendingDomainSetupDays" /> days of adding the domain,
+  and keep those records in place meanwhile. We check them daily; if either is gone, the domain is removed.
+- **Otherwise:** an unverified domain is removed after <Value of="pendingDomainDays" /> days.
+
+Removed domains show in your [audit log](/docs/audit-log). Add the domain again to start over (it gets a new
+verification code).
+
 ## Removing a domain
 
 Open the domain from the **Domains** list, go to its **Overview** tab and choose **Remove domain…**. Remove or move its mailboxes and aliases first; the console tells
@@ -63,3 +75,7 @@ you if any still use it. You can add the domain again later.
 
 Adding a domain doesn't claim it: only the account whose verification record is published can make it active. If
 the console says the domain is connected to another account and it's yours, contact support.
+
+If **Check now** says your records are found but another account is still connected to the domain, it has an
+unfinished setup of its own. Delete any verification TXT record other than the one your console shows, then check
+again: once their verification record is gone, their setup is removed and yours goes ahead a few minutes later.
