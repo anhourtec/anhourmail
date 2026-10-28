@@ -15,7 +15,7 @@ describe("remote images while writing", () => {
     );
     const shown = parkRemoteImages(html);
     expect(shown).not.toMatch(/\ssrc="(?:https|cid):/);
-    expect(shown.match(new RegExp(`src="${PLACEHOLDER_SRC.replace(/[+/]/g, "\\$&")}"`, "g"))).toHaveLength(2);
+    expect(shown.split(`src="${PLACEHOLDER_SRC}"`)).toHaveLength(3);
     expect(shown).toContain('data-am-src="https://cdn.example/a.png?x=1&amp;y=2"');
     expect(shown).toContain('src="data:image/png;base64,AAAA"');
     expect(shown).toContain('alt="Logo"');

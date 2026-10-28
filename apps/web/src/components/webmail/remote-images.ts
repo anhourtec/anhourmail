@@ -13,8 +13,11 @@
  * linear. The `data-am-*` attributes never leave the browser: the outgoing sanitiser drops every `data-*` attribute.
  */
 
-/** A transparent 1×1 GIF: the placeholder's size comes from the image's own width and height, else from CSS. */
-export const PLACEHOLDER_SRC = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+/**
+ * An empty SVG with no size of its own: the placeholder takes the image's width and height attributes (and their
+ * aspect ratio), else the CSS minimum. A raster pixel would force a square.
+ */
+export const PLACEHOLDER_SRC = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E";
 
 const IMG_TAG = /<img\b[^>]*>/gi;
 const STYLED_TAG = /<[a-z][a-z0-9]*\b[^>]*\sstyle="[^"]*"[^>]*>/gi;
