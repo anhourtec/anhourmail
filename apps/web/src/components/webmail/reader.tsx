@@ -109,10 +109,9 @@ function SenderChecks({
   useEffect(() => {
     let live = true;
     client
-      .authHeaders(emailId)
-      .then((values) => {
+      .traceHeaders(emailId)
+      .then((headers) => {
         if (!live) return;
-        const headers = values.map((value) => ({ name: "Authentication-Results", value: value.trim() }));
         setChecks(senderChecks(authResults(headers, authservIds)));
       })
       .catch(() => {

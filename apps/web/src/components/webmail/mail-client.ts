@@ -414,15 +414,21 @@ export function createMailClient(origin = "") {
       return ((res.get("g")?.list ?? []) as Summary[]).sort((x, y) => x.receivedAt.localeCompare(y.receivedAt));
     },
 
-    /** A message's `Authentication-Results` headers, topmost first (for "mailed-by" and "signed-by"). */
-    async authHeaders(emailId: string): Promise<string[]> {
+    /**
+     * A message's header fields in order, topmost first (for "mailed-by" and "signed-by"): deciding whether an
+     * `Authentication-Results` header is our server's needs its position relative to `Received`.
+     */
+    async traceHeaders(emailId: string): Promise<{ name: string; value: string }[]> {
       const a = await accountId();
-      const res = await call([
-        ["Email/get", { accountId: a, ids: [emailId], properties: ["header:Authentication-Results:all"] }, "g"],
-      ]);
+      const res = await call([["Email/get", { accountId: a, ids: [emailId], properties: ["headers"] }, "g"]]);
       const e = ((res.get("g")?.list ?? []) as Record<string, unknown>[])[0];
-      const v = e?.["header:Authentication-Results:all"];
-      return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+      const v = e?.headers;
+      if (!Array.isArray(v)) return [];
+      return v.flatMap((h: unknown) => {
+        if (typeof h !== "object" || h === null) return [];
+        const { name, value } = h as { name?: unknown; value?: unknown };
+        return typeof name === "string" && typeof value === "string" ? [{ name, value: value.trim() }] : [];
+      });
     },
 
     /**
