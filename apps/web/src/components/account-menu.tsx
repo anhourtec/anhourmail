@@ -157,7 +157,8 @@ export function AccountMenu({
         <CircleUser className="size-4" aria-hidden />
         Profile
       </Link>
-      {soon("Billing", CreditCard)}
+      {/* Billing belongs to an account: staff without one (roles.md) don't get the entry. */}
+      {accounts.length > 0 && soon("Billing", CreditCard)}
       {user.webmailHref && (
         <a role="menuitem" href={user.webmailHref} className={itemClass} onClick={onNavigate}>
           <Mail className="size-4" aria-hidden />
