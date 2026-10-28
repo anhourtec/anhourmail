@@ -102,8 +102,9 @@ export async function ConsoleShell({
         name: actor.name ?? "",
         email: actor.email,
         staffRole: staffRole ? ROLE_LABELS[`platform:${staffRole}`] : null,
-        // Customers only (roles.md "Mail (webmail link)": staff ✗). Pre-fills the address, never a credential.
-        ...(actor.memberships.length > 0
+        // Customers only (roles.md "Mail (webmail link)": staff ✗), with an account that isn't suspended (its
+        // mailboxes can't sign in). Never a credential.
+        ...(actor.memberships.some((m) => !actor.suspendedAccountIds?.includes(m.accountId))
           ? {
               webmailHref: `${env().WEBMAIL_URL.replace(/\/$/, "")}/sign-in`,
             }

@@ -159,7 +159,8 @@ async function accountOverview(actor: UserActor, accountId: string) {
     can(actor, "alias.manage.own", accountId) ? listAliases(deps, actor, accountId) : null,
     can(actor, "audit.read", accountId) ? listAccountAudit(deps, actor, accountId, { limit: 6 }) : null,
   ]);
-  return { mailboxes, pool, people, domains, allowance, aliases, audit };
+  const suspended = actor.suspendedAccountIds?.includes(accountId) ?? false;
+  return { mailboxes, pool, people, domains, allowance, aliases, audit, suspended };
 }
 
 type Overview = Awaited<ReturnType<typeof accountOverview>>;
@@ -473,6 +474,14 @@ function AccountTabs({ actor, accountId, o }: { actor: UserActor; accountId: str
         ]
       : []),
   ];
+  if (o.suspended) {
+    return (
+      <p className="am-small">
+        <StatusText tone="danger">Suspended</StatusText> Its pages are closed until Anhourtec lifts the suspension. Its
+        stored mail is kept.
+      </p>
+    );
+  }
   if (tabs.length === 0) {
     return <p className="am-small">Your role here doesn&apos;t include any console pages yet.</p>;
   }
@@ -497,7 +506,10 @@ export default async function ConsoleHome() {
   const cards = first ? recommendations(actor, first.accountId, first.o, freeDomain) : [];
   const base = current ? `/accounts/${current}` : "";
   const staff = actor.platformRoles.length > 0;
-  const webmail = actor.memberships.length > 0 ? `${env().WEBMAIL_URL.replace(/\/$/, "")}/sign-in` : null;
+  // Webmail only when one of the person's accounts is open (a suspended account's mailboxes can't sign in).
+  const webmail = actor.memberships.some((m) => !actor.suspendedAccountIds?.includes(m.accountId))
+    ? `${env().WEBMAIL_URL.replace(/\/$/, "")}/sign-in`
+    : null;
 
   const quick: { href: string; icon: React.ReactNode; label: string; external?: boolean }[] = [];
   if (current && first) {
