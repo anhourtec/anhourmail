@@ -7,7 +7,18 @@
  */
 import type { Page } from "@playwright/test";
 
-import { e2eUsers, expect, linkFromMail, openNav, panel, signIn, SIGN_IN_TIMEOUT, test, urls } from "./fixtures";
+import {
+  e2eUsers,
+  expect,
+  linkFromMail,
+  openNav,
+  panel,
+  SIGN_IN_TIMEOUT,
+  signIn,
+  test,
+  urls,
+  verifyDomain,
+} from "./fixtures";
 
 test.use({ trace: "off" });
 
@@ -49,8 +60,7 @@ test("create with a password, sign in, change it in the webmail, and an owner's 
   await page.getByRole("link", { name: "Add a domain" }).first().click();
   await page.getByLabel("Domain name").fill(domain);
   await page.getByRole("button", { name: "Add domain" }).click();
-  await panel(page, domain).getByRole("button", { name: "Check now" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Verified." })).toBeVisible();
+  await verifyDomain(page, domain);
   await page.keyboard.press("Escape");
 
   // Create with a generated password, shown once.

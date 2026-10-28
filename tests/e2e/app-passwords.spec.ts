@@ -4,7 +4,7 @@
  * once), and revokes it; an owner turns catch-all on and off on a verified domain. Development DNS answers for `.test`
  * names (adapters/dns devResolver); the worker applies mailboxes, revocations and catch-alls to the dev mail server.
  */
-import { e2eUsers, expect, openNav, panel, signIn, test } from "./fixtures";
+import { e2eUsers, expect, openNav, panel, signIn, test, verifyDomain } from "./fixtures";
 
 test("an owner creates an app password for their own mailbox, sees it once, and revokes it", async ({
   page,
@@ -20,8 +20,7 @@ test("an owner creates an app password for their own mailbox, sees it once, and 
   await page.getByRole("link", { name: "Add a domain" }).click();
   await page.getByLabel("Domain name").fill(domain);
   await page.getByRole("button", { name: "Add domain" }).click();
-  await panel(page, domain).getByRole("button", { name: "Check now" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Verified." })).toBeVisible();
+  await verifyDomain(page, domain);
   await page.keyboard.press("Escape");
   await (await openNav(page)).getByRole("link", { name: "Mailboxes" }).click();
   await page.getByRole("button", { name: "More actions" }).click();

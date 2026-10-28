@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /** Mailboxes (Phase 3) on a domain verified through the development DNS (`.test` names answer as configured). */
-import { e2eUsers, expect, openNav, panel, panelReady, signIn, test, urls } from "./fixtures";
+import { e2eUsers, expect, openNav, panel, panelReady, signIn, test, urls, verifyDomain } from "./fixtures";
 
 test("an owner creates a mailbox, changes its storage, suspends, resumes, deletes and restores it", async ({
   page,
@@ -17,8 +17,7 @@ test("an owner creates a mailbox, changes its storage, suspends, resumes, delete
   await page.getByRole("link", { name: "Add a domain" }).click();
   await page.getByLabel("Domain name").fill(domain);
   await page.getByRole("button", { name: "Add domain" }).click();
-  await panel(page, domain).getByRole("button", { name: "Check now" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Verified." })).toBeVisible();
+  await verifyDomain(page, domain);
 
   await page.keyboard.press("Escape");
   await (await openNav(page)).getByRole("link", { name: "Mailboxes" }).click();

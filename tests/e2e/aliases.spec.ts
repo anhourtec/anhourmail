@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /** Aliases and masked aliases (Phase 3) on a mailbox of a domain verified through the development DNS. */
-import { e2eUsers, expect, openNav, panel, signIn, signOut, test } from "./fixtures";
+import { e2eUsers, expect, openNav, panel, signIn, signOut, test, verifyDomain } from "./fixtures";
 
 test("an owner adds, turns off and deletes aliases; the member sees only their own", async ({ page }, testInfo) => {
   const u = e2eUsers();
@@ -13,8 +13,7 @@ test("an owner adds, turns off and deletes aliases; the member sees only their o
   await page.getByRole("link", { name: "Add a domain" }).click();
   await page.getByLabel("Domain name").fill(domain);
   await page.getByRole("button", { name: "Add domain" }).click();
-  await panel(page, domain).getByRole("button", { name: "Check now" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Verified." })).toBeVisible();
+  await verifyDomain(page, domain);
   await page.keyboard.press("Escape");
   await (await openNav(page)).getByRole("link", { name: "Mailboxes" }).click();
   await expect(page.getByRole("heading", { name: "Mailboxes", level: 1 })).toBeVisible();
