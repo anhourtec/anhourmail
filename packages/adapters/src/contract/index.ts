@@ -684,6 +684,23 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         await uow.run((r) => r.directory.clearPendingPassword(mailboxId));
         expect(await uow.run((r) => r.mailboxPasswords.pending(mailboxId))).toBe(false);
         expect((await uow.run((r) => r.directory.getMailbox(other.mailboxId)))?.passwordCredentialId).toBeNull();
+        // The person's own password is marked as theirs until it is applied or dropped; an admin's replaces the mark.
+        expect((await uow.run((r) => r.directory.getMailbox(mailboxId)))?.pendingPasswordByOwner).toBe(false);
+        await uow.run((r) => r.mailboxPasswords.setPending(mailboxId, h1, "g1", { byOwner: true }));
+        expect((await uow.run((r) => r.directory.getMailbox(mailboxId)))?.pendingPasswordByOwner).toBe(true);
+        await uow.run((r) => r.directory.passwordApplied(mailboxId, h2, "e")); // not the waiting one: mark stays
+        expect((await uow.run((r) => r.directory.getMailbox(mailboxId)))?.pendingPasswordByOwner).toBe(true);
+        await uow.run((r) => r.directory.passwordApplied(mailboxId, h1, "f"));
+        expect(await uow.run((r) => r.directory.getMailbox(mailboxId))).toMatchObject({
+          pendingPasswordHash: null,
+          pendingPasswordByOwner: false,
+        });
+        await uow.run((r) => r.mailboxPasswords.setPending(mailboxId, h1, "g1", { byOwner: true }));
+        await uow.run((r) => r.mailboxPasswords.setPending(mailboxId, h2, "g2"));
+        expect((await uow.run((r) => r.directory.getMailbox(mailboxId)))?.pendingPasswordByOwner).toBe(false);
+        await uow.run((r) => r.mailboxPasswords.setPending(mailboxId, h1, "g1", { byOwner: true }));
+        await uow.run((r) => r.directory.clearPendingPassword(mailboxId));
+        expect((await uow.run((r) => r.directory.getMailbox(mailboxId)))?.pendingPasswordByOwner).toBe(false);
         // Unknown and malformed ids are no-ops.
         await uow.run(async (r) => {
           await r.directory.passwordApplied("not-a-uuid", null, "x");

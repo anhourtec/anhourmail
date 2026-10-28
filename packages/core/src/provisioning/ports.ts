@@ -34,7 +34,8 @@ export type MailDirectoryRepository = {
   markMailbox(id: string, update: { status: string; stalwartId?: string; lastError: string | null }): Promise<void>;
   /**
    * Records the Password credential id the mail server now has for the mailbox, and clears the waiting password if it
-   * is still `applied` (a newer one set meanwhile stays for its own job). `applied` null records the id only.
+   * is still `applied` (a newer one set meanwhile stays for its own job), with its by-owner mark. `applied` null records
+   * the id only.
    */
   passwordApplied(id: string, applied: string | null, credentialId: string): Promise<void>;
   /** Drops a waiting password (its job gave up, or the mailbox is going away): the hash isn't kept around. */

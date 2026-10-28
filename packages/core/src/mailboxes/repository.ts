@@ -15,7 +15,10 @@ export type MailboxRepository = {
   lockAddress(address: string): Promise<void>;
   insert(mailbox: Mailbox): Promise<void>;
   setQuota(id: string, quotaBytes: number): Promise<void>;
-  /** Sets or clears the webmail's first-sign-in password change (`Mailbox.mustChangePassword`). */
+  /**
+   * Sets or clears the webmail's first-sign-in password change (`Mailbox.mustChangePassword`). Cleared by the worker
+   * once a password the person chose has reached the mail server, never when the change is only queued.
+   */
   setPasswordChangeRequired(id: string, required: boolean): Promise<void>;
   /**
    * Links an unassigned mailbox to a person ("Make this a user"). Conditional: false when the mailbox already belongs
@@ -46,9 +49,15 @@ export type MailboxRepository = {
 export type MailboxPasswordRepository = {
   /**
    * Records a new password for the worker to apply, with the web app's grant for replacing it on an existing account
-   * (null at creation, or where no grant key is configured); replaces one still waiting.
+   * (null at creation, or where no grant key is configured); replaces one still waiting. `byOwner`: the mailbox's
+   * person chose it themselves, so applying it ends their first-sign-in password change (default false).
    */
-  setPending(mailboxId: string, passwordHash: string, grant: string | null): Promise<void>;
+  setPending(
+    mailboxId: string,
+    passwordHash: string,
+    grant: string | null,
+    opts?: { byOwner?: boolean },
+  ): Promise<void>;
   /** Whether a password is waiting for the worker. */
   pending(mailboxId: string): Promise<boolean>;
 };

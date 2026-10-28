@@ -35,6 +35,8 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 | #    | Migration                          | Commit      | Date       | Change                                                                                                   | Rollback        |
 | ---- | ---------------------------------- | ----------- | ---------- | -------------------------------------------------------------------------------------------------------- | --------------- |
+| 0020 | `0020_mailbox_password_by_owner`   | uncommitted | 2026-10-28 | `mailbox.pending_password_by_owner` (the waiting password is the person's own choice)                    | Safe            |
+| 0019 | `0019_customer_domain_dkim_keys`   | uncommitted | 2026-10-28 | `customer_domain.dkim_keys` (DKIM public keys per domain, read from the mail server)                     | Safe            |
 | 0018 | `0018_add_user`                    | uncommitted | 2026-10-24 | `mailbox.display_name`, `mailbox.must_change_password`; `user_profile.must_change_password` + profile    | Safe            |
 | 0017 | `0017_staff_suspension`            | uncommitted | 2026-10-23 | `mailbox_staff_hold`; suspension reason, note, time and staff id on `customer_account`, `user_profile`   | Safe            |
 | 0016 | `0016_mailbox_storage_used`        | uncommitted | 2026-10-23 | `mailbox.storage_used_bytes`, `mailbox.storage_checked_at` (last storage measurement; sizes only)        | Safe            |
@@ -75,6 +77,15 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0020_mailbox_password_by_owner · uncommitted · 2026-10-28 · Safe
+
+- Added: `mailbox.pending_password_by_owner` (bool, default false): the password waiting for the worker is one the
+  mailbox's person chose in the webmail, so applying it ends their first-sign-in password change.
+- Changed: —
+- Removed: —
+- Data: none. Waiting passwords at deploy time count as an administrator's (a person mid-change is asked again).
+- Rollback: drop the column with the code that reads it (older code clears the change when it is queued).
 
 ### 0019_customer_domain_dkim_keys · uncommitted · 2026-10-28 · Safe
 

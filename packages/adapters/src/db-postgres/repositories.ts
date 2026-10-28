@@ -447,6 +447,7 @@ class PgMailDirectoryRepository implements MailDirectoryRepository {
       })),
       pendingPasswordHash: m.pendingPasswordHash,
       pendingPasswordGrant: m.pendingPasswordGrant,
+      pendingPasswordByOwner: m.pendingPasswordByOwner,
       passwordCredentialId: m.passwordCredentialId,
     };
   }
@@ -463,6 +464,7 @@ class PgMailDirectoryRepository implements MailDirectoryRepository {
           : {
               pendingPasswordHash: sql`case when ${mailbox.pendingPasswordHash} = ${applied} then null else ${mailbox.pendingPasswordHash} end`,
               pendingPasswordGrant: sql`case when ${mailbox.pendingPasswordHash} = ${applied} then null else ${mailbox.pendingPasswordGrant} end`,
+              pendingPasswordByOwner: sql`case when ${mailbox.pendingPasswordHash} = ${applied} then false else ${mailbox.pendingPasswordByOwner} end`,
             }),
       })
       .where(eq(mailbox.id, id));
@@ -472,7 +474,7 @@ class PgMailDirectoryRepository implements MailDirectoryRepository {
     if (!/^[0-9a-f-]{36}$/i.test(id)) return;
     await this.x
       .update(mailbox)
-      .set({ pendingPasswordHash: null, pendingPasswordGrant: null })
+      .set({ pendingPasswordHash: null, pendingPasswordGrant: null, pendingPasswordByOwner: false })
       .where(eq(mailbox.id, id));
   }
 
@@ -698,10 +700,19 @@ function toMailbox(r: typeof mailbox.$inferSelect): Mailbox {
 class PgMailboxPasswordRepository implements MailboxPasswordRepository {
   constructor(private readonly x: Executor) {}
 
-  async setPending(mailboxId: string, passwordHash: string, grant: string | null): Promise<void> {
+  async setPending(
+    mailboxId: string,
+    passwordHash: string,
+    grant: string | null,
+    opts?: { byOwner?: boolean },
+  ): Promise<void> {
     await this.x
       .update(mailbox)
-      .set({ pendingPasswordHash: passwordHash, pendingPasswordGrant: grant })
+      .set({
+        pendingPasswordHash: passwordHash,
+        pendingPasswordGrant: grant,
+        pendingPasswordByOwner: opts?.byOwner === true,
+      })
       .where(eq(mailbox.id, mailboxId));
   }
 

@@ -141,6 +141,13 @@
       "when": 1793194365438,
       "tag": "0019_customer_domain_dkim_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1793195934624,
+      "tag": "0020_mailbox_password_by_owner",
+      "breakpoints": true
     }
   ]
 }

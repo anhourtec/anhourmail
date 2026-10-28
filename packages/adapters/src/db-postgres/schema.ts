@@ -302,7 +302,8 @@ export const mailbox = pgTable(
     /** The sender name ("Name <address>"), also the mail server account's description. Null: none set. */
     displayName: text("display_name"),
     /**
-     * Set by "Add a user": the webmail asks for a new password before the inbox; cleared when the person changes it.
+     * Set by "Add a user": the webmail asks for a new password before the inbox (and its API refuses everything else);
+     * cleared once the password the person chose has reached the mail server (the worker's `mailbox.password` job).
      */
     mustChangePassword: boolean("must_change_password").notNull().default(false),
     stalwartId: text("stalwart_id"),
@@ -322,6 +323,11 @@ export const mailbox = pgTable(
     pendingPasswordHash: text("pending_password_hash"),
     /** The web app's HMAC grant for replacing the password with exactly that hash (verified by the management proxy). */
     pendingPasswordGrant: text("pending_password_grant"),
+    /**
+     * The waiting password is the one the mailbox's person chose themselves (webmail): once the worker has applied it,
+     * `must_change_password` clears. False for an admin's reset or a password set at creation.
+     */
+    pendingPasswordByOwner: boolean("pending_password_by_owner").notNull().default(false),
     /** The mail server's id for the mailbox's Password credential as we last set it (reconciler; 07-security.md). */
     passwordCredentialId: text("password_credential_id"),
     /**

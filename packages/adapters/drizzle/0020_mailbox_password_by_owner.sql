@@ -1,0 +1,1 @@
+ALTER TABLE "mailbox" ADD COLUMN "pending_password_by_owner" boolean DEFAULT false NOT NULL;

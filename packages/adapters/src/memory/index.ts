@@ -92,6 +92,8 @@ export type MemoryState = {
     pendingHash: string | null;
     credentialId: string | null;
     grant?: string | null;
+    /** Postgres: `mailbox.pending_password_by_owner`. */
+    byOwner?: boolean;
   }[];
   /** Catch-all per domain (Postgres: `customer_domain.catch_all_mailbox_id`). */
   catchAll: { domainId: string; mailboxId: string }[];
@@ -316,6 +318,7 @@ function repositories(s: MemoryState): Repositories {
           .map((a) => ({ address: a.address, kind: a.kind, enabled: a.enabled, description: a.description })),
         pendingPasswordHash: passwordOf(m.id)?.pendingHash ?? null,
         pendingPasswordGrant: passwordOf(m.id)?.grant ?? null,
+        pendingPasswordByOwner: passwordOf(m.id)?.byOwner === true,
         passwordCredentialId: passwordOf(m.id)?.credentialId ?? null,
       });
     },
@@ -326,6 +329,7 @@ function repositories(s: MemoryState): Repositories {
       if (applied !== null && p.pendingHash === applied) {
         p.pendingHash = null;
         p.grant = null;
+        delete p.byOwner;
       }
     },
     clearPendingPassword: async (id) => {
@@ -333,6 +337,7 @@ function repositories(s: MemoryState): Repositories {
       if (p) {
         p.pendingHash = null;
         p.grant = null;
+        delete p.byOwner;
       }
     },
     markDomain: async (id, update) => {
@@ -476,11 +481,13 @@ function repositories(s: MemoryState): Repositories {
   };
 
   const mailboxPasswords: MailboxPasswordRepository = {
-    setPending: async (mailboxId, passwordHash, grant) => {
+    setPending: async (mailboxId, passwordHash, grant, opts) => {
       if (!s.mailboxes.some((m) => m.id === mailboxId)) return;
       const row = passwordRow(mailboxId);
       row.pendingHash = passwordHash;
       row.grant = grant;
+      if (opts?.byOwner === true) row.byOwner = true;
+      else delete row.byOwner;
     },
     pending: async (mailboxId) => (passwordOf(mailboxId)?.pendingHash ?? null) !== null,
   };

@@ -46,6 +46,11 @@ export type MailboxState = {
    */
   pendingPasswordGrant: string | null;
   /**
+   * The waiting password is one the mailbox's person chose themselves (webmail): applying it clears the mailbox's
+   * first-sign-in password change. False for an admin's reset or a password set at creation.
+   */
+  pendingPasswordByOwner: boolean;
+  /**
    * The mail server's id for the mailbox's sign-in Password credential as the control plane last set it (null:
    * not recorded yet, e.g. a mailbox from before this was tracked). The reconciler reports a different one.
    */
