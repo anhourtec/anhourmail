@@ -228,8 +228,10 @@ mailbox in our control plane also has its aliases removed from the account, so m
 unknown recipients. DAV (`PROPFIND /dav/card/…`) returns 403 while suspended. **Limitation:** an IMAP session that
 was already logged in when the suspension landed keeps working (`SELECT` and `FETCH` still succeed, also after
 `x:Action InvalidateCaches`); it ends only when the client disconnects or the session times out. New mail can't reach
-it (delivery is refused). Ending such sessions would need a credential change, which would also destroy the app
-passwords, so we don't. `x:Account/set { destroy }` removes the account
+it (delivery is refused). A credential change doesn't end them either: on v0.16.27 an IMAP session signed in with the
+account password keeps working after the password is replaced, and even after the Password credential is removed and
+re-added (verified on the dev stack 2026-10-28, pinned in `packages/adapters/src/stalwart/int-imap.ts`). Only revoking
+an app password cuts off a session that signed in with it. `x:Account/set { destroy }` removes the account
 and its mail; the purge verifies with `x:Account/get` that the id still has the expected address first.
 
 **OAuth tokens issued before a suspension** (verified 2026-10-22 with a throwaway `dev.test` account, then destroyed;
