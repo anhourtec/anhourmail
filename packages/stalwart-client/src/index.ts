@@ -15,6 +15,7 @@ export {
   StalwartError,
   StalwartTransport,
 } from "./client";
+export { type DkimRecord, dkimTags, parseDkimRecords } from "./dkim";
 export {
   appPasswordPermissions,
   type AppPasswordScope,

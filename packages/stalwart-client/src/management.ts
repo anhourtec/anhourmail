@@ -8,6 +8,7 @@ import {
   SELF_SERVICE_PERMISSIONS,
 } from "./app-passwords";
 import { StalwartError, type StalwartTransport } from "./client";
+import { type DkimRecord, parseDkimRecords } from "./dkim";
 
 /**
  * Typed management operations used by the control plane, worker and dev seeding. Every write is idempotent:
@@ -247,6 +248,20 @@ export class StalwartManagement {
       [domainId],
     );
     return d?.dnsZoneFile ?? "";
+  }
+
+  /**
+   * The DKIM keys a domain signs with, as TXT records the customer publishes (`<selector>._domainkey`), read from its
+   * zone file. Stalwart creates the RSA key a moment after the domain, so a new domain may list only its Ed25519 key
+   * at first. A domain that is gone has none.
+   */
+  async domainDkimRecords(domainId: string): Promise<DkimRecord[]> {
+    const [d] = await this.transport.getAll<{ id: string; name?: string; dnsZoneFile?: string }>(
+      "x:Domain",
+      ["name", "dnsZoneFile"],
+      [domainId],
+    );
+    return d?.name ? parseDkimRecords(d.dnsZoneFile ?? "", d.name) : [];
   }
 
   async upsertUser(input: UserInput): Promise<string> {
