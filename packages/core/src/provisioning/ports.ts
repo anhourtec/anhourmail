@@ -31,6 +31,12 @@ export type MailDirectoryRepository = {
   claimedDomainOwner(name: string): Promise<string | null>;
   /** Whether a domain row other than `exceptId` with this name is on the mail server (has a mail-server id). */
   domainOnMailServerElsewhere(name: string, exceptId: string): Promise<boolean>;
+  /**
+   * Serialises everything that puts this domain name on the mail server or releases it, for the rest of the unit of
+   * work (a transaction-scoped lock on the lowercased name), so two claims racing for one name can't both record the
+   * mail server's domain as theirs.
+   */
+  lockDomainName(name: string): Promise<void>;
   /** Deletes the domain row once the mail server no longer has it (`removing` domains only). */
   deleteDomain(id: string): Promise<void>;
   markMailbox(id: string, update: { status: string; stalwartId?: string; lastError: string | null }): Promise<void>;

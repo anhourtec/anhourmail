@@ -399,6 +399,54 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
       }
     });
 
+    it("domains: two pending claims racing onto the mail server under the name lock, exactly one records it", async () => {
+      const { uow, cleanup } = await factory();
+      try {
+        const a = await uow.run((r) => r.accounts.create({ name: "Contract race A", plan: "plus" }));
+        const b = await uow.run((r) => r.accounts.create({ name: "Contract race B", plan: "plus" }));
+        const name = `race-${randomUUID().slice(0, 8)}.example.ca`;
+        const make = (accountId: string) => ({
+          id: randomUUID(),
+          accountId,
+          name,
+          status: "pending_dns" as const,
+          verifyToken: randomUUID(),
+          stalwartId: null,
+          lastError: null,
+          createdAt: new Date(),
+        });
+        const mine = make(a.id);
+        const theirs = make(b.id);
+        await uow.run(async (r) => {
+          await r.domains.insert(mine);
+          await r.domains.insert(theirs);
+        });
+        // What the worker does once the mail server has the domain: lock the name, re-check, record it.
+        const attach = (id: string, spelled: string) =>
+          uow.run(async (r) => {
+            await r.directory.lockDomainName(spelled);
+            if (await r.directory.domainOnMailServerElsewhere(name, id)) return false;
+            await new Promise((resolve) => setTimeout(resolve, 50)); // the other claim gets every chance to interleave
+            await r.directory.markDomain(id, { stalwartId: `s-${name}`, lastError: null });
+            return true;
+          });
+        // The lock is on the name whatever its case.
+        const won = await Promise.all([attach(mine.id, name), attach(theirs.id, name.toUpperCase())]);
+        expect(won.filter(Boolean)).toHaveLength(1);
+        const rows = [
+          await uow.run((r) => r.domains.get(a.id, mine.id)),
+          await uow.run((r) => r.domains.get(b.id, theirs.id)),
+        ];
+        expect(rows.filter((d) => d?.stalwartId !== null)).toHaveLength(1);
+        for (const d of [mine, theirs]) {
+          await uow.run((r) => r.domains.transition(d.id, "pending_dns", "removing"));
+          await uow.run((r) => r.directory.deleteDomain(d.id));
+        }
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("provisioning: a job is claimed by exactly one of two concurrent workers", async () => {
       const { uow, cleanup } = await factory();
       try {

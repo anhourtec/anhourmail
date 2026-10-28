@@ -511,6 +511,12 @@ class PgMailDirectoryRepository implements MailDirectoryRepository {
     return r !== undefined;
   }
 
+  async lockDomainName(name: string): Promise<void> {
+    await this.x.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`domain-name:${name.trim().toLowerCase()}`}, 0))`,
+    );
+  }
+
   async claimedDomainOwner(name: string): Promise<string | null> {
     const [r] = await this.x
       .select({ accountId: customerDomain.accountId })

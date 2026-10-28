@@ -355,6 +355,8 @@ function repositories(s: MemoryState): Repositories {
       s.domains.find((d) => d.name === name && d.status !== "pending_dns")?.accountId ?? null,
     domainOnMailServerElsewhere: async (name, exceptId) =>
       s.domains.some((d) => d.name === name && d.id !== exceptId && d.stalwartId !== null),
+    // One unit of work at a time already: nothing to lock.
+    lockDomainName: async () => undefined,
     deleteDomain: async (id) => {
       s.domains = s.domains.filter((d) => !(d.id === id && d.status === "removing"));
       s.catchAll = s.catchAll.filter((c) => s.domains.some((d) => d.id === c.domainId));
