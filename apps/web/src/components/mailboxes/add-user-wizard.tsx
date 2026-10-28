@@ -347,8 +347,9 @@ export function AddUserWizard({
                 <span className="am-code break-all text-foreground">{existing.address}</span>
                 <span className="am-micro">
                   They sign in to the webmail and the console with this mailbox. When you finish, it gets a new
-                  password, shown to you once, and they choose their own at first sign-in. The current password stops
-                  working. Until they change it, the new password also works in mail apps.
+                  password, shown to you once, and they choose their own at first sign-in. The current password and the
+                  mailbox&apos;s app passwords stop working; a mail app already signed in with the current password
+                  stays connected until it disconnects. Until they change it, the new password also works in mail apps.
                 </span>
               </div>
             ) : (
