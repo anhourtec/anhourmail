@@ -14,6 +14,7 @@
     "job:service-accounts": "tsx src/jobs/service-accounts.ts",
     "start": "tsx src/worker.ts",
     "job:domain-recheck": "tsx src/jobs/domain-recheck.ts",
+    "job:domain-expiry": "tsx src/jobs/domain-expiry.ts",
     "job:mailbox-purge": "tsx src/jobs/mailbox-purge.ts",
     "job:mailbox-backfill": "tsx src/jobs/mailbox-backfill.ts",
     "job:storage-usage": "tsx src/jobs/storage-usage.ts",
