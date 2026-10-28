@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 "use client";
 
-import { useMemo } from "react";
+import { TriangleAlert } from "lucide-react";
+import { useMemo, useState } from "react";
 
 import { REGIONS, type WebmailPreferences } from "@anhourmail/shared/webmail";
 
 import { folderLabel, folderTree } from "../format";
 import type { Folder, ListRow } from "../mail-client";
 import { MessageRow, rowHeight } from "../message-list";
+import { notificationHelp, type NotifyPermission } from "../sync";
 import { Choice, Group, Note, SelectRow, Toggle } from "./controls";
 
 type Change = (patch: Partial<WebmailPreferences>) => void;
@@ -184,6 +186,11 @@ export function AppearancePanel({ prefs, onChange }: { prefs: WebmailPreferences
 }
 
 export function ReadingPanel({ prefs, onChange }: { prefs: WebmailPreferences; onChange: Change }) {
+  // Desktop notifications: the browser's current answer, and what to tell the person when it said no.
+  const [permission, setPermission] = useState<NotifyPermission>(() =>
+    typeof Notification === "undefined" ? "unsupported" : Notification.permission,
+  );
+  const [notifyHelp, setNotifyHelp] = useState<string | null>(null);
   return (
     <div className="flex flex-col gap-6">
       <Group title="Opening mail">
@@ -242,17 +249,30 @@ export function ReadingPanel({ prefs, onChange }: { prefs: WebmailPreferences; o
         <Toggle
           label="Desktop notifications"
           description="Shows who sent new Inbox mail, never what it says. Your browser asks for permission first."
-          checked={prefs.desktopNotifications}
+          checked={prefs.desktopNotifications && permission === "granted"}
           onChange={(desktopNotifications) => {
+            setNotifyHelp(null);
             if (!desktopNotifications || typeof Notification === "undefined") {
               onChange({ desktopNotifications: false });
+              if (desktopNotifications) setNotifyHelp(notificationHelp("unsupported"));
               return;
             }
             void Notification.requestPermission().then((p) => {
+              setPermission(p);
               onChange({ desktopNotifications: p === "granted" });
+              setNotifyHelp(notificationHelp(p));
             });
           }}
         />
+        {(notifyHelp ?? (prefs.desktopNotifications && permission === "denied")) && (
+          <p
+            role="status"
+            className="am-small flex items-start gap-2 rounded-lg border border-l-4 border-l-[rgb(var(--am-status-warning))] px-3 py-2"
+          >
+            <TriangleAlert className="mt-0.5 size-4 shrink-0 text-[rgb(var(--am-status-warning))]" aria-hidden />
+            <span>{notifyHelp ?? notificationHelp("denied")}</span>
+          </p>
+        )}
       </Group>
       <Group title="Privacy">
         <Note label="Remote images are blocked">

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 
-import { MAX_POLL_MS, newMailToAnnounce, POLL_MS, pollDelay, shouldPoll, tabTitle } from "./sync";
+import { MAX_POLL_MS, newMailToAnnounce, notificationHelp, POLL_MS, pollDelay, shouldPoll, tabTitle } from "./sync";
 
 describe("polling", () => {
   it("checks every 30 seconds and backs off after failures, up to 5 minutes", () => {
@@ -54,5 +54,14 @@ describe("tabTitle", () => {
     expect(tabTitle("Inbox", 1)).toBe("(1) Inbox · AnhourMail");
     expect(tabTitle("Archive", 0)).toBe("Archive · AnhourMail");
     expect(tabTitle(null, 0)).toBe("AnhourMail");
+  });
+});
+
+describe("desktop notification help", () => {
+  it("explains how to allow blocked notifications and says nothing once they are allowed", () => {
+    expect(notificationHelp("granted")).toBeNull();
+    expect(notificationHelp("denied")).toMatch(/site settings.*Allow/);
+    expect(notificationHelp("default")).toMatch(/choose Allow/);
+    expect(notificationHelp("unsupported")).toMatch(/can't show/);
   });
 });

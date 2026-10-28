@@ -81,3 +81,23 @@ export function playChime(): void {
     // No audio available: new mail is still shown.
   }
 }
+
+/** The browser's answer about desktop notifications, or `unsupported` when it has none. */
+export type NotifyPermission = "granted" | "denied" | "default" | "unsupported";
+
+/**
+ * What to tell the person when desktop notifications can't be turned on, or null when they can. A browser that
+ * blocked them won't ask again: only the site settings can allow them.
+ */
+export function notificationHelp(permission: NotifyPermission): string | null {
+  switch (permission) {
+    case "granted":
+      return null;
+    case "denied":
+      return "Your browser is blocking notifications from this site. To allow them, open the site settings (the icon at the left of the address bar), set Notifications to Allow, then turn this on again.";
+    case "default":
+      return "Your browser didn't allow notifications. Turn this on again and choose Allow when it asks.";
+    case "unsupported":
+      return "This browser can't show desktop notifications.";
+  }
+}
