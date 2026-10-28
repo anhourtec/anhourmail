@@ -30,7 +30,11 @@ function isCurrent(pathname: string, href: string, exact = false): boolean {
 export type NavCounts = Partial<Record<string, { count: number; emphasis?: boolean }>>;
 
 /** The most common create action for the person's role, shown as the sidebar's prominent button. */
-export type PrimaryAction = { label: string; href: string; icon: "mailbox" | "person" | "alias" | "account" };
+/** The sidebar's main action; with `disabledReason` (and no `href`) it is shown disabled with that reason. */
+export type PrimaryAction = {
+  label: string;
+  icon: "mailbox" | "person" | "alias" | "account";
+} & ({ href: string; disabledReason?: undefined } | { href?: undefined; disabledReason: string });
 
 /** The account menu's width (w-72) plus the panel surface's padding and border. */
 const MENU_WIDTH = 302;
@@ -198,7 +202,12 @@ export function LeftNav({
         detail={current ? `${current.name} · ${current.role}` : (user.staffRole ?? user.email)}
       >
         {primary && (
-          <SidebarPrimaryAction label={primary.label} icon={PrimaryIcon} collapsed={compact} href={primary.href} />
+          <SidebarPrimaryAction
+            label={primary.label}
+            icon={PrimaryIcon}
+            collapsed={compact}
+            {...(primary.href ? { href: primary.href } : { disabledReason: primary.disabledReason })}
+          />
         )}
       </SidebarIdentity>
 

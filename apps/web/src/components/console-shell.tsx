@@ -12,6 +12,7 @@ import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 import { navTree } from "@/server/console-nav";
 import { container } from "@/server/container";
 import { env } from "@/server/env";
+import { peopleActions } from "@/server/people-actions";
 
 import type { MenuAccount } from "./account-menu";
 import { ConsoleChrome } from "./console-chrome";
@@ -40,13 +41,21 @@ async function navCounts(actor: UserActor, accountId: string | undefined): Promi
   };
 }
 
-/** The sidebar's prominent button: the most common create action this person's role allows. */
-function primaryAction(actor: UserActor, accountId: string | undefined): PrimaryAction | null {
+/**
+ * The sidebar's prominent button: the most common create action this person's role allows and the account has room
+ * for (`peopleActions`, the same answer Home and the Mailboxes page use). Adding a user or an invite that the plan or
+ * the account's room refuses isn't offered as a link: when neither is ready but one is only full, it shows disabled
+ * with the reason.
+ */
+async function primaryAction(actor: UserActor, accountId: string | undefined): Promise<PrimaryAction | null> {
   const base = accountId ? `/accounts/${accountId}` : "";
-  if (accountId && can(actor, "mailbox.manage", accountId))
-    return { label: "Add a user", href: `${base}/mailboxes/new`, icon: "person" };
-  if (accountId && can(actor, "member.manage", accountId))
-    return { label: "New invite", href: `${base}/people?new=1`, icon: "person" };
+  if (accountId) {
+    const { addUser, invite } = await peopleActions(actor, accountId);
+    if (addUser.state === "ready") return { label: "Add a user", href: `${base}/mailboxes/new`, icon: "person" };
+    if (invite.state === "ready") return { label: "New invite", href: `${base}/people?new=1`, icon: "person" };
+    if (addUser.state === "full") return { label: "Add a user", disabledReason: addUser.reason, icon: "person" };
+    if (invite.state === "full") return { label: "New invite", disabledReason: invite.reason, icon: "person" };
+  }
   if (accountId && can(actor, "alias.manage.own", accountId))
     return { label: "New alias", href: `${base}/aliases?new=1`, icon: "alias" };
   if (can(actor, "platform.accounts.read"))
@@ -96,7 +105,7 @@ export async function ConsoleShell({
     <ConsoleChrome
       tree={navTree(actor, current)}
       counts={await navCounts(actor, current)}
-      primary={primaryAction(actor, current)}
+      primary={await primaryAction(actor, current)}
       currentAccountId={current ?? null}
       user={{
         name: actor.name ?? "",
