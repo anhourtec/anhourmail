@@ -26,12 +26,12 @@ import {
 } from "@anhourmail/core/audit";
 import { domainAllowance, listDomains } from "@anhourmail/core/domains";
 import { listMailboxes, mailboxStoragePool } from "@anhourmail/core/mailboxes";
-import { listPeople } from "@anhourmail/core/people";
+import { type Availability, listPeople } from "@anhourmail/core/people";
 import { MAX_MAILBOXES } from "@anhourmail/shared/plans";
 import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 import { formatBytes, poolSummary, type StoragePool } from "@anhourmail/shared/storage";
 
-import { CommandBar, CommandLink } from "@/components/console/command-bar";
+import { CommandBar, CommandLink, CommandUnavailable } from "@/components/console/command-bar";
 import { DetailTabs } from "@/components/console/flyout";
 import { Greeting } from "@/components/console/greeting";
 import { firstName } from "@/components/console/greeting-text";
@@ -42,6 +42,7 @@ import { UsageBar } from "@/components/mailboxes/storage-usage";
 import { accountNames, requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
 import { env } from "@/server/env";
+import { peopleActions } from "@/server/people-actions";
 import { platform } from "@/server/platform";
 
 export const metadata: Metadata = { title: "Console" };
@@ -159,8 +160,10 @@ async function accountOverview(actor: UserActor, accountId: string) {
     can(actor, "alias.manage.own", accountId) ? listAliases(deps, actor, accountId) : null,
     can(actor, "audit.read", accountId) ? listAccountAudit(deps, actor, accountId, { limit: 6 }) : null,
   ]);
+  // "Add a user" and "Invite someone": offered, shown disabled (full), or not at all — as in the sidebar.
+  const actions = await peopleActions(actor, accountId);
   const suspended = actor.suspendedAccountIds?.includes(accountId) ?? false;
-  return { mailboxes, pool, people, domains, allowance, aliases, audit, suspended };
+  return { mailboxes, pool, people, domains, allowance, aliases, audit, actions, suspended };
 }
 
 type Overview = Awaited<ReturnType<typeof accountOverview>>;
@@ -225,8 +228,7 @@ function recommendations(actor: UserActor, accountId: string, o: Overview, freeD
       tone: "warning",
     });
   }
-  const activeDomain = o.domains?.some((d) => d.status === "active") ?? false;
-  if (o.mailboxes?.length === 0 && activeDomain && can(actor, "mailbox.manage", accountId)) {
+  if (o.mailboxes?.length === 0 && o.actions.addUser.state === "ready") {
     cards.push({
       id: "first-mailbox",
       icon: Inbox,
@@ -238,10 +240,10 @@ function recommendations(actor: UserActor, accountId: string, o: Overview, freeD
     });
   }
   if (
-    o.people?.limits.addPeople &&
+    o.people &&
+    o.actions.invite.state === "ready" &&
     o.people.members.length === 1 &&
-    o.people.invites.length === 0 &&
-    can(actor, "member.manage", accountId)
+    o.people.invites.length === 0
   ) {
     cards.push({
       id: "invite",
@@ -302,6 +304,35 @@ function Cards({ cards }: { cards: Card[] }) {
   );
 }
 
+/** "Add a user" or "Invite someone" in a command bar: a link when ready, disabled with the reason when full. */
+function PeopleAction({
+  availability,
+  href,
+  icon,
+  label,
+}: {
+  availability: Availability;
+  href: string;
+  icon: React.ReactNode;
+  label: string;
+}) {
+  if (availability.state === "ready") {
+    return (
+      <CommandLink href={href} icon={icon}>
+        {label}
+      </CommandLink>
+    );
+  }
+  if (availability.state === "full") {
+    return (
+      <CommandUnavailable icon={icon} reason={availability.reason}>
+        {label}
+      </CommandUnavailable>
+    );
+  }
+  return null;
+}
+
 function AccountTabs({ actor, accountId, o }: { actor: UserActor; accountId: string; o: Overview }) {
   const base = `/accounts/${accountId}`;
   const tabs = [
@@ -313,11 +344,12 @@ function AccountTabs({ actor, accountId, o }: { actor: UserActor; accountId: str
             content: (
               <>
                 <TabBar>
-                  {can(actor, "mailbox.manage", accountId) && (
-                    <CommandLink href={`${base}/mailboxes/new`} icon={<UserPlus />}>
-                      Add a user
-                    </CommandLink>
-                  )}
+                  <PeopleAction
+                    availability={o.actions.addUser}
+                    href={`${base}/mailboxes/new`}
+                    icon={<UserPlus />}
+                    label="Add a user"
+                  />
                   <CommandLink href={`${base}/mailboxes`} icon={<Inbox />}>
                     All mailboxes
                   </CommandLink>
@@ -381,11 +413,12 @@ function AccountTabs({ actor, accountId, o }: { actor: UserActor; accountId: str
             content: (
               <>
                 <TabBar>
-                  {can(actor, "member.manage", accountId) && o.people.limits.addPeople && (
-                    <CommandLink href={`${base}/people?new=1`} icon={<UserPlus />}>
-                      Invite someone
-                    </CommandLink>
-                  )}
+                  <PeopleAction
+                    availability={o.actions.invite}
+                    href={`${base}/people?new=1`}
+                    icon={<UserPlus />}
+                    label="Invite someone"
+                  />
                   <CommandLink href={`${base}/people`} icon={<Users />}>
                     People and roles
                   </CommandLink>
@@ -511,15 +544,31 @@ export default async function ConsoleHome() {
     ? `${env().WEBMAIL_URL.replace(/\/$/, "")}/sign-in`
     : null;
 
-  const quick: { href: string; icon: React.ReactNode; label: string; external?: boolean }[] = [];
+  const quick: {
+    href: string;
+    icon: React.ReactNode;
+    label: string;
+    external?: boolean;
+    availability?: Availability;
+  }[] = [];
   if (current && first) {
     const { o } = first;
     if (canClaimFree(actor, current, o, freeDomain))
       quick.push({ href: `${base}/mailboxes?claim=1`, icon: <AtSign />, label: "Get your free address" });
-    if (can(actor, "mailbox.manage", current) && o.domains?.some((d) => d.status === "active"))
-      quick.push({ href: `${base}/mailboxes/new`, icon: <UserPlus />, label: "Add a user" });
-    if (can(actor, "member.manage", current) && o.people?.limits.addPeople)
-      quick.push({ href: `${base}/people?new=1`, icon: <UserPlus />, label: "Invite someone" });
+    if (o.actions.addUser.state !== "unavailable")
+      quick.push({
+        href: `${base}/mailboxes/new`,
+        icon: <UserPlus />,
+        label: "Add a user",
+        availability: o.actions.addUser,
+      });
+    if (o.actions.invite.state !== "unavailable")
+      quick.push({
+        href: `${base}/people?new=1`,
+        icon: <UserPlus />,
+        label: "Invite someone",
+        availability: o.actions.invite,
+      });
     if (can(actor, "domain.manage", current) && o.allowance?.allowed)
       quick.push({ href: `${base}/domains?new=1`, icon: <Globe />, label: "Add a domain" });
     if (o.aliases && o.aliases.mailboxes.length > 0)
@@ -551,6 +600,8 @@ export default async function ConsoleHome() {
                 {q.icon}
                 {q.label}
               </a>
+            ) : q.availability ? (
+              <PeopleAction key={q.label} availability={q.availability} href={q.href} icon={q.icon} label={q.label} />
             ) : (
               <CommandLink key={q.label} href={q.href} icon={q.icon}>
                 {q.label}
@@ -558,6 +609,14 @@ export default async function ConsoleHome() {
             ),
           )}
         </CommandBar>
+      )}
+      {/* Why a quick action is disabled, as text too (tooltips don't show on touch screens). */}
+      {[...new Set(quick.flatMap((q) => (q.availability?.state === "full" ? [q.availability.reason] : [])))].map(
+        (reason) => (
+          <p key={reason} className="am-micro mt-1.5">
+            {reason}
+          </p>
+        ),
       )}
 
       <header className="mt-3 flex flex-col gap-1.5">
