@@ -65,7 +65,11 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
     const domain = await deps.uow.run((r) => r.directory.getDomain(job.subjectId));
     if (!domain) return; // already gone
     if (domain.status !== "removing") throw new Error(`domain not marked for removal (status ${domain.status})`);
-    await mail.removeDomain(domain.name);
+    // Another row recorded on the mail server for this name (a claim from before the per-name lock) keeps it there:
+    // only this row goes. While this row is on the mail server no other pending claim can be recorded there.
+    if (!(await deps.uow.run((r) => r.directory.domainOnMailServerElsewhere(domain.name, domain.id)))) {
+      await mail.removeDomain(domain.name);
+    }
     await deps.uow.run((r) => r.directory.deleteDomain(domain.id));
     return;
   }
@@ -101,14 +105,27 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
     };
     const now = await deps.uow.run((r) => r.directory.getDomain(domain.id));
     if (!now) return offAgainUnlessHeld();
-    // Marked for removal while we were adding it: take it off again so the mail server keeps no orphan.
+    // Marked for removal while we were adding it: take it off again so the mail server keeps no orphan (unless another
+    // row is recorded there for this name).
     if (now.status === "removing") {
-      await mail.removeDomain(domain.name);
+      if (!(await deps.uow.run((r) => r.directory.domainOnMailServerElsewhere(domain.name, domain.id)))) {
+        await mail.removeDomain(domain.name);
+      }
       return;
     }
     // From now on a removal goes through a job that takes the domain off the mail server; a pending row deleted in
-    // the moment before this (it had no mail-server id yet) is caught by the second read.
-    await deps.uow.run((r) => r.directory.markDomain(domain.id, { stalwartId: externalId, lastError: null }));
+    // the moment before this (it had no mail-server id yet) is caught by the second read. Recorded under the per-name
+    // lock, re-checking that no other claim was recorded meanwhile: two pending claims that both passed the check
+    // above can't both own the mail server's domain (the loser leaves it in place: it is the winner's now).
+    const recorded = await deps.uow.run(async (r) => {
+      await r.directory.lockDomainName(domain.name);
+      const holder = await r.directory.claimedDomainOwner(domain.name);
+      if (holder !== null && holder !== domain.accountId) return false;
+      if (pending && (await r.directory.domainOnMailServerElsewhere(domain.name, domain.id))) return false;
+      await r.directory.markDomain(domain.id, { stalwartId: externalId, lastError: null });
+      return true;
+    });
+    if (!recorded) throw new Error("domain is being set up by another account");
     if (!(await deps.uow.run((r) => r.directory.getDomain(domain.id)))) return offAgainUnlessHeld();
     const keys = await mail.domainDkimKeys(externalId);
     // The RSA key (the one every receiver checks) is created a moment after the domain: retry until it is there, so

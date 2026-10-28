@@ -828,6 +828,45 @@ describe("domain removed while being added", () => {
     expect(d.uow.state.jobs[0]?.status).toBe("succeeded");
   });
 
+  it("records a pending domain only if no other claim was recorded on the mail server while it was being added", async () => {
+    const { d } = setup();
+    d.uow.state.mailboxes = [];
+    d.uow.state.domains[0]!.status = "pending_dns";
+    d.uow.state.domains.push({ ...d.uow.state.domains[0]!, id: "d2", accountId: "a2" });
+    const mail = fakeMailServer();
+    const ensure = mail.ensureDomain.bind(mail);
+    const locked: string[] = [];
+    const run = d.uow.run.bind(d.uow);
+    d.uow.run = (fn) =>
+      run((r) => fn({ ...r, directory: { ...r.directory, lockDomainName: async (n) => void locked.push(n) } }));
+    mail.ensureDomain = async (name) => {
+      const out = await ensure(name);
+      // The other account's claim passed the same check and was recorded first.
+      d.uow.state.domains.find((x) => x.id === "d2")!.stalwartId = out.externalId;
+      return out;
+    };
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await runNextJob(d, mail);
+    expect(locked).toContain("example.test");
+    expect(d.uow.state.domains.find((x) => x.id === "d1")?.stalwartId).toBeNull();
+    expect(d.uow.state.jobs[0]?.lastError).toContain("domain is being set up by another account");
+    // The mail server's domain is the winner's now: left in place.
+    expect(mail.domains).toEqual(["example.test"]);
+  });
+
+  it("removes a released row without taking the name off the mail server while another row holds it there", async () => {
+    const { d } = setup();
+    d.uow.state.mailboxes = [];
+    const mail = fakeMailServer();
+    await mail.ensureDomain("example.test");
+    d.uow.state.domains[0]!.stalwartId = "dom:example.test";
+    d.uow.state.domains.push({ ...d.uow.state.domains[0]!, id: "d2", accountId: "a2", status: "removing" });
+    await enqueueProvisioning(d, { kind: "domain.remove", subjectId: "d2" });
+    await runNextJob(d, mail);
+    expect(mail.domains).toEqual(["example.test"]);
+    expect(d.uow.state.domains.map((x) => x.id)).toEqual(["d1"]);
+  });
+
   it("takes it off the mail server again instead of leaving an orphan", async () => {
     const { d } = setup();
     d.uow.state.mailboxes = [];
