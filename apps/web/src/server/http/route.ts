@@ -29,6 +29,7 @@ const STATUS: Record<string, number> = {
   not_found: 404,
   bad_request: 400,
   conflict: 409,
+  password_change_pending: 409,
   plan_limit: 403,
   enrolment_required: 403,
   password_change_required: 403,

@@ -7,6 +7,7 @@ import { networkInterfaces } from "node:os";
 import { type Auth, type AuthSecurityEvent, createAuth, type SecurityHooks } from "@anhourmail/adapters/auth";
 import { db } from "@anhourmail/adapters/postgres";
 import { provisionSignUp } from "@anhourmail/core/account";
+import { consoleResetHeld } from "@anhourmail/core/mailboxes";
 import {
   afterPasswordChange,
   factorRemovalRefusal,
@@ -189,6 +190,31 @@ export function auth(): Auth {
           container().deps,
           { action: "auth.password_reset_requested", userId: "", email },
           // The request's client address (TRUST_PROXY rules, `route()`), for staff watching for abuse; no user agent.
+          {
+            requestId: requestContext()?.requestId ?? "reset",
+            ip: requestContext()?.clientIp ?? null,
+            userAgent: null,
+          },
+        ).catch((err: unknown) => {
+          log.error("audit write failed", { component: "auth", err });
+        });
+      },
+      // A login whose address is a mailbox between owners ("Make this a user" on a shared address, a first-sign-in
+      // password still to choose, an administrator's password not applied yet) gets no reset email: whoever knew the
+      // mailbox's previous password could read it. The endpoint answers as for any address.
+      holdPasswordReset: (user) => consoleResetHeld(container().deps, user.email),
+      onPasswordResetHeld: async (user, reason) => {
+        log.info("password reset held", { component: "auth", userId: user.id, reason });
+        await recordSecurityEvent(
+          container().deps,
+          // Never the address (it is the mailbox's): the person's id only.
+          {
+            action: "auth.password_reset_requested",
+            userId: user.id,
+            email: null,
+            denied: "mailbox_password_pending",
+            meta: { reason },
+          },
           {
             requestId: requestContext()?.requestId ?? "reset",
             ip: requestContext()?.clientIp ?? null,
