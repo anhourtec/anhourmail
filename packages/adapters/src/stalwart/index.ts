@@ -136,6 +136,10 @@ export function stalwartManagedScripts(mgmt: StalwartManagement): ManagedScriptR
   return { read: (externalId) => mgmt.getSieveScript(externalId, MANAGED_SIEVE_SCRIPT) };
 }
 
+const RSA_KEY_WAIT_TRIES = 20;
+const RSA_KEY_WAIT_MS = 250;
+const isRsaKey = (k: { value: string }) => /(^|;)\s*k=rsa\s*(;|$)/i.test(k.value);
+
 /**
  * The MailServer port with the provisioning key (worker and scheduler): domains, accounts, aliases, suspension and
  * app-password revocation through `x:Account.credentials`. It never needs owner access to a mailbox: the managed Sieve
@@ -153,7 +157,14 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
     },
 
     async domainDkimKeys(externalId) {
-      return mgmt.domainDkimRecords(externalId);
+      // Stalwart creates the RSA key a second or two after the domain (verified on v0.16.27): wait briefly for it so a
+      // new domain's job finishes in one run instead of a retry. Gone domains (no keys at all) answer at once.
+      let keys = await mgmt.domainDkimRecords(externalId);
+      for (let i = 0; i < RSA_KEY_WAIT_TRIES && keys.length > 0 && !keys.some(isRsaKey); i++) {
+        await new Promise((r) => setTimeout(r, RSA_KEY_WAIT_MS));
+        keys = await mgmt.domainDkimRecords(externalId);
+      }
+      return keys;
     },
 
     async revokeAppPassword({ externalId, credentialId, createdAt }) {
