@@ -193,6 +193,18 @@ sha256(phc) | expiry)>`, expiry ≤ 1 h, stored beside the waiting hash and sent
 - **Webmail session (run-26 L1/L3):** the own-change route needs the page's `X-Webmail-Account` to equal the
   session's active account, and moves the session to a new id (old one deleted, new cookie). The mailbox's person is
   emailed at their console address on every change, own or admin.
+- **First-sign-in change (Add a user / Make this a user):** `mailbox.must_change_password` is enforced on the webmail
+  **API**, not only the page. `route()` asks `PasswordChangeGate` (`packages/core/src/webmail/password-change-gate.ts`,
+  via `apps/web/src/server/webmail/password-gate.ts`) for every route with `session: "webmail"` and answers 403
+  `password_change_required` while the session's active mailbox has the flag; only the own-change route and sign-out
+  opt out (`passwordChange: "allowed"`, pinned by a test against the route files). The original-message page checks
+  it too. "Required" is never cached; "not required" for at most 30 s. The flag clears only when the worker has
+  applied the person's own password (`mailbox.pending_password_by_owner` on the waiting hash; `runNextJob` clears it
+  in the same unit of work as `passwordApplied`), never when the change is queued; an admin's reset never clears it,
+  and a job that gives up leaves it set (the step then says the last change didn't go through).
+  **Residual (accepted):** Stalwart has no "must change" state, so IMAP, POP3 and SMTP submission keep accepting the
+  administrator-set password until the person changes it. We don't disable the mailbox's protocols for it; the
+  wizard says so ("Until they change it, the password also works in mail apps").
 - **Detection:** the worker records the Password `credentialId` after every create/reset/change
   (`mailbox.password_credential_id`); the hourly reconciler reports a mailbox whose credential differs
   (`passwordReplaced`) or was never recorded (`passwordUntracked`) as `platform.reconciler_drift`, never fixes it.
