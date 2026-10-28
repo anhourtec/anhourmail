@@ -48,6 +48,7 @@ export function MailboxPanel({
   accountId,
   canManage,
   peopleHref,
+  makeUserHref = null,
   graceDays,
   appPasswords,
   storageCheckedAgo,
@@ -58,6 +59,8 @@ export function MailboxPanel({
   canManage: boolean;
   /** Link to the owner's person panel, when the viewer can see people. */
   peopleHref: string | null;
+  /** "Make this a user" for a person-less mailbox, when this admin may add users now. */
+  makeUserHref?: string | null;
   graceDays: number;
   /** Its app passwords (names and dates only), for people who can see mailboxes. */
   appPasswords: MailboxAppPasswords | null;
@@ -117,6 +120,10 @@ export function MailboxPanel({
                 m.owner && peopleHref ? (
                   <ActionLink href={peopleHref} plain>
                     View person
+                  </ActionLink>
+                ) : !m.owner && makeUserHref ? (
+                  <ActionLink href={makeUserHref} plain>
+                    Make this a user
                   </ActionLink>
                 ) : undefined
               }

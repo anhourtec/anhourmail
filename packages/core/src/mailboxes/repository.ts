@@ -17,6 +17,11 @@ export type MailboxRepository = {
   setQuota(id: string, quotaBytes: number): Promise<void>;
   /** Sets or clears the webmail's first-sign-in password change (`Mailbox.mustChangePassword`). */
   setPasswordChangeRequired(id: string, required: boolean): Promise<void>;
+  /**
+   * Links an unassigned mailbox to a person ("Make this a user"). Conditional: false when the mailbox already belongs
+   * to someone (or doesn't exist), so two concurrent links can't both apply.
+   */
+  assignOwner(id: string, userId: string): Promise<boolean>;
   /** Sets or clears (null) the display name. */
   setDisplayName(id: string, displayName: string | null): Promise<void>;
   /**

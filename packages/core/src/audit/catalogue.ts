@@ -53,6 +53,7 @@ export const AUDIT_ACTIONS = [
   "domain.dns_state_changed",
   "mailbox.created",
   "mailbox.renamed",
+  "mailbox.made_user",
   "mailbox.suspended",
   "mailbox.unsuspended",
   "mailbox.deleted",

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { randomUUID } from "node:crypto";
 
-import { and, desc, eq, gte, inArray, isNotNull, lt, lte, or, type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, or, type SQL, sql } from "drizzle-orm";
 
 import { type AccessRepository, ConflictError, type Repositories, type UnitOfWork } from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
@@ -810,6 +810,15 @@ class PgMailboxRepository implements MailboxRepository {
 
   async setPasswordChangeRequired(id: string, required: boolean): Promise<void> {
     await this.x.update(mailbox).set({ mustChangePassword: required }).where(eq(mailbox.id, id));
+  }
+
+  async assignOwner(id: string, userId: string): Promise<boolean> {
+    const rows = await this.x
+      .update(mailbox)
+      .set({ userId })
+      .where(and(eq(mailbox.id, id), isNull(mailbox.userId)))
+      .returning({ id: mailbox.id });
+    return rows.length > 0;
   }
 
   async setDisplayName(id: string, displayName: string | null): Promise<void> {

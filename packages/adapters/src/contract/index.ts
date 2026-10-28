@@ -247,6 +247,15 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         await uow.run((r) => r.mailboxes.setDisplayName(m.id, null));
         expect((await uow.run((r) => r.mailboxes.get(a.id, m.id)))?.displayName).toBeNull();
 
+        // "Make this a user": only an unassigned mailbox takes an owner, once.
+        expect(await uow.run((r) => r.mailboxes.assignOwner(m.id, other))).toBe(false);
+        const loose = { ...m, id: randomUUID(), userId: null, address: `loose-${tag}@contract.example.ca` };
+        await uow.run((r) => r.mailboxes.insert(loose));
+        expect(await uow.run((r) => r.mailboxes.assignOwner(loose.id, other))).toBe(true);
+        expect((await uow.run((r) => r.mailboxes.get(a.id, loose.id)))?.userId).toBe(other);
+        expect(await uow.run((r) => r.mailboxes.assignOwner(loose.id, userId))).toBe(false);
+        expect(await uow.run((r) => r.mailboxes.assignOwner(randomUUID(), userId))).toBe(false);
+
         // Aliases: account-scoped, counted by kind, unique addresses (a duplicate is a conflict, not a crash).
         const alias = {
           id: randomUUID(),

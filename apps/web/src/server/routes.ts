@@ -161,6 +161,16 @@ export const ROUTES: readonly RouteSpec[] = [
     accountParam: "accountId",
     probeStatus: 404,
   },
+  // "Make this a user": a person-less mailbox becomes a person who signs in with it (core mailboxes/make-user.ts).
+  // Random ids → 404 for allowed callers.
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/mailboxes/:mailboxId/user",
+    file: "app/api/accounts/[accountId]/mailboxes/[mailboxId]/user/route.ts",
+    guard: "mailbox.manage",
+    accountParam: "accountId",
+    probeStatus: 404,
+  },
   // Free platform-domain addresses (ADR-0021): is a name available (no name → the rule it breaks, 200).
   {
     method: "GET",

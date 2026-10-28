@@ -484,6 +484,12 @@ function repositories(s: MemoryState): Repositories {
       const m = s.mailboxes.find((x) => x.id === id);
       if (m) m.mustChangePassword = required;
     },
+    assignOwner: async (id, userId) => {
+      const m = s.mailboxes.find((x) => x.id === id && x.userId === null);
+      if (!m) return false;
+      m.userId = userId;
+      return true;
+    },
     setDisplayName: async (id, displayName) => {
       const m = s.mailboxes.find((x) => x.id === id);
       if (m) m.displayName = displayName;

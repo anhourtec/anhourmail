@@ -151,6 +151,11 @@ export default async function MailboxesPage({
                 ? `/accounts/${accountId}/people?person=${encodeURIComponent(open.owner.userId)}`
                 : null
             }
+            makeUserHref={
+              canManage && !open.owner && open.status === "active" && grantableRoles(actor, accountId).length > 0
+                ? `${path}/${open.id}/make-user`
+                : null
+            }
             graceDays={MAILBOX_DELETE_GRACE_DAYS}
             appPasswords={appPasswords}
             storageCheckedAgo={storageCheckedAgo(open.storageCheckedAt, data.now)}
