@@ -188,3 +188,16 @@ export async function passwordJobState(deps: Deps, jobId: string): Promise<Passw
   if (job.status === "succeeded") return "applied";
   return job.status === "failed" ? "failed" : "pending";
 }
+
+/**
+ * For the webmail's first-sign-in step: whether the last password job of the mailbox at `address` gave up, so the
+ * step can say the previous change didn't go through (the mailbox keeps the password it had, and the step stays).
+ * Read-only; unknown addresses are false.
+ */
+export async function lastPasswordChangeFailed(deps: Deps, address: string): Promise<boolean> {
+  return deps.uow.run(async (r) => {
+    const m = await r.webmailSettings.mailboxByAddress(address.trim().toLowerCase());
+    if (!m) return false;
+    return (await r.provisioning.latest("mailbox.password", m.id))?.status === "failed";
+  });
+}

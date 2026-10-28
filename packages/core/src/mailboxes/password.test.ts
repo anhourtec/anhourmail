@@ -24,7 +24,7 @@ import {
   ValidationError,
 } from "../errors";
 import type { Mailbox } from "./entity";
-import { changeOwnMailboxPassword, passwordJobState, resetMailboxPassword } from "./password";
+import { changeOwnMailboxPassword, lastPasswordChangeFailed, passwordJobState, resetMailboxPassword } from "./password";
 import { hashMailboxPassword, mailboxPassword } from "./password-hash";
 import { getMailbox } from "./service";
 
@@ -267,6 +267,21 @@ describe("changing one's own mailbox password (webmail)", () => {
     );
     // Marked as the person's own, so the worker's success ends the step (provisioning.test.ts).
     expect(await d.uow.run((r) => r.directory.getMailbox(MBX_MEMBER))).toMatchObject({ pendingPasswordByOwner: true });
+  });
+
+  it("tells the first-sign-in step when the last password job gave up", async () => {
+    const { d } = setup();
+    expect(await lastPasswordChangeFailed(d, "kid@family.ca")).toBe(false); // none yet
+    const { jobId } = await changeOwnMailboxPassword(d, fakeHasher, "kid@family.ca", { password: MAILBOX_PW }, req);
+    expect(await lastPasswordChangeFailed(d, " Kid@Family.ca ")).toBe(false); // waiting
+    await d.uow.run((r) => r.provisioning.giveUp(jobId, "mail server unavailable", new Date()));
+    expect(await lastPasswordChangeFailed(d, "kid@family.ca")).toBe(true);
+    expect(await passwordJobState(d, jobId)).toBe("failed");
+    // A new attempt replaces the answer; other mailboxes and unknown addresses are unaffected.
+    await changeOwnMailboxPassword(d, fakeHasher, "kid@family.ca", { password: MAILBOX_PW }, req);
+    expect(await lastPasswordChangeFailed(d, "kid@family.ca")).toBe(false);
+    expect(await lastPasswordChangeFailed(d, "mum@family.ca")).toBe(false);
+    expect(await lastPasswordChangeFailed(d, "nobody@family.ca")).toBe(false);
   });
 
   it("refuses unknown addresses, inactive mailboxes and weak passwords", async () => {
