@@ -9,7 +9,10 @@ import { inlineActionClass } from "../console/flyout";
 import { primaryButtonClass } from "../ui-classes";
 import { callApi } from "../api";
 
-type CheckResult = { activated: boolean; records: { required: boolean; state: string }[] };
+type CheckResult = {
+  activated: boolean;
+  records: { required: boolean; state: string; placeholder?: boolean }[];
+};
 
 /**
  * Re-checks the records live; the page refreshes with the new states (and the active status when they pass).
@@ -41,16 +44,24 @@ export function CheckButton({
       return;
     }
     const result = res.data as CheckResult;
-    const missing = result.records.filter((r) => r.required && r.state !== "ok").length;
+    const failing = result.records.filter((r) => r.required && r.state !== "ok");
+    const missing = failing.length;
+    // Only the DKIM keys are left, and they don't exist yet: the mail server makes them once the other records pass.
+    const keysOnly = missing > 0 && failing.every((r) => r.placeholder === true);
     setMessage(
       result.activated
         ? { tone: "ok", text: "Verified. Your domain is being set up and will be ready in a minute or two." }
         : missing === 0
           ? { tone: "ok", text: "All required records are in place." }
-          : {
-              tone: "warn",
-              text: `${String(missing)} required ${missing === 1 ? "record is" : "records are"} not in place yet. DNS changes can take a while to show up.`,
-            },
+          : keysOnly
+            ? {
+                tone: "warn",
+                text: "The other required records are in place. Your DKIM keys are being created: check again in a minute to see them.",
+              }
+            : {
+                tone: "warn",
+                text: `${String(missing)} required ${missing === 1 ? "record is" : "records are"} not in place yet. DNS changes can take a while to show up.`,
+              },
     );
     router.refresh();
   }
