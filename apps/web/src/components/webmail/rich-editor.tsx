@@ -221,6 +221,10 @@ export function RichEditor({
     restore(el, savedRange.current);
     if (savedRange.current && !savedRange.current.collapsed) exec("createLink", url);
     else exec("insertHTML", `<a href="${escapeHtml(url)}">${escapeHtml(url.replace(/^mailto:|^tel:/, ""))}</a>`);
+    // The caret goes after the link, so the next key doesn't replace the linked text.
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && !sel.isCollapsed) sel.collapseToEnd();
+    savedRange.current = null;
     setLinkOpen(false);
     changed();
   };
