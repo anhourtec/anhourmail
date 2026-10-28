@@ -179,12 +179,23 @@ describe("sanitizeOutgoingHtml: what is kept", () => {
     expect(r.removedTags).toEqual(["button", "form", "head", "script", "style", "title"]);
   });
 
-  it("unwraps the reading view's quote toggle without its label", () => {
-    expect(
-      clean(
-        '<details data-am-quote="1"><summary title="Show quoted text">&#8226;&#8226;&#8226;</summary><p>old</p></details>',
-      ),
-    ).toBe("<p>old</p>");
+  it("turns the reading view's quote toggle back into a quote, without its label", () => {
+    const r = sanitizeOutgoingHtml(
+      '<details data-am-quote="1"><summary title="Show quoted text">&#8226;&#8226;&#8226;</summary><p>old</p></details>',
+    );
+    expect(r.html).toBe('<blockquote type="cite"><p>old</p></blockquote>');
+    expect(r.removedTags).toEqual(["summary"]);
+    // Any other details element is unwrapped, its text kept.
+    expect(clean("<details open><p>x</p></details>")).toBe("<p>x</p>");
+  });
+
+  it("keeps type=cite on a quote (folded by mail apps) and drops any other type", () => {
+    expect(clean('<blockquote type="CITE" style="margin: 0">q</blockquote>')).toBe(
+      '<blockquote type="cite" style="margin: 0">q</blockquote>',
+    );
+    const r = sanitizeOutgoingHtml('<blockquote type="x-evil">q</blockquote><p type="cite">p</p>');
+    expect(r.html).toBe("<blockquote>q</blockquote><p>p</p>");
+    expect(r.removedAttributes).toEqual(["type"]);
   });
 
   it("reports removed attributes", () => {
@@ -284,5 +295,33 @@ describe("outgoingText", () => {
 
   it("decodes entities only once", () => {
     expect(outgoingText("<p>&amp;lt;b&amp;gt;</p>")).toBe("&lt;b&gt;");
+  });
+
+  it('quotes a reply\'s original with "> " per level, after its "On … wrote:" line', () => {
+    const html = clean(
+      "<div>Thanks!</div><div><br></div><div>On Mon, Oct 27, 2026, Sam &lt;sam@x.test&gt; wrote:</div>" +
+        '<blockquote type="cite" style="margin: 0 0 0 0.8ex"><p>First line<br>second line</p><p></p>' +
+        '<blockquote type="cite"><div>older</div></blockquote><p>after</p></blockquote><div>-- <br>Me</div>',
+    );
+    expect(outgoingText(html)).toBe(
+      [
+        "Thanks!",
+        "",
+        "On Mon, Oct 27, 2026, Sam <sam@x.test> wrote:",
+        "> First line",
+        "> second line",
+        ">> older",
+        "> after",
+        "",
+        "-- ",
+        "Me",
+      ]
+        .join("\n")
+        .replace("-- \n", "--\n"),
+    );
+  });
+
+  it("ignores stray quote markers in the input", () => {
+    expect(outgoingText("<p>a\uE000b\uE001c</p>")).toBe("abc");
   });
 });

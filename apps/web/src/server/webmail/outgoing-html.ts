@@ -57,6 +57,8 @@ const COMMON = ["title", "width", "height", "align", "valign", "bgcolor", "color
 
 const ATTRS: Record<string, string[]> = {
   a: [...COMMON, "href", "target", "rel"],
+  // `type="cite"` marks a quoted reply, which mail apps (ours included) fold when reading; any other value is dropped.
+  blockquote: [...COMMON, "type"],
   img: [...COMMON, "src", "alt", "border"],
   table: [...COMMON, "border", "cellpadding", "cellspacing"],
   td: [...COMMON, "colspan", "rowspan"],
@@ -76,6 +78,9 @@ const DROP_WITH_CONTENT = [
   "iframe", "frame", "frameset", "object", "embed", "applet", "svg", "math", "title", "head", "xmp", "plaintext",
   "summary",
 ]; // prettier-ignore
+
+/** The reading view's marker on a folded quote (`server/webmail/sanitize.ts`). */
+const QUOTE_MARK = "data-am-quote";
 
 const LINK = /^(?:https?:\/\/|mailto:|tel:)/i;
 const IMG_HTTPS = /^https:\/\//i;
@@ -222,6 +227,11 @@ export function sanitizeOutgoingHtml(input: string): OutgoingHtml {
         continue;
       }
       if (name === "href" || name === "src" || name === "target" || name === "rel") continue;
+      if (name === "type") {
+        if (raw.trim().toLowerCase() === "cite") out.type = "cite";
+        else removedAttributes.add("type");
+        continue;
+      }
       out[name] = raw;
     }
     return out;
@@ -238,7 +248,8 @@ export function sanitizeOutgoingHtml(input: string): OutgoingHtml {
     allowProtocolRelative: false,
     parseStyleAttributes: false,
     enforceHtmlBoundary: true,
-    onOpenTag: (name) => {
+    onOpenTag: (name, attribs) => {
+      if (name === "details" && attribs[QUOTE_MARK] !== undefined) return; // a quote the reading view folded
       if (!ALLOWED_TAG_SET.has(name) && name !== "html" && name !== "body") {
         removedTags.add(/^[a-z][a-z0-9-]{0,40}$/i.test(name) ? name.toLowerCase() : "element");
       }
@@ -258,6 +269,12 @@ export function sanitizeOutgoingHtml(input: string): OutgoingHtml {
         else if (attribs.href !== undefined) removedAttributes.add("href");
         return { tagName, attribs: { ...out, target: "_blank", rel: "noopener noreferrer" } };
       },
+      // The reading view folds quoted replies into `<details data-am-quote>`; quoting that message again keeps them
+      // quotes (its `summary` toggle is dropped with its label).
+      details: (tagName, attribs) =>
+        attribs[QUOTE_MARK] !== undefined
+          ? { tagName: "blockquote", attribs: { type: "cite" } }
+          : { tagName, attribs: {} },
       img: (tagName, attribs) => {
         const out = filter(tagName, attribs);
         const src = (attribs.src ?? "").trim();
@@ -287,10 +304,58 @@ export function sanitizeOutgoingHtml(input: string): OutgoingHtml {
 
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", nbsp: " " };
 
+/** Private-use markers for the start and end of a quote while the text is built (removed from the input first). */
+const QUOTE_OPEN = "\uE000";
+const QUOTE_CLOSE = "\uE001";
+
+/**
+ * Prefixes the lines between quote markers with "> " per level (">" alone on an empty line) and drops the markers.
+ * Blank lines next to a quote's start or end go; a blank line separates the end of a quote from the text after it.
+ */
+function quoteLines(text: string): string {
+  type Item = { kind: "open" | "close" | "text"; text: string };
+  const items: Item[] = text.split("\n").map((line) => {
+    const t = line.trim();
+    if (t === QUOTE_OPEN) return { kind: "open", text: "" };
+    if (t === QUOTE_CLOSE) return { kind: "close", text: "" };
+    return { kind: "text", text: line };
+  });
+  const blank = (i: Item | undefined) => i?.kind === "text" && i.text.trim() === "";
+  // The nearest item before / after `at` that isn't a blank line.
+  const near = (at: number, step: 1 | -1): Item | undefined => {
+    for (let i = at + step; i >= 0 && i < items.length; i += step) if (!blank(items[i])) return items[i];
+    return undefined;
+  };
+  const kept = items.filter((item, i) => {
+    if (!blank(item)) return true;
+    return (
+      near(i, -1)?.kind !== "open" &&
+      near(i, -1)?.kind !== "close" &&
+      near(i, 1)?.kind !== "open" &&
+      near(i, 1)?.kind !== "close"
+    );
+  });
+  const out: string[] = [];
+  let depth = 0;
+  let separate = false;
+  for (const item of kept) {
+    if (item.kind === "open") depth += 1;
+    else if (item.kind === "close") {
+      depth = Math.max(0, depth - 1);
+      separate = depth === 0;
+    } else {
+      if (separate && depth === 0) out.push("");
+      separate = false;
+      out.push(depth > 0 ? `${">".repeat(depth)} ${item.text}`.trimEnd() : item.text);
+    }
+  }
+  return out.join("\n");
+}
+
 /**
  * The text/plain alternative for sanitised HTML: block ends become line breaks, list items get a dash, links keep
- * their address in brackets when it differs from the text. Expects `sanitizeOutgoingHtml` output (attributes
- * double-quoted and escaped), and is linear on it.
+ * their address in brackets when it differs from the text, and quoted replies (`blockquote`) get "> " per level.
+ * Expects `sanitizeOutgoingHtml` output (attributes double-quoted and escaped), and is linear on it.
  */
 export function outgoingText(html: string): string {
   const withLinks = html.replace(
@@ -302,7 +367,10 @@ export function outgoingText(html: string): string {
       return text === "" ? url : text === shown || text === url ? text : `${inner} (${url})`;
     },
   );
-  return withLinks
+  const text = withLinks
+    .replace(/[\uE000\uE001]/g, "")
+    .replace(/<blockquote\b[^>]*>/gi, `\n${QUOTE_OPEN}\n`)
+    .replace(/<\/blockquote>/gi, `\n${QUOTE_CLOSE}\n`)
     .replace(/<li\b[^>]*>/gi, "\n- ")
     .replace(/<\/(?:p|div|tr|h[1-6]|blockquote|table|ul|ol|pre)>|<br\s*\/?>|<hr\s*\/?>/gi, "$&\n")
     .replace(/<(?:p|div|h[1-6]|blockquote|table|ul|ol|pre)\b[^>]*>/gi, "\n$&")
@@ -312,6 +380,8 @@ export function outgoingText(html: string): string {
     .replace(/&(amp|lt|gt|quot|#39|nbsp);/g, (_m, e: string) => ENTITIES[e] ?? "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/^[ \t]+/gm, (s) => (s.includes("\t") ? "" : s))
+    .replace(/\n{3,}/g, "\n\n");
+  return quoteLines(text)
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }

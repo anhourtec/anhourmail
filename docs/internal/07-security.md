@@ -432,7 +432,10 @@ mail apps render what we send, so the list is stricter than the reader's (`sanit
   controls, frames, `object`/`embed`/`applet`, SVG, MathML, `noscript` and `summary` go with their content; unknown
   and custom elements are unwrapped and keep their text. Comments and CDATA are dropped.
 - **Attributes:** an allow-list per element (`href`, `src`, `alt`, `title`, sizes, table layout, colours, `dir`,
-  `lang`, `style`); no `on*`, `class`, `id`, `srcdoc`, `formaction` or `data-*`.
+  `lang`, `style`, and `type` on `blockquote` with the single value `cite` — the quoted-reply mark mail apps fold);
+  no `on*`, `class`, `id`, `srcdoc`, `formaction` or `data-*`. The reading view's folded quote (`details
+data-am-quote`) becomes `blockquote type="cite"` again when a reply quotes it. The text/plain part prefixes quoted
+  lines with "> " per level, under the "On … wrote:" line.
 - **URLs:** links http, https, mailto, tel (control characters and entities decoded first; relative and
   protocol-relative removed), always `target="_blank" rel="noopener noreferrer"`. Images https, `cid:` or raster
   `data:` (PNG, JPEG, GIF, WebP) up to `WEBMAIL_HTML.inlineImageKb`; an image without a valid source is removed.
