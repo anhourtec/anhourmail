@@ -49,6 +49,22 @@ test("a Reports Reader reads the platform audit but not customer accounts", asyn
   await expect(nav.locator(`[data-nav="platform.accounts.read"]`)).toHaveCount(0);
   await nav.getByRole("link", { name: "Platform audit" }).click();
   await expect(page.getByRole("heading", { name: "Platform audit", level: 1 })).toBeVisible();
-  await page.goto(`${urls.app}/platform/accounts`);
+  const res = await page.goto(`${urls.app}/platform/accounts`);
+  expect(res?.status()).toBe(404);
+  await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
+});
+
+test("a customer account's own pages are a 404 for staff", async ({ page }) => {
+  const u = e2eUsers();
+  await signIn(page, u.users.globalAdmin, u.password);
+  await (await openNav(page)).getByRole("link", { name: "Customer accounts" }).click();
+  await page.getByLabel("Search accounts").fill(u.run);
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page.getByRole("link", { name: u.accountName }).click();
+  await expect(page.getByRole("heading", { name: u.accountName, level: 1 })).toBeVisible();
+  const accountId = new URL(page.url()).pathname.split("/").at(-1) ?? "";
+  // Staff look accounts up on the staff pages; the account's own console pages are its members' only.
+  const res = await page.goto(`${urls.app}/accounts/${accountId}/mailboxes`);
+  expect(res?.status()).toBe(404);
   await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
 });

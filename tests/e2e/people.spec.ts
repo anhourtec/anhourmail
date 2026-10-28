@@ -154,13 +154,18 @@ test("a User Administrator invites Members only and can't remove the owner", asy
   expect(res.status()).toBe(403);
 });
 
-test("a Member has no People page; the platform pages are a 404 for customers", async ({ page }) => {
+test("a Member has no People page (403); the platform pages are a 404 for customers", async ({ page }) => {
   const u = e2eUsers();
   await signIn(page, u.users.member, u.password);
   const nav = await openNav(page);
   await expect(nav.locator(`[data-nav="member.read"]`)).toHaveCount(0);
-  await page.goto(`${urls.app}/platform/accounts`);
-  await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
-  await page.goto(`${urls.app}/platform/audit`);
-  await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
+  const aliases = (await nav.getByRole("link", { name: "Aliases" }).getAttribute("href")) ?? "";
+  const people = await page.goto(`${urls.app}${aliases.replace(/aliases$/, "people")}`);
+  expect(people?.status()).toBe(403);
+  await expect(page.getByRole("heading", { name: "Not part of your role", level: 1 })).toBeVisible();
+  for (const path of ["/platform/accounts", "/platform/audit"]) {
+    const res = await page.goto(`${urls.app}${path}`);
+    expect(res?.status(), path).toBe(404);
+    await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
+  }
 });
