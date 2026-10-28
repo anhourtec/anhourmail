@@ -12,9 +12,20 @@ import { cleanProfile, ProfileFieldsGrid, profileErrors, ProfileSummary, type Pr
 /**
  * "Edit profile": the optional profile details (job title … country) as a list, and for people who may change them
  * (the person themself; an admin for a Member; an Owner for anyone) an inline form that replaces them all — an emptied
- * field is cleared. `url` is the person's profile endpoint (`/api/me/profile` or the People route).
+ * field is cleared. Anyone else who manages people sees why they can't (`readOnlyReason`). `url` is the person's profile endpoint (`/api/me/profile` or the People route).
  */
-export function EditProfile({ url, details, canEdit }: { url: string; details: ProfileValues; canEdit: boolean }) {
+export function EditProfile({
+  url,
+  details,
+  canEdit,
+  readOnlyReason,
+}: {
+  url: string;
+  details: ProfileValues;
+  canEdit: boolean;
+  /** Why this admin can't edit them (the details stay readable). */
+  readOnlyReason?: string | undefined;
+}) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [profile, setProfile] = useState<ProfileValues>(details);
@@ -50,6 +61,7 @@ export function EditProfile({ url, details, canEdit }: { url: string; details: P
             Profile saved.
           </p>
         )}
+        {!canEdit && readOnlyReason && <p className="am-small">{readOnlyReason}</p>}
         {canEdit && (
           <button
             type="button"

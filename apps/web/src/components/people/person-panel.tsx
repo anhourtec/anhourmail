@@ -99,6 +99,7 @@ export function PersonPanel({
                 url={`/api/accounts/${encodeURIComponent(accountId)}/people/${encodeURIComponent(person.userId)}/profile`}
                 details={profile.details}
                 canEdit={profile.canEdit}
+                readOnlyReason={profile.readOnlyReason}
               />
             ),
           },
