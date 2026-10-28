@@ -147,9 +147,7 @@ test("a person signs in to the webmail, reads mail with remote images blocked, a
   expect(await pdf.getAttribute("href")).toMatch(/^\/api\/webmail\/download\/[A-Za-z0-9_-]+$/);
   const [download] = await Promise.all([page.waitForEvent("download"), pdf.click()]);
   expect(download.suggestedFilename()).toBe("garden-plan.pdf");
-  await expect(reader.getByRole("list", { name: "Conversation" }).getByRole("listitem")).toHaveCount(2);
-  // The rich reply quoted the original as a citation, which the reader folds behind a toggle.
-  await expect(reader.locator("iframe").last().contentFrame().locator("details[data-am-quote]")).toHaveCount(1);
+  await expect(reader.getByRole("list", { name: "Conversation" }).locator(":scope > li")).toHaveCount(2);
 
   // Sign out from the folder sidebar (a drawer on small screens).
   await showList(page);
@@ -207,7 +205,7 @@ test("write, send, receive in a second mailbox, reply, search and switch back @d
   await composer.getByLabel("To", { exact: true }).press("Enter");
   await expect(composer.getByRole("button", { name: `Remove ${MEMBER}` })).toBeVisible();
   await composer.getByLabel("Subject").fill(`Plans ${tag}`);
-  await composer.getByLabel("Message").fill("Are we still on for Saturday?");
+  await composer.getByLabel("Message", { exact: true }).fill("Are we still on for Saturday?");
   await composer.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Message sent." })).toBeVisible();
   await expect(composer).toBeHidden();
@@ -236,8 +234,8 @@ test("write, send, receive in a second mailbox, reply, search and switch back @d
   const reply = page.getByRole("dialog", { name: "Reply" });
   await expect(reply.getByRole("button", { name: `Remove ${OWNER}` })).toBeVisible();
   await expect(reply.getByLabel("Subject")).toHaveValue(`Re: Plans ${tag}`);
-  await reply.getByLabel("Message").press("Home");
-  await reply.getByLabel("Message").pressSequentially("Yes, see you at 10.");
+  await reply.getByLabel("Message", { exact: true }).press("Home");
+  await reply.getByLabel("Message", { exact: true }).pressSequentially("Yes, see you at 10.");
   await reply.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Message sent." })).toBeVisible();
 
@@ -249,7 +247,9 @@ test("write, send, receive in a second mailbox, reply, search and switch back @d
     .getByRole("listbox", { name: "Search results messages" })
     .getByRole("option", { name: new RegExp(`Re: Plans ${tag}`) })
     .click();
-  await expect(reader.getByRole("list", { name: "Conversation" }).getByRole("listitem")).toHaveCount(2);
+  await expect(reader.getByRole("list", { name: "Conversation" }).locator(":scope > li")).toHaveCount(2);
+  // The rich reply quoted the original as a citation, which the reader folds behind a toggle.
+  await expect(reader.locator("iframe").last().contentFrame().locator("details[data-am-quote]")).toHaveCount(1);
 
   // Pin it, see it in Inbox's Pinned section, archive with undo, then delete it for good from Trash. The shortcut
   // acts on the open message, so wait until the reader has it.
@@ -311,7 +311,7 @@ test("the composer fits the screen (full screen on phones) and sends", async ({ 
   await expectComposerLayout(page, composer);
   await composer.getByLabel("To", { exact: true }).fill(`${recipient().address},`);
   await composer.getByLabel("Subject").fill(`Phone ${tag}`);
-  await composer.getByLabel("Message").fill("Sent from the composer test.");
+  await composer.getByLabel("Message", { exact: true }).fill("Sent from the composer test.");
   await composer.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Message sent." })).toBeVisible();
   expect(consoleErrors).toEqual([]);
@@ -347,7 +347,7 @@ test("every common body type reads natively in the reader's flow", async ({ page
   await showList(page);
   reader = await openBySearch(page, 'subject:"Cabin weekend checklist"', /Cabin weekend checklist/);
   await expect(reader.getByRole("heading", { name: "Gear" })).toBeVisible();
-  await expect(reader.getByRole("listitem").filter({ hasText: "Camp stove and fuel" })).toBeVisible();
+  await expect(reader.getByRole("listitem").filter({ hasText: /^Camp stove and fuel$/ })).toBeVisible();
   await expect(reader.getByText("<script>alert('markdown can carry HTML; it must never run')</script>")).toBeVisible();
 
   // A calendar invitation as an event card.
