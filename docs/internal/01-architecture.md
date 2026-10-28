@@ -280,6 +280,10 @@ scheduler ─► job:reconcile (hourly) ─► desired vs Stalwart ─► drift 
 scheduler ─► job:mailbox-purge (hourly) ─► deleting mailboxes past purge_after: destroy the Stalwart account, then
              the mailbox + alias rows; audit platform.mailbox_purged (system, account scope). The only path that
              deletes mail.
+scheduler ─► job:domain-expiry (daily) ─► pending domains: never on Stalwart and older than 30 days → deleted; on
+             Stalwart and unverified after 14 days, or ownership/MX record gone → removing + domain.remove (taken
+             off Stalwart unless another row holds the name there); audit domain.expired / domain.released (system,
+             account scope). A failed DNS lookup releases nothing (PENDING_DOMAIN in packages/shared).
 scheduler ─► job:storage-usage (every 10 min, provisioning key) ─► batched x:Account/get (name, usedDiskQuota only)
              for every mailbox with a stalwart_id ─► mailbox.storage_used_bytes / storage_checked_at. Sizes only
              (rule 24); a failed batch keeps the last good value; not audited (an observation, not a change). The

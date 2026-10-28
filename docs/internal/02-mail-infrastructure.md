@@ -58,6 +58,25 @@ signature)`). Now each key Stalwart signs with is a TXT at `<selector>._domainke
   (`domainOnMailServerElsewhere`). A pending domain with a Stalwart id is removed through `domain.remove` (no direct
   row delete); one deleted while the job ran is taken off again unless another claim holds the name. The reconciler
   expects these pending domains too.
+- **One claim on Stalwart per name.** The worker records the Stalwart id under a transaction-scoped lock on the
+  lowercased name (`lockDomainName`, a Postgres advisory lock) and re-checks there that no other row holds it, so two
+  pending claims racing through `domain.ensure` can't both own the Stalwart domain (the loser leaves it in place and
+  retries with "domain is being set up by another account"). `domain.remove` only takes the name off Stalwart when no
+  other row is recorded there for it.
+- **Pending domains don't hold a name for good** (`packages/core/src/domains/expiry.ts`; numbers in
+  `PENDING_DOMAIN`, `packages/shared/src/plans.ts`, published in the custom-domain guide). A pending claim on Stalwart
+  makes the name local there: abandoned, it would block the real owner and keep our other customers' mail for that
+  name inside Stalwart. So:
+  - when another account's ownership and MX records are found (`checkDomain`, by the person or the 5-minute re-check)
+    and a pending claim of another account holds the name on Stalwart, that claim's ownership TXT is looked up live;
+    if its token is gone it is **released** (`removing` + `domain.remove`, system actor `domain-claims`, audited
+    `domain.released` reason `ownership_proven_elsewhere` in the released account). While another claim holds the
+    name no `domain.ensure` is queued for the newcomer; its check result says `heldElsewhere: "held"` or `"releasing"`;
+  - the daily scheduler job `domain-expiry` releases a pending claim on Stalwart that wasn't verified within
+    `onMailServerDays` (14) of being added (`domain.expired`, `not_verified_in_time`), or whose ownership or MX record
+    is gone (`domain.released`, `records_not_found`), and deletes pending rows never put on Stalwart after
+    `unverifiedDays` (30) (`domain.expired`). A failed DNS lookup never releases anything; a row that changed meanwhile
+    is audited as `failed` and retried the next day. Every change is the system's, in the domain's own account log.
 - Until keys are cached the template shows one `placeholder` DKIM row (can't pass, no copy button; the check message
   says the keys are being created). Verification (`checkRecords` in `packages/core/src/domains/dns.ts`) passes a key
   only when a TXT at its name has the same `p=` (whitespace and quotes ignored); otherwise "DKIM not found in DNS —
