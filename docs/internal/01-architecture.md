@@ -73,7 +73,7 @@ mail clients ─► Stalwart 465/587/993/995 (TLS by Stalwart itself)    MX traf
   `active` only when the required records pass for _its_ ownership token; then a `domain.ensure` job adds it to
   Stalwart. Removal marks it `removing` and a `domain.remove` job takes it off Stalwart (refused while accounts
   remain) before the row is deleted.
-- **Stalwart is the source of truth for mail state:** messages, mail credentials, DKIM keys and their published zone (`dnsZoneFile`).
+- **Stalwart is the source of truth for mail state:** messages, mail credentials, DKIM keys and their published zone (`dnsZoneFile`). The control plane caches only the DKIM public keys (`customer_domain.dkim_keys`, written by the worker's `domain.ensure`) so the console can show customers the TXT records to publish without calling Stalwart.
 - **Webmail settings are split by what they control** (05-webmail.md "Settings"): display preferences per mailbox in
   Postgres (`webmail_preference`); a person's own mail flow (automatic replies, forwarding, junk lists) in one
   managed Sieve script in their Stalwart account, written by the BFF with their own token (not a provisioning job:
@@ -229,12 +229,11 @@ The Stalwart Community edition has no tenants (Enterprise-only, `research/stalwa
 
 **Production exposure.** Only NGINX **80/443** and Stalwart's mail ports **25, 465, 587, 993, 995** are published on public interfaces (ManageSieve 4190 and the cleartext-upgrade ports IMAP 143 / POP3 110 are not, so mail apps are only ever told about 465/587/993/995). The app, worker, Postgres, Redis and Stalwart's HTTP/JMAP/management listener are reachable only on internal Docker networks. The management API is never on a public interface; NGINX proxies only what the BFF needs, and the BFF is the only path to user JMAP.
 
-**Platform hostnames.** The hostnames customers are told about — MX (`mx1.`), SPF include (`_spf.`), DKIM CNAME
-targets (`<selector>.<domain>.dkim.`), autoconfig/autodiscover, SRV targets, IMAP/SMTP/JMAP/CardDAV hosts — are built
+**Platform hostnames.** The hostnames customers are told about — MX (`mx1.`), SPF include (`_spf.`), autoconfig/autodiscover, SRV targets, IMAP/SMTP/JMAP/CardDAV hosts — are built
 from one setting, `PLATFORM_DOMAIN` (default `anhourmail.com`), so a staging or self-hosted install never sends its
 customers to production names. Facts flow two ways from `packages/shared/src/platform.ts`:
 
-- **Server code (configured):** `platformFacts(domain)` builds a `Platform` (hosts, `spfInclude`, `dkimZone`, client
+- **Server code (configured):** `platformFacts(domain)` builds a `Platform` (hosts, `spfInclude`, client
   endpoints, CardDAV). The web app reads it per request (`apps/web/src/server/platform.ts`, validated in `env.ts`),
   the worker via `workerPlatform()` (`apps/worker/src/platform.ts`), the seed from the same variable. Core services get it as
   `deps.platform`: domain records (`customerDomainRecords(…, platform)`), live verification (`checkRecords`), the

@@ -36,23 +36,46 @@ The full record set (A/AAAA/PTR, MX, SPF with `-all`, DKIM RSA-2048 selectors, D
 
 ## Customer domain records
 
-The template is **code**: `customerDomainRecords(domain, verifyToken, platform)` in `packages/shared/src/dns.ts`. The console renders it with live per-record verification and the worker checks it, both with the configured platform (`deps.platform`, from `PLATFORM_DOMAIN`); the docs render it per DNS provider with the product's published names (`PUBLIC_PLATFORM`). SPF verification looks for the include in the rendered template, so it follows the platform too. In summary:
+The template is **code**: `customerDomainRecords(domain, verifyToken, platform, dkimKeys)` in `packages/shared/src/dns.ts`. The console renders it with live per-record verification and the worker checks it, both with the configured platform (`deps.platform`, from `PLATFORM_DOMAIN`); the docs render it per DNS provider with the product's published names (`PUBLIC_PLATFORM`). SPF verification looks for the include in the rendered template, so it follows the platform too. In summary:
 
-- **Required:** ownership TXT (`_anhourmail`), MX → `mx1`, SPF include, two DKIM CNAMEs.
+- **Required:** ownership TXT (`_anhourmail`), MX → `mx1`, SPF include, one DKIM TXT per signing key.
 - **Recommended:** DMARC, autoconfig and autodiscover CNAMEs, client SRV records.
 
-DKIM passes only when the CNAME matches **and** a TXT lookup of the same name (which follows the CNAME) returns a
-DKIM key with a non-empty `p=` (`checkRecords` in `packages/core/src/domains/dns.ts`); otherwise the record shows
-"DKIM not found in DNS — mail will fail DKIM" and the domain stays pending. The keys behind
-`<selector>.<domain>.<dkimZone>` must therefore be published for every listed selector before a domain activates.
+**DKIM records are the domain's real keys (2026-10-28).** Until then the console asked for CNAMEs to
+`<selector>.<domain>.dkim.<platform>`, which nothing ever published (receivers: `dkim=permerror (no key for
+signature)`). Now each key Stalwart signs with is a TXT at `<selector>._domainkey` with its full value:
 
-We compare against Stalwart's own expectation (`x:Domain/get dnsZoneFile`) so the two never drift.
+- Stalwart creates the keys when the domain is added there (`dkimManagement: Automatic`: selectors
+  `v1-ed25519-YYYYMMDD` and `v1-rsa-YYYYMMDD`; the RSA key appears 1–2 s after the domain). The worker's
+  `domain.ensure` reads them from `x:Domain/get` → `dnsZoneFile` (`StalwartManagement.domainDkimRecords`,
+  `parseDkimRecords` handles single and parenthesised multi-string TXT) and caches the public halves in
+  `customer_domain.dkim_keys` (migration 0019); it retries ("DKIM keys not ready yet") until an RSA key is listed.
+  The console never calls Stalwart to render records.
+- **Pending domains reach Stalwart once ownership and MX pass** (`checkDomain` queues `domain.ensure`), because the keys
+  only exist there. Never earlier: a domain on Stalwart is local to it, so an unproven name would divert our other
+  customers' mail for it; with MX already pointing at us that is no change. Catch-all stays off while pending. The job
+  refuses a name another account has verified or another pending claim already put on Stalwart
+  (`domainOnMailServerElsewhere`). A pending domain with a Stalwart id is removed through `domain.remove` (no direct
+  row delete); one deleted while the job ran is taken off again unless another claim holds the name. The reconciler
+  expects these pending domains too.
+- Until keys are cached the template shows one `placeholder` DKIM row (can't pass, no copy button; the check message
+  says the keys are being created). Verification (`checkRecords` in `packages/core/src/domains/dns.ts`) passes a key
+  only when a TXT at its name has the same `p=` (whitespace and quotes ignored); otherwise "DKIM not found in DNS —
+  mail will fail DKIM" or "The DKIM key in DNS is not this one". The domain stays pending until every key matches.
+- **Backfill:** the `domain-recheck` scheduler job runs `backfillDkimKeys`, queueing `domain.ensure` for domains on
+  Stalwart with no cached keys and no last error; a customer's Check now also re-queues it. Domains connected before
+  this change get their keys without manual work, and their console shows the TXT records to publish (the old CNAMEs
+  must be replaced).
+- With manual DNS management Stalwart never rotates these keys (`nextTransitionAt` stays null), so the cache stays
+  valid; every `domain.ensure` refreshes it anyway.
 
 ### DKIM
 
 - **RSA-2048 is primary.** The largest mailbox provider does not verify Ed25519 signatures, so Ed25519 is an optional second signature only (`research/deliverability.md` §4).
-- Customer domains delegate DKIM by CNAME: `am1._domainkey.<domain> → am1.<domain>.dkim.anhourmail.com` (likewise `am2`). We publish the keys behind these and rotate them without the customer touching DNS.
-- **Fixed selectors — answered in Phase 1 (ADR-0017, verified 2026-10-21 on v0.16.27):**
+- **Customers publish their keys as TXT records** (above). CNAME delegation with fixed `am1`/`am2` selectors and
+  worker-owned rotation (ADR-0017, below) is **not built**: it needs our DNS provider's API to publish the keys under
+  the platform zone. Until then rotating a customer's key means the customer publishes the new TXT first.
+- **Fixed selectors — researched in Phase 1, not in use yet (ADR-0017, verified 2026-10-21 on v0.16.27):**
   - `dkimManagement: {"@type":"Automatic","selectorTemplate":"am1","algorithms":{"Dkim1RsaSha256":true}}` creates
     one RSA key with selector `am1` at domain creation. With manual DNS its `nextTransitionAt` stays null: Stalwart
     never rotates it (automatic rotation needs automatic DNS management), and a fixed template would collide on

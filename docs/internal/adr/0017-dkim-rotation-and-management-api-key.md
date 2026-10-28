@@ -1,6 +1,6 @@
 # ADR-0017: DKIM with fixed selectors rotated by the worker; a scoped API key for management
 
-- Status: Accepted, 2026-10-21
+- Status: Accepted, 2026-10-21. Amended 2026-10-28: customer DKIM uses direct TXT keys for now (see "Amendment").
 - Related: `../02-mail-infrastructure.md` ("DKIM", "Stalwart configuration principles"), `../09-roadmap.md` Phase 1
   prototypes 1–2, ADR-0001, ADR-0011
 
@@ -51,3 +51,17 @@ sysDkimSignature*}}` manages domains, accounts and DKIM keys; without `authentic
 - Automatic DKIM with automatic DNS (Stalwart drives the DNS provider): gives date-named selectors and puts DNS
   credentials inside the mail server; rejected for customer CNAME delegation.
 - Keep using an admin password over Basic auth: no permission scoping, no IP allow-list; rejected.
+
+## Amendment (2026-10-28): direct TXT keys for customer domains, for now
+
+The CNAME delegation above was shown to customers but never wired: nothing published keys under the platform's DKIM
+zone, so every customer domain failed DKIM (`permerror`, no key for signature). Rather than build the DNS-provider
+integration first, customer domains now keep Stalwart's automatic DKIM (default date-based selectors, one Ed25519 and
+one RSA-2048 key) and the console lists those keys as TXT records at `<selector>._domainkey`, read from
+`dnsZoneFile` and cached by the worker (`02-mail-infrastructure.md` "Customer domain records"). The key only exists
+once the domain is on Stalwart, so a pending domain is added there once its ownership and MX records pass.
+
+Consequences: rotation needs the customer to publish the new key first (Stalwart doesn't rotate with manual DNS, so
+nothing changes under them meanwhile); Ed25519 is published alongside RSA (an extra signature, never the only one).
+Part 1 of the decision (worker-owned fixed selectors, CNAME delegation, 90-day rotation) stays the target once the
+platform DKIM zone can be published through a DNS provider; part 2 (scoped API key) is unchanged.
