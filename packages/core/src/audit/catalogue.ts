@@ -40,6 +40,7 @@ export const AUDIT_ACTIONS = [
   "account.invite_revoked",
   "account.member_added",
   "account.user_added",
+  "account.profile_changed",
   "account.member_removed",
   "account.role_changed",
   "account.ownership_transferred",

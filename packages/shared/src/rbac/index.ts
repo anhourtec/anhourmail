@@ -59,6 +59,10 @@ type PermissionDef = {
 export const PERMISSIONS = {
   // --- self (any signed-in person, about themselves)
   "self.profile.read": { scope: "self", description: "See own profile, roles and memberships" },
+  "self.profile.manage": {
+    scope: "self",
+    description: "Edit own optional profile details (job title, department, phones, postal address)",
+  },
   "self.security.manage": { scope: "self", description: "Own sign-ins, sessions, 2FA, app passwords" },
 
   // --- platform (Anhourtec staff)

@@ -32,6 +32,14 @@ export const ROUTES: readonly RouteSpec[] = [
   { method: "GET", path: "/api/me", file: "app/api/me/route.ts", guard: "session" },
   // The person's own sign-in security (packages/core/src/security). Someone else's ids are a 404.
   { method: "GET", path: "/api/me/security", file: "app/api/me/security/route.ts", guard: "self.security.manage" },
+  // The person's own optional profile details (packages/core/src/people/profile-service.ts).
+  {
+    method: "PUT",
+    path: "/api/me/profile",
+    file: "app/api/me/profile/route.ts",
+    guard: "self.profile.manage",
+    audits: "account.profile_changed",
+  },
   {
     method: "DELETE",
     path: "/api/me/sessions",
@@ -333,6 +341,16 @@ export const ROUTES: readonly RouteSpec[] = [
     guard: "account.admins.manage",
     accountParam: "accountId",
     audits: "account.role_changed",
+    probeStatus: 404,
+  },
+  // "Edit profile" on a person's panel: a Member's with member.manage, anyone's for an Owner (and your own always,
+  // which the harness's random id can't be). Random ids → 404 for allowed callers.
+  {
+    method: "PUT",
+    path: "/api/accounts/:accountId/people/:userId/profile",
+    file: "app/api/accounts/[accountId]/people/[userId]/profile/route.ts",
+    guard: "member.manage",
+    accountParam: "accountId",
     probeStatus: 404,
   },
   {

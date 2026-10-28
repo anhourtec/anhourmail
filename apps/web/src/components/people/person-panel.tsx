@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import type { MemberView } from "@anhourmail/core/people";
+import type { MemberView, ProfileView } from "@anhourmail/core/people";
 import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 import { ShieldCheck } from "lucide-react";
 
@@ -7,6 +7,7 @@ import { ActionLink, DetailHeader, DetailTabs, Field, FieldGrid, PanelSection, T
 import { initialsOf } from "../console/initials";
 import { StatusText } from "../console/status-text";
 import { CopyValue } from "../copy-value";
+import { EditProfile } from "./edit-profile";
 import { RemovePerson, RoleForm } from "./person-actions";
 import { ROLE_HELP, RoleHelp } from "./role-help";
 
@@ -14,7 +15,8 @@ const dateFmt = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium", timeZone
 
 /**
  * A person's details panel: header (initials, name, status and role, inline actions), then Account (fields, their
- * mailboxes) and Role (Owners only). What's offered follows the service's answer for this viewer.
+ * mailboxes), Profile (the optional details, with "Edit profile" for the person and the admins who may) and Role
+ * (Owners only). What's offered follows the service's answer for this viewer.
  */
 export function PersonPanel({
   accountId,
@@ -22,6 +24,7 @@ export function PersonPanel({
   mailboxes,
   mailboxesHref,
   closeHref,
+  profile = null,
   tab,
 }: {
   accountId: string;
@@ -30,6 +33,8 @@ export function PersonPanel({
   mailboxes: { id: string; address: string }[] | null;
   mailboxesHref: string;
   closeHref: string;
+  /** Their optional profile details and whether this viewer may edit them. */
+  profile?: ProfileView | null;
   tab?: string | null;
 }) {
   const roleLabel = ROLE_LABELS[`account:${person.role}`];
@@ -84,6 +89,21 @@ export function PersonPanel({
         </FieldGrid>
       ),
     },
+    ...(profile
+      ? [
+          {
+            id: "profile",
+            label: "Profile",
+            content: (
+              <EditProfile
+                url={`/api/accounts/${encodeURIComponent(accountId)}/people/${encodeURIComponent(person.userId)}/profile`}
+                details={profile.details}
+                canEdit={profile.canEdit}
+              />
+            ),
+          },
+        ]
+      : []),
     ...(person.canChangeRole
       ? [
           {

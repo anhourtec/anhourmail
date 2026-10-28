@@ -6,18 +6,17 @@ import Link from "next/link";
 import { type ReactNode, type SyntheticEvent, useId, useState } from "react";
 
 import { nameProblem } from "@anhourmail/shared/names";
-import {
-  COUNTRIES,
-  countryName,
-  PHONE_PATTERN,
-  PROFILE_FIELD_INFO,
-  PROFILE_FIELDS,
-  type ProfileField,
-} from "@anhourmail/shared/profile";
 import { ACCOUNT_ROLE_SUMMARIES, type AccountRole, ROLE_LABELS } from "@anhourmail/shared/rbac";
 import { mailboxPasswordProblem } from "@anhourmail/shared/security";
 
 import { callApi } from "../api";
+import {
+  cleanProfile,
+  ProfileFieldsGrid,
+  profileErrors,
+  ProfileSummary,
+  type ProfileValues,
+} from "../people/profile-fields";
 import { PasswordInput } from "../password-input";
 import { authCall } from "../security/webauthn";
 import { inputClass, primaryButtonClass, secondaryButtonClass } from "../ui-classes";
@@ -40,7 +39,6 @@ const STEPS: { id: StepId; label: string }[] = [
   { id: "review", label: "Review and finish" },
 ];
 
-type Profile = Partial<Record<ProfileField, string>>;
 type Added = { address: string; password: string | null; requirePasswordChange: boolean };
 
 /** "Make this a user": the person-less mailbox the person will sign in with (no new mailbox is created). */
@@ -86,7 +84,7 @@ export function AddUserWizard({
   const [role, setRole] = useState<AccountRole>(
     options.roles.includes("member") ? "member" : (options.roles[0] ?? "member"),
   );
-  const [profile, setProfile] = useState<Profile>({});
+  const [profile, setProfile] = useState<ProfileValues>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -123,19 +121,7 @@ export function AddUserWizard({
       }
     }
     if (id === "role" && !options.roles.includes(role)) e.role = "Choose a role.";
-    if (id === "profile") {
-      for (const f of PROFILE_FIELDS) {
-        const v = (profile[f] ?? "").trim();
-        if (v === "") continue;
-        const { label, max } = PROFILE_FIELD_INFO[f];
-        if (v.length > max) e[f] = `${label} is too long.`;
-        else if ((f === "officePhone" || f === "mobilePhone") && !PHONE_PATTERN.test(v)) {
-          e[f] = "Use digits, spaces and + ( ) - only.";
-        } else if (f !== "country" && f !== "officePhone" && f !== "mobilePhone" && nameProblem(v)) {
-          e[f] = nameProblem(v) ?? "";
-        }
-      }
-    }
+    if (id === "profile") Object.assign(e, profileErrors(profile));
     return e;
   }
 
@@ -166,11 +152,7 @@ export function AddUserWizard({
     }
     setPending(true);
     setSubmitError(null);
-    const cleanProfile = Object.fromEntries(
-      Object.entries(profile)
-        .map(([k, v]) => [k, v.trim()] as const)
-        .filter(([, v]) => v !== ""),
-    );
+    const cleaned = cleanProfile(profile);
     if (existing) {
       const made = await callApi(
         `/api/accounts/${encodeURIComponent(accountId)}/mailboxes/${encodeURIComponent(existing.mailboxId)}/user`,
@@ -181,7 +163,7 @@ export function AddUserWizard({
             lastName: lastName.trim(),
             displayName: displayName.trim(),
             role,
-            profile: cleanProfile,
+            profile: cleaned,
           },
         },
       );
@@ -213,7 +195,7 @@ export function AddUserWizard({
         generatePassword: autoPassword,
         ...(autoPassword ? {} : { password }),
         requirePasswordChange: requireChange,
-        profile: cleanProfile,
+        profile: cleaned,
       },
     });
     setPending(false);
@@ -479,39 +461,7 @@ export function AddUserWizard({
 
         {step === "profile" && (
           <Section title="Optional settings" lead="Profile details for your records. All optional; skip any you like.">
-            <div className="grid gap-4 sm:grid-cols-2">
-              {PROFILE_FIELDS.filter((f) => f !== "country").map((f) => (
-                <Field key={f} label={PROFILE_FIELD_INFO[f].label} error={fieldError(f)}>
-                  <input
-                    value={profile[f] ?? ""}
-                    onChange={(e) => {
-                      setProfile((p) => ({ ...p, [f]: e.target.value }));
-                    }}
-                    type={f === "officePhone" || f === "mobilePhone" ? "tel" : "text"}
-                    autoComplete="off"
-                    maxLength={PROFILE_FIELD_INFO[f].max}
-                    className={inputClass}
-                    {...describedBy(f)}
-                  />
-                </Field>
-              ))}
-              <Field label={PROFILE_FIELD_INFO.country.label} error={fieldError("country")}>
-                <select
-                  value={profile.country ?? ""}
-                  onChange={(e) => {
-                    setProfile((p) => ({ ...p, country: e.target.value }));
-                  }}
-                  className={inputClass}
-                >
-                  <option value="">Not set</option>
-                  {COUNTRIES.map((c) => (
-                    <option key={c.code} value={c.code}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
+            <ProfileFieldsGrid profile={profile} onChange={setProfile} errors={errors} />
           </Section>
         )}
 
@@ -566,20 +516,7 @@ export function AddUserWizard({
                 go("profile");
               }}
             >
-              {PROFILE_FIELDS.some((f) => (profile[f] ?? "").trim() !== "") ? (
-                <dl className="grid gap-x-4 gap-y-1 sm:grid-cols-[10rem_minmax(0,1fr)]">
-                  {PROFILE_FIELDS.filter((f) => (profile[f] ?? "").trim() !== "").map((f) => (
-                    <div key={f} className="contents">
-                      <dt className="am-small">{PROFILE_FIELD_INFO[f].label}</dt>
-                      <dd className="am-body break-words">
-                        {f === "country" ? (countryName(profile[f] ?? "") ?? profile[f]) : profile[f]}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              ) : (
-                <p className="am-small">None given.</p>
-              )}
+              <ProfileSummary profile={profile} />
             </Summary>
             {stepUp && (
               <ConfirmItsYou

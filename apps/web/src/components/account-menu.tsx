@@ -153,7 +153,10 @@ export function AccountMenu({
         <ShieldCheck className="size-4" aria-hidden />
         Security
       </Link>
-      {soon("Profile", CircleUser)}
+      <Link role="menuitem" href="/profile" onClick={onNavigate} className={itemClass}>
+        <CircleUser className="size-4" aria-hidden />
+        Profile
+      </Link>
       {soon("Billing", CreditCard)}
       {user.webmailHref && (
         <a role="menuitem" href={user.webmailHref} className={itemClass} onClick={onNavigate}>

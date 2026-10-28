@@ -17,7 +17,7 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | Area | Actions |
 | --- | --- |
 | `auth` | `auth.sign_in`, `auth.sign_in_failed`, `auth.sign_out`, `auth.password_changed`, `auth.password_reset`, `auth.password_reset_requested`, `auth.two_factor_enabled`, `auth.two_factor_disabled`, `auth.app_password_created`, `auth.app_password_revoked`, `auth.session_revoked`, `auth.locked_out`, `auth.mail_client_sign_in`, `auth.mail_client_sign_in_failed`, `auth.two_factor_reset`, `auth.backup_code_used`, `auth.sessions_revoked_all`, `auth.new_device`, `auth.passkey_added`, `auth.passkey_renamed`, `auth.passkey_removed`, `auth.recovery_codes_regenerated`, `auth.identity_confirmed`, `auth.email_verification_sent`, `auth.email_verified` |
-| `account` | `account.created`, `account.deleted`, `account.updated`, `account.invite_sent`, `account.invite_accepted`, `account.invite_resent`, `account.invite_revoked`, `account.member_added`, `account.user_added`, `account.member_removed`, `account.role_changed`, `account.ownership_transferred`, `account.sign_in_policy_changed`, `account.sign_in_factor_added` |
+| `account` | `account.created`, `account.deleted`, `account.updated`, `account.invite_sent`, `account.invite_accepted`, `account.invite_resent`, `account.invite_revoked`, `account.member_added`, `account.user_added`, `account.profile_changed`, `account.member_removed`, `account.role_changed`, `account.ownership_transferred`, `account.sign_in_policy_changed`, `account.sign_in_factor_added` |
 | `domain` | `domain.added`, `domain.verified`, `domain.verify_failed`, `domain.removed`, `domain.dns_state_changed` |
 | `mailbox` | `mailbox.created`, `mailbox.renamed`, `mailbox.made_user`, `mailbox.suspended`, `mailbox.unsuspended`, `mailbox.deleted`, `mailbox.quota_changed`, `mailbox.deletion_scheduled`, `mailbox.restored`, `mailbox.password_reset`, `mailbox.password_changed` |
 | `alias` | `alias.created`, `alias.toggled`, `alias.deleted` |
@@ -123,6 +123,11 @@ true` when it lifts the first-sign-in password change.
 `userId`, `role`, `profileFields` — names only). One entry covers the console login, the membership, the owner link,
 the display name and the new generated password (never recorded). Denied entries: a role the actor may not grant
 (`forbidden`), a staff act-as session (`act_as`) and a missing step-up (`step_up_required`).
+
+Profile details: `account.profile_changed` (target = the person, label their sign-in email; meta: `fields` — the names
+of the optional profile fields that changed, never their values — and `self`). An admin's edit is written to that
+account's log; the person's own edit from their Profile page is written to every account they belong to (the platform
+log when they belong to none), so its admins see it. A User Administrator editing an admin's profile is `denied`.
 
 People: `account.invite_sent`, `account.invite_resent`, `account.invite_revoked` (target label = the invited
 address, meta = role; never the token), `account.invite_accepted` (meta: role, `newLogin`, the user id; the actor is

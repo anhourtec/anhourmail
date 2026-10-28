@@ -2,9 +2,9 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
-import { can } from "@anhourmail/core";
+import { can, NotFoundError } from "@anhourmail/core";
 import { listMailboxes } from "@anhourmail/core/mailboxes";
-import { listPeople } from "@anhourmail/core/people";
+import { getPersonProfile, listPeople } from "@anhourmail/core/people";
 import { INVITE_TTL_DAYS } from "@anhourmail/shared/plans";
 import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 import { PageHeader } from "@anhourmail/ui/page-header";
@@ -25,7 +25,8 @@ export const metadata: Metadata = { title: "People and roles" };
 const dateFmt = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium", timeZone: "UTC" });
 
 /**
- * People and roles (console page template). `?person=<userId>` opens a person's panel (`&tab=role` for the role),
+ * People and roles (console page template). `?person=<userId>` opens a person's panel (`&tab=profile` for the
+ * optional profile details, `&tab=role` for the role),
  * `?new=1` the "Invite someone" panel. Ids that aren't a member of this account are a 404.
  */
 export default async function PeoplePage({
@@ -43,6 +44,13 @@ export default async function PeoplePage({
   const data = await forPage(async () => ({
     overview: await listPeople(deps, actor, accountId),
     mailboxes: openId && can(actor, "mailbox.read", accountId) ? await listMailboxes(deps, actor, accountId) : null,
+    // Someone outside the account: no profile here, and the page answers 404 below.
+    profile: openId
+      ? await getPersonProfile(deps, actor, accountId, openId).catch((err: unknown) => {
+          if (err instanceof NotFoundError) return null;
+          throw err;
+        })
+      : null,
   }));
   const crumbs = [{ label: "Home", href: "/" }, { label: "People and roles" }];
   if (!data) {
@@ -132,6 +140,7 @@ export default async function PeoplePage({
             }
             mailboxesHref={`/accounts/${accountId}/mailboxes`}
             closeHref={path}
+            profile={data.profile}
             tab={param(sp, "tab")}
           />
         </UrlFlyout>
