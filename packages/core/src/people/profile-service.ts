@@ -13,7 +13,9 @@ import { profileDetails } from "./entity";
  *
  * Who may edit: the person themself (`self.profile.manage`, from their Profile page or their own person panel), and in
  * an account, admins with `member.manage` for a Member; someone with another role needs an Owner
- * (`account.admins.manage`), as for changing or removing them.
+ * (`account.admins.manage`), as for changing or removing them. The details belong to the person, not to one account:
+ * someone who also belongs to another account is edited only by themself, so one account's admins can't change what
+ * every other account sees (unaudited there).
  */
 
 export type ProfileView = {
@@ -29,12 +31,28 @@ export function changedFields(before: ProfileDetails, after: ProfileDetails): Pr
 
 const selfId = (actor: Actor): string | null => (actor.kind === "user" ? actor.userId : null);
 
-/** May this actor edit the profile of `target` in the account (already known to be a member there)? */
-function mayEdit(actor: Actor, accountId: string, target: { userId: string; role: string }): boolean {
-  if (target.userId === selfId(actor)) return true;
-  if (can(actor, "account.admins.manage", accountId)) return true;
-  return target.role === "member" && can(actor, "member.manage", accountId);
+/** Someone else's details are refused for their role here, or because they also belong to another account. */
+type EditRefusal = "role" | "other_account";
+
+/** Why this actor may not edit the profile of `target` in the account (already known to be a member there), or null. */
+async function editRefusal(
+  repos: Repositories,
+  actor: Actor,
+  accountId: string,
+  target: { userId: string; role: string },
+): Promise<EditRefusal | null> {
+  if (target.userId === selfId(actor)) return null;
+  if (
+    !can(actor, "account.admins.manage", accountId) &&
+    !(target.role === "member" && can(actor, "member.manage", accountId))
+  ) {
+    return "role";
+  }
+  return (await repos.accounts.membershipCount(target.userId)) > 1 ? "other_account" : null;
 }
+
+export const OTHER_ACCOUNT_PROFILE =
+  "This person also belongs to another account, so only they can change their profile.";
 
 async function memberOf(repos: Repositories, accountId: string, userId: string) {
   const target =
@@ -53,7 +71,10 @@ export async function getPersonProfile(
   authorize(actor, "member.read", accountId);
   return deps.uow.run(async (repos) => {
     const target = await memberOf(repos, accountId, userId);
-    return { details: await repos.people.profile(target.userId), canEdit: mayEdit(actor, accountId, target) };
+    return {
+      details: await repos.people.profile(target.userId),
+      canEdit: (await editRefusal(repos, actor, accountId, target)) === null,
+    };
   });
 }
 
@@ -72,7 +93,8 @@ export type ProfileChange = { details: ProfileDetails; changed: ProfileField[] }
 /**
  * An admin's (or the person's own) edit from the People page (`member.manage`, plus the role rule above; the person
  * themself always may). Replaces all the fields: an empty one clears it. Audited as `account.profile_changed` in the
- * account's log with the names of the fields that changed; a refusal by role is audited as denied (403).
+ * account's log with the names of the fields that changed; a refusal by role (`forbidden`), or because the person also
+ * belongs to another account (`other_account`), is audited as denied (403).
  */
 export async function updatePersonProfile(
   deps: Deps,
@@ -83,7 +105,7 @@ export async function updatePersonProfile(
   req: RequestMeta,
 ): Promise<ProfileChange> {
   const own = userId === selfId(actor);
-  const out = await mutation<ProfileChange | null>(
+  const out = await mutation<ProfileChange | EditRefusal>(
     deps,
     actor,
     req,
@@ -99,8 +121,13 @@ export async function updatePersonProfile(
         throw new NotFoundError();
       }
       const target = await memberOf(repos, accountId, userId);
-      if (!mayEdit(actor, accountId, target)) {
-        return { result: null, target: { label: target.email }, denied: { code: "forbidden" } };
+      const refusal = await editRefusal(repos, actor, accountId, target);
+      if (refusal !== null) {
+        return {
+          result: refusal,
+          target: { label: target.email },
+          denied: { code: refusal === "role" ? "forbidden" : refusal },
+        };
       }
       const after = profileDetails(input.profile ?? {});
       const changed = changedFields(await repos.people.profile(target.userId), after);
@@ -113,7 +140,8 @@ export async function updatePersonProfile(
       };
     },
   );
-  if (out === null) throw new ForbiddenError("Only an owner can edit the profile of an owner or an admin.");
+  if (out === "role") throw new ForbiddenError("Only an owner can edit the profile of an owner or an admin.");
+  if (out === "other_account") throw new ForbiddenError(OTHER_ACCOUNT_PROFILE);
   return out;
 }
 

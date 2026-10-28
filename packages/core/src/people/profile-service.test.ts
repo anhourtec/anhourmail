@@ -8,11 +8,15 @@ import {
   changedFields,
   getOwnProfile,
   getPersonProfile,
+  OTHER_ACCOUNT_PROFILE,
   updateOwnProfile,
   updatePersonProfile,
 } from "./profile-service";
 
-/** Account A with an Owner, a User Admin, a second User Admin, an Auditor and a Member; B with its Owner. */
+/**
+ * Account A with an Owner, a User Admin, a second User Admin, an Auditor and two Members (`solo` only there, `kid` also
+ * in B); B with its Owner.
+ */
 function world() {
   const d = deps(fixedClock("2026-10-28T12:00:00Z"));
   const s = d.uow.state;
@@ -23,6 +27,7 @@ function world() {
     ["admin2", "user_admin", ACCOUNT_A],
     ["auditor", "auditor", ACCOUNT_A],
     ["kid", "member", ACCOUNT_A],
+    ["solo", "member", ACCOUNT_A],
     ["kid", "member", ACCOUNT_B],
     ["owner-b", "owner", ACCOUNT_B],
   ];
@@ -31,6 +36,7 @@ function world() {
     s.memberships.push({ userId: id, accountId, role });
   }
   s.profiles.kid = { jobTitle: "Student", city: "Halifax" };
+  s.profiles.solo = { jobTitle: "Student", city: "Halifax" };
   const as = (id: string): Actor => {
     const u = user({
       id,
@@ -61,18 +67,18 @@ describe("updatePersonProfile", () => {
       d,
       as("admin"),
       ACCOUNT_A,
-      "kid",
+      "solo",
       { profile: { jobTitle: "Intern", city: "Halifax", mobilePhone: "+1 902 555 0100" } },
       req,
     );
     expect(out.changed).toEqual(["jobTitle", "mobilePhone"]);
-    expect(s.profiles.kid).toEqual({ jobTitle: "Intern", city: "Halifax", mobilePhone: "+1 902 555 0100" });
+    expect(s.profiles.solo).toEqual({ jobTitle: "Intern", city: "Halifax", mobilePhone: "+1 902 555 0100" });
     const entry = s.audit.at(-1);
     expect(entry).toMatchObject({
       action: "account.profile_changed",
       result: "success",
       scope: `account:${ACCOUNT_A}`,
-      target: { type: "person", id: "kid", label: "kid@a.test" },
+      target: { type: "person", id: "solo", label: "solo@a.test" },
       meta: { fields: ["jobTitle", "mobilePhone"], self: false },
     });
     expect(JSON.stringify(s.audit)).not.toMatch(/Intern|555/);
@@ -80,10 +86,10 @@ describe("updatePersonProfile", () => {
 
   it("clears fields left empty and writes nothing when nothing changed", async () => {
     const { d, s, as } = world();
-    const out = await updatePersonProfile(d, as("owner"), ACCOUNT_A, "kid", { profile: { city: "" } }, req);
+    const out = await updatePersonProfile(d, as("owner"), ACCOUNT_A, "solo", { profile: { city: "" } }, req);
     expect(out.changed).toEqual(["jobTitle", "city"]);
-    expect(s.profiles.kid).toEqual({});
-    const again = await updatePersonProfile(d, as("owner"), ACCOUNT_A, "kid", { profile: {} }, req);
+    expect(s.profiles.solo).toEqual({});
+    const again = await updatePersonProfile(d, as("owner"), ACCOUNT_A, "solo", { profile: {} }, req);
     expect(again.changed).toEqual([]);
     expect(s.audit.at(-1)).toMatchObject({ result: "success", meta: { fields: [] } });
   });
@@ -105,6 +111,28 @@ describe("updatePersonProfile", () => {
     expect(s.audit.at(-1)).toMatchObject({ meta: { self: true } });
   });
 
+  it("someone who also belongs to another account: only they edit their details (403 for admins, audited)", async () => {
+    const { d, s, as } = world();
+    for (const admin of ["admin", "owner", "owner-b"]) {
+      const accountId = admin === "owner-b" ? ACCOUNT_B : ACCOUNT_A;
+      await expect(
+        updatePersonProfile(d, as(admin), accountId, "kid", { profile: { jobTitle: "Intern" } }, req),
+      ).rejects.toThrow(OTHER_ACCOUNT_PROFILE);
+      expect(s.audit.at(-1)).toMatchObject({
+        action: "account.profile_changed",
+        result: "denied",
+        errorCode: "other_account",
+        scope: `account:${accountId}`,
+        target: { id: "kid" },
+      });
+    }
+    expect(s.profiles.kid).toEqual({ jobTitle: "Student", city: "Halifax" });
+    // Once they belong to this account only, its admins may edit them again.
+    s.memberships = s.memberships.filter((m) => !(m.userId === "kid" && m.accountId === ACCOUNT_B));
+    await updatePersonProfile(d, as("admin"), ACCOUNT_A, "kid", { profile: { jobTitle: "Intern" } }, req);
+    expect(s.profiles.kid).toEqual({ jobTitle: "Intern" });
+  });
+
   it("403 without member.manage, 404 for another account or someone outside it, 401 signed out", async () => {
     const { d, as } = world();
     const edit = (actor: Actor, accountId: string, userId: string) =>
@@ -121,7 +149,7 @@ describe("updatePersonProfile", () => {
 
   it("checks the values", async () => {
     const { d, as } = world();
-    const edit = (profile: unknown) => updatePersonProfile(d, as("owner"), ACCOUNT_A, "kid", { profile }, req);
+    const edit = (profile: unknown) => updatePersonProfile(d, as("owner"), ACCOUNT_A, "solo", { profile }, req);
     await expect(edit({ country: "Nowhere" })).rejects.toThrow(ValidationError);
     await expect(edit({ officePhone: "call me" })).rejects.toThrow(ValidationError);
     await expect(edit({ jobTitle: "see example.com" })).rejects.toThrow(ValidationError);
@@ -132,10 +160,12 @@ describe("updatePersonProfile", () => {
 describe("getPersonProfile / own profile", () => {
   it("reads with member.read and says who may edit", async () => {
     const { d, as } = world();
-    expect(await getPersonProfile(d, as("admin"), ACCOUNT_A, "kid")).toEqual({
+    expect(await getPersonProfile(d, as("admin"), ACCOUNT_A, "solo")).toEqual({
       details: { jobTitle: "Student", city: "Halifax" },
       canEdit: true,
     });
+    // Someone who also belongs to another account edits their details themself.
+    expect((await getPersonProfile(d, as("owner"), ACCOUNT_A, "kid")).canEdit).toBe(false);
     expect((await getPersonProfile(d, as("admin"), ACCOUNT_A, "admin2")).canEdit).toBe(false);
     expect((await getPersonProfile(d, as("auditor"), ACCOUNT_A, "kid")).canEdit).toBe(false);
     expect((await getPersonProfile(d, as("auditor"), ACCOUNT_A, "auditor")).canEdit).toBe(true);
