@@ -123,6 +123,11 @@ const basic = `Basic ${Buffer.from(`${target}:${password}`).toString("base64")}`
 
 /** Recipients of the messages in the target mailbox (JMAP as the mailbox itself). */
 async function receivedFor(): Promise<string[]> {
+  return (await messages()).flatMap((e) => e.to.map((t) => t.email));
+}
+
+/** The target mailbox's messages: recipients and the ordered header list. */
+async function messages(): Promise<{ to: { email: string }[]; headers: { name: string; value: string }[] }[]> {
   const session = (await (
     await fetch(`${stalwartUrl}/jmap/session`, { headers: { Authorization: basic } })
   ).json()) as { primaryAccounts: Record<string, string> };
@@ -136,14 +141,24 @@ async function receivedFor(): Promise<string[]> {
         ["Email/query", { accountId: jmapAccount }, "q"],
         [
           "Email/get",
-          { accountId: jmapAccount, "#ids": { resultOf: "q", name: "Email/query", path: "/ids" }, properties: ["to"] },
+          {
+            accountId: jmapAccount,
+            "#ids": { resultOf: "q", name: "Email/query", path: "/ids" },
+            properties: ["to", "headers"],
+          },
           "g",
         ],
       ],
     }),
   });
-  const body = (await res.json()) as { methodResponses: [string, { list?: { to: { email: string }[] }[] }, string][] };
-  return (body.methodResponses[1]?.[1].list ?? []).flatMap((e) => e.to.map((t) => t.email));
+  const body = (await res.json()) as {
+    methodResponses: [
+      string,
+      { list?: { to: { email: string }[]; headers: { name: string; value: string }[] }[] },
+      string,
+    ][];
+  };
+  return body.methodResponses[1]?.[1].list ?? [];
 }
 
 const catchAllOnServer = async (): Promise<string | null> => {
@@ -210,6 +225,14 @@ describe("catch-all on Stalwart", () => {
     const accepted = await deliver(random);
     expect(accepted.some((r) => r.startsWith("250 2.0.0"))).toBe(true);
     await expect.poll(receivedFor, { timeout: 15_000 }).toContain(random);
+    // Delivered through the catch-all, the message has the mail server's own Received with its
+    // Authentication-Results directly below, like any port-25 delivery (the webmail trusts only that pair;
+    // docs/internal/07-security.md "Authentication results in the webmail").
+    const caught = (await messages()).find((e) => e.to.some((t) => t.email === random));
+    const names = (caught?.headers ?? []).map((h) => h.name.toLowerCase());
+    const top = names.indexOf("received");
+    expect(top).toBeGreaterThanOrEqual(0);
+    expect(names[top + 1]).toBe("authentication-results");
 
     // Suspending the mailbox turns the catch-all off by itself, in the control plane and on the mail server.
     await suspendMailbox(deps, actor, accountId, m.id, meta);
