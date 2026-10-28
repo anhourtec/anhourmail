@@ -10,6 +10,7 @@ import type { Address } from "@/server/webmail/view";
 import { Tooltip } from "@/components/tooltip";
 
 import { displayName, fileSize } from "./format";
+import { parkRemoteImages, unparkRemoteImages } from "./remote-images";
 import { loadOutgoing, type Outgoing, RichEditor, useOutgoing } from "./rich-editor";
 import { SIGNATURE_ATTR, signatureHtml, signatureInner, textToHtml } from "./rich-text";
 import {
@@ -337,10 +338,13 @@ export function Composer({
     key: 0,
   }));
   const [richVersion, setRichVersion] = useState(0);
+  // Remote images are shown as placeholders while writing (nothing loads); they are put back for saving.
   const initialHtml = useMemo(
-    () => (outgoing ? outgoing.sanitizeOutgoingHtml(richSource.body).html : null),
+    () => (outgoing ? parkRemoteImages(outgoing.sanitizeOutgoingHtml(richSource.body).html) : null),
     [outgoing, richSource.body],
   );
+  /** The editor's HTML as it will be sent (remote images put back), before sanitising. */
+  const editorHtml = () => unparkRemoteImages(editor.current?.innerHTML ?? "");
   /** The signature text the editor holds; null until the editor has been filled. */
   const appliedSig = useRef<string | undefined | null>(null);
   const richReady = format === "rich" && initialHtml !== null;
@@ -367,7 +371,7 @@ export function Composer({
   const switchFormat = (next: ComposeFormat) => {
     if (next === format) return;
     if (next === "plain") {
-      const raw = editor.current?.innerHTML ?? "";
+      const raw = editorHtml();
       setText(
         outgoing ? outgoing.outgoingText(outgoing.sanitizeOutgoingHtml(raw).html) : (editor.current?.textContent ?? ""),
       );
@@ -392,7 +396,7 @@ export function Composer({
     (mod: Outgoing): DraftPayload | null => {
       let content: { text: string; html?: string } = { text };
       if (format === "rich") {
-        const clean = mod.sanitizeOutgoingHtml(editor.current?.innerHTML ?? "");
+        const clean = mod.sanitizeOutgoingHtml(editorHtml());
         if (clean.tooLarge) return null;
         // The server writes the text/plain part from the HTML.
         content = { text: "", html: clean.html };

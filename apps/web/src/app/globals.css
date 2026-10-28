@@ -633,6 +633,16 @@ html[data-motion="reduced"] *::after {
   max-width: 100%;
   height: auto;
 }
+/* A remote image while writing (components/webmail/remote-images.ts): a placeholder, nothing loads. */
+.am-rich img[data-am-blocked] {
+  display: inline-block;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  vertical-align: middle;
+  background: var(--muted);
+  outline: 1px dashed var(--border);
+  outline-offset: -1px;
+}
 .am-rich table {
   max-width: 100%;
 }

@@ -33,6 +33,7 @@ import { inputClass, primaryButtonClass, secondaryButtonClass } from "@/componen
 
 import { Modal } from "./dialogs";
 import { frameDocument } from "./message-frame";
+import { parkRemoteImages } from "./remote-images";
 import { escapeHtml, linkUrl, removedSummary } from "./rich-text";
 
 /**
@@ -174,7 +175,8 @@ export function RichEditor({
   /** Inserts HTML from outside (paste, drop) after sanitising it; plain text when the sanitiser isn't loaded. */
   const insertForeign = (html: string, text: string) => {
     const clean = html !== "" && outgoing ? outgoing.sanitizeOutgoingHtml(html) : null;
-    if (clean && !clean.tooLarge && clean.html !== "") exec("insertHTML", clean.html);
+    // Remote images show as placeholders while writing (nothing loads); the composer puts them back for saving.
+    if (clean && !clean.tooLarge && clean.html !== "") exec("insertHTML", parkRemoteImages(clean.html));
     else if (text !== "") exec("insertText", text);
     changed();
   };
@@ -379,7 +381,7 @@ export function RichEditor({
             setInserting(false);
             if (!editorRef.current) return;
             restore(editorRef.current, savedRange.current);
-            exec("insertHTML", html);
+            exec("insertHTML", parkRemoteImages(html));
             changed();
           }}
         />
@@ -480,7 +482,7 @@ export function InsertHtmlDialog({
               <iframe
                 title="Preview of the HTML to insert"
                 sandbox=""
-                srcDoc={frameDocument(result.html)}
+                srcDoc={frameDocument(parkRemoteImages(result.html))}
                 referrerPolicy="no-referrer"
                 className="block h-48 w-full rounded-lg border bg-background"
               />
