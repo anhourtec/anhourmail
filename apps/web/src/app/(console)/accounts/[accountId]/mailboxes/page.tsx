@@ -67,7 +67,13 @@ export default async function MailboxesPage({
   const { mailboxes, pool, options, open, appPasswords } = data;
   const path = `/accounts/${accountId}/mailboxes`;
   const canAdd = options !== null && options.remaining > 0 && (options.domains.length > 0 || options.platform.allowed);
-  const creating = canAdd && param(sp, "new") === "1" ? options : null;
+  // The "Add a shared address" panel stays open (with what it just created) once the account is full; it then says so.
+  const creating = options !== null && param(sp, "new") === "1" ? options : null;
+  const createUnavailable = canAdd
+    ? null
+    : options !== null && options.remaining <= 0
+      ? "This account now has all the mailboxes its plan includes."
+      : "Shared addresses need one of your own domains, or the plan's free address.";
   // The free platform address (ADR-0021): offered until the account has one, while the plan has room.
   const canClaim = options !== null && options.platform.used === 0 && options.platform.allowed;
   const claiming = canClaim && param(sp, "claim") === "1" ? options : null;
@@ -199,7 +205,7 @@ export default async function MailboxesPage({
                 , with its own storage and password. To add a person with their own sign-in, use Add a user instead.
               </p>
             </div>
-            <CreateMailboxForm accountId={accountId} options={creating} />
+            <CreateMailboxForm accountId={accountId} options={creating} unavailable={createUnavailable} />
           </div>
         </UrlFlyout>
       )}

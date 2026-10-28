@@ -30,7 +30,19 @@ type Options = {
  * to the webmail with (typed or generated, shown once). The panel stays open after
  * creating one, so several can be added in a row.
  */
-export function CreateMailboxForm({ accountId, options }: { accountId: string; options: Options }) {
+export function CreateMailboxForm({
+  accountId,
+  options,
+  unavailable = null,
+}: {
+  accountId: string;
+  options: Options;
+  /**
+   * Why no more can be added now (the last mailbox slot was just used): the form gives way to this, keeping the
+   * confirmation of the one just created.
+   */
+  unavailable?: string | null;
+}) {
   const router = useRouter();
   const choices = [
     ...options.domains.map((d) => ({ id: d.id, name: d.name, free: false })),
@@ -78,6 +90,20 @@ export function CreateMailboxForm({ accountId, options }: { accountId: string; o
     form.reset();
     setPassword("");
     router.refresh();
+  }
+
+  if (unavailable) {
+    return (
+      <div className="flex max-w-2xl flex-col gap-4">
+        {created && (
+          <p role="status" className="am-small rounded-lg border bg-muted/40 px-3 py-2.5">
+            Created <span className="am-code break-all text-foreground">{created}</span>. It&apos;s set up on the mail
+            server within a minute; after that, the webmail sign-in takes the password you set.
+          </p>
+        )}
+        <p className="am-body">{unavailable}</p>
+      </div>
+    );
   }
 
   return (
