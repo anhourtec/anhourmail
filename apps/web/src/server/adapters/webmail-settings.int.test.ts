@@ -69,7 +69,7 @@ function mailService() {
     store: new WebmailSessionStore(memoryKv(), createKeyRing([{ id: "t", key: randomBytes(32) }])),
     oauth: stalwartOAuthPort({ stalwartUrl: STALWART_URL, webmailUrl: WEBMAIL_URL }),
     stalwartUrl: STALWART_URL,
-    access: { allowed: async () => true },
+    access: { state: async () => "ok" as const },
     quota: memorySlidingQuota(),
     sieve: {
       read: (accountId) => stalwartDevAdmin().getSieveScript(accountId, MANAGED_SCRIPT),

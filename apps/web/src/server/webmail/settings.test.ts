@@ -150,7 +150,7 @@ async function setup() {
       refresh: async () => ({ accessToken: "at", refreshToken: "rt", expiresAt: Date.now() + 3_600_000 }),
     },
     stalwartUrl: "http://stalwart",
-    access: { allowed: async () => true },
+    access: { state: async () => "ok" as const },
     quota: memorySlidingQuota(),
     sieve: {
       read: async (accountId) => {

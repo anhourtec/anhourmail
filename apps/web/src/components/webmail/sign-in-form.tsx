@@ -3,8 +3,6 @@
 
 import { type SyntheticEvent, useState } from "react";
 
-import { SUPPORT_EMAIL } from "@anhourmail/shared/platform";
-
 import { useHydrated } from "@/components/use-hydrated";
 
 import { PasswordInput } from "@/components/password-input";
@@ -41,10 +39,12 @@ export function WebmailSignInForm({ home, domain }: { home: string; domain: stri
         window.location.assign(home);
         return;
       }
-      const code = ((await res.json().catch(() => null)) as { error?: { code?: string } } | null)?.error?.code;
+      const failure = ((await res.json().catch(() => null)) as { error?: { code?: string; message?: string } } | null)
+        ?.error;
+      // A blocked mailbox (suspended person or mailbox, being deleted, gone) carries its own explanation.
       setError(
-        code === "mailbox_unavailable"
-          ? `This mailbox is suspended, so it can't be used right now. Its mail is kept. If you think this is a mistake, ask your account's admin, or email ${SUPPORT_EMAIL} if Anhourtec suspended your account.`
+        failure?.code === "mailbox_unavailable" && failure.message
+          ? failure.message
           : (MESSAGES[res.status] ?? "Something went wrong. Try again."),
       );
     } catch {

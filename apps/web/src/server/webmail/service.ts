@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { createHash, randomBytes } from "node:crypto";
 
+import type { WebmailAccess, WebmailRefusal } from "@anhourmail/core/webmail";
 import { log } from "@anhourmail/server/log";
 import type { SlidingQuotaStore } from "@anhourmail/server/rate-limit";
 
@@ -79,11 +80,18 @@ export class WebmailUnavailableError extends Error {
   override readonly name = "WebmailUnavailableError";
 }
 /**
- * The mailbox is suspended, being deleted or gone from the control plane: the session is ended even though
- * Stalwart may still accept its tokens. → 401 with its own message
+ * The mailbox is suspended, being deleted or gone from the control plane, or the person it belongs to is suspended:
+ * the session is ended even though Stalwart may still accept its tokens. → 401 with a message for `reason`
  */
 export class WebmailBlockedError extends Error {
   override readonly name = "WebmailBlockedError";
+  constructor(
+    message: string,
+    /** Why (the mail server's own 403 on a suspended account is `suspended`). */
+    readonly reason: WebmailRefusal = "suspended",
+  ) {
+    super(message);
+  }
 }
 /** The mailbox's sending limit for now is used up (per hour / per day, by recipients). → 429 */
 export class WebmailQuotaError extends Error {
@@ -132,8 +140,8 @@ export type WebmailDeps = {
   oauth: OAuthPort;
   /** Stalwart's HTTP base URL (internal network). */
   stalwartUrl: string;
-  /** Control-plane gate: may this mailbox use the webmail now? (core `MailboxAccessGate`, cached ≤ 30 s) */
-  access: { allowed(address: string): Promise<boolean> };
+  /** Control-plane gate: may this mailbox use the webmail now, and if not why? (core `MailboxAccessGate`, ≤ 30 s) */
+  access: { state(address: string): Promise<WebmailAccess> };
   /** Sliding send quotas (Redis in the app). Failures refuse sending (fail closed). */
   quota: SlidingQuotaStore;
   fetch?: typeof fetch;
@@ -231,6 +239,23 @@ export class WebmailService {
     return this.#d.store;
   }
 
+  /** Throws `WebmailBlockedError` (with the reason) unless the control plane lets `address` use the webmail now. */
+  async #assertAllowed(address: string): Promise<void> {
+    const access = await this.#d.access.state(address);
+    if (access !== "ok") throw new WebmailBlockedError("mailbox unavailable", access);
+  }
+
+  /**
+   * Why a sign-in Stalwart refused may really be a blocked mailbox: the mail server disables a suspended account's
+   * sign-in, so its right password is refused like a wrong one. Only for callers that already know this browser signed
+   * in to `address` before (docs/internal/07-security.md "Webmail sign-in and suspension"): the control-plane reason,
+   * or null when the mailbox may be used (then the refusal really was the password).
+   */
+  async blockedReason(address: string): Promise<WebmailRefusal | null> {
+    const access = await this.#d.access.state(address);
+    return access === "ok" ? null : access;
+  }
+
   /** Exchanges a mailbox address and password for that mailbox's tokens (password used once, never kept). */
   async #authenticate(address: string, password: string): Promise<MailboxTokens> {
     let tokens: OAuthTokens;
@@ -254,7 +279,7 @@ export class WebmailService {
       throw new WebmailUnavailableError("mail account missing from session");
     }
     // Password proven; now the control plane decides (a suspended mailbox may still hold valid credentials).
-    if (!(await this.#d.access.allowed(s.username))) throw new WebmailBlockedError("mailbox unavailable");
+    await this.#assertAllowed(s.username);
     return {
       username: s.username,
       accountId,
@@ -339,7 +364,7 @@ export class WebmailService {
     if (current.username === username) return current;
     const target = (current.others ?? []).find((m) => m.username === username);
     if (!target) throw new WebmailRefusedError("That mailbox isn't signed in here.");
-    if (!(await this.#d.access.allowed(target.username))) {
+    if ((await this.#d.access.state(target.username)) !== "ok") {
       // That one is suspended or gone: drop it, keep the session on the current mailbox.
       await this.#update(sessionId, (cur) => ({
         ...cur,
@@ -383,10 +408,11 @@ export class WebmailService {
   async session(sessionId: string, opts: { forceRefresh?: boolean } = {}): Promise<WebmailSession | null> {
     const s = await this.#d.store.read(sessionId);
     if (!s) return null;
-    if (!(await this.#d.access.allowed(s.username))) {
+    const access = await this.#d.access.state(s.username);
+    if (access !== "ok") {
       this.#refreshing.delete(sessionId);
       await this.#d.store.destroy(sessionId);
-      throw new WebmailBlockedError("mailbox unavailable");
+      throw new WebmailBlockedError("mailbox unavailable", access);
     }
     if (!opts.forceRefresh && s.expiresAt - this.#d.now() > this.#d.refreshSkewMs) return s;
     const pending = this.#refreshing.get(sessionId);
@@ -848,7 +874,7 @@ export class WebmailService {
   ): Promise<Map<string, Record<string, unknown>>> {
     const t = (session.others ?? []).find((o) => o.accountId === account);
     if (!t) throw new WebmailRefusedError("That mailbox isn't signed in here any more.");
-    if (!(await this.#d.access.allowed(t.username))) throw new WebmailBlockedError("mailbox unavailable");
+    await this.#assertAllowed(t.username);
     let token = t.accessToken;
     if (t.expiresAt - this.#d.now() <= this.#d.refreshSkewMs && t.refreshToken) {
       try {

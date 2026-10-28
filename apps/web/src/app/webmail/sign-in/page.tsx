@@ -7,7 +7,7 @@ import { AuthSplit, LegalConsent } from "@/components/auth-split";
 import { WebmailSignInForm } from "@/components/webmail/sign-in-form";
 import { env } from "@/server/env";
 import { platform } from "@/server/platform";
-import { BLOCKED_HELP, BLOCKED_MESSAGE, NOTICE_COOKIE } from "@/server/webmail/http";
+import { blockedNoticeFor, NOTICE_COOKIE } from "@/server/webmail/http";
 import { webmail, webmailCookieName } from "@/server/webmail/instance";
 import { webmailBasePath } from "@/server/webmail/paths";
 
@@ -33,19 +33,21 @@ export default async function WebmailSignInPage({
   const id = jar.get(webmailCookieName())?.value;
   if (id && (await webmail().store.read(id))) redirect(base === "" ? "/" : base);
   const params = await searchParams;
-  const blocked = params.reason === "unavailable" || jar.get(NOTICE_COOKIE)?.value === "unavailable";
+  const notice =
+    blockedNoticeFor(typeof params.reason === "string" ? params.reason : undefined) ??
+    blockedNoticeFor(jar.get(NOTICE_COOKIE)?.value);
   return (
     <AuthSplit area="Webmail">
       <div className="flex flex-col gap-2">
         <h1 className="am-h1">Sign in to your mailbox</h1>
         <p className="am-small">Use your mailbox address and the mailbox password, not your console sign-in.</p>
       </div>
-      {blocked && (
+      {notice && (
         <p
           role="alert"
           className="am-small rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2.5 text-destructive"
         >
-          {BLOCKED_MESSAGE} {BLOCKED_HELP}
+          {notice}
         </p>
       )}
       <WebmailSignInForm home={base === "" ? "/" : base} domain={platform().freeAddressDomain} />

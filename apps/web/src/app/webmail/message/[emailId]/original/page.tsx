@@ -52,16 +52,16 @@ export default async function OriginalMessagePage({ params }: { params: Promise<
   const production = env().NODE_ENV === "production";
   const base = webmailBasePath(h.get("host"), production, process.env.WEBMAIL_DEV_PORT);
   const sessionId = (await cookies()).get(webmailCookieName())?.value;
-  // A suspended or deleted mailbox: the sign-in page says so.
+  // A suspended person or mailbox, or one being deleted or gone: the sign-in page says which.
   const session = sessionId
     ? await webmail()
         .session(sessionId)
         .catch((err: unknown) => {
-          if (err instanceof WebmailBlockedError) return "blocked" as const;
+          if (err instanceof WebmailBlockedError) return err;
           throw err;
         })
     : null;
-  if (session === "blocked") redirect(`${base}/sign-in?reason=unavailable`);
+  if (session instanceof WebmailBlockedError) redirect(`${base}/sign-in?reason=${session.reason}`);
   if (!session || !sessionId) redirect(`${base}/sign-in`);
   // The first-sign-in password change comes before any mail (the webmail page shows that step).
   if (await passwordChangeGate().required(session.username)) redirect(base === "" ? "/" : base);

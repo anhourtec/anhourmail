@@ -80,7 +80,7 @@ function service(autoSave = false) {
     store: new WebmailSessionStore(memoryKv(), createKeyRing([{ id: "t", key: randomBytes(32) }])),
     oauth: stalwartOAuthPort({ stalwartUrl: STALWART_URL, webmailUrl: WEBMAIL_URL }),
     stalwartUrl: STALWART_URL,
-    access: { allowed: async () => true },
+    access: { state: async () => "ok" as const },
     quota: memorySlidingQuota(),
     sieve: { read: async () => null, write: async () => undefined },
     confirmedForward: async () => null,

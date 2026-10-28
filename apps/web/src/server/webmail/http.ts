@@ -3,6 +3,7 @@ import "server-only";
 
 import { NextResponse } from "next/server";
 
+import type { WebmailRefusal } from "@anhourmail/core/webmail";
 import { SUPPORT_EMAIL } from "@anhourmail/shared/platform";
 
 import { webmailCookie } from "./instance";
@@ -16,12 +17,28 @@ import {
   WebmailUnavailableError,
 } from "./service";
 
-/** Why the sign-in page is shown again (a short-lived, HttpOnly hint; never a credential). */
+/** Why the sign-in page is shown again (a short-lived, HttpOnly hint naming a `WebmailRefusal`; never a credential). */
 export const NOTICE_COOKIE = "am.webmail_notice";
-export const BLOCKED_MESSAGE = "This mailbox is suspended, so it can't be used right now. Its mail is kept.";
 
-/** What to do about it: the account's admin, or Anhourtec support when Anhourtec suspended the account. */
-export const BLOCKED_HELP = `If you think this is a mistake, ask your account's admin, or email ${SUPPORT_EMAIL} if Anhourtec suspended your account.`;
+/**
+ * What a person is told when the control plane keeps a mailbox out of the webmail, and what to do about it. A staff
+ * suspension of the person is always Anhourtec's, so it names the appeal address; a suspended mailbox may be the
+ * account's own doing or Anhourtec's; a mailbox being deleted can still be restored by the account's admins.
+ */
+export const BLOCKED_NOTICES: Record<WebmailRefusal, string> = {
+  person_suspended: `Your AnhourMail sign-in is suspended, so this mailbox can't be used right now. Its mail is kept. If you think this is a mistake, email ${SUPPORT_EMAIL}.`,
+  suspended: `This mailbox is suspended, so it can't be used right now. Its mail is kept. If you think this is a mistake, ask your account's admin, or email ${SUPPORT_EMAIL} if Anhourtec suspended your account.`,
+  deleting:
+    "This mailbox is being deleted, so it can't be used. If it should be kept, ask your account's admin to restore it before the deletion completes.",
+  gone: "This mailbox no longer exists. If you think this is a mistake, ask your account's admin.",
+};
+
+/** The refusal named by a notice cookie or `?reason=` value (`unavailable` is the older name for `suspended`). */
+export function blockedNoticeFor(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  if (value === "unavailable") return BLOCKED_NOTICES.suspended;
+  return Object.hasOwn(BLOCKED_NOTICES, value) ? BLOCKED_NOTICES[value as WebmailRefusal] : null;
+}
 
 /** Maps webmail BFF errors to the `{ error: { code, message } }` envelope; null when `err` isn't one of ours. */
 export function webmailErrorResponse(err: unknown): Response | null {
@@ -33,9 +50,9 @@ export function webmailErrorResponse(err: unknown): Response | null {
     return res;
   }
   if (err instanceof WebmailBlockedError) {
-    const res = body("mailbox_unavailable", BLOCKED_MESSAGE, 401);
+    const res = body("mailbox_unavailable", BLOCKED_NOTICES[err.reason], 401);
     res.headers.append("Set-Cookie", webmailCookie("", 0));
-    res.headers.append("Set-Cookie", `${NOTICE_COOKIE}=unavailable; Path=/; HttpOnly; SameSite=Lax; Max-Age=60`);
+    res.headers.append("Set-Cookie", `${NOTICE_COOKIE}=${err.reason}; Path=/; HttpOnly; SameSite=Lax; Max-Age=60`);
     return res;
   }
   if (err instanceof WebmailRefusedError) return body("refused", err.message, 400);

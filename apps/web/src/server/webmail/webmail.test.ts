@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { WebmailAccess } from "@anhourmail/core/webmail";
 import { createKeyRing } from "@anhourmail/server/keyring";
 import { memorySlidingQuota } from "@anhourmail/server/rate-limit";
 import { setLogSinkForTests } from "@anhourmail/server/log";
@@ -380,7 +381,14 @@ describe("message view", () => {
 
 type Upstream = (url: string, init: RequestInit) => Response | Promise<Response>;
 
-function setup(opts: { upstream?: Upstream; allowed?: (a: string) => boolean; oauth?: Partial<OAuthPort> } = {}) {
+function setup(
+  opts: {
+    upstream?: Upstream;
+    allowed?: (a: string) => boolean;
+    state?: (a: string) => WebmailAccess;
+    oauth?: Partial<OAuthPort>;
+  } = {},
+) {
   let now = 1_000_000;
   const kv = memoryKv(() => now);
   const store = new WebmailSessionStore(kv, ring(), { now: () => now });
@@ -417,7 +425,7 @@ function setup(opts: { upstream?: Upstream; allowed?: (a: string) => boolean; oa
     store,
     oauth,
     stalwartUrl: "http://stalwart:8080/",
-    access: { allowed: async (a) => allowed(a) },
+    access: { state: async (a) => opts.state?.(a) ?? (allowed(a) ? "ok" : "suspended") },
     quota: memorySlidingQuota(),
     sieve: { read: async () => null, write: async () => undefined },
     confirmedForward: async () => null,
@@ -512,6 +520,25 @@ describe("WebmailService", () => {
   it("refuses a suspended or deleted mailbox at sign-in, even with the right password", async () => {
     const t = setup({ allowed: () => false });
     await expect(t.svc.signIn("a@x.test", "right")).rejects.toBeInstanceOf(WebmailBlockedError);
+    expect(t.kv.size()).toBe(0);
+  });
+
+  it("refuses a mailbox whose person staff suspended, saying why, and reports reasons for refused sign-ins", async () => {
+    let state: WebmailAccess = "person_suspended";
+    const t = setup({ state: () => state });
+    const err: unknown = await t.svc.signIn("a@x.test", "right").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(WebmailBlockedError);
+    expect((err as WebmailBlockedError).reason).toBe("person_suspended");
+    expect(t.kv.size()).toBe(0);
+    expect(await t.svc.blockedReason("a@x.test")).toBe("person_suspended");
+    state = "deleting";
+    expect(await t.svc.blockedReason("a@x.test")).toBe("deleting");
+    state = "ok";
+    expect(await t.svc.blockedReason("a@x.test")).toBeNull();
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    state = "person_suspended";
+    const ended: unknown = await t.svc.jmap(sessionId, body).catch((e: unknown) => e);
+    expect((ended as WebmailBlockedError).reason).toBe("person_suspended");
     expect(t.kv.size()).toBe(0);
   });
 

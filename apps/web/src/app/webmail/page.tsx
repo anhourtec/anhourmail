@@ -30,14 +30,15 @@ export default async function WebmailPage() {
   const jar = await cookies();
   const id = jar.get(webmailCookieName())?.value;
   let session = null;
-  let blocked = false;
+  let blocked: string | null = null;
   try {
     session = id ? await webmail().session(id) : null;
   } catch (err) {
-    // A suspended or deleted mailbox: the sign-in page says so. A mail-server outage: sign in again later.
-    blocked = err instanceof WebmailBlockedError;
+    // A suspended person or mailbox, or one being deleted or gone: the sign-in page says which. A mail-server
+    // outage: sign in again later.
+    if (err instanceof WebmailBlockedError) blocked = err.reason;
   }
-  if (!session) redirect(`${base}/sign-in${blocked ? "?reason=unavailable" : ""}`);
+  if (!session) redirect(`${base}/sign-in${blocked ? `?reason=${blocked}` : ""}`);
   // Display preferences only (no mail): read here so the first paint already has the chosen layout.
   const [preferences, mailbox] = await Promise.all([
     settingsService()

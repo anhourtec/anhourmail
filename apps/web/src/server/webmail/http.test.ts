@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   ACCOUNT_HEADER,
+  BLOCKED_NOTICES,
+  blockedNoticeFor,
   BodyTooLargeError,
   MAX_UPLOADS,
   noAccount,
@@ -55,5 +57,18 @@ describe("the account a contacts change is for", () => {
     const res = noAccount();
     expect(res.status).toBe(400);
     expect(await res.json()).toMatchObject({ error: { message: "Reload the page and try again." } });
+  });
+});
+
+describe("why a mailbox can't use the webmail", () => {
+  it("maps a notice cookie or reason to its message, refusing anything else", () => {
+    expect(blockedNoticeFor("person_suspended")).toBe(BLOCKED_NOTICES.person_suspended);
+    expect(blockedNoticeFor("deleting")).toBe(BLOCKED_NOTICES.deleting);
+    expect(blockedNoticeFor("gone")).toBe(BLOCKED_NOTICES.gone);
+    // The older notice value still means a suspended mailbox.
+    expect(blockedNoticeFor("unavailable")).toBe(BLOCKED_NOTICES.suspended);
+    expect(blockedNoticeFor(undefined)).toBeNull();
+    expect(blockedNoticeFor("toString")).toBeNull();
+    expect(blockedNoticeFor("<b>")).toBeNull();
   });
 });

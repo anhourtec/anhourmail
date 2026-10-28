@@ -77,6 +77,13 @@ export function webmailFailures(): FailureStore {
   return failureStore;
 }
 
+let accessGate: MailboxAccessGate | null = null;
+/** Whether a mailbox may use the webmail now (control plane, cached ≤ 30 s); shared by the BFF and `route()`. */
+export function mailboxAccessGate(): MailboxAccessGate {
+  accessGate ??= new MailboxAccessGate(pgMailboxStatusLookup(db()));
+  return accessGate;
+}
+
 let instance: WebmailService | null = null;
 
 /** The webmail BFF service (lazy, one per server process; rebuilt when this module reloads in dev). */
@@ -99,7 +106,7 @@ export function webmail(): WebmailService {
         fallbackIp: e.NODE_ENV === "production" ? null : "127.0.0.1",
       }),
       stalwartUrl,
-      access: new MailboxAccessGate(pgMailboxStatusLookup(db())),
+      access: mailboxAccessGate(),
       quota: redisSlidingQuota(redis()),
       // The undo-send hold each mailbox chose in its settings.
       holdSeconds: async (address) => (await settingsService().preferences(address)).undoSeconds,
