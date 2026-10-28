@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 
-import { sanitizeOutgoingHtml } from "@/server/webmail/outgoing-html";
+import { outgoingText, sanitizeOutgoingHtml } from "@/server/webmail/outgoing-html";
+import { sanitizeMessageHtml } from "@/server/webmail/sanitize";
 
 import {
   escapeHtml,
@@ -45,7 +46,15 @@ describe("rich-text helpers", () => {
     expect(q).toContain("Sam &lt;boss&gt; &lt;sam@x.test&gt; wrote:");
     expect(q).toContain("<blockquote");
     expect(q).toContain("<p>Rich <b>original</b></p>");
-    expect(sanitizeOutgoingHtml(q).html).toContain("<blockquote style=");
+    expect(sanitizeOutgoingHtml(q).html).toContain('<blockquote type="cite" style=');
+  });
+
+  it('sends a quote that readers fold and a text part with "> " lines', () => {
+    const sent = sanitizeOutgoingHtml(`<div>Sounds good</div>${quoteHtml(msg, "reply")}`).html;
+    // Our reading view (and other mail apps) fold `blockquote type=cite`.
+    expect(sanitizeMessageHtml(sent).html).toMatch(/<details[^>]*data-am-quote="1"/);
+    const text = outgoingText(sent);
+    expect(text).toMatch(/^Sounds good\n\nOn .+, Sam <boss> <sam@x\.test> wrote:\n> Rich original$/);
   });
 
   it("quotes the text when there is no HTML or it is too long", () => {

@@ -74,7 +74,7 @@ export function quoteHtml(
     ].join("<br>");
     return `<div><br></div><div>${head}</div><br><div>${original}</div>`;
   }
-  return `<div><br></div><div>On ${escapeHtml(fullDate(msg.receivedAt))}, ${who(msg.from)} wrote:</div><blockquote style="${QUOTE_STYLE}">${original}</blockquote>`;
+  return `<div><br></div><div>On ${escapeHtml(fullDate(msg.receivedAt))}, ${who(msg.from)} wrote:</div><blockquote type="cite" style="${QUOTE_STYLE}">${original}</blockquote>`;
 }
 
 /**
