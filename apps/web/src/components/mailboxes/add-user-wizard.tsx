@@ -90,6 +90,7 @@ export function AddUserWizard({
   const [pending, setPending] = useState(false);
   const [added, setAdded] = useState<Added | null>(null);
   const [stepUp, setStepUp] = useState(false);
+  const uid = useId();
 
   const domain = options.domains.find((d) => d.id === domainId);
   const address = existing ? existing.address : `${localPart.trim().toLowerCase()}@${domain?.name ?? ""}`;
@@ -239,11 +240,23 @@ export function AddUserWizard({
 
   const fieldError = (k: string) =>
     errors[k] ? (
-      <span id={`err-${k}`} className="am-micro text-destructive">
+      <span id={`${uid}-err-${k}`} className="am-micro text-destructive">
         {errors[k]}
       </span>
     ) : null;
-  const describedBy = (k: string) => (errors[k] ? { "aria-describedby": `err-${k}`, "aria-invalid": true } : {});
+  /**
+   * The input's id (its `Field` label points at it) and its description: the field's hint and note, then its error.
+   * The label stays the accessible name on its own ("Last name", never "Last nameOptional").
+   */
+  const describedBy = (k: string, extra: string[] = []) => {
+    const ids = [...(FIELD_HINTS[k] ? [`${uid}-hint-${k}`] : []), ...extra, ...(errors[k] ? [`${uid}-err-${k}`] : [])];
+    return {
+      id: `${uid}-f-${k}`,
+      ...(ids.length > 0 ? { "aria-describedby": ids.join(" ") } : {}),
+      ...(errors[k] ? { "aria-invalid": true } : {}),
+    };
+  };
+  const field = (k: string) => ({ uid, name: k, hint: FIELD_HINTS[k], error: fieldError(k) });
 
   return (
     <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:gap-10">
@@ -297,7 +310,7 @@ export function AddUserWizard({
         {step === "basics" && (
           <Section title="Basics" lead="Who this user is, their address and how they first sign in.">
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="First name" error={fieldError("firstName")}>
+              <Field label="First name" {...field("firstName")}>
                 <input
                   value={firstName}
                   onChange={(e) => {
@@ -310,7 +323,7 @@ export function AddUserWizard({
                   {...describedBy("firstName")}
                 />
               </Field>
-              <Field label="Last name" hint="Optional" error={fieldError("lastName")}>
+              <Field label="Last name" {...field("lastName")}>
                 <input
                   value={lastName}
                   onChange={(e) => {
@@ -324,11 +337,7 @@ export function AddUserWizard({
                 />
               </Field>
             </div>
-            <Field
-              label="Display name"
-              hint="The name people see on mail from this user."
-              error={fieldError("displayName")}
-            >
+            <Field label="Display name" {...field("displayName")}>
               <input
                 value={displayName}
                 onChange={(e) => {
@@ -354,7 +363,7 @@ export function AddUserWizard({
               </div>
             ) : (
               <>
-                <Field label="Username" hint="Also their sign-in address." error={fieldError("localPart")}>
+                <Field label="Username" {...field("localPart")}>
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                     <input
                       value={localPart}
@@ -365,7 +374,6 @@ export function AddUserWizard({
                       autoComplete="off"
                       autoCapitalize="none"
                       spellCheck={false}
-                      aria-label="Username"
                       className={`${inputClass} font-mono sm:max-w-56`}
                       {...describedBy("localPart")}
                     />
@@ -378,6 +386,7 @@ export function AddUserWizard({
                         setDomainId(e.target.value);
                       }}
                       aria-label="Domain"
+                      {...(errors.localPart ? { "aria-describedby": `${uid}-err-localPart` } : {})}
                       className={`${inputClass} font-mono sm:max-w-64`}
                     >
                       {options.domains.map((d) => (
@@ -388,7 +397,7 @@ export function AddUserWizard({
                     </select>
                   </div>
                 </Field>
-                <Field label="Storage (GB)" error={fieldError("quotaGb")}>
+                <Field label="Storage (GB)" {...field("quotaGb")}>
                   <input
                     type="number"
                     inputMode="numeric"
@@ -399,9 +408,9 @@ export function AddUserWizard({
                       setQuotaGb(e.target.value);
                     }}
                     className={`${inputClass} am-num sm:max-w-40`}
-                    {...describedBy("quotaGb")}
+                    {...describedBy("quotaGb", [`${uid}-note-quotaGb`])}
                   />
-                  <span className="am-micro">
+                  <span id={`${uid}-note-quotaGb`} className="am-micro">
                     <span className="am-num">{options.maxQuotaGb} GB</span> unassigned. The default is an even share.
                   </span>
                 </Field>
@@ -591,26 +600,44 @@ function Section({ title, lead, children }: { title: string; lead: string; child
   );
 }
 
+/** Hints shown beside a field's label; read as the input's description, never as part of its name. */
+const FIELD_HINTS: Partial<Record<string, string>> = {
+  lastName: "Optional",
+  displayName: "The name people see on mail from this user.",
+  localPart: "Also their sign-in address.",
+};
+
+/** A labelled field: the label names the input (`describedBy` gives it the matching id), the hint describes it. */
 function Field({
+  uid,
+  name,
   label,
   hint,
   error,
   children,
 }: {
+  uid: string;
+  name: string;
   label: string;
-  hint?: string;
+  hint: string | undefined;
   error: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <label className="flex flex-col gap-1.5">
-      <span className="am-h4">
-        {label}
-        {hint && <span className="am-micro ml-2 font-normal">{hint}</span>}
+    <div className="flex flex-col gap-1.5">
+      <span>
+        <label htmlFor={`${uid}-f-${name}`} className="am-h4">
+          {label}
+        </label>
+        {hint && (
+          <span id={`${uid}-hint-${name}`} className="am-micro ml-2">
+            {hint}
+          </span>
+        )}
       </span>
       {children}
       {error}
-    </label>
+    </div>
   );
 }
 
@@ -625,21 +652,28 @@ function Toggle({
   label: string;
   hint: string;
 }) {
+  const id = useId();
   return (
-    <label className="flex items-start gap-3">
+    <div className="flex items-start gap-3">
       <input
+        id={id}
         type="checkbox"
         checked={checked}
         onChange={(e) => {
           onChange(e.target.checked);
         }}
+        aria-describedby={`${id}-hint`}
         className="mt-1 size-4 accent-primary"
       />
       <span className="flex flex-col gap-0.5">
-        <span className="am-body text-foreground">{label}</span>
-        <span className="am-micro">{hint}</span>
+        <label htmlFor={id} className="am-body text-foreground">
+          {label}
+        </label>
+        <span id={`${id}-hint`} className="am-micro">
+          {hint}
+        </span>
       </span>
-    </label>
+    </div>
   );
 }
 
