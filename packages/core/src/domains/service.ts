@@ -8,8 +8,9 @@ import { type Actor, authorize } from "../actor";
 import { ConflictError, NotFoundError, PlanLimitError } from "../errors";
 import { authorizeAudited, mutation } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
-import { type CheckedRecord, checkRecords, type DnsResolver, requiredPass } from "./dns";
+import { type CheckedRecord, checkRecords, claimStillHeld, type DnsResolver, requiredPass } from "./dns";
 import { type CustomerDomain, type DomainStatus, normaliseDomain } from "./entity";
+import { releasePendingDomain } from "./expiry";
 
 /** What the console and API show. Internal provisioning details (mail-server ids, errors) stay server-side. */
 export type DomainView = {
@@ -106,7 +107,19 @@ export async function addDomain(
   );
 }
 
-export type CheckResult = { domain: DomainView; records: CheckedRecord[]; activated: boolean };
+/**
+ * Another account's claim on the name, as the checking account sees it once its own ownership and MX records are
+ * found: `held` (verified there, or pending on the mail server with its ownership record still published) or
+ * `releasing` (being taken off the mail server; the next check can go ahead). Null: no other claim holds it.
+ */
+export type HeldElsewhere = "held" | "releasing" | null;
+
+export type CheckResult = {
+  domain: DomainView;
+  records: CheckedRecord[];
+  activated: boolean;
+  heldElsewhere: HeldElsewhere;
+};
 
 const found = (records: readonly CheckedRecord[], purpose: CheckedRecord["purpose"]) =>
   records.some((r) => r.purpose === purpose && r.state === "ok");
@@ -124,8 +137,34 @@ function needsDkimKeys(d: CustomerDomain, records: readonly CheckedRecord[]): bo
 }
 
 /**
+ * Once this domain's ownership and MX records are found: does another account's claim hold the name? A pending claim
+ * on the mail server whose own ownership record is no longer published has lost the name: it is released (the system,
+ * audited in that account as `domain.released`), so an abandoned claim can't block the real owner, or keep the name's
+ * mail inside the mail server, for good. A failed lookup releases nothing. Nothing about the other account is returned.
+ */
+async function settleOtherClaim(deps: Deps, dns: DnsResolver, d: CustomerDomain): Promise<HeldElsewhere> {
+  const other = await deps.uow.run((r) => r.domains.otherClaim(d.name, d.id));
+  if (other === null) return null;
+  if (other.status === "removing") return "releasing";
+  if (other.status !== "pending_dns") return "held";
+  const theirs = await claimStillHeld(dns, other.name, other.verifyToken, deps.platform, ["ownership"]);
+  if (theirs !== "gone") return "held";
+  try {
+    await releasePendingDomain(deps, other, {
+      action: "domain.released",
+      reason: "ownership_proven_elsewhere",
+      by: "domain-claims",
+    });
+    return "releasing";
+  } catch {
+    return "held"; // it changed meanwhile (verified, or released already): the next check sees where it stands
+  }
+}
+
+/**
  * Checks every record live. When all required records pass on a pending domain, it becomes active and the
- * worker adds it to the mail server. Lookups run before the unit of work (no transaction held over DNS).
+ * worker adds it to the mail server. Lookups run before the unit of work (no transaction held over DNS). While another
+ * account's claim holds the name (`settleOtherClaim`), nothing is queued for this one: its result says so instead.
  */
 export async function checkDomain(
   deps: Deps,
@@ -141,8 +180,11 @@ export async function checkDomain(
   const records = await checkRecords(dns, before.name, before.verifyToken, deps.platform, before.dkimKeys);
   const pass = requiredPass(records);
   const failing = records.filter((r) => r.required && r.state !== "ok").map((r) => r.purpose);
-  // The DKIM keys come from the mail server: the worker adds the domain there (or re-reads it) and caches them.
-  const prepare = needsDkimKeys(before, records);
+  const proven = before.status === "pending_dns" && found(records, "ownership") && found(records, "inbound");
+  const heldElsewhere = proven ? await settleOtherClaim(deps, dns, before) : null;
+  // The DKIM keys come from the mail server: the worker adds the domain there (or re-reads it) and caches them. Never
+  // while another claim holds the name there: the job could only fail, again and again.
+  const prepare = heldElsewhere === null && needsDkimKeys(before, records);
   const enqueueEnsure = (repos: Repositories) =>
     repos.provisioning.enqueue({ kind: "domain.ensure", subjectId: before.id, runAfter: deps.clock.now() });
 
@@ -151,12 +193,16 @@ export async function checkDomain(
     if (before.status === "pending_dns" && actor.kind === "user") {
       await mutation(deps, actor, req, { ...spec, action: "domain.verify_failed" }, async (repos) => {
         if (prepare) await enqueueEnsure(repos);
-        return { result: null, target: { id: before.id, label: before.name }, meta: { failing } };
+        return {
+          result: null,
+          target: { id: before.id, label: before.name },
+          meta: { failing, ...(heldElsewhere ? { heldElsewhere } : {}) },
+        };
       });
     } else if (prepare) {
       await deps.uow.run(enqueueEnsure);
     }
-    return { domain: view(before), records, activated: false };
+    return { domain: view(before), records, activated: false, heldElsewhere };
   }
 
   const activated = await mutation(deps, actor, req, { ...spec, action: "domain.verified" }, async (repos) => {
@@ -169,7 +215,7 @@ export async function checkDomain(
     return { result: changed, target: { id: before.id, label: before.name } };
   });
   const after = await deps.uow.run((r) => scoped(r, accountId, id));
-  return { domain: view(after), records, activated };
+  return { domain: view(after), records, activated, heldElsewhere };
 }
 
 /**

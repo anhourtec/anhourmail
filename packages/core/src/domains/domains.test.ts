@@ -289,6 +289,111 @@ describe("DKIM keys from the mail server", () => {
   });
 });
 
+describe("another account's claim on the name", () => {
+  /** A has the name pending on the mail server; B has added it too and published its own records. */
+  async function contested() {
+    const d = setup();
+    d.uow.state.accounts.find((a) => a.id === ACCOUNT_B)!.plan = "plus";
+    const z = zone();
+    const stale = await addDomain(d, owner, ACCOUNT_A, { name: "held.example.ca" }, req);
+    onMailServer(d, stale.id);
+    const mine = await addDomain(d, ownerB, ACCOUNT_B, { name: "held.example.ca" }, req);
+    const token = (id: string) => d.uow.state.domains.find((x) => x.id === id)!.verifyToken;
+    const ownership = customerDomainRecords("held.example.ca", "t", TEST_PLATFORM).find(
+      (r) => r.purpose === "ownership",
+    )!;
+    const txt = `${ownership.name}.held.example.ca`;
+    const publishOwnership = (...ids: string[]) => {
+      z.publish("TXT", txt, ...ids.map((id) => `anhourmail-verify=${token(id)}`));
+    };
+    // B's records: everything but its DKIM keys, which only the mail server can make.
+    for (const r of customerDomainRecords("held.example.ca", token(mine.id), TEST_PLATFORM)) {
+      if (r.placeholder || !r.required || r.purpose === "ownership") continue;
+      z.publish(
+        r.type,
+        r.name === "@" ? "held.example.ca" : `${r.name}.held.example.ca`,
+        r.type === "MX" ? `${String(r.priority)} ${r.value}` : r.value,
+      );
+    }
+    d.uow.state.jobs = [];
+    return { d, z, stale, mine, publishOwnership };
+  }
+
+  it("leaves a claim whose ownership record is still published alone, and queues nothing for the newcomer", async () => {
+    const { d, z, stale, mine, publishOwnership } = await contested();
+    publishOwnership(stale.id, mine.id);
+    const out = await checkDomain(d, z, ownerB, ACCOUNT_B, mine.id, req);
+    expect(out).toMatchObject({ activated: false, heldElsewhere: "held" });
+    expect(d.uow.state.jobs).toEqual([]);
+    expect(d.uow.state.domains.find((x) => x.id === stale.id)?.status).toBe("pending_dns");
+    expect(d.uow.state.audit.at(-1)).toMatchObject({
+      scope: `account:${ACCOUNT_B}`,
+      action: "domain.verify_failed",
+      meta: { heldElsewhere: "held" },
+    });
+    // Nothing about the other account reaches the newcomer.
+    expect(JSON.stringify(out)).not.toContain(ACCOUNT_A);
+  });
+
+  it("releases a pending claim on the mail server whose ownership record is gone, audited in its own account", async () => {
+    const { d, z, stale, mine, publishOwnership } = await contested();
+    publishOwnership(mine.id);
+    const out = await checkDomain(d, z, ownerB, ACCOUNT_B, mine.id, req);
+    expect(out).toMatchObject({ activated: false, heldElsewhere: "releasing" });
+    expect(d.uow.state.domains.find((x) => x.id === stale.id)?.status).toBe("removing");
+    expect(d.uow.state.jobs).toEqual([expect.objectContaining({ kind: "domain.remove", subjectId: stale.id })]);
+    const released = d.uow.state.audit.find((e) => e.action === "domain.released");
+    expect(released).toMatchObject({
+      scope: `account:${ACCOUNT_A}`,
+      result: "success",
+      actor: { type: "system" },
+      target: { id: stale.id, label: "held.example.ca" },
+      meta: { reason: "ownership_proven_elsewhere", onMailServer: true },
+    });
+    // Account A's admins never see who proved it.
+    expect(JSON.stringify(released)).not.toContain(ACCOUNT_B);
+    expect(JSON.stringify(released)).not.toContain("owner-b");
+
+    // While it is being taken off, checks wait without releasing again or queueing anything.
+    await checkDomain(d, z, ownerB, ACCOUNT_B, mine.id, req);
+    expect(d.uow.state.jobs).toHaveLength(1);
+    expect(d.uow.state.audit.filter((e) => e.action === "domain.released")).toHaveLength(1);
+
+    // Once the worker has removed it, the newcomer's check goes ahead.
+    d.uow.state.domains = d.uow.state.domains.filter((x) => x.id !== stale.id);
+    const next = await checkDomain(d, z, ownerB, ACCOUNT_B, mine.id, req);
+    expect(next.heldElsewhere).toBeNull();
+    expect(d.uow.state.jobs.at(-1)).toMatchObject({ kind: "domain.ensure", subjectId: mine.id });
+  });
+
+  it("re-checks the other claim only once this account's own ownership and MX records are found", async () => {
+    const { d, z, stale, mine, publishOwnership } = await contested();
+    publishOwnership(stale.id); // only the other account's token: this one hasn't proved anything
+    const out = await checkDomain(d, z, ownerB, ACCOUNT_B, mine.id, req);
+    expect(out.heldElsewhere).toBeNull();
+    expect(d.uow.state.domains.find((x) => x.id === stale.id)?.status).toBe("pending_dns");
+    expect(d.uow.state.jobs).toEqual([]);
+  });
+
+  it("reports a verified claim as holding the name and queues nothing", async () => {
+    const { d, z, stale, mine, publishOwnership } = await contested();
+    d.uow.state.domains.find((x) => x.id === stale.id)!.status = "active";
+    publishOwnership(mine.id);
+    const out = await checkDomain(d, z, ownerB, ACCOUNT_B, mine.id, req);
+    expect(out.heldElsewhere).toBe("held");
+    expect(d.uow.state.domains.find((x) => x.id === stale.id)?.status).toBe("active");
+    expect(d.uow.state.jobs).toEqual([]);
+  });
+
+  it("the scheduler's re-check releases a stale claim too", async () => {
+    const { d, z, stale, mine, publishOwnership } = await contested();
+    publishOwnership(mine.id);
+    await recheckPendingDomains(d, z);
+    expect(d.uow.state.domains.find((x) => x.id === stale.id)?.status).toBe("removing");
+    expect(d.uow.state.jobs.filter((j) => j.subjectId === mine.id)).toEqual([]);
+  });
+});
+
 describe("domains service", () => {
   it("adds a domain (audited) and shows it with its records to readers", async () => {
     const d = setup();
