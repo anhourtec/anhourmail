@@ -6,6 +6,7 @@ import { sanitizeMessageHtml } from "@/server/webmail/sanitize";
 
 import {
   escapeHtml,
+  hasFormatting,
   linkUrl,
   MAX_QUOTE_HTML,
   quoteHtml,
@@ -110,5 +111,14 @@ describe("rich-text helpers", () => {
       "Other elements, text kept (x-bar)",
       "Other attributes (class)",
     ]);
+  });
+
+  it("knows when switching to plain text would lose formatting", () => {
+    expect(hasFormatting("<div>Hi</div><div><br /></div><p>there</p>")).toBe(false);
+    expect(hasFormatting("")).toBe(false);
+    expect(hasFormatting("<div>Hi <b>you</b></div>")).toBe(true);
+    expect(hasFormatting('<a href="https://x.test">x</a>')).toBe(true);
+    expect(hasFormatting('<blockquote type="cite">q</blockquote>')).toBe(true);
+    expect(hasFormatting("<ul><li>a</li></ul>")).toBe(true);
   });
 });

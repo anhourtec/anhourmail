@@ -10,9 +10,10 @@ import type { Address } from "@/server/webmail/view";
 import { Tooltip } from "@/components/tooltip";
 
 import { displayName, fileSize } from "./format";
+import { ConfirmDialog } from "./dialogs";
 import { parkRemoteImages, unparkRemoteImages } from "./remote-images";
 import { loadOutgoing, type Outgoing, RichEditor, useOutgoing } from "./rich-editor";
-import { SIGNATURE_ATTR, signatureHtml, signatureInner, textToHtml } from "./rich-text";
+import { hasFormatting, SIGNATURE_ATTR, signatureHtml, signatureInner, textToHtml } from "./rich-text";
 import {
   type Attachment,
   type DraftPayload,
@@ -345,6 +346,8 @@ export function Composer({
   );
   /** The editor's HTML as it will be sent (remote images put back), before sanitising. */
   const editorHtml = () => unparkRemoteImages(editor.current?.innerHTML ?? "");
+  /** Asking before rich text becomes plain text (its formatting is dropped). */
+  const [confirmPlain, setConfirmPlain] = useState(false);
   /** The signature text the editor holds; null until the editor has been filled. */
   const appliedSig = useRef<string | undefined | null>(null);
   const richReady = format === "rich" && initialHtml !== null;
@@ -368,8 +371,13 @@ export function Composer({
     setRichVersion((v) => v + 1);
   }, [richReady, identityId, identities, richSource]);
 
-  const switchFormat = (next: ComposeFormat) => {
+  const switchFormat = (next: ComposeFormat, confirmed = false) => {
     if (next === format) return;
+    if (next === "plain" && !confirmed && outgoing && hasFormatting(outgoing.sanitizeOutgoingHtml(editorHtml()).html)) {
+      // Nothing changes until the person agrees; Cancel leaves the rich text as it is.
+      setConfirmPlain(true);
+      return;
+    }
     if (next === "plain") {
       const raw = editorHtml();
       setText(
@@ -822,6 +830,19 @@ export function Composer({
           </button>
         </Tooltip>
       </footer>
+      {confirmPlain && (
+        <ConfirmDialog
+          title="Switch to plain text?"
+          body="Switching to plain text removes formatting such as bold, links, lists and images. Your text is kept."
+          confirm="Switch to plain text"
+          onConfirm={() => {
+            switchFormat("plain", true);
+          }}
+          onClose={() => {
+            setConfirmPlain(false);
+          }}
+        />
+      )}
     </section>
   );
 }
