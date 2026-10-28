@@ -348,7 +348,7 @@ export function AddUserWizard({
                 <span className="am-micro">
                   They sign in to the webmail and the console with this mailbox. When you finish, it gets a new
                   password, shown to you once, and they choose their own at first sign-in. The current password stops
-                  working.
+                  working. Until they change it, the new password also works in mail apps.
                 </span>
               </div>
             ) : (
@@ -420,7 +420,7 @@ export function AddUserWizard({
                   checked={requireChange}
                   onChange={setRequireChange}
                   label="Require this user to change their password when they first sign in"
-                  hint="In the webmail and the console, before anything else."
+                  hint="In the webmail and the console, before anything else. Until they change it, the password also works in mail apps."
                 />
               </>
             )}
