@@ -5,7 +5,7 @@
  * once the worker has added the domain to the mail server (after ownership and MX pass), so verifying takes a check,
  * the worker, and a second check, as for a customer.
  */
-import { e2eUsers, expect, openNav, panel, panelReady, signIn, test, urls } from "./fixtures";
+import { e2eUsers, expect, openNav, panel, panelReady, recordStatus, signIn, test, urls } from "./fixtures";
 
 test("an owner adds a domain, verifies it, sees it set up, then removes it", async ({ page }, testInfo) => {
   const u = e2eUsers();
@@ -25,7 +25,7 @@ test("an owner adds a domain, verifies it, sees it set up, then removes it", asy
   await expect(details.getByRole("tab", { name: "DNS records" })).toHaveAttribute("aria-selected", "true");
   const required = details.getByRole("region", { name: "Required records" });
   // Ownership, MX and SPF are found; the DKIM keys don't exist yet.
-  await expect(required.getByText("Found")).toHaveCount(3);
+  await expect(required.getByText("Found", { exact: true })).toHaveCount(3);
   await expect(required.getByText("Not ready yet")).toBeVisible();
 
   await details.getByRole("button", { name: "Check now" }).click();
@@ -33,10 +33,7 @@ test("an owner adds a domain, verifies it, sees it set up, then removes it", asy
   // The worker adds the domain to the mail server and caches its two keys (Ed25519 and RSA), shown as TXT records.
   await expect(async () => {
     await page.reload();
-    await expect(panel(page, name).getByRole("region", { name: "Required records" }).getByText("Found")).toHaveCount(
-      5,
-      { timeout: 2000 },
-    );
+    await expect(recordStatus(page, name, "Found")).toHaveCount(5, { timeout: 2000 });
   }).toPass({ timeout: 30_000, intervals: [2000, 3000, 5000] });
   await expect(details.getByRole("button", { name: /^Copy DKIM value for v1-rsa-\d{8}\._domainkey$/ })).toBeVisible();
 
@@ -69,7 +66,7 @@ test("a domain without its DNS records stays waiting and says what's missing", a
   const details = panel(page, name);
   await expect(details.getByRole("heading", { name, level: 2 })).toBeVisible();
   const required = details.getByRole("region", { name: "Required records" });
-  await expect(required.getByText("Missing")).toHaveCount(3);
+  await expect(required.getByText("Missing", { exact: true })).toHaveCount(3);
   await expect(required.getByText("Not ready yet")).toBeVisible();
 
   await details.getByRole("button", { name: "Check now" }).click();

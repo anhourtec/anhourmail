@@ -84,6 +84,31 @@ export async function panelReady(page: Page, name: string | RegExp) {
   await expect(panel(page, name).locator(":focus")).toHaveCount(1);
 }
 
+/** A domain record's status cell ("Found", "Missing"), matched exactly (not "Found instead: …"). */
+export const recordStatus = (page: Page, domain: string, status: string) =>
+  panel(page, domain).getByRole("region", { name: "Required records" }).getByText(status, { exact: true });
+
+/**
+ * Verifies a just-added domain from its open details panel, as a customer would: a check (ownership and MX pass, so
+ * the worker adds it to the mail server and creates its DKIM keys), wait for the five records to be found, then a
+ * second check. Development DNS answers for `.test` names as if every record were published.
+ */
+export async function verifyDomain(page: Page, domain: string) {
+  await panel(page, domain).getByRole("button", { name: "Check now" }).click();
+  const answer = panel(page, domain)
+    .getByRole("status")
+    .filter({ hasText: /Verified\.|Your DKIM keys are being created/ });
+  await expect(answer).toBeVisible();
+  if ((await answer.textContent())?.includes("Verified.")) return;
+  await expect(async () => {
+    await page.reload();
+    await expect(recordStatus(page, domain, "Found")).toHaveCount(5, { timeout: 2000 });
+  }).toPass({ timeout: 30_000, intervals: [2000, 3000, 5000] });
+  await panelReady(page, domain);
+  await panel(page, domain).getByRole("button", { name: "Check now" }).click();
+  await expect(panel(page, domain).getByRole("status").filter({ hasText: "Verified." })).toBeVisible();
+}
+
 /**
  * The console navigation. On small screens it lives in a drawer behind "Open navigation", so open it first; on
  * wide screens the left navigation is always there.
