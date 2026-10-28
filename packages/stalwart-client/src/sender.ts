@@ -15,7 +15,7 @@ import type { StalwartManagement } from "./management";
  */
 export const SENDER_IDENTITY_SCRIPT = "sender-identity";
 
-export const SENDER_IDENTITY_SIEVE = `require ["envelope", "variables", "relational", "comparator-i;ascii-numeric", "reject"];
+export const SENDER_IDENTITY_SIEVE = `require ["envelope", "variables", "relational", "comparator-i;ascii-numeric", "reject", "editheader"];
 
 # AnhourMail sender identity (ADR-0019). Runs at DATA for authenticated submissions only (MtaStageData.script).
 # mustMatchSender has already checked the envelope sender against the account's own address, aliases and groups;
@@ -42,6 +42,10 @@ if exists "sender" {
     stop;
   }
 }
+
+# Stalwart stamps no Authentication-Results on authenticated submissions, so any such header here was written by
+# the sender and could claim checks our server never ran (RFC 8601 section 5). Remove them all.
+deleteheader "Authentication-Results";
 `;
 
 /** The DATA-stage expression: run the script for authenticated sessions only (inbound MX mail is unaffected). */

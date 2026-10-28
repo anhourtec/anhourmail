@@ -56,4 +56,9 @@ describe("sender identity policy", () => {
     expect(SENDER_IDENTITY_SIEVE).toContain('"sender" "${envelope.from}"');
     expect(SENDER_IDENTITY_SIEVE).toContain(':count "ne"');
   });
+
+  it("script strips every Authentication-Results header from submitted mail", () => {
+    expect(SENDER_IDENTITY_SIEVE).toMatch(/^require \[[^\]]*"editheader"/);
+    expect(SENDER_IDENTITY_SIEVE).toContain('deleteheader "Authentication-Results";');
+  });
 });
