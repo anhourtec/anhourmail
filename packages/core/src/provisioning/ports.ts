@@ -13,6 +13,8 @@ export type ProvisioningRepository = {
   retry(id: string, error: string, runAfter: Date, now: Date): Promise<void>;
   giveUp(id: string, error: string, now: Date): Promise<void>;
   get(id: string): Promise<ProvisioningJob | null>;
+  /** The most recently queued job of this kind for this subject, whatever its status, or null. */
+  latest(kind: JobKind, subjectId: string): Promise<ProvisioningJob | null>;
 };
 
 /** Desired mail configuration in the control plane (domains, mailboxes, aliases). */

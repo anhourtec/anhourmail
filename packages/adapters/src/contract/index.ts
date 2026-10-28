@@ -383,6 +383,17 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
           lastError: "gave up",
         });
         expect(await uow.run((r) => r.provisioning.get(randomUUID()))).toBeNull();
+        // The latest job of a kind for a subject, whatever its status.
+        expect((await uow.run((r) => r.provisioning.latest("domain.ensure", subject)))?.id).toBe(a.id);
+        const c = await uow.run((r) =>
+          r.provisioning.enqueue({ kind: "domain.ensure", subjectId: subject, runAfter: future }),
+        );
+        expect(await uow.run((r) => r.provisioning.latest("domain.ensure", subject))).toMatchObject({
+          id: c.id,
+          status: "queued",
+        });
+        expect(await uow.run((r) => r.provisioning.latest("domain.remove", subject))).toBeNull();
+        expect(await uow.run((r) => r.provisioning.latest("domain.ensure", randomUUID()))).toBeNull();
       } finally {
         await cleanup();
       }

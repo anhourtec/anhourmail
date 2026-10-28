@@ -412,6 +412,16 @@ class PgProvisioningRepository implements ProvisioningRepository {
     const [row] = await this.x.select().from(provisioningJob).where(eq(provisioningJob.id, id));
     return row ? toJob(row) : null;
   }
+
+  async latest(kind: JobKind, subjectId: string): Promise<ProvisioningJob | null> {
+    const [row] = await this.x
+      .select()
+      .from(provisioningJob)
+      .where(and(eq(provisioningJob.kind, kind), eq(provisioningJob.subjectId, subjectId)))
+      .orderBy(desc(provisioningJob.createdAt))
+      .limit(1);
+    return row ? toJob(row) : null;
+  }
 }
 
 class PgMailDirectoryRepository implements MailDirectoryRepository {

@@ -275,6 +275,8 @@ function repositories(s: MemoryState): Repositories {
       if (job) Object.assign(job, { status: "failed", lastError: error });
     },
     get: async (id) => clone(s.jobs.find((j) => j.id === id) ?? null),
+    latest: async (kind, subjectId) =>
+      clone(s.jobs.findLast((j) => j.kind === kind && j.subjectId === subjectId) ?? null),
   };
 
   const passwordOf = (mailboxId: string) => s.mailboxPasswords.find((p) => p.mailboxId === mailboxId);
