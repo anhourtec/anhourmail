@@ -41,7 +41,17 @@ import type { Address, MessageView } from "@/server/webmail/view";
 
 import { Tooltip } from "@/components/tooltip";
 
-import { defaultExpanded, fromHere, isMine, recipientLabel, senderLabel } from "./conversation";
+import {
+  defaultExpanded,
+  fromHere,
+  isMine,
+  type MailChange,
+  mergeExpanded,
+  recipientLabel,
+  sameThread,
+  senderLabel,
+  touchesThread,
+} from "./conversation";
 import { displayName, folderLabel, folderTree, fullDate, initials, messageDate, subjectOf } from "./format";
 import type { Folder, MailClient, Summary } from "./mail-client";
 import { iconButtonClass, Menu, type MenuEntry } from "./menu";
@@ -363,6 +373,7 @@ function CollapsedRow({
 export function Reader({
   client,
   threadId,
+  mailChange = null,
   folders,
   currentFolder,
   hiddenMailboxIds,
@@ -387,6 +398,11 @@ export function Reader({
 }: {
   client: MailClient;
   threadId: string;
+  /**
+   * The latest change in the mailbox: when it touches this conversation (a new reply, a message changed or removed,
+   * or Refresh) the conversation loads again in place, keeping what is expanded and the scroll position.
+   */
+  mailChange?: MailChange | null;
   /** Show just this message of the thread (the list isn't grouping conversations). */
   onlyEmailId?: string | undefined;
   /** The signed-in person's own addresses (lowercase): their messages show as "me". */
@@ -482,6 +498,50 @@ export function Reader({
     // The thread id is the identity of this reader (the parent re-keys it); callbacks are stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per thread
   }, [threadId]);
+
+  // A change touching this conversation: load it again in place. The message rows keep their keys, so the scroll
+  // position and loaded bodies stay; new messages open the way they would have on opening (unread and the newest).
+  // New messages aren't marked read here: the person may not be looking.
+  const threadRef = useRef(thread);
+  useEffect(() => {
+    threadRef.current = thread;
+  });
+  useEffect(() => {
+    const now = threadRef.current;
+    if (
+      !mailChange ||
+      !now ||
+      !touchesThread(
+        mailChange,
+        threadId,
+        now.map((e) => e.id),
+      )
+    )
+      return;
+    let live = true;
+    client
+      .thread(threadId)
+      .then((all) => {
+        const before = threadRef.current;
+        if (!live || !before) return;
+        const visible = all.filter((e) => !hiddenMailboxIds.some((id) => e.mailboxIds[id]));
+        const shown = visible.length > 0 ? visible : all;
+        const one = onlyEmailId ? shown.filter((e) => e.id === onlyEmailId) : [];
+        const list = one.length > 0 ? one : shown;
+        if (list.length === 0 || sameThread(before, list)) return;
+        setThread(list);
+        setExpanded((cur) => mergeExpanded(before, list, cur));
+      })
+      .catch((err: unknown) => {
+        if (live && err instanceof Error && err.name === "SignedOutError") onSignedOut();
+        // Otherwise keep showing what we have; the next change or Refresh tries again.
+      });
+    return () => {
+      live = false;
+    };
+    // Only a new change signal reloads; the rest is read at that moment.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the change signal
+  }, [mailChange]);
 
   // Bodies load lazily: only for expanded messages, once each.
   useEffect(() => {

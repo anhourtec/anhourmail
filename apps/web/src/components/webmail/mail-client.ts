@@ -438,13 +438,18 @@ export function createMailClient(origin = "") {
      * then, with the newly created messages' summaries (for the new-mail sound). `reset` when the server can't say
      * (the state is too old): the caller reloads everything.
      */
-    async mailChanges(
-      since: string | null,
-    ): Promise<{ state: string; changed: boolean; created: Summary[]; reset: boolean }> {
+    async mailChanges(since: string | null): Promise<{
+      state: string;
+      changed: boolean;
+      created: Summary[];
+      /** Ids of messages changed (keywords, folders) or removed since `since`. */
+      touched: string[];
+      reset: boolean;
+    }> {
       const a = await accountId();
       if (since === null) {
         const res = await call([["Email/get", { accountId: a, ids: [], properties: ["id"] }, "g"]]);
-        return { state: asState(res.get("g")?.state), changed: false, created: [], reset: false };
+        return { state: asState(res.get("g")?.state), changed: false, created: [], touched: [], reset: false };
       }
       try {
         const res = await call([
@@ -461,18 +466,21 @@ export function createMailClient(origin = "") {
         ]);
         const c = res.get("c") ?? {};
         const count = (k: string) => (Array.isArray(c[k]) ? (c[k] as unknown[]).length : 0);
+        const ids = (k: string) =>
+          Array.isArray(c[k]) ? (c[k] as unknown[]).filter((x): x is string => typeof x === "string") : [];
         const state = asState(c.newState) || since;
         const changed = state !== since || count("created") + count("updated") + count("destroyed") > 0;
         return {
           state,
           changed,
           created: (res.get("g")?.list ?? []) as Summary[],
+          touched: [...ids("updated"), ...ids("destroyed")],
           reset: c.hasMoreChanges === true,
         };
       } catch (err) {
         if (err instanceof JmapError && err.type === "cannotCalculateChanges") {
           const res = await call([["Email/get", { accountId: a, ids: [], properties: ["id"] }, "g"]]);
-          return { state: asState(res.get("g")?.state), changed: true, created: [], reset: true };
+          return { state: asState(res.get("g")?.state), changed: true, created: [], touched: [], reset: true };
         }
         throw err;
       }

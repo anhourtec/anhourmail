@@ -423,6 +423,13 @@ it can't reach the check above; the suspension is named only to a browser that s
 
 - The BFF holds **one upstream push channel per active user**: the JMAP WebSocket with `WebSocketPushEnable` (preferred) or EventSource. It fans `StateChange` events out to every open tab over **our own SSE** endpoint. Tabs share one connection via `BroadcastChannel` and leader election.
 - A state change triggers `*/changes` for the affected types only. There is no polling (except a 5-min safety resync when push is down).
+- **Until push lands (built today):** the app asks `Email/changes` every 30 s while the tab is visible (at once on
+  focus, visibility or coming back online; backing off after errors). A real change reloads the folders and the list
+  windows in place, and is passed to the open conversation as the new messages' thread ids and the changed or
+  removed message ids: when it touches the conversation (or on Refresh, or when the server can't list the changes),
+  the conversation loads again in place — what the person expanded or collapsed stays, newly arrived messages open
+  like on first opening, the scroll position and loaded bodies are kept (`mergeExpanded`, `touchesThread` in
+  `components/webmail/conversation.ts`). New arrivals aren't marked read automatically.
 - **Answered (Phase 1, ADR-0018):** long-lived channels do **not** count against `maxConcurrentRequests`. With one
   WebSocket (`/jmap/ws`, subprotocol `jmap`, `WebSocketPushEnable`) and five EventSource streams open for the same
   user, bursts of 4 and 8 requests still all succeeded, and the 40-request overload test produced the same share of

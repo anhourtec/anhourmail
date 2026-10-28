@@ -64,7 +64,7 @@ import {
 } from "./mail-client";
 import { iconButtonClass, Menu, type MenuEntry } from "./menu";
 import { MessageList } from "./message-list";
-import { restoreTarget } from "./conversation";
+import { type MailChange, restoreTarget } from "./conversation";
 import { newMailToAnnounce, playChime, pollDelay, shouldPoll, tabTitle } from "./sync";
 import { Reader, type ReaderAction, type ReaderActions } from "./reader";
 import { type Mailboxes, Sidebar } from "./sidebar";
@@ -415,16 +415,30 @@ function Mailroom({
     [list, view, narrow, search, hidden, loadPage],
   );
 
+  // What changed since the last check, for the open conversation (it loads again when it is touched).
+  const [mailChange, setMailChange] = useState<MailChange | null>(null);
+  const changeSeq = useRef(0);
+  const announceChange = useCallback((patch: Omit<MailChange, "seq">) => {
+    changeSeq.current += 1;
+    setMailChange({ ...patch, seq: changeSeq.current });
+  }, []);
+
   const refresh = useCallback(() => {
     void loadFolders();
     void reload({ keep: true });
   }, [loadFolders, reload]);
 
+  /** Refresh asked for by the person: the list, the folders and the open conversation. */
+  const refreshAll = useCallback(() => {
+    refresh();
+    announceChange({ all: true, threadIds: new Set(), emailIds: new Set() });
+  }, [refresh, announceChange]);
+
   // Automatic refresh (until push lands): one cheap Email/changes call every 30 s while the tab is visible, at once
   // when it becomes visible, gains focus or comes back online, backing off after errors. Only a real change reloads.
-  const syncRefs = useRef({ refresh, signedOut, roles, mine, prefs });
+  const syncRefs = useRef({ refresh, announceChange, signedOut, roles, mine, prefs });
   useEffect(() => {
-    syncRefs.current = { refresh, signedOut, roles, mine, prefs };
+    syncRefs.current = { refresh, announceChange, signedOut, roles, mine, prefs };
   });
   useEffect(() => {
     let state: string | null = null;
@@ -445,6 +459,11 @@ function Mailroom({
         if (!first && r.changed) {
           const ref = syncRefs.current;
           ref.refresh();
+          ref.announceChange({
+            all: r.reset,
+            threadIds: new Set(r.created.map((e) => e.threadId)),
+            emailIds: new Set([...r.touched, ...r.created.map((e) => e.id)]),
+          });
           const fresh = newMailToAnnounce(r.created, {
             inboxId: ref.roles.inbox,
             junkId: ref.roles.junk,
@@ -1505,7 +1524,7 @@ function Mailroom({
                 className={narrowed ? "[&>span>button]:text-primary" : ""}
               />
               <Tooltip label="Refresh">
-                <button type="button" onClick={refresh} aria-label="Refresh" className={iconButtonClass}>
+                <button type="button" onClick={refreshAll} aria-label="Refresh" className={iconButtonClass}>
                   <RotateCw className="size-4" aria-hidden />
                 </button>
               </Tooltip>
@@ -1670,7 +1689,7 @@ function Mailroom({
                 <p className="am-small text-destructive">{error}</p>
                 <button
                   type="button"
-                  onClick={refresh}
+                  onClick={refreshAll}
                   className="am-small shrink-0 font-medium text-foreground underline underline-offset-2"
                 >
                   Retry
@@ -1724,6 +1743,7 @@ function Mailroom({
                 key={openThread}
                 client={client}
                 threadId={openRow?.threadId ?? openThread}
+                mailChange={mailChange}
                 onlyEmailId={prefs.grouping === "messages" ? (openRow?.id ?? openThread) : undefined}
                 markRead={{ mode: prefs.markRead, delay: prefs.markReadDelay }}
                 mine={mine}
