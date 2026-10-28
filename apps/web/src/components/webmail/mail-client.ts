@@ -172,7 +172,9 @@ async function api<T>(path: string, init: RequestInit = {}, go: typeof fetch = p
   }
   if (res.status === 401) throw new SignedOutError("signed out");
   if (!res.ok) {
-    if (res.status === 400 || res.status === 413 || res.status === 429) {
+    // An administrator's new password not in use yet: the own password change says so (409 with its own code).
+    const pending = res.status === 409 && body?.error?.code === "password_change_pending";
+    if (res.status === 400 || res.status === 413 || res.status === 429 || pending) {
       throw new RefusedError(body?.error?.message ?? "That didn't work. Try again.");
     }
     throw new Error(`HTTP ${String(res.status)}`);

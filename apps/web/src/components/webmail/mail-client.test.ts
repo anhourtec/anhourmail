@@ -119,3 +119,38 @@ describe("changing the active mailbox", () => {
     expect(server.sent().sort()).toEqual(["GET /api/webmail/identities", "POST /api/webmail/jmap"]);
   });
 });
+
+describe("changing the mailbox's own password", () => {
+  let server: ReturnType<typeof fakeServer>;
+  beforeEach(() => {
+    server = fakeServer();
+    vi.stubGlobal("fetch", server.fetchFn);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const MESSAGE = "Your administrator has set a new password for this mailbox that isn't in use yet.";
+
+  it("shows the server's reason when an administrator's password is still waiting (409 password_change_pending)", async () => {
+    const client = createMailClient(ORIGIN);
+    const changed = client.changePassword("acc1", "old one", "new one");
+    await settle();
+    server.answer(
+      "/api/webmail/settings/password",
+      Response.json({ error: { code: "password_change_pending", message: MESSAGE } }, { status: 409 }),
+    );
+    await expect(changed).rejects.toMatchObject({ name: "RefusedError", message: MESSAGE });
+  });
+
+  it("keeps other conflicts generic", async () => {
+    const client = createMailClient(ORIGIN);
+    const changed = client.changePassword("acc1", "old one", "new one");
+    await settle();
+    server.answer(
+      "/api/webmail/settings/password",
+      Response.json({ error: { code: "conflict", message: "Something else." } }, { status: 409 }),
+    );
+    await expect(changed).rejects.not.toBeInstanceOf(RefusedError);
+  });
+});
