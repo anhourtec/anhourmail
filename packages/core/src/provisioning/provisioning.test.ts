@@ -979,7 +979,7 @@ describe("mailbox passwords (worker)", () => {
     expect(d.uow.state.mailboxPasswords[0]?.pendingHash).toBeNull();
   });
 
-  it("gives up after the last attempt: the hash is dropped, the mailbox status is untouched, and it's audited", async () => {
+  it("gives up after the last attempt: an administrator's password is kept (marked failed), status untouched, audited", async () => {
     const { d, clock } = setup();
     const ok = fakeMailServer();
     await provision(d, ok);
@@ -990,11 +990,46 @@ describe("mailbox passwords (worker)", () => {
       await runNextJob(d, failing);
       clock.set(new Date(clock.now().getTime() + backoffMs(i + 1)));
     }
-    expect(d.uow.state.mailboxPasswords[0]).toMatchObject({ pendingHash: null, credentialId: "a" });
+    // Kept, so the mailbox can't change its own password with the old one and the console asks for it again.
+    expect(d.uow.state.mailboxPasswords[0]).toMatchObject({ pendingHash: PHC(6), credentialId: "a" });
     expect(d.uow.state.mailboxes[0]?.status).toBe("active");
     const entry = d.uow.state.audit.at(-1);
-    expect(entry).toMatchObject({ action: "platform.provisioning_failed", target: { type: "mailbox.password" } });
+    expect(entry).toMatchObject({
+      action: "platform.provisioning_failed",
+      target: { type: "mailbox.password" },
+      meta: { adminPasswordKept: true },
+    });
     expect(JSON.stringify(entry)).not.toContain("argon2id");
+    // Setting it again replaces it and applies.
+    await d.uow.run((r) => r.mailboxPasswords.setPending("m1", PHC(12), "grant-12"));
+    await enqueueProvisioning(d, { kind: "mailbox.password", subjectId: "m1" });
+    await runNextJob(d, ok);
+    expect(ok.boxes[0]).toMatchObject({ passwordHash: PHC(12) });
+    expect(d.uow.state.mailboxPasswords[0]).toMatchObject({ pendingHash: null });
+  });
+
+  it("gives up on a deleting mailbox's password without keeping it", async () => {
+    const { d, clock } = setup();
+    const ok = fakeMailServer();
+    await provision(d, ok);
+    const failing = { ...ok, setMailboxPassword: () => Promise.reject(new Error("mail server unavailable")) };
+    await d.uow.run((r) => r.mailboxPasswords.setPending("m1", PHC(13), "grant-13"));
+    await enqueueProvisioning(d, { kind: "mailbox.password", subjectId: "m1" });
+    for (let i = 0; i < MAX_ATTEMPTS - 1; i++) {
+      await runNextJob(d, failing);
+      clock.set(new Date(clock.now().getTime() + backoffMs(i + 1)));
+    }
+    // Scheduled for deletion before the last attempt, which fails anyway (e.g. a stale read).
+    const failingLast = {
+      ...failing,
+      setMailboxPassword: () => {
+        d.uow.state.mailboxes[0]!.status = "deleting";
+        return Promise.reject(new Error("mail server unavailable"));
+      },
+    };
+    await runNextJob(d, failingLast);
+    expect(d.uow.state.jobs.find((j) => j.kind === "mailbox.password")?.status).toBe("failed");
+    expect(d.uow.state.mailboxPasswords[0]?.pendingHash).toBeNull();
   });
 
   describe("first-sign-in password change", () => {

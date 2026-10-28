@@ -213,9 +213,20 @@ export async function runNextJob(deps: Deps, mail: MailServer): Promise<Provisio
         async (repos) => {
           await repos.provisioning.giveUp(job.id, error, now);
           let catchAllOff: string[] = [];
+          let adminPasswordKept = false;
           if (job.kind === "mailbox.password") {
-            // The new password never reached the mail server: drop its hash (the old password still works).
-            await repos.directory.clearPendingPassword(job.subjectId);
+            // The new password never reached the mail server, so the old one still works. The person's own change is
+            // dropped (they keep the password they had). An administrator's password is kept, marked by this failed
+            // job: the console asks them to set it again, and until a new one is applied the mailbox can't change its
+            // own password and its login gets no console reset email (mustChangePassword stays as it is), so
+            // whoever knew the old password can't take it over (docs/internal/07-security.md "Mailbox passwords").
+            const current = await repos.directory.getMailbox(job.subjectId);
+            adminPasswordKept =
+              current !== null &&
+              current.status !== "deleting" &&
+              current.pendingPasswordHash !== null &&
+              !current.pendingPasswordByOwner;
+            if (!adminPasswordKept) await repos.directory.clearPendingPassword(job.subjectId);
           } else if (job.kind === "mailbox.ensure") {
             // A suspension or a scheduled deletion stays in force; only the error is recorded. A password waiting
             // for a create that never happened isn't kept either (a reset sets a new one once it exists).
@@ -232,7 +243,13 @@ export async function runNextJob(deps: Deps, mail: MailServer): Promise<Provisio
           }
           return {
             result: undefined,
-            meta: { jobId: job.id, attempts: job.attempts, error, ...(catchAllOff.length > 0 ? { catchAllOff } : {}) },
+            meta: {
+              jobId: job.id,
+              attempts: job.attempts,
+              error,
+              ...(catchAllOff.length > 0 ? { catchAllOff } : {}),
+              ...(adminPasswordKept ? { adminPasswordKept } : {}),
+            },
           };
         },
       );

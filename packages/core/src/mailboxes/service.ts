@@ -189,6 +189,7 @@ export async function getMailbox(
     pool: StoragePool;
     lifecycleLocked: boolean;
     passwordPending: boolean;
+    passwordApplyFailed: boolean;
     canSetPassword: boolean;
   }
 > {
@@ -200,6 +201,9 @@ export async function getMailbox(
     const locked = lifecycleLocked(actor, accountId, m, await r.access.members(accountId));
     const p = await poolOf(r, accountId);
     const range = quotaRange(m, p.pool, v.storageUsedBytes);
+    // A waiting password whose job gave up: an administrator's, kept until they set one again (`runNextJob`).
+    const waiting = await r.mailboxPasswords.pending(m.id);
+    const applyFailed = waiting && (await r.provisioning.latest("mailbox.password", m.id))?.status === "failed";
     return {
       ...v,
       /** Storage it can be given: its own plus the account's unassigned pool. */
@@ -210,7 +214,12 @@ export async function getMailbox(
       /** True when this person may not suspend, delete or restore it (the console hides those actions). */
       lifecycleLocked: locked,
       /** A new password is waiting for the mail server (set a moment ago). */
-      passwordPending: await r.mailboxPasswords.pending(m.id),
+      passwordPending: waiting && !applyFailed,
+      /**
+       * The password an administrator set never reached the mail server (the worker gave up): the old one still works,
+       * the mailbox can't change its own until a new one is set, and the console asks for it again.
+       */
+      passwordApplyFailed: applyFailed,
       /** This person may set its password (`mailbox.password.reset`, not locked, not acting as someone). */
       canSetPassword:
         can(actor, "mailbox.password.reset", accountId) &&
