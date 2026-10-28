@@ -88,7 +88,8 @@ export function matches(record: DnsRecordTemplate, answer: string): boolean {
 
 /**
  * Looks up every record for a domain in parallel and grades each one. `dkim`: the domain's keys from the mail server
- * (null until known: the DKIM record is a placeholder that can't pass yet).
+ * (null until known: the DKIM record is a placeholder that can't pass yet). `only`: just the records with these
+ * purposes (e.g. the ownership and MX records, to see whether a claim still holds).
  */
 export async function checkRecords(
   dns: DnsResolver,
@@ -96,9 +97,11 @@ export async function checkRecords(
   verifyToken: string,
   platform: Platform,
   dkim: readonly DkimKey[] | null = null,
+  only?: readonly CheckedRecord["purpose"][],
 ): Promise<CheckedRecord[]> {
+  const records = customerDomainRecords(domain, verifyToken, platform, dkim);
   return Promise.all(
-    customerDomainRecords(domain, verifyToken, platform, dkim).map(async (r): Promise<CheckedRecord> => {
+    (only ? records.filter((r) => only.includes(r.purpose)) : records).map(async (r): Promise<CheckedRecord> => {
       if (r.placeholder) return { ...r, fqdn: domain, state: "missing", found: [], problem: DKIM_KEYS_PENDING };
       const fqdn = fqdnOf(r.name, domain);
       try {
@@ -117,3 +120,22 @@ export async function checkRecords(
 /** Every required record is in place (recommended ones only warn). */
 export const requiredPass = (records: readonly CheckedRecord[]) =>
   records.every((r) => !r.required || r.state === "ok");
+
+/**
+ * Whether a domain's claim is still proven by these records (default: its ownership and MX records): `held` when each
+ * is found, `gone` when one is missing or something else is published there, `unknown` when that can't be told because
+ * a lookup failed (a failed lookup never counts as gone).
+ */
+export async function claimStillHeld(
+  dns: DnsResolver,
+  domain: string,
+  verifyToken: string,
+  platform: Platform,
+  proof: readonly CheckedRecord["purpose"][] = ["ownership", "inbound"],
+): Promise<"held" | "gone" | "unknown"> {
+  const records = await checkRecords(dns, domain, verifyToken, platform, null, proof);
+  const of = (p: CheckedRecord["purpose"]) => records.filter((r) => r.purpose === p);
+  const missing = proof.filter((p) => !of(p).some((r) => r.state === "ok"));
+  if (missing.length === 0) return "held";
+  return missing.some((p) => of(p).every((r) => r.state !== "error")) ? "gone" : "unknown";
+}
