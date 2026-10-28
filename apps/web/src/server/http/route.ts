@@ -13,13 +13,14 @@ import { type RequestContext, requestIdFrom, runWithRequestContext } from "@anho
 import { API_CSP } from "../console-csp";
 import { container } from "../container";
 import { env } from "../env";
+import { mailboxAccessBlock } from "../webmail/access-block";
 import { PASSWORD_CHANGE_REQUIRED, passwordChangeBlock } from "../webmail/password-gate";
 
 /**
  * Every API handler goes through `route()` (CLAUDE.md rules 12–14):
  *   request id + one access-log line, rate limit (tier per route), same-origin check on writes (CSRF for
- *   cookie auth: writes must come from this origin), the webmail's first-sign-in password change (webmail routes),
- *   domain-error → HTTP mapping.
+ *   cookie auth: writes must come from this origin), the webmail's control-plane access check (suspended person or
+ *   mailbox, deleting, gone) and first-sign-in password change (webmail routes), domain-error → HTTP mapping.
  * Permission and ownership checks happen in the service layer (packages/core), never only here.
  */
 
@@ -147,9 +148,17 @@ export function route(handler: Handler, opts: RouteOptions = {}) {
           errorCode = "forbidden";
           res = errorBody("forbidden", "Cross-origin request blocked.", 403);
         } else {
+          // A blocked mailbox first (every webmail route, sign-out and the password change included), then the
+          // password change the mailbox still owes.
+          const unavailable = opts.session === "webmail" ? await mailboxAccessBlock(req) : null;
           const blocked =
-            opts.session === "webmail" && opts.passwordChange !== "allowed" ? await passwordChangeBlock(req) : null;
-          if (blocked) {
+            !unavailable && opts.session === "webmail" && opts.passwordChange !== "allowed"
+              ? await passwordChangeBlock(req)
+              : null;
+          if (unavailable) {
+            errorCode = "mailbox_unavailable";
+            res = unavailable;
+          } else if (blocked) {
             errorCode = PASSWORD_CHANGE_REQUIRED;
             res = blocked;
           } else {

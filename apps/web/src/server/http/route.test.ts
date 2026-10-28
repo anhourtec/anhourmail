@@ -22,6 +22,14 @@ vi.mock("../webmail/password-gate", () => ({
       : null,
 }));
 
+// The access check itself is tested in webmail/access-block.test.ts; here only whether route() consults it, first.
+vi.mock("../webmail/access-block", () => ({
+  mailboxAccessBlock: async (req: Request) =>
+    req.headers.get("cookie")?.includes("am.webmail=suspended")
+      ? Response.json({ error: { code: "mailbox_unavailable", message: "x" } }, { status: 401 })
+      : null,
+}));
+
 const params = { params: Promise.resolve({}) };
 const noDns = { lookup: async () => [] };
 let uow: MemoryUnitOfWork;
@@ -211,5 +219,31 @@ describe("webmail first-sign-in password change", () => {
     expect((await allowed(get("am.webmail=flagged"), params)).status).toBe(200);
     const consoleRoute = route(async () => ok(true));
     expect((await consoleRoute(get("am.webmail=flagged"), params)).status).toBe(200);
+  });
+});
+
+describe("webmail control-plane access", () => {
+  const get = (cookie: string) =>
+    new Request("http://localhost:43300/api/webmail/session", { headers: { cookie, host: "localhost:43300" } });
+
+  it("refuses a blocked mailbox on every webmail route, opt-ins included, before the handler runs", async () => {
+    let ran = false;
+    const handler = (opts: Parameters<typeof route>[1]) =>
+      route(async () => {
+        ran = true;
+        return ok(true);
+      }, opts);
+    for (const opts of [
+      { session: "webmail" as const },
+      { session: "webmail" as const, passwordChange: "allowed" as const },
+    ]) {
+      const res = await handler(opts)(get("am.webmail=suspended"), params);
+      expect(res.status).toBe(401);
+      expect(await res.json()).toMatchObject({ error: { code: "mailbox_unavailable" } });
+    }
+    expect(ran).toBe(false);
+    expect((await handler({ session: "webmail" })(get("am.webmail=fine"), params)).status).toBe(200);
+    // Console routes never consult it.
+    expect((await handler({})(get("am.webmail=suspended"), params)).status).toBe(200);
   });
 });
