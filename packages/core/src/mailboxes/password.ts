@@ -30,11 +30,18 @@ function assertSettable(m: Mailbox): void {
  * Hashes the password and queues the worker with it for an existing account (same unit of work as the caller's audit
  * entry), with the grant the management proxy needs to accept the replacement (bound to this account and hash).
  */
-async function queuePassword(deps: Deps, repos: Repositories, hasher: PasswordHasher, m: Mailbox, password: string) {
+async function queuePassword(
+  deps: Deps,
+  repos: Repositories,
+  hasher: PasswordHasher,
+  m: Mailbox,
+  password: string,
+  byOwner = false,
+) {
   const phc = await hashMailboxPassword(hasher, password);
   const grant =
     m.stalwartId === null ? null : (hasher.grant?.({ externalId: m.stalwartId, passwordHash: phc }) ?? null);
-  await repos.mailboxPasswords.setPending(m.id, phc, grant);
+  await repos.mailboxPasswords.setPending(m.id, phc, grant, { byOwner });
   return repos.provisioning.enqueue({ kind: "mailbox.password", subjectId: m.id, runAfter: deps.clock.now() });
 }
 
@@ -127,7 +134,9 @@ export async function resetMailboxPassword(
  * The person's own password change from the webmail (the caller is the webmail session of `address`, which has just
  * proved the current password to the mail server). Written as the mailbox itself, in its account's log
  * (`mailbox.password_changed`), like other webmail settings. Only an active mailbox (a suspended one can't use the
- * webmail). Returns the job that applies it, so the caller can wait for it and keep its own session signed in.
+ * webmail). Returns the job that applies it, so the caller can wait for it and keep its own session signed in. A
+ * first-sign-in password change (`mustChangePassword`) ends only when the worker has applied this password to the mail
+ * server (`runNextJob`), never here: until then the administrator's password is still the mailbox's password.
  */
 export async function changeOwnMailboxPassword(
   deps: Deps,
@@ -159,9 +168,7 @@ export async function changeOwnMailboxPassword(
       }
       const password = mailboxPassword(input.password, m.address);
       if (breached) throw new BreachedPasswordError();
-      const job = await queuePassword(deps, repos, hasher, m, password);
-      // The person has chosen their own password: the webmail's first-sign-in step is done.
-      if (m.mustChangePassword === true) await repos.mailboxes.setPasswordChangeRequired(m.id, false);
+      const job = await queuePassword(deps, repos, hasher, m, password, true);
       // The person's console identity (if the mailbox belongs to someone) gets the change notice.
       const owner = m.userId
         ? ((await repos.access.members(m.accountId)).find((x) => x.userId === m.userId)?.email ?? null)

@@ -53,7 +53,12 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
       passwordHash: m.pendingPasswordHash,
       grant: m.pendingPasswordGrant,
     });
-    await deps.uow.run((r) => r.directory.passwordApplied(m.id, m.pendingPasswordHash, credentialId));
+    await deps.uow.run(async (r) => {
+      await r.directory.passwordApplied(m.id, m.pendingPasswordHash, credentialId);
+      // The person's own password is on the mail server now: their first-sign-in password change is done. (An
+      // admin's reset never clears it; a failed job leaves it set, and the old password keeps working.)
+      if (m.pendingPasswordByOwner) await r.mailboxes.setPasswordChangeRequired(m.id, false);
+    });
     return;
   }
   if (job.kind === "domain.remove") {

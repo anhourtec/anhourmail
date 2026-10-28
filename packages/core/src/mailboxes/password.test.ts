@@ -257,17 +257,16 @@ describe("changing one's own mailbox password (webmail)", () => {
     expect(await passwordJobState(d, out.jobId)).toBe("pending");
   });
 
-  it("ends the webmail's first-sign-in password step", async () => {
+  it("leaves the first-sign-in password step in force until the worker has applied the new password", async () => {
     const { d } = setup();
     const box = d.uow.state.mailboxes.find((m) => m.id === MBX_MEMBER);
     if (box) box.mustChangePassword = true;
+    await changeOwnMailboxPassword(d, fakeHasher, "kid@family.ca", { password: MAILBOX_PW }, req);
     expect((await d.uow.run((r) => r.webmailSettings.mailboxByAddress("kid@family.ca")))?.mustChangePassword).toBe(
       true,
     );
-    await changeOwnMailboxPassword(d, fakeHasher, "kid@family.ca", { password: MAILBOX_PW }, req);
-    expect((await d.uow.run((r) => r.webmailSettings.mailboxByAddress("kid@family.ca")))?.mustChangePassword).toBe(
-      false,
-    );
+    // Marked as the person's own, so the worker's success ends the step (provisioning.test.ts).
+    expect(await d.uow.run((r) => r.directory.getMailbox(MBX_MEMBER))).toMatchObject({ pendingPasswordByOwner: true });
   });
 
   it("refuses unknown addresses, inactive mailboxes and weak passwords", async () => {

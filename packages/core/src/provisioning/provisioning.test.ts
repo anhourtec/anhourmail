@@ -958,6 +958,75 @@ describe("mailbox passwords (worker)", () => {
     expect(JSON.stringify(entry)).not.toContain("argon2id");
   });
 
+  describe("first-sign-in password change", () => {
+    const flagged = (d: ReturnType<typeof setup>["d"]) => d.uow.state.mailboxes[0]?.mustChangePassword;
+
+    it("ends only once the person's own password has reached the mail server", async () => {
+      const { d } = setup();
+      const mail = fakeMailServer();
+      await provision(d, mail);
+      d.uow.state.mailboxes[0]!.mustChangePassword = true;
+      await d.uow.run((r) => r.mailboxPasswords.setPending("m1", PHC(7), "grant-7", { byOwner: true }));
+      await enqueueProvisioning(d, { kind: "mailbox.password", subjectId: "m1" });
+      expect(flagged(d)).toBe(true); // queued is not applied
+      expect(await d.uow.run((r) => r.directory.getMailbox("m1"))).toMatchObject({ pendingPasswordByOwner: true });
+      await runNextJob(d, mail);
+      expect(mail.boxes[0]).toMatchObject({ passwordHash: PHC(7) });
+      expect(flagged(d)).toBe(false);
+      expect(await d.uow.run((r) => r.directory.getMailbox("m1"))).toMatchObject({
+        pendingPasswordHash: null,
+        pendingPasswordByOwner: false,
+      });
+    });
+
+    it("stays required after an administrator's reset is applied", async () => {
+      const { d } = setup();
+      const mail = fakeMailServer();
+      await provision(d, mail);
+      d.uow.state.mailboxes[0]!.mustChangePassword = true;
+      await d.uow.run((r) => r.mailboxPasswords.setPending("m1", PHC(8), "grant-8"));
+      await enqueueProvisioning(d, { kind: "mailbox.password", subjectId: "m1" });
+      await runNextJob(d, mail);
+      expect(mail.boxes[0]).toMatchObject({ passwordHash: PHC(8) });
+      expect(flagged(d)).toBe(true);
+    });
+
+    it("stays required when the person's password never reached the mail server", async () => {
+      const { d, clock } = setup();
+      const ok = fakeMailServer();
+      await provision(d, ok);
+      d.uow.state.mailboxes[0]!.mustChangePassword = true;
+      const failing = { ...ok, setMailboxPassword: () => Promise.reject(new Error("mail server unavailable")) };
+      await d.uow.run((r) => r.mailboxPasswords.setPending("m1", PHC(9), "grant-9", { byOwner: true }));
+      await enqueueProvisioning(d, { kind: "mailbox.password", subjectId: "m1" });
+      await runNextJob(d, failing);
+      expect(flagged(d)).toBe(true); // retrying
+      for (let i = 1; i < MAX_ATTEMPTS; i++) {
+        clock.set(new Date(clock.now().getTime() + backoffMs(i)));
+        await runNextJob(d, failing);
+      }
+      expect(d.uow.state.jobs.find((j) => j.kind === "mailbox.password")?.status).toBe("failed");
+      expect(flagged(d)).toBe(true);
+      expect(await d.uow.run((r) => r.directory.getMailbox("m1"))).toMatchObject({
+        pendingPasswordHash: null,
+        pendingPasswordByOwner: false,
+      });
+    });
+
+    it("an administrator's newer password replaces the person's waiting one and doesn't end the change", async () => {
+      const { d } = setup();
+      const mail = fakeMailServer();
+      await provision(d, mail);
+      d.uow.state.mailboxes[0]!.mustChangePassword = true;
+      await d.uow.run((r) => r.mailboxPasswords.setPending("m1", PHC(10), "g", { byOwner: true }));
+      await d.uow.run((r) => r.mailboxPasswords.setPending("m1", PHC(11), "g"));
+      await enqueueProvisioning(d, { kind: "mailbox.password", subjectId: "m1" });
+      await runNextJob(d, mail);
+      expect(mail.boxes[0]).toMatchObject({ passwordHash: PHC(11) });
+      expect(flagged(d)).toBe(true);
+    });
+  });
+
   it("records the Password of a mailbox from before tracking once, and never overwrites a recorded one", async () => {
     const { d } = setup();
     const mail = fakeMailServer();
