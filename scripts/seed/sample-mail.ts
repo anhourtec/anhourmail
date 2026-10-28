@@ -688,39 +688,44 @@ export function toRfc822(s: Sample, domain: string, now: number): { raw: string;
 
 // ---- import -------------------------------------------------------------------------------------------------
 
+/** Stalwart's `maxObjectsInGet` default: one `Email/get` may name at most this many ids. */
+const PAGE = 500;
+
+/** Reads `properties` of every message in the mailbox, newest first, a page at a time. */
+async function everyMessage(
+  jmap: JmapClient,
+  accountId: string,
+  properties: string[],
+): Promise<Record<string, unknown>[]> {
+  const all: Record<string, unknown>[] = [];
+  for (let position = 0; ; position += PAGE) {
+    const res = await jmap.request([
+      [
+        "Email/query",
+        { accountId, sort: [{ property: "receivedAt", isAscending: false }], position, limit: PAGE },
+        "q",
+      ],
+      ["Email/get", { accountId, "#ids": { resultOf: "q", name: "Email/query", path: "/ids" }, properties }, "g"],
+    ]);
+    const page = (res.get("g")?.list ?? []) as Record<string, unknown>[];
+    all.push(...page);
+    if (page.length < PAGE) return all;
+  }
+}
+
 /**
  * Ids of messages that carry the sample header. Stalwart v0.16 doesn't answer `Email/query` header filters for
- * custom headers, so this reads the header of the newest messages instead (a demo mailbox is small).
+ * custom headers, so this reads the header of every message instead.
  */
 export async function sampleIds(jmap: JmapClient, accountId: string): Promise<string[]> {
-  const res = await jmap.request([
-    ["Email/query", { accountId, sort: [{ property: "receivedAt", isAscending: false }], limit: 500 }, "q"],
-    [
-      "Email/get",
-      {
-        accountId,
-        "#ids": { resultOf: "q", name: "Email/query", path: "/ids" },
-        properties: [`header:${SAMPLE_HEADER}:asText`],
-      },
-      "g",
-    ],
-  ]);
-  const list = (res.get("g")?.list ?? []) as Record<string, unknown>[];
+  const list = await everyMessage(jmap, accountId, [`header:${SAMPLE_HEADER}:asText`]);
   return list.filter((e) => typeof e[`header:${SAMPLE_HEADER}:asText`] === "string").map((e) => String(e.id));
 }
 
 /** Keys of the samples already in the mailbox (from their `<sample-KEY@domain>` Message-IDs). */
 export async function sampleKeys(jmap: JmapClient, accountId: string): Promise<Set<string>> {
-  const res = await jmap.request([
-    ["Email/query", { accountId, sort: [{ property: "receivedAt", isAscending: false }], limit: 1000 }, "q"],
-    [
-      "Email/get",
-      { accountId, "#ids": { resultOf: "q", name: "Email/query", path: "/ids" }, properties: ["messageId"] },
-      "g",
-    ],
-  ]);
   const keys = new Set<string>();
-  for (const e of (res.get("g")?.list ?? []) as { messageId: string[] | null }[]) {
+  for (const e of (await everyMessage(jmap, accountId, ["messageId"])) as { messageId?: string[] | null }[]) {
     const m = /^sample-([a-z0-9-]+)@/.exec(e.messageId?.[0] ?? "");
     if (m?.[1]) keys.add(m[1]);
   }
