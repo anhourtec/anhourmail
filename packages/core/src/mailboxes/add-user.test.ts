@@ -201,6 +201,10 @@ describe("addUser", () => {
     await expect(add(d, owner)).rejects.toThrow(ConflictError);
     d.uow.state.userEmails.someone = "kim@family.ca";
     await expect(add(d, owner, { localPart: "kim" })).rejects.toThrow(/already has a console login/);
+    // Whatever the case of the login's email, or of the address typed.
+    d.uow.state.userEmails.other = "Lou@Family.CA";
+    await expect(add(d, owner, { localPart: "lou" })).rejects.toThrow(/already has a console login/);
+    await expect(add(d, owner, { localPart: "KIM" })).rejects.toThrow(/already has a console login/);
     const acting = {
       ...owner,
       actingAs: { staffUserId: "s", staffEmail: "s@x", staffRole: "support_admin" as const, reason: "r" },
