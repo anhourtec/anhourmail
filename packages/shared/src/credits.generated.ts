@@ -1442,6 +1442,13 @@ export const CREDITS: readonly Credit[] = [
     url: "lukeed/dequal",
   },
   {
+    name: "detect-libc",
+    version: "2.1.2",
+    license: "Apache-2.0",
+    url: "https://github.com/lovell/detect-libc",
+    repository: "https://github.com/lovell/detect-libc",
+  },
+  {
     name: "detect-node-es",
     version: "1.1.0",
     license: "MIT",
@@ -2537,6 +2544,13 @@ export const CREDITS: readonly Credit[] = [
     license: "MIT",
     url: "https://scroll-into-view.dev",
     repository: "https://github.com/scroll-into-view/scroll-into-view-if-needed",
+  },
+  {
+    name: "semver",
+    version: "7.8.5",
+    license: "ISC",
+    url: "https://github.com/npm/node-semver",
+    repository: "https://github.com/npm/node-semver",
   },
   {
     name: "server-only",

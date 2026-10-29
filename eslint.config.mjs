@@ -23,6 +23,10 @@ const INFRA_IMPORTS = [
   { group: ["ioredis"], message: "Use @anhourmail/server/redis." },
   { group: ["stripe", "stripe/*"], message: "Stripe lives behind a billing port in packages/adapters (ADR-0008)." },
   {
+    group: ["sharp"],
+    message: "Image decoding lives behind the ImageNormaliser port in packages/adapters/src/image (ADR-0022).",
+  },
+  {
     group: ["@anhourmail/stalwart-client", "@anhourmail/stalwart-client/*"],
     message: "Stalwart is reached through an adapter (apps/*/src/server/adapters, apps/worker) — rule 21, ADR-0008.",
   },
