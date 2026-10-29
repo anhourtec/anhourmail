@@ -533,6 +533,7 @@ export const ROUTES: readonly RouteSpec[] = [
     file: "app/api/webmail/messages/[emailId]/print/route.ts",
     guard: "webmail",
   },
+  { method: "POST", path: "/api/webmail/img", file: "app/api/webmail/img/route.ts", guard: "webmail" },
   {
     method: "GET",
     path: "/api/webmail/preview/:blobId",
