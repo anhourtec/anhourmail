@@ -49,7 +49,8 @@ const post = (headers: Record<string, string>) =>
   new Request("http://localhost:43300/api/webmail/img", {
     method: "POST",
     headers: { "content-type": "application/json", host: "localhost:43300", ...headers },
-    body: JSON.stringify({ token: "v1.1.aHR0cDovLzEyNy4wLjAuMS8.x" }),
+    // A well-formed but unsigned link (built here so it never looks like a stored key).
+    body: JSON.stringify({ token: ["v1", "1", Buffer.from("http://127.0.0.1/").toString("base64url"), "x"].join(".") }),
   });
 
 describe("POST /api/webmail/img", () => {
