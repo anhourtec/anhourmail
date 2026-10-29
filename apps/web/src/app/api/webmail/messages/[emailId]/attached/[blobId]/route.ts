@@ -25,7 +25,7 @@ export const GET = route(
       const secret = env().BETTER_AUTH_SECRET;
       const sanitize = linkingSanitizer(secret, { sessionId: id, accountId: s.accountId });
       const view = await webmail().attachedMessage(id, emailId, blobId, sanitize, htmlToText);
-      return view ? ok(withSenderKey(view, secret, s.username)) : notFound();
+      return view ? ok(withSenderKey(view, secret, s.username, undefined)) : notFound();
     });
   },
   { session: "webmail", limit: "webmail" },

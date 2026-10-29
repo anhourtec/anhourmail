@@ -14,6 +14,7 @@ import {
   type ServeDeps,
   signImageLink,
   verifyImageLink,
+  senderVerified,
   withSenderKey,
 } from "./image-proxy";
 import type { FetchResult } from "./remote-image";
@@ -141,13 +142,40 @@ describe("the reader's linking sanitiser", () => {
 
   it("gives the view its sender key only when there is something to load", () => {
     const loadable = buildMessageView(email('<img src="https://c.example.org/a.png">'), (h) => sanitize(h, new Map()));
-    expect(withSenderKey(loadable, SECRET, "me@a.test").senderKey).toBe(
+    const passed = {
+      spf: { result: "none", detail: null, domain: null },
+      dkim: { result: "none", detail: null, domain: null },
+      dmarc: { result: "pass", detail: null, domain: "shop.example" },
+    };
+    expect(withSenderKey(loadable, SECRET, "me@a.test", passed).senderKey).toBe(
       senderKey(SECRET, "me@a.test", "news@shop.example"),
     );
     const none = buildMessageView(email("<p>Hello</p>"), (h) => sanitize(h, new Map()));
-    expect(withSenderKey(none, SECRET, "me@a.test").senderKey).toBeNull();
+    expect(withSenderKey(none, SECRET, "me@a.test", null).senderKey).toBeNull();
     const noSender = { ...loadable, from: [] };
-    expect(withSenderKey(noSender, SECRET, "me@a.test").senderKey).toBeNull();
+    expect(withSenderKey(noSender, SECRET, "me@a.test", null).senderKey).toBeNull();
+  });
+
+  it("gives a sender key only for a From our own results verify", () => {
+    const loadable = buildMessageView(email('<img src="https://c.example.org/a.png">'), (h) => sanitize(h, new Map()));
+    const check = (result: string, domain: string | null) => ({ result, detail: null, domain });
+    const none = check("none", null);
+    const auth = (dmarc: ReturnType<typeof check>, dkim: ReturnType<typeof check>) => ({ spf: none, dkim, dmarc });
+    const key = (a: Parameters<typeof withSenderKey>[3]) => withSenderKey(loadable, SECRET, "me@a.test", a);
+    expect(key(auth(check("pass", "shop.example"), none)).senderVerified).toBe(true);
+    expect(key(auth(none, check("pass", "shop.example"))).senderKey).not.toBeNull();
+    // DKIM for a parent domain aligns; another domain's signature doesn't.
+    expect(senderVerified("news@mail.shop.example", auth(none, check("pass", "shop.example")))).toBe(true);
+    expect(key(auth(none, check("pass", "evil.example"))).senderKey).toBeNull();
+    // A forged From: DMARC failed for the domain.
+    const forged = key(auth(check("fail", "shop.example"), none));
+    expect(forged.senderKey).toBeNull();
+    expect(forged.senderVerified).toBe(false);
+    // DMARC passed for some other domain than the From's.
+    expect(key(auth(check("pass", "other.example"), none)).senderKey).toBeNull();
+    // Results that couldn't be read, or none of ours (a copy forwarded by a redirect rule looks like that): not verified.
+    expect(key(undefined).senderKey).toBeNull();
+    expect(key(null).senderVerified).toBe(false);
   });
 });
 

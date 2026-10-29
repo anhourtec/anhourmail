@@ -55,8 +55,12 @@ describe("loading images into the message frame", () => {
     const ask = { mode: "ask" as const, senders: ["k".repeat(22)] };
     expect(loadsWithoutAsking(ask, null, "friend@example.org", contacts)).toBe(false);
     expect(loadsWithoutAsking(ask, "k".repeat(22), "x@example.org", contacts)).toBe(true);
-    expect(loadsWithoutAsking({ mode: "contacts", senders: [] }, null, "Friend@Example.org", contacts)).toBe(true);
-    expect(loadsWithoutAsking({ mode: "contacts", senders: [] }, null, "x@example.org", contacts)).toBe(false);
+    expect(loadsWithoutAsking({ mode: "contacts", senders: [] }, null, "Friend@Example.org", contacts, true)).toBe(
+      true,
+    );
+    // A contact's address on a message whose From isn't verified asks first.
+    expect(loadsWithoutAsking({ mode: "contacts", senders: [] }, null, "friend@example.org", contacts)).toBe(false);
+    expect(loadsWithoutAsking({ mode: "contacts", senders: [] }, null, "x@example.org", contacts, true)).toBe(false);
     expect(loadsWithoutAsking({ mode: "contacts", senders: [] }, null, undefined, contacts)).toBe(false);
     expect(loadsWithoutAsking({ mode: "always", senders: [] }, null, undefined, contacts)).toBe(true);
   });

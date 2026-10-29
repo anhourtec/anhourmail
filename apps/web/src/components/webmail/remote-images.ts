@@ -116,8 +116,10 @@ export function loadsWithoutAsking(
   senderKey: string | null,
   from: string | undefined,
   contacts: ReadonlySet<string>,
+  verified = false,
 ): boolean {
   if (policy.mode === "always") return true;
+  // The server sends a sender key only for a verified From.
   if (senderKey !== null && policy.senders.includes(senderKey)) return true;
-  return policy.mode === "contacts" && from !== undefined && contacts.has(from.toLowerCase());
+  return policy.mode === "contacts" && verified && from !== undefined && contacts.has(from.toLowerCase());
 }

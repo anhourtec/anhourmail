@@ -610,7 +610,7 @@ function useRemoteImages(
   const auto =
     images !== undefined &&
     view.loadableImages > 0 &&
-    loadsWithoutAsking(images.policy, view.senderKey, view.from[0]?.email, images.contacts);
+    loadsWithoutAsking(images.policy, view.senderKey, view.from[0]?.email, images.contacts, view.senderVerified);
   useEffect(() => {
     if (auto && state === "blocked") void load();
   }, [auto, state, load]);

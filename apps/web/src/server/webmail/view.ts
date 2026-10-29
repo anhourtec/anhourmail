@@ -102,6 +102,11 @@ export type MessageView = {
    * the `imageSenders` preference), or null when there is no sender or nothing to load.
    */
   senderKey: string | null;
+  /**
+   * Whether the From address is trustworthy enough to load images without asking (remembered sender or contact):
+   * our own results show DMARC or aligned DKIM passing, or the message never came in from outside.
+   */
+  senderVerified: boolean;
   attachments: AttachmentView[];
 };
 
@@ -284,6 +289,7 @@ export function buildMessageView(
     blockedTrackers,
     loadableImages,
     senderKey: null,
+    senderVerified: false,
     attachments,
   };
 }

@@ -8,6 +8,7 @@ import { NextResponse } from "next/server";
 import { REMOTE_IMAGES } from "@anhourmail/shared/webmail";
 import { log } from "@anhourmail/server/log";
 
+import type { AuthSummary } from "./original";
 import { type FetchResult, imageUrl } from "./remote-image";
 import { type SanitizeResult, sanitizeMessageHtml } from "./sanitize";
 import type { MessageView } from "./view";
@@ -88,11 +89,36 @@ export function linkingSanitizer(
     });
 }
 
-/** The view with its sender's key, when it has images to load and a sender (else unchanged). */
-export function withSenderKey(view: MessageView, secret: string, mailbox: string): MessageView {
+/**
+ * Whether a message's From can be trusted for loading images without asking. Our own Authentication-Results must
+ * show DMARC passing for the From domain, or DKIM passing for it (or a parent domain). Anything else asks first.
+ */
+export function senderVerified(from: string, auth: AuthSummary | null | undefined): boolean {
+  // `undefined`: the results couldn't be read (or the message is attached to another): not verified.
+  // `null`: no results of ours. That isn't proof of anything: a copy forwarded by a mailbox's own redirect rule
+  // arrives with our LMTP `Received` on top and no results, whatever its From says.
+  if (auth === undefined || auth === null) return false;
+  const domain = from.slice(from.lastIndexOf("@") + 1).toLowerCase();
+  const aligned = (d: string | null) => d !== null && (domain === d || domain.endsWith(`.${d}`));
+  return (
+    (auth.dmarc.result === "pass" && auth.dmarc.domain === domain) ||
+    (auth.dkim.result === "pass" && aligned(auth.dkim.domain))
+  );
+}
+
+/**
+ * The view with its sender's key, when it has images to load and a sender whose From is verified (else unchanged):
+ * a forged From must not load a remembered sender's images, which would tell the forger the message was opened.
+ */
+export function withSenderKey(
+  view: MessageView,
+  secret: string,
+  mailbox: string,
+  auth: AuthSummary | null | undefined,
+): MessageView {
   const from = view.from[0]?.email;
-  if (view.loadableImages === 0 || !from) return view;
-  return { ...view, senderKey: senderKey(secret, mailbox, from) };
+  if (view.loadableImages === 0 || !from || !senderVerified(from, auth)) return view;
+  return { ...view, senderKey: senderKey(secret, mailbox, from), senderVerified: true };
 }
 
 /** Largest request body: `{ "token": "…" }` with a link for a 2,048-character address. */

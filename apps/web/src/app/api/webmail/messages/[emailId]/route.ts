@@ -2,7 +2,9 @@
 import { ok, route } from "@/server/http/route";
 import { env } from "@/server/env";
 import { handleWebmail, notFound, unauthorized } from "@/server/webmail/http";
+import { platform } from "@/server/platform";
 import { linkingSanitizer, withSenderKey } from "@/server/webmail/image-proxy";
+import { type AuthSummary, authResults, trustedAuthservIds } from "@/server/webmail/original";
 import { webmail, webmailSessionId } from "@/server/webmail/instance";
 import { htmlToText } from "@/server/webmail/sanitize";
 import { isJmapId } from "@/server/webmail/view";
@@ -26,7 +28,19 @@ export const GET = route(
       const full = new URL(req.url).searchParams.get("full") === "1";
       const sanitize = linkingSanitizer(secret, { sessionId: id, accountId: s.accountId });
       const view = await webmail().message(id, emailId, sanitize, htmlToText, { full });
-      return view ? ok(withSenderKey(view, secret, s.username)) : notFound();
+      if (!view) return notFound();
+      // Only a verified From may load images without asking: read our own Authentication-Results when it matters.
+      let auth: AuthSummary | null | undefined;
+      if (view.loadableImages > 0) {
+        const e = env();
+        auth = await webmail()
+          .headers(id, emailId)
+          .then((h) =>
+            authResults(h, trustedAuthservIds(e.MAIL_AUTHSERV_ID, platform().hosts.mx, e.NODE_ENV === "production")),
+          )
+          .catch(() => undefined);
+      }
+      return ok(withSenderKey(view, secret, s.username, auth));
     });
   },
   { session: "webmail", limit: "webmail" },

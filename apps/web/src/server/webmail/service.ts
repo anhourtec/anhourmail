@@ -574,6 +574,24 @@ export class WebmailService {
     return this.#view(sessionId, accountId, email, sanitize, toText);
   }
 
+  /** A message's raw header fields in order (for the trusted Authentication-Results); empty when it's gone. */
+  async headers(sessionId: string, emailId: string): Promise<{ name: string; value: string }[]> {
+    const res = await this.jmapAs(sessionId, (s) => ({
+      using: USING,
+      methodCalls: [["Email/get", { accountId: s.accountId, ids: [emailId], properties: ["headers"] }, "h"]],
+    }));
+    const resp = res as { methodResponses?: [string, { list?: { headers?: unknown }[] }, string][] } | null;
+    const [name, args] = resp?.methodResponses?.[0] ?? [];
+    if (name !== "Email/get") throw new WebmailUnavailableError("unexpected response");
+    const list = args?.list?.[0]?.headers;
+    if (!Array.isArray(list)) return [];
+    return list.flatMap((h: unknown) => {
+      if (typeof h !== "object" || h === null) return [];
+      const { name: n, value } = h as { name?: unknown; value?: unknown };
+      return typeof n === "string" && typeof value === "string" ? [{ name: n, value: value.trim() }] : [];
+    });
+  }
+
   /** Builds the reader view: inline images, a markdown body and calendar invitations fetched as small blobs. */
   async #view(
     sessionId: string,
