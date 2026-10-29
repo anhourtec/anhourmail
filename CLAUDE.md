@@ -90,14 +90,15 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 
 ## Where we are and what's next
 
-As of 2026-10-23 development pauses while pre-staging goes up on one VM from the private ops repository
-(`anhourmail-ops`, following the local-only `deploy.md`). The next phases, in order, with exit criteria, are in
-`docs/internal/09-roadmap.md` "Path to production":
+Pre-staging has run on one VM since 2026-10-23 from the private ops repository (`anhourmail-ops`, following the
+local-only `deploy.md`); as of 2026-10-29 the work since then (Add a user, shared addresses, DKIM TXT keys, rich-text
+compose, unverified-domain expiry) waits for the next pre-staging deploy. The next phases, in order, with exit
+criteria, are in `docs/internal/09-roadmap.md` "Path to production":
 
 1. pre-staging on one VM (real DNS, certificates, rDNS, external mail, backups and a restore drill);
 2. product gaps a beta needs (free sign-up with SMS/OTP, webmail session handoff, data export and deletion, act-as,
    image proxy, push sync, webmail settings part 2);
-3. billing;
+3. billing, plus mail and contacts import (migration);
 4. abuse controls, monitoring and backups;
 5. production host (app VM + mail VM), warm-up and dogfood;
 6. closed beta, then launch.
@@ -324,6 +325,15 @@ an app container direct access to Stalwart's management listener.
     say so in the session summary. Same rules as everything public: no secrets or private details (rule 44), no
     competitor names (rule 57).
 
+60. **Sweep every Markdown doc against the code every session.** Before the session ends (and before any push),
+    check every `.md`/`.mdx` the session's work could have made stale, not only the ones a commit touched:
+    `docs/internal/*` (incl. `09-roadmap.md` phase status lines and "Path to production", `codemap.md`,
+    `migration.md`, `audit.md`, `roles.md`, `rate-limits.md`), ADRs (add a dated "Update" note, never rewrite the
+    decision), `docs/public/**` and the changelog, `README.md`, `AGENTS.md` (pinned versions), this file's "Where we
+    are and what's next", and `docs/internal/handoff.md`. Verify claims against the code (statuses, names, limits,
+    jobs, migrations, routes), fix what's wrong, and bump a doc's `Last updated:` line whenever its content changes.
+    Record in the handoff that the sweep ran and what it changed; if nothing was stale, say so.
+
 ## Project conventions
 
 - **Services hold the logic; route handlers only parse, call and map errors.** Services take the actor and check
@@ -354,3 +364,5 @@ an app container direct access to Stalwart's management listener.
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Rule 59: update the README with every push                                                                                         |
 | 2026-10-22 | Nishchayjeet Singh (Nish) | Waitlist removed from the product (maintainer decision); sign-up is open (firewalled) or closed                                    |
 | 2026-10-23 | Nishchayjeet Singh (Nish) | "Where we are and what's next": development pauses for pre-staging; next phases to production                                      |
+| 2026-10-29 | Nishchayjeet Singh (Nish) | "Where we are and what's next": pre-staging running; the work since waits for the next deploy                                      |
+| 2026-10-29 | Nishchayjeet Singh (Nish) | Rule 60: sweep every Markdown doc against the code every session; bump `Last updated` on change                                    |
