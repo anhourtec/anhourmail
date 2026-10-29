@@ -17,7 +17,7 @@ Last updated: 2026-10-29.
 | T9  | Token or secret leakage                                 | Stalwart tokens, Stripe keys, DKIM keys | Key ring encryption with AAD; write-only secrets; redaction list in logs and audit; no tokens in the browser                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | T10 | Mail content leaking into logs, analytics or errors     | Privacy promise                         | Content keys redacted by the logger; no third-party error reporting; rule 24 checks in review                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | T11 | CSRF / cross-origin abuse of cookie sessions            | Console actions                         | Same-origin check on unsafe methods; `SameSite=Lax` host-only cookies; no CORS                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| T12 | SSRF via user-supplied hosts (IMAP import, image proxy) | Internal network                        | Allow public addresses only (block private, loopback and link-local ranges after DNS resolution); port allow-list; timeouts; no redirects to internal hosts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| T12 | SSRF via user-supplied hosts (IMAP import, image proxy) | Internal network                        | Allow public addresses only (block private, loopback and link-local ranges after DNS resolution); port allow-list; timeouts; no redirects to internal hosts (image proxy built 2026-10-29: "Image proxy (SSRF)")                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | T13 | Audit tampering                                         | Accountability                          | Append-only triggers (migration 0001); per-scope hash chain; verification job every 6 hours (`audit.md`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | T14 | Supply chain                                            | Everything                              | Pinned versions and lockfile; licence allowlist; `npm audit` and gitleaks in CI; Stalwart pinned by digest                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | T15 | Lawful access / foreign legal process                   | User data                               | No hosting-region claims; data minimisation; transparency report; legal-request runbook                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -513,6 +513,66 @@ mailbox's own credentials: they can only mislead themselves, or the others shari
 owner after "Make this a user" (messages planted before the handover, or through an IMAP session that outlives it;
 "Mailbox passwords" above). A robust fix would be cryptographic: have the mail server ARC-seal inbound mail and
 verify the seal (our key, configured, no DNS) in the webmail before trusting the results. Open item, not built.
+
+## Image proxy (SSRF)
+
+Built 2026-10-29. "Load images" in the webmail fetches remote images on the reader's behalf
+(`apps/web/src/server/webmail/{image-proxy,remote-image}.ts`, route `POST /api/webmail/img`). The address comes from a
+stranger's email, so the proxy is an SSRF surface and a tracking surface at once.
+
+**Not an open proxy.** The proxy only fetches addresses it signed itself. When the reader's message view is served,
+the sanitiser removes every remote `<img>` address and leaves an image link in `data-am-img`:
+`v1.<expiry>.<base64url address>.<mac>`, HMAC-SHA256 under `BETTER_AUTH_SECRET` with its own domain string
+(`am.webmail.image-link.v1`), over the address, the expiry (`REMOTE_IMAGES.linkMinutes`, 60) and the webmail session id
+and active mailbox. A link from another session or mailbox, an altered one or garbage → 404; an expired one → 410
+(the reader loads the message again for fresh links, once). There is no "sign this URL" endpoint. Signed-out → 401,
+cross-origin → 403 (`route()`), then the webmail access and first-password gates.
+
+**The fetch** (`fetchRemoteImage`):
+
+- http/https only, ports 80/443 only (an explicit other port is refused), no credentials, ≤ 2,048 characters, the
+  fragment dropped. Single-label names and `localhost`, `.local`, `.internal`, `home.arpa` are refused before DNS.
+- We resolve the name ourselves (`dns.lookup`, all answers) and refuse it if **any** answer isn't public:
+  0/8, 10/8, 100.64/10, 127/8, 169.254/16, 172.16/12, 192.0.0/24, 192.0.2/24, 192.31.196/24, 192.52.193/24,
+  192.88.99/24, 192.168/16, 192.175.48/24, 198.18/15, 198.51.100/24, 203.0.113/24, 224/4, 240/4; for IPv6 only
+  2000::/3 is allowed at all, minus 2001::/23 (Teredo, benchmarking, ORCHID), 2001:db8::/32, 2002::/16 (6to4) and
+  3fff::/20. IPv4-mapped addresses are judged as their IPv4 address; NAT64, IPv4-compatible, ULA, link-local,
+  site-local and multicast fall outside 2000::/3. IP literals in the URL (including `0x7f.1`, `2130706433`,
+  bracketed IPv6) go through the same check after URL parsing normalises them.
+- **Pinned connection:** the socket connects to the checked IP itself (no second lookup, so DNS rebinding can't swap
+  in an internal address); the Host header, SNI and certificate check use the name.
+- Redirects (301/302/303/307/308) are followed by hand, at most 3, and every hop is checked from scratch (scheme, port,
+  DNS, ranges). One deadline for the whole chain (10 s), DNS lookups included (a name that never answers
+  ends at the deadline, so it can't hold a fetch slot).
+- `Accept-Encoding: identity` (a compressed answer is refused: no decompression bombs); the size is capped at
+  `REMOTE_IMAGES.maxMb` (5 MB) from Content-Length and while reading.
+- Only raster images by their **magic bytes** (PNG, JPEG, GIF, WebP, BMP) — never SVG, HTML or anything else,
+  whatever Content-Type says; the answer goes back with the sniffed type, `Content-Security-Policy: default-src
+'none'; sandbox`, `nosniff`, `Cross-Origin-Resource-Policy: same-origin`, `Cache-Control: no-store` and no
+  Set-Cookie.
+- Nothing about the reader goes out: no cookies, Referer, X-Forwarded-For or Origin, User-Agent `Mozilla/5.0`.
+- At most 16 fetches in flight per process and 4 per webmail session (each holds ≤ 5 MB), then 429; the `webmailImage` tier (300 / 60 s per
+  session, fail closed).
+
+**Nothing loads in the frame.** The browser turns each answer into a `data:` URL (raster types only) and puts it in
+the sandboxed `srcdoc` frame, whose own CSP stays `img-src data:`; the frame never makes a request. The link travels
+in the POST body, never a path or query, so no image address reaches NGINX or Next access logs. The proxy logs only
+the outcome (`reason`) or the byte count — never the address, its host or query (rule 24).
+
+**Tracking pixels** (≤ 2×2) are still removed by the sanitiser and never get a link; CSS background images stay
+blocked.
+
+**Remembered senders** ("Always load from this sender") are stored in `webmail_preference.prefs.imageSenders` as
+HMAC-SHA256 keys of the lowercased From address under the server secret, per mailbox (22 characters, ≤ 500), never
+the address. The server sends a message's `senderKey`; the browser only compares and stores keys. A forged From
+header can make a remembered sender's images load: that reveals to the forger only that the message was opened
+through our proxy, never the reader's address. Audit records the changed preference keys only.
+
+**Tests:** `remote-image.test.ts` (every blocked range, mapped/NAT64/6to4 forms, URL refusals, redirects to internal
+addresses, the redirect limit, DNS rebinding, size caps, compression, SVG/HTML refusal, deadline, headers sent),
+`image-proxy.test.ts` (links: other session, other mailbox, altered, expired; route logic 401/404/410/502/429 and
+response headers; logs carry no address), `img/route.test.ts` (signed-out 401, cross-origin 403, tier),
+e2e `webmail-images.spec.ts`.
 
 ## Review process
 

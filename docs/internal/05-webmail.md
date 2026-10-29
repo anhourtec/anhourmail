@@ -1,13 +1,13 @@
 # 05 — Webmail
 
-Last updated: 2026-10-29 (reading: conversations, message menu, Show original page, restore; auto refresh, chime and
+Last updated: 2026-10-29 (remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
 notifications; quoted replies; compose image placeholders; first-sign-in password step; sign-in links not pre-filled).
 
 **Status (2026-10-22): slice 1 is built** — webmail sign-in (OAuth code flow + PKCE, tokens sealed server-side), the
 JMAP proxy (allow-list, per-user queue ≤ 4, `limit` retry), folders with counts and nesting, the thread-collapsed
 windowed list, the reader (server-sanitised HTML in a sandboxed `srcdoc` frame, remote images blocked, attachments as
 downloads), read/unread/flag, basic shortcuts, and the control-plane mailbox gate. Next slices: push (SSE fan-out),
-IndexedDB cache and `*/changes` sync, the image proxy ("Load images" is shown disabled until then), composer,
+IndexedDB cache and `*/changes` sync, the image proxy (built 2026-10-29, "Remote images" below), composer,
 move/archive/delete, search. Until push lands the client refreshes on tab focus and every 5 minutes (superseded
 2026-10-23: a 30 s `Email/changes` check, see "Push"). Details:
 `01-architecture.md` "How the webmail gets a Stalwart session". Research: `research/legacy-audit.md`, `research/ui-references.md`, `research/stalwart.md` §5.
@@ -227,9 +227,10 @@ keywords (`settings/sections.ts`), so "vacation", "spam" or "24-hour" still find
 - **Defaults** are the current behaviour, so most people never open settings: comfortable, right pane, 2 preview
   lines, grouped by conversation, mark read when opened, open the next message after a move, Reply, 10 s undo,
   English (Canada) dates, the device's time zone, shortcuts on, start in Inbox.
-- **Not offered (no real behaviour yet), recorded rather than shown as placeholders:** loading remote images
-  ("always ask" / "allow for contacts") needs the image proxy — the Reading panel states that remote images are
-  blocked; read receipts — Stalwart v0.16.27 doesn't advertise JMAP MDN, and the webmail never sends them (stated);
+- **Remote images (2026-10-29):** Reading → Privacy offers **Remote images: Always ask / Load from contacts / Always
+  load** (`remoteImages`, default ask) and **Senders whose images always load** with a count and **Forget all**
+  (`imageSenders`: keyed hashes, so the list can't be shown as addresses). See "Remote images" below.
+- **Not offered (no real behaviour yet), recorded rather than shown as placeholders:** read receipts — Stalwart v0.16.27 doesn't advertise JMAP MDN, and the webmail never sends them (stated);
   "basic formatted" messages — superseded: the composer writes rich text by default (2026-10-24); "empty Deleted after N days" — JMAP
   doesn't expose when a message was moved to Trash, so a correct per-person policy needs the worker-side
   `folder_policy` (phase 6); the server-wide 30-day clean-up applies meanwhile. "Empty Trash when I sign out" is
@@ -390,7 +391,7 @@ React UI (virtualized lists, reader iframe, composer)
 Sync engine (packages/jmap-client + webmail store)
    │  IndexedDB cache: mailboxes, thread/email summaries, state strings, bodies (LRU, size-capped)
    │  outbox queue (optimistic actions with rollback)
-Same-origin BFF  /jmap (proxy) · /jmap/push (SSE) · /jmap/upload · /jmap/download · /img (image proxy)
+Same-origin BFF  /jmap (proxy) · /jmap/push (SSE) · /jmap/upload · /jmap/download · /img (image proxy, POST)
    │  attaches the user's Stalwart Bearer token server-side; rewrites session URLs
    │  (token from the headless OAuth code flow — see "Session acquisition")
 Stalwart JMAP (Core, Mail, Submission, Blob, Quota, Sieve, WebSocket push)
@@ -481,13 +482,24 @@ it can't reach the check above; the suspension is named only to a browser that s
 
 - The BFF holds **one upstream push channel per active user**: the JMAP WebSocket with `WebSocketPushEnable` (preferred) or EventSource. It fans `StateChange` events out to every open tab over **our own SSE** endpoint. Tabs share one connection via `BroadcastChannel` and leader election.
 - A state change triggers `*/changes` for the affected types only. There is no polling (except a 5-min safety resync when push is down).
-- **Until push lands (built today):** the app asks `Email/changes` every 30 s while the tab is visible (at once on
-  focus, visibility or coming back online; backing off after errors). A real change reloads the folders and the list
-  windows in place, and is passed to the open conversation as the new messages' thread ids and the changed or
+- **Until push lands (built today):** the app sends one request carrying `Email/changes` and `Mailbox/changes`
+  every 30 s while the tab is visible (at once on focus, visibility or coming back online; backing off after errors;
+  `mailChanges` in `components/webmail/mail-client.ts`). Changed folders alone (counts moved by reading or moving
+  mail on another device or in an IMAP app) reload just the folder counts. A real mail change reloads the folders and
+  the list windows in place, and is passed to the open conversation as the new messages' thread ids and the changed or
   removed message ids: when it touches the conversation (or on Refresh, or when the server can't list the changes),
   the conversation loads again in place — what the person expanded or collapsed stays, newly arrived messages open
   like on first opening, the scroll position and loaded bodies are kept (`mergeExpanded`, `touchesThread` in
   `components/webmail/conversation.ts`). New arrivals aren't marked read automatically.
+- **Folder counts follow the webmail's own changes (2026-10-29):** the mail client reports every change it makes to
+  folder membership or read/draft state once it has been answered (`onChange`: `Email/set` updates and destroys, a
+  new draft, a send, an undone send — saving over an existing draft doesn't change a count and isn't reported; a
+  refusal changed nothing and isn't either). The app turns those reports into one folder reload (`Mailbox/get` plus
+  the Priority count) 300 ms after the first, coalesced so a burst of changes costs one reload and never more than one
+  is in flight (`coalescer` in `components/webmail/sync.ts`); while Drafts is shown its list reloads with it. So no
+  action has to remember to reload the counts — discarding a draft, sending one, reading, moving, restoring,
+  blocking or reporting spam all go through the same path. Marking read or unread also moves the unread counts at
+  once for the messages the list has (`adjustUnread`); the server's counts that follow are the source of truth.
 - **New mail alerts (2026-10-23; chime and permission help in `components/webmail/sync.ts`, the check in
   `webmail-app.tsx`):** when the check finds new Inbox mail, an optional
   short chime (Web Audio, `newMailSound`, default on) and an optional desktop notification naming only the sender,
@@ -503,8 +515,34 @@ it can't reach the check above; the suspension is named only to a browser that s
 ### Rendering safety
 
 - Server-side sanitising (allow-list sanitizer; HourMail's DOMPurify config is the starting point, hardened per `research/legacy-audit.md`) plus a client-side defence in depth.
-- Message HTML renders in an `<iframe sandbox>` **without `allow-scripts` and without `allow-same-origin`**, `srcdoc`, with its own CSP: `default-src 'none'; img-src data: https://mail.anhourmail.com/img/; style-src 'unsafe-inline'; font-src data:`. Links open via `target=_blank rel=noopener noreferrer` through a click interstitial for lookalike domains.
-- **Remote images are blocked by default.** "Load images" fetches them through our image proxy (`/img/<signed-url>`): no cookies, no referrer, a size cap, and content-type checks. Senders never see the user's IP. The choice can be remembered per sender.
+- Message HTML renders in an `<iframe sandbox>` **without `allow-scripts` and without `allow-same-origin`**, `srcdoc`, with its own CSP: `default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none'` (the frame never loads an image by URL, not even from the proxy: loaded images arrive as `data:` URLs). Links open via `target=_blank rel=noopener noreferrer` through a click interstitial for lookalike domains.
+- **Remote images are blocked by default.** "Load images" fetches them through our image proxy (`POST /api/webmail/img` with a signed image link): no cookies, no referrer, no client address, a size cap, and content checks. Senders never see the user's IP. The choice can be remembered per sender. Details: "Remote images" below and `07-security.md` "Image proxy (SSRF)".
+
+### Remote images
+
+Built 2026-10-29. `server/webmail/{sanitize,image-proxy,remote-image}.ts`, `app/api/webmail/img/route.ts`,
+`components/webmail/{message-body,remote-images,mail-client}.ts(x)`.
+
+- **Served blocked, with links.** The message routes (`messages/:emailId`, `attached/:blobId`) sanitise with
+  `linkingSanitizer`: every remote `<img>` (http, https, protocol-relative) becomes a placeholder with a signed
+  **image link** in `data-am-img` and no address; at most `REMOTE_IMAGES.perMessage` (100) per message. Trackers
+  (≤ 2×2) are still dropped and never linked; CSS background images stay blocked (counted, not loadable). The view
+  carries `loadableImages` and `senderKey`. The print view keeps images blocked.
+- **Why sign when serving, not a sign endpoint:** the proxy can only ever fetch addresses that were in a message this
+  session opened, for the mailbox it showed, for an hour; a sign endpoint would let any session make us fetch any
+  address. The link goes in a POST body so no address lands in access logs.
+- **Loading.** "Load images" (or a setting) posts each distinct link to the proxy, four at a time; answers become
+  `data:` URLs (raster types only) and replace the placeholders in the frame document (one re-render at the end).
+  An expired link (410) makes the reader load the message again for fresh links, once. Images that fail stay
+  placeholders and the notice says how many.
+- **Without asking:** `remoteImages` `always`; `contacts` when the From address is on a contact card (the reader's
+  known-addresses set); or a remembered sender (`senderKey` in `imageSenders`). "Always load from this sender" /
+  "Stop loading from this sender" on the notice; "Forget all" in Reading settings.
+- **Notice copy.** Blocked: "N remote images blocked · N trackers removed — Senders can't see when or where you
+  opened this. Loading them goes through our privacy proxy, so the sender never sees your IP address." Loaded:
+  "Images loaded through our privacy proxy — The sender can't see your IP address or your browser."
+- **Limits** (`REMOTE_IMAGES` in `packages/shared/src/webmail.ts`, published): 5 MB per image, 100 per message,
+  3 redirects, 10 s, links valid 60 min, 500 remembered senders. Rate tier `webmailImage`.
 - Print, forward and "view original" run through the same sanitiser and sandbox. Attachments download with `Content-Disposition: attachment` and are never rendered inline on the app origin (all three of HourMail's XSS paths are closed).
 - The app CSP is nonce-based with `'strict-dynamic'`, `connect-src 'self'`, `frame-src 'self'` (srcdoc), `object-src 'none'`, `base-uri 'none'`, and `Referrer-Policy: no-referrer`. There are no third-party scripts, fonts, analytics or error reporters (rule 29).
 
@@ -553,7 +591,7 @@ Not built yet: the `g i` / `g s` / `g d` go-to sequences.
 
 | Capability                                                                           | How                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Plan                        | Phase                          |
 | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- | ------------------------------ |
-| System folders: Inbox, Drafts, Sent, Archive, Junk, Trash                            | JMAP `role`s; Archive created at provisioning (verified: a new account has inbox, drafts, sent, junk, trash only; `Mailbox/set create {name:"Archive", role:"archive"}` works); Inbox/Junk/Trash can't be deleted (server rule)                                                                                                                                                                                                                                       | All                         | 4                              |
+| System folders: Inbox, Drafts, Sent, Archive, Junk, Trash                            | JMAP `role`s; Archive comes from Stalwart's `x:Email.defaultFolders` (`archive.create` on, so every account opened since gets it), older mailboxes from the one-off `backfillArchiveFolders` (ADR-0014 update); with no Archive the action shows an error toast; Inbox/Junk/Trash can't be deleted (server rule)                                                                                                                                                      | All                         | 4                              |
 | Custom and nested folders: create, rename, move, delete                              | `Mailbox/set` via the BFF; depth ≤ 6, name ≤ 120 chars, count ≤ plan limit enforced by the BFF (re-verified in Phase 1, 2026-10-21: `x:Email.maxMailboxDepth` = 10 is enforced for single creates — level 11 fails `invalidProperties` "too deep" — but a 14-level batched chain of `#back-references` was accepted); delete refuses folders with subfolders (`mailboxHasChild`) — UI offers "delete with subfolders" which removes children first after confirmation | All                         | 4                              |
 | Unread / total counts, unread-only view                                              | `unreadEmails` / `totalEmails` from `Mailbox/get` + `Mailbox/changes`                                                                                                                                                                                                                                                                                                                                                                                                 | All                         | 4                              |
 | Favourites (pinned to top), colours, collapsed state                                 | `folder_preference` in the control plane (JMAP has no such property)                                                                                                                                                                                                                                                                                                                                                                                                  | All                         | 4 (favourites) · 4.1 (colours) |
