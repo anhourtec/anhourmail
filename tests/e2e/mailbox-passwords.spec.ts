@@ -65,10 +65,11 @@ test("create with a password, sign in, change it in the webmail, and an owner's 
 
   // Create with a generated password, shown once.
   await (await openNav(page)).getByRole("link", { name: "Mailboxes" }).click();
+  await expect(page.getByRole("heading", { name: "Mailboxes", level: 1 })).toBeVisible();
   await page.getByRole("button", { name: "More actions" }).click();
   await page.getByRole("menuitem", { name: "Add a shared address" }).click();
   const adding = panel(page, "Add a shared address");
-  await page.getByLabel("Address").fill("pat");
+  await page.getByLabel("Address", { exact: true }).fill("pat");
   await page.getByLabel("Domain").selectOption({ label: domain });
   await page.getByLabel("Belongs to").selectOption({ label: people.member });
   await expect(adding.getByText("A passphrase works well.", { exact: false })).toBeVisible();

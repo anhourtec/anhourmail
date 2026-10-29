@@ -23,9 +23,10 @@ test("an owner creates an app password for their own mailbox, sees it once, and 
   await verifyDomain(page, domain);
   await page.keyboard.press("Escape");
   await (await openNav(page)).getByRole("link", { name: "Mailboxes" }).click();
+  await expect(page.getByRole("heading", { name: "Mailboxes", level: 1 })).toBeVisible();
   await page.getByRole("button", { name: "More actions" }).click();
   await page.getByRole("menuitem", { name: "Add a shared address" }).click();
-  await page.getByLabel("Address").fill("me");
+  await page.getByLabel("Address", { exact: true }).fill("me");
   await page.getByLabel("Domain").selectOption({ label: domain });
   await page.getByLabel("Belongs to").selectOption({ label: u.users.owner });
   await page.getByLabel("Password", { exact: true }).fill("e2e mailbox password");
