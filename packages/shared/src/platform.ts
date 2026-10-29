@@ -39,6 +39,20 @@ export type SuspensionReason = keyof typeof SUSPENSION_REASONS;
 export const isSuspensionReason = (v: unknown): v is SuspensionReason =>
   typeof v === "string" && Object.hasOwn(SUSPENSION_REASONS, v);
 
+/**
+ * Staff support access ("act as", ADR-0023): a Global or Support Administrator opens one customer account read-only
+ * for a while, with a written reason the account's admins see in their audit log.
+ */
+export const ACT_AS = {
+  /** Minutes one start or renewal lasts. */
+  minutes: 30,
+  /** Longest a session can be renewed to, counted from its start (minutes); then staff start a new one. */
+  maxMinutes: 240,
+  /** The reason, in characters (trimmed, whitespace collapsed). */
+  reasonMin: 10,
+  reasonMax: 500,
+} as const;
+
 export const BRAND = {
   product: "AnhourMail",
   company: "Anhourtec",

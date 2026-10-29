@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import {
   ACCOUNT_POLICY,
+  ACT_AS,
   ADDONS,
+  ALIAS_CREATIONS_PER_DAY,
   APP_PASSWORDS_PER_MAILBOX,
   BREACHED_PASSWORD,
   BILLING,
@@ -37,6 +39,7 @@ import {
   type TrustTier,
   WEBMAIL_ATTACHMENTS,
   WEBMAIL_HTML,
+  WEBMAIL_SIGNATURES,
 } from "@anhourmail/shared";
 import { AVATAR } from "@anhourmail/shared/profile";
 
@@ -50,6 +53,9 @@ import { CopyButton } from "./copy-button";
 
 const VALUES = {
   productDomain: PRODUCT_DOMAIN,
+  // Anhourtec support access (packages/shared/src/platform.ts ACT_AS, ADR-0023).
+  actAsMinutes: String(ACT_AS.minutes),
+  actAsMaxHours: String(ACT_AS.maxMinutes / 60),
   appHost: HOSTS.app,
   webmailHost: HOSTS.webmail,
   imapHost: HOSTS.imap,
@@ -62,6 +68,11 @@ const VALUES = {
   pendingDomainDays: String(PENDING_DOMAIN.unverifiedDays),
   inviteDays: String(INVITE_TTL_DAYS),
   inviteEmailsPerDay: String(INVITE_EMAILS_PER_DAY),
+  // Alias creations per account per UTC day (packages/shared/src/plans.ts); deleting gives none back.
+  aliasCreationsPerDayFree: String(ALIAS_CREATIONS_PER_DAY.free.alias),
+  maskedCreationsPerDayFree: String(ALIAS_CREATIONS_PER_DAY.free.masked),
+  aliasCreationsPerDayPaid: String(ALIAS_CREATIONS_PER_DAY.paid.alias),
+  maskedCreationsPerDayPaid: String(ALIAS_CREATIONS_PER_DAY.paid.masked),
   maxPeople: String(MAX_PEOPLE),
   photoMaxUpload: `${String(AVATAR.maxUploadMb)} MB`,
   // Free platform addresses (packages/shared/src/addresses.ts, plans.ts; ADR-0021)
@@ -96,6 +107,12 @@ const VALUES = {
   attachmentPerMessage: `${String(WEBMAIL_ATTACHMENTS.perMessageMb)} MB`,
   htmlMaxSize: `${String(WEBMAIL_HTML.maxMb)} MB`,
   htmlInlineImage: `${String(WEBMAIL_HTML.inlineImageKb)} KB`,
+  signaturesPerMailbox: String(WEBMAIL_SIGNATURES.perMailbox),
+  signatureNameChars: String(WEBMAIL_SIGNATURES.nameChars),
+  signatureImages: String(WEBMAIL_SIGNATURES.imagesPerSignature),
+  signatureImageSize: `${String(WEBMAIL_SIGNATURES.imageKb)} KB`,
+  signatureMaxSize: `${String(WEBMAIL_SIGNATURES.signatureKb)} KB`,
+  signaturesMaxSize: `${String(WEBMAIL_SIGNATURES.mailboxKb / 1024)} MB`,
   // Remote images through the webmail's image proxy (packages/shared/src/webmail.ts)
   remoteImageSize: `${String(REMOTE_IMAGES.maxMb)} MB`,
   remoteImagesPerMessage: String(REMOTE_IMAGES.perMessage),

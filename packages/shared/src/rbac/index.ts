@@ -69,7 +69,12 @@ export const PERMISSIONS = {
   "platform.staff.manage": { scope: "platform", description: "Grant and revoke staff roles", critical: true },
   "platform.settings.manage": { scope: "platform", description: "Change platform settings", critical: true },
   "platform.accounts.read": { scope: "platform", description: "Look up customer accounts (never mail content)" },
-  "platform.accounts.actAs": { scope: "platform", description: "Act as a customer, time-limited", critical: true },
+  "platform.accounts.actAs": {
+    scope: "platform",
+    description:
+      "Open a customer account read-only as Anhourtec support (time-limited, written reason, fresh step-up; never staff accounts)",
+    critical: true,
+  },
   "platform.users.resetCredentials": { scope: "platform", description: "Reset a customer's password or 2FA" },
   "platform.mailbox.create": {
     scope: "platform",
@@ -385,6 +390,12 @@ export const NON_DELEGABLE_ROLES: readonly AccountRole[] = ["member", "auditor"]
 
 /** Staff roles allowed to "act as" a customer (time-limited, banner, audited, never mail content). */
 export const ACT_AS_ROLES: readonly PlatformRole[] = ["global_admin", "support_admin"];
+
+/**
+ * The one role staff hold inside the account while acting in it (ADR-0023): read-only. Every service check runs as for
+ * an Auditor of that account, so nothing changes and owner-only actions answer 403; there is no "with changes" mode.
+ */
+export const ACT_AS_ACCOUNT_ROLE: AccountRole = "auditor";
 
 export const isCritical = (p: Permission): boolean => "critical" in PERMISSIONS[p];
 

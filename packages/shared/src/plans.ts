@@ -44,11 +44,29 @@ export type Plan = {
   /** `null` = unlimited. */
   aliases: number | null;
   maskedAliases: number | null;
+  /**
+   * Aliases and, separately, masked aliases one account may create per UTC day (`ALIAS_CREATIONS_PER_DAY`). Counted
+   * from creations, not from the aliases that exist, so deleting one gives none back.
+   */
+  aliasCreationsPerDay: AliasCreationsPerDay;
   catchAll: boolean;
   supporterBadge: boolean;
 };
 
 const GB = 1;
+
+export type AliasCreationsPerDay = Readonly<{ alias: number; masked: number }>;
+
+/**
+ * Daily creation caps (placeholders until abuse data says otherwise; handoff open items). They stop an account from
+ * churning through addresses (create, use once, delete, repeat) that the live-count limits alone would allow. Fails
+ * closed: the count is kept in Postgres in the same transaction as the alias. The docs render them
+ * (`<AliasCreationLimits />`).
+ */
+export const ALIAS_CREATIONS_PER_DAY: Readonly<Record<"free" | "paid", AliasCreationsPerDay>> = {
+  free: { alias: 10, masked: 20 },
+  paid: { alias: 50, masked: 100 },
+};
 
 /** Paid plans (2026-10-23): an extra mailbox beyond the ten included, per year. */
 const EXTRA_MAILBOX_PRICE: Price = { USD: 100, CAD: 140 };
@@ -74,6 +92,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     addPeople: false,
     aliases: 5,
     maskedAliases: 10,
+    aliasCreationsPerDay: ALIAS_CREATIONS_PER_DAY.free,
     catchAll: false,
     supporterBadge: false,
   },
@@ -93,6 +112,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     addPeople: true,
     aliases: null,
     maskedAliases: null,
+    aliasCreationsPerDay: ALIAS_CREATIONS_PER_DAY.paid,
     catchAll: true,
     supporterBadge: false,
   },
@@ -112,6 +132,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     addPeople: true,
     aliases: null,
     maskedAliases: null,
+    aliasCreationsPerDay: ALIAS_CREATIONS_PER_DAY.paid,
     catchAll: true,
     supporterBadge: true,
   },

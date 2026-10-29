@@ -5,11 +5,13 @@ import {
   ACCOUNT_GRANTS,
   ACCOUNT_ROLE_SUMMARIES,
   ACCOUNT_ROLES,
+  ACT_AS_ACCOUNT_ROLE,
   ACT_AS_ROLES,
   ALL_PERMISSIONS,
   accountRoleCan,
   isCritical,
   NON_DELEGABLE_ROLES,
+  type Permission,
   PERMISSIONS,
   PLATFORM_GRANTS,
   PLATFORM_ROLES,
@@ -48,6 +50,18 @@ describe("permission matrix invariants", () => {
     expect([...ACT_AS_ROLES].sort()).toEqual(["global_admin", "support_admin"]);
     const holders = PLATFORM_ROLES.filter((r) => platformRoleCan(r, "platform.accounts.actAs")).sort();
     expect(holders).toEqual([...ACT_AS_ROLES].sort());
+  });
+
+  it("act-as grants a read-only role: no critical permission, nothing that manages, sends or changes", () => {
+    expect(NON_DELEGABLE_ROLES).toContain(ACT_AS_ACCOUNT_ROLE);
+    const granted = ACCOUNT_GRANTS[ACT_AS_ACCOUNT_ROLE];
+    for (const p of granted) {
+      expect(isCritical(p)).toBe(false);
+      expect(p.endsWith(".read")).toBe(true);
+    }
+    for (const owners of ["account.delete", "billing.manage", "account.admins.manage", "member.credentials.reset"]) {
+      expect(accountRoleCan(ACT_AS_ACCOUNT_ROLE, owners as Permission)).toBe(false);
+    }
   });
 
   it("people: Owner and User Admin invite and remove Members; Members and Billing Admins don't see people", () => {
