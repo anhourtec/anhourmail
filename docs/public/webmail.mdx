@@ -103,13 +103,27 @@ tile to switch. You can have up to five open at once. **Sign out** signs out of 
 
 ## Rich text and HTML email
 
-New messages start in **Rich text**. The toolbar above the message has bold, italic, underline, links, bulleted and
-numbered lists, quotes and **Clear formatting**; the usual shortcuts (`Ctrl`/`⌘` + `B`, `I`, `U`) work too. Switch to
-**Plain text** at the bottom of the message to send text only. If your message has formatting, you're asked first:
-switching removes it and keeps your text; **Cancel** leaves the message as it is.
+Messages are written in rich text. The toolbar above the message has:
+
+- **Undo** and **Redo**;
+- **Font** (sans serif, serif or monospace) and **Text size** (small, normal, large or huge);
+- bold, italic, underline and strikethrough;
+- **Text colour** and **Highlight**;
+- **Align** (left, centre or right), bulleted and numbered lists, and **Decrease indent** / **Increase indent**;
+- links, quotes, **Clear formatting** and **Insert HTML**.
+
+The usual shortcuts work too: `Ctrl`/`⌘` + `B`, `I` and `U`, `Ctrl`/`⌘` + `K` for a link, and `Ctrl`/`⌘` + `Z` to
+undo. On a phone, swipe the toolbar sideways to see the rest of it. Fonts are the reader's own sans-serif, serif or
+monospace font, so nothing is downloaded when your message is read.
+
+To send text only, open **More options** (the ⋯ button next to the paperclip) and choose **Plain text mode**. If your
+message has formatting, you're asked first: switching removes it and keeps your text; **Cancel** leaves the message
+as it is. In plain text, the same menu has **Switch to rich text**. A draft you wrote in plain text reopens in plain
+text.
 
 Rich messages are sent with a plain-text copy alongside, so mail apps that don't show formatting still show your
-words. Replies and forwards quote the original with its formatting. A reply's quote is marked as one, so mail apps
+words: each line stays a line, list items start with `-` or their number, and indented text isn't marked as a
+quote. Replies and forwards quote the original with its formatting. A reply's quote is marked as one, so mail apps
 (the webmail included) fold it away, and in the plain-text copy the quoted lines start with `>` under the "On …
 wrote:" line.
 
@@ -137,8 +151,10 @@ the check.
 - **Links** must start with `https://`, `http://`, `mailto:` or `tel:`, and always open in a new tab.
 - **Images** must be `https://` addresses or pictures embedded in the message (PNG, JPEG, GIF or WebP, up to
   <Value of="htmlInlineImage" /> each).
-- **Styles** that could cover the page or load code (such as fixed positioning, `expression()` or `@import`) are
-  removed; background images keep only `https://` addresses.
+- **Styles** that could cover the page or load code (such as fixed positioning, `expression()`, `var()` or
+  `@import`) are removed; background images keep only `https://` addresses. Colours, fonts, sizes, alignment,
+  spacing and strikethrough are kept only as plain values (for example `#2563eb`, `serif`, `large`, `center` or
+  `40px`); anything else in them, such as a function or a negative margin, is removed.
 
 <Callout type="warn">
   Images loaded from another server can tell whoever runs that server when and where your message was opened. Insert
@@ -223,6 +239,8 @@ your cookies or the page you're on.
 - **Always load from this sender** on the note loads this sender's images by themselves from then on. **Stop loading
   from this sender** undoes it.
 - In **Settings → Reading → Remote images** you can also load images from people in your contacts, or always.
+- Images load by themselves for a remembered sender or a contact only when the message really comes from that
+  sender's domain (it passed the domain's sender checks). A message that only pretends to be from them asks first.
 - Each image can be up to <Value of="remoteImageSize" />, and up to <Value of="remoteImagesPerMessage" /> images load
   per message. Pictures in other formats (such as SVG) and images used as backgrounds stay blocked.
 - Loading an image still tells the sender that _someone_ opened the message through our proxy. If that matters, leave
