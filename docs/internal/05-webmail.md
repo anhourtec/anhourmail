@@ -412,7 +412,9 @@ It is checked at sign-in (after Stalwart accepted the password), on every use of
 first-sign-in password gate, sign-out and the password change included — so a route that never reaches Stalwart
 (preferences, contacts settings) can't serve a blocked session either (`server/webmail/access-block.ts`). A blocked
 session is ended (record deleted, cookie cleared) and answered `401 mailbox_unavailable` with the state's message; a
-short-lived notice cookie lets the sign-in page show it. Every open session of a suspended person ends on its next
+short-lived notice cookie lets the sign-in page show it. Server pages, which can't set cookies, redirect with a
+signed `?reason=` (`reason.expiry.mac` under the server secret, 60 s), so a crafted sign-in link shows no notice
+(`blockedNoticeForLink` in `server/webmail/http.ts`). Every open session of a suspended person ends on its next
 request, within the 30 s cache.
 
 A fresh sign-in to a mailbox Stalwart already disabled fails at Stalwart with the same answer as a wrong password, so
