@@ -1,6 +1,6 @@
 ---
 title: Webmail
-description: Read and write mail in the browser — signing in, several mailboxes, writing and undoing a send, organising, searching, shortcuts, and why remote images are blocked. Contacts have their own guide.
+description: Read and write mail in the browser — signing in, several mailboxes, writing and undoing a send, organising, searching, shortcuts, and how remote images stay blocked until you load them. Contacts have their own guide.
 ---
 
 The webmail is AnhourMail in your browser, at <Value of="webmailHost" />. It's a separate address from the console
@@ -65,6 +65,8 @@ tile to switch. You can have up to five open at once. **Sign out** signs out of 
   it.
 - The list checks for new mail every half minute while the webmail is open. When a reply arrives in the conversation
   you're reading, it appears there too, without closing it; **Refresh** above the list updates both straight away.
+- The counts beside your folders (unread mail, and the number of drafts) update as you read, move, delete, send or
+  discard mail, and within half a minute when you do it in another app or on another device.
 - Plain-text messages keep their line breaks, and links and addresses in them work. Earlier messages quoted in a
   reply are folded away behind **…** — choose it to show them; signatures are shown lighter.
 - Attachments are listed under the sender, with their size. Pictures show a small preview; choose one to see it
@@ -202,17 +204,29 @@ also shows its name and shortcut.
 Theme, density, the reading pane, signatures, automatic replies, forwarding and blocked senders are all in
 **Settings** (at the bottom of the sidebar, or press `,`). See [Webmail settings](/docs/webmail-settings).
 
-## Remote images are blocked
+## Remote images are blocked until you load them
 
 Many messages, especially newsletters, load their pictures from the sender's servers when you open them. That
 tells the sender when you opened the message, roughly where you are, and which device you use — the same trick
 tracking pixels rely on.
 
-So the webmail **never loads remote images**. You'll see a striped placeholder where an image would be and a note
-saying how many were blocked. Tiny tracking pixels are removed entirely. Pictures that are part of the message
-itself (sent inside it) still show.
+So the webmail **doesn't load remote images by itself**. You'll see a striped placeholder where an image would be and
+a note saying how many were blocked. Tiny tracking pixels are removed entirely and never load. Pictures that are part
+of the message itself (sent inside it) always show.
 
-Loading remote images on request, through our privacy proxy so the sender still can't see you, is coming soon.
+### Loading images through our privacy proxy
+
+Choose **Load images** on the note to see the pictures. They're fetched by our servers, not your browser, and then
+shown in the message, so the sender's server sees our request instead of you: never your IP address, your browser,
+your cookies or the page you're on.
+
+- **Always load from this sender** on the note loads this sender's images by themselves from then on. **Stop loading
+  from this sender** undoes it.
+- In **Settings → Reading → Remote images** you can also load images from people in your contacts, or always.
+- Each image can be up to <Value of="remoteImageSize" />, and up to <Value of="remoteImagesPerMessage" /> images load
+  per message. Pictures in other formats (such as SVG) and images used as backgrounds stay blocked.
+- Loading an image still tells the sender that _someone_ opened the message through our proxy. If that matters, leave
+  them blocked.
 
 ## How messages are kept safe
 

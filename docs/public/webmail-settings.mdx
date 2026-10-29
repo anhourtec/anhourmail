@@ -36,8 +36,15 @@ they change how your mail is handled.
 - **Desktop notifications** show who sent new Inbox mail (never what it says). Your browser asks for permission the
   first time. If it blocked notifications for this site, the setting explains how to allow them again: open the site
   settings (the icon at the left of the address bar), set **Notifications** to **Allow**, then turn the setting on.
-- Remote images are always blocked and read receipts are never sent; see
-  [Remote images are blocked](/docs/webmail#remote-images-are-blocked).
+- **Remote images:** **Always ask** (the default: images on other servers stay blocked until you choose **Load
+  images**), **Load from contacts** (images load by themselves when the sender is in your contacts) or **Always
+  load**. Images always come through our privacy proxy, so senders never see your IP address, and tracking pixels are
+  always removed. See
+  [Remote images are blocked until you load them](/docs/webmail#remote-images-are-blocked-until-you-load-them).
+- **Senders whose images always load:** how many senders you chose **Always load from this sender** for (up to
+  <Value of="remoteImageSenders" />
+  ). Only a private fingerprint of each address is kept, so they can't be listed; **Forget all** clears them.
+- Read receipts are never sent.
 
 ## Writing
 
