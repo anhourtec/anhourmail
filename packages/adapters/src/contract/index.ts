@@ -375,12 +375,19 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
           enabled: false,
           adminLocked: false,
         });
-        // Daily creation counts: per account, day and kind; they survive deleting the alias. Yesterday's count is kept
-        // (clock skew between instances around midnight must not reset a day early); older days go.
+        // Per-mailbox count: both kinds on the mailbox, scoped to the account.
+        expect(await uow.run((r) => r.aliases.countForMailbox(a.id, m.id))).toBe(1);
+        expect(await uow.run((r) => r.aliases.countForMailbox(b.id, m.id))).toBe(0);
+        // Creation counts: per account, day and kind; they survive deleting the alias. The rolling year's days are
+        // kept, plus one (clock skew between instances around midnight); older days go when a new day is counted.
         const day = "2026-10-29";
+        const since = (accountId: string, kind: "alias" | "masked", from: string) =>
+          uow.run((r) => r.aliases.creationsSince(accountId, kind, from));
         expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", day))).toBe(0);
-        await uow.run((r) => r.aliases.recordCreation(a.id, "masked", "2026-10-27"));
-        await uow.run((r) => r.aliases.recordCreation(a.id, "masked", "2026-10-28"));
+        expect(await since(a.id, "masked", "2025-10-30")).toEqual([]);
+        await uow.run((r) => r.aliases.recordCreation(a.id, "masked", "2025-10-27")); // 367 days before `day`
+        await uow.run((r) => r.aliases.recordCreation(a.id, "masked", "2025-10-28")); // 366 days before: kept
+        await uow.run((r) => r.aliases.recordCreation(a.id, "masked", "2026-03-01"));
         await uow.run((r) => r.aliases.recordCreation(a.id, "masked", day));
         await uow.run((r) => r.aliases.recordCreation(a.id, "masked", day));
         await uow.run((r) => r.aliases.recordCreation(a.id, "alias", day));
@@ -388,20 +395,39 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", day))).toBe(2);
         expect(await uow.run((r) => r.aliases.creationsOn(a.id, "alias", day))).toBe(1);
         expect(await uow.run((r) => r.aliases.creationsOn(b.id, "masked", day))).toBe(1);
-        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", "2026-10-28"))).toBe(1); // yesterday: kept
-        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", "2026-10-27"))).toBe(0); // older: dropped
+        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", "2025-10-28"))).toBe(1);
+        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", "2025-10-27"))).toBe(0); // dropped
         expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", "2026-10-30"))).toBe(0);
+        // The rolling year ending on `day` starts 364 days before it; oldest first, inclusive, per account and kind.
+        expect(await since(a.id, "masked", "2025-10-30")).toEqual([
+          { day: "2026-03-01", count: 1 },
+          { day, count: 2 },
+        ]);
+        expect(await since(a.id, "masked", "2025-01-01")).toEqual([
+          { day: "2025-10-28", count: 1 },
+          { day: "2026-03-01", count: 1 },
+          { day, count: 2 },
+        ]);
+        expect(await since(a.id, "masked", day)).toEqual([{ day, count: 2 }]);
+        expect(await since(a.id, "alias", "2025-10-30")).toEqual([{ day, count: 1 }]);
+        expect(await since(b.id, "masked", "2025-10-30")).toEqual([{ day, count: 1 }]);
         // An instance whose clock is still on yesterday counts into yesterday and leaves today's count alone.
         await uow.run((r) => r.aliases.recordCreation(a.id, "masked", "2026-10-28"));
-        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", "2026-10-28"))).toBe(2);
+        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", "2026-10-28"))).toBe(1);
         expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", day))).toBe(2);
-        // Across a month boundary too.
+        // Across a month boundary too; earlier days in the window stay.
         await uow.run((r) => r.aliases.recordCreation(a.id, "alias", "2026-11-01"));
         expect(await uow.run((r) => r.aliases.creationsOn(a.id, "alias", "2026-10-31"))).toBe(0);
-        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", day))).toBe(0); // 2026-10-29 < 2026-10-31
+        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", day))).toBe(2);
+        // A year on, the account's older days go; another account's stay.
+        await uow.run((r) => r.aliases.recordCreation(a.id, "alias", "2027-11-03"));
+        expect(await since(a.id, "masked", "2000-01-01")).toEqual([]);
+        expect(await since(a.id, "alias", "2000-01-01")).toEqual([{ day: "2027-11-03", count: 1 }]);
+        expect(await uow.run((r) => r.aliases.creationsOn(b.id, "masked", day))).toBe(1);
         await uow.run((r) => r.aliases.delete(alias.id));
         expect(await uow.run((r) => r.aliases.get(a.id, alias.id))).toBeNull();
-        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "alias", "2026-11-01"))).toBe(1);
+        expect(await uow.run((r) => r.aliases.countForMailbox(a.id, m.id))).toBe(0);
+        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "alias", "2027-11-03"))).toBe(1);
       } finally {
         await cleanup();
       }
@@ -2016,6 +2042,172 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         expect(await uow.run((r) => r.avatars.get(person))).toBeNull();
         expect(await uow.run((r) => r.avatars.remove({ kind: "mailbox", id: "not-a-uuid" }))).toBe(false);
         expect(await uow.run((r) => r.avatars.get(mbx))).not.toBeNull();
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("data exports: insert, list per person and kind, claim once, store sealed, download, expire (ADR-0025)", async () => {
+      const { uow, cleanup, createUser } = await factory();
+      try {
+        const userId = await createUser(`export-${randomUUID()}@example.com`);
+        const { id: accountId } = await uow.run((r) => r.accounts.create({ name: "Contract export", plan: "plus" }));
+        await uow.run((r) => r.accounts.addMember({ accountId, userId, role: "owner" }));
+        // Oldest in the table, so this test's claim takes it whatever else a shared database holds.
+        const createdAt = new Date("2000-01-01T00:00:00Z");
+        const base = {
+          requestedBy: userId,
+          status: "queued" as const,
+          createdAt,
+          startedAt: null,
+          readyAt: null,
+          expiresAt: null,
+          downloadedAt: null,
+          sizeBytes: null,
+          attempts: 0,
+          error: null,
+        };
+        const accountExport = { ...base, id: randomUUID(), kind: "account" as const, accountId };
+        const personal = {
+          ...base,
+          id: randomUUID(),
+          kind: "personal" as const,
+          accountId: null,
+          createdAt: new Date(),
+        };
+        await uow.run(async (r) => {
+          await r.dataLifecycle.insertExport(accountExport);
+          await r.dataLifecycle.insertExport(personal);
+        });
+        expect(
+          (await uow.run((r) => r.dataLifecycle.listExports(userId, "account", accountId, 10))).map((e) => e.id),
+        ).toEqual([accountExport.id]);
+        expect(
+          (await uow.run((r) => r.dataLifecycle.listExports(userId, "personal", null, 10))).map((e) => e.id),
+        ).toEqual([personal.id]);
+        expect(await uow.run((r) => r.dataLifecycle.listExports(userId, "account", randomUUID(), 10))).toEqual([]);
+        expect(await uow.run((r) => r.dataLifecycle.getExport("not-a-uuid"))).toBeNull();
+
+        const now = new Date();
+        const claimed = await uow.run((r) => r.dataLifecycle.claimExport(now, new Date(now.getTime() - 60_000)));
+        expect(claimed).toMatchObject({ id: accountExport.id, status: "building", attempts: 1 });
+        const startedAt = claimed?.startedAt ?? now;
+        // A stale claim's outcome changes nothing.
+        expect(
+          await uow.run((r) =>
+            r.dataLifecycle.storeArchive(accountExport.id, new Date(0), new Uint8Array([1]), now, now),
+          ),
+        ).toBe(false);
+        expect(await uow.run((r) => r.dataLifecycle.archive(accountExport.id))).toBeNull();
+        const sealed = new Uint8Array([9, 8, 7, 6]);
+        const expiresAt = new Date(now.getTime() + 1000);
+        expect(
+          await uow.run((r) => r.dataLifecycle.storeArchive(accountExport.id, startedAt, sealed, now, expiresAt)),
+        ).toBe(true);
+        expect(Array.from((await uow.run((r) => r.dataLifecycle.archive(accountExport.id))) ?? [])).toEqual([
+          9, 8, 7, 6,
+        ]);
+        expect(await uow.run((r) => r.dataLifecycle.getExport(accountExport.id))).toMatchObject({
+          status: "ready",
+          sizeBytes: 4,
+        });
+        await uow.run((r) => r.dataLifecycle.markDownloaded(accountExport.id, now));
+        expect((await uow.run((r) => r.dataLifecycle.getExport(accountExport.id)))?.downloadedAt).not.toBeNull();
+
+        expect(await uow.run((r) => r.dataLifecycle.anyExpired(now))).toBe(false);
+        const later = new Date(expiresAt.getTime() + 1);
+        expect(await uow.run((r) => r.dataLifecycle.anyExpired(later))).toBe(true);
+        const expired = await uow.run((r) => r.dataLifecycle.expireExports(later, 1000));
+        expect(expired.map((e) => e.id)).toContain(accountExport.id);
+        expect(await uow.run((r) => r.dataLifecycle.archive(accountExport.id))).toBeNull();
+        expect((await uow.run((r) => r.dataLifecycle.getExport(accountExport.id)))?.status).toBe("expired");
+
+        // A failure returns it to the queue, or gives up.
+        const p = await uow.run((r) => r.dataLifecycle.getExport(personal.id));
+        expect(p?.status).toBe("queued");
+        await uow.run((r) => r.dataLifecycle.claimExport(new Date(), new Date(0)));
+        const building = await uow.run((r) => r.dataLifecycle.getExport(personal.id));
+        expect(building?.status).toBe("building");
+        const claimedAt = building?.startedAt ?? now;
+        expect(await uow.run((r) => r.dataLifecycle.failExport(personal.id, claimedAt, "TypeError", true))).toBe(true);
+        expect((await uow.run((r) => r.dataLifecycle.getExport(personal.id)))?.status).toBe("failed");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("account deletion: schedule once, cancel before it starts, due list, start, delete with what it owns", async () => {
+      const { uow, cleanup, createUser } = await factory();
+      try {
+        const userId = await createUser(`deletion-${randomUUID()}@example.com`);
+        const name = `Contract deletion ${randomUUID()}`;
+        const { id: accountId } = await uow.run((r) => r.accounts.create({ name, plan: "plus" }));
+        await uow.run((r) => r.accounts.addMember({ accountId, userId, role: "owner" }));
+        const requestedAt = new Date("2026-10-01T00:00:00Z");
+        const deleteAfter = new Date("2026-10-15T00:00:00Z");
+        const d = { accountId, requestedBy: userId, requestedAt, deleteAfter, startedAt: null };
+        await uow.run((r) => r.dataLifecycle.scheduleDeletion(d));
+        await expect(uow.run((r) => r.dataLifecycle.scheduleDeletion(d))).rejects.toBeInstanceOf(ConflictError);
+        expect(await uow.run((r) => r.dataLifecycle.getDeletion(accountId))).toEqual(d);
+        expect(await uow.run((r) => r.dataLifecycle.deletingAccountsOf(userId))).toEqual([accountId]);
+        expect(
+          (await uow.run((r) => r.dataLifecycle.pendingDeletions())).find((x) => x.accountId === accountId),
+        ).toMatchObject({
+          accountName: name,
+        });
+        const before = new Date(deleteAfter.getTime() - 1);
+        expect(
+          (await uow.run((r) => r.dataLifecycle.dueDeletions(before, 1000))).some((x) => x.accountId === accountId),
+        ).toBe(false);
+        expect(await uow.run((r) => r.dataLifecycle.startDeletion(accountId, before))).toBe(false);
+        expect(await uow.run((r) => r.dataLifecycle.cancelDeletion(accountId))).toBe(true);
+        expect(await uow.run((r) => r.dataLifecycle.getDeletion(accountId))).toBeNull();
+
+        await uow.run((r) => r.dataLifecycle.scheduleDeletion(d));
+        expect(
+          (await uow.run((r) => r.dataLifecycle.dueDeletions(deleteAfter, 1000))).some(
+            (x) => x.accountId === accountId,
+          ),
+        ).toBe(true);
+        expect(await uow.run((r) => r.dataLifecycle.startDeletion(accountId, deleteAfter))).toBe(true);
+        expect(await uow.run((r) => r.dataLifecycle.startDeletion(accountId, deleteAfter))).toBe(false);
+        expect(await uow.run((r) => r.dataLifecycle.cancelDeletion(accountId))).toBe(false);
+        expect(await uow.run((r) => r.dataLifecycle.accountCreatedAt(accountId))).toBeInstanceOf(Date);
+
+        expect(await uow.run((r) => r.dataLifecycle.deleteAccount(accountId))).toBe(true);
+        expect(await uow.run((r) => r.accounts.get(accountId))).toBeNull();
+        expect(await uow.run((r) => r.dataLifecycle.getDeletion(accountId))).toBeNull();
+        expect(await uow.run((r) => r.access.memberships(userId))).toEqual([]);
+        expect(await uow.run((r) => r.dataLifecycle.deleteAccount(accountId))).toBe(false);
+        expect(await uow.run((r) => r.dataLifecycle.accountCreatedAt(accountId))).toBeNull();
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("login deletion: the person and what hangs off it go; audit rows stay", async () => {
+      const { uow, cleanup, createUser } = await factory();
+      try {
+        const email = `login-${randomUUID()}@example.com`;
+        const userId = await createUser(email);
+        expect(await uow.run((r) => r.dataLifecycle.person(userId))).toMatchObject({ id: userId, email });
+        const scope = `account:${randomUUID()}` as const;
+        await uow.run((r) =>
+          r.audit.append(
+            { ...auditInput(scope), actor: { type: "user", userId, email, role: null, accountId: null } },
+            new Date(),
+          ),
+        );
+        // Locking and deleting in one unit of work (as deleting one's own login does).
+        expect(
+          await uow.run(async (r) => {
+            await r.dataLifecycle.lockLogin(userId);
+            return r.dataLifecycle.deleteLogin(userId);
+          }),
+        ).toBe(true);
+        expect(await uow.run((r) => r.dataLifecycle.person(userId))).toBeNull();
+        expect(await uow.run((r) => r.dataLifecycle.deleteLogin(userId))).toBe(false);
+        expect(await uow.run((r) => r.audit.chain(scope))).toHaveLength(1);
       } finally {
         await cleanup();
       }

@@ -48,7 +48,7 @@ import {
 } from "@anhourmail/core/audit";
 import type { DkimKey } from "@anhourmail/shared/dns";
 import { isSuspensionReason } from "@anhourmail/shared/platform";
-import { PLAN_ORDER, type PlanId } from "@anhourmail/shared/plans";
+import { ALIAS_YEAR_DAYS, PLAN_ORDER, type PlanId } from "@anhourmail/shared/plans";
 import { ACCOUNT_ROLES, type AccountRole, PLATFORM_ROLES, type PlatformRole } from "@anhourmail/shared/rbac";
 
 import type { Db, Executor } from "./client";
@@ -57,6 +57,7 @@ import { PgSecurityRepository } from "./security";
 import { PgWebmailSettingsRepository } from "./webmail-settings";
 import { PgAvatarRepository } from "./avatars";
 import { PgActAsRepository } from "./act-as";
+import { PgDataLifecycleRepository } from "./data-lifecycle";
 import { isUniqueViolation } from "./errors";
 import {
   accountMembership,
@@ -1069,6 +1070,28 @@ class PgAliasRepository implements AliasRepository {
     await this.x.delete(mailAlias).where(eq(mailAlias.id, id));
   }
 
+  async countForMailbox(accountId: string, mailboxId: string): Promise<number> {
+    const [r] = await this.x
+      .select({ n: sql<number>`count(*)::int` })
+      .from(mailAlias)
+      .where(and(eq(mailAlias.accountId, accountId), eq(mailAlias.mailboxId, mailboxId)));
+    return r?.n ?? 0;
+  }
+
+  async creationsSince(accountId: string, kind: AliasKind, fromDay: string): Promise<{ day: string; count: number }[]> {
+    return this.x
+      .select({ day: aliasCreationDay.day, count: aliasCreationDay.count })
+      .from(aliasCreationDay)
+      .where(
+        and(
+          eq(aliasCreationDay.accountId, accountId),
+          eq(aliasCreationDay.kind, kind),
+          gte(aliasCreationDay.day, fromDay),
+        ),
+      )
+      .orderBy(aliasCreationDay.day);
+  }
+
   async creationsOn(accountId: string, kind: AliasKind, day: string): Promise<number> {
     const [r] = await this.x
       .select({ n: aliasCreationDay.count })
@@ -1087,11 +1110,16 @@ class PgAliasRepository implements AliasRepository {
         target: [aliasCreationDay.accountId, aliasCreationDay.day, aliasCreationDay.kind],
         set: { count: sql`${aliasCreationDay.count} + 1` },
       });
-    // Today's and yesterday's counts stay (yesterday's survives clock skew between instances around midnight, so a
-    // late "yesterday" count never resets today's early); older days go (at most four rows per account remain).
+    // The yearly window's days stay, plus one (it survives clock skew between instances around midnight, so a late
+    // count never falls out of the window early); older days go (at most 2 × 367 rows per account remain).
     await this.x
       .delete(aliasCreationDay)
-      .where(and(eq(aliasCreationDay.accountId, accountId), lt(aliasCreationDay.day, sql`${day}::date - 1`)));
+      .where(
+        and(
+          eq(aliasCreationDay.accountId, accountId),
+          lt(aliasCreationDay.day, sql`${day}::date - ${ALIAS_YEAR_DAYS + 1}::int`),
+        ),
+      );
   }
 }
 
@@ -1473,7 +1501,7 @@ const toSuspension = (r: {
     ? { reason: r.reason, note: r.note, at: r.at, byUserId: r.by }
     : null;
 
-const HOLD_KINDS: readonly MailboxHoldKind[] = ["account", "person"];
+const HOLD_KINDS: readonly MailboxHoldKind[] = ["account", "person", "deletion"];
 
 class PgSuspensionRepository implements SuspensionRepository {
   constructor(private readonly x: Executor) {}
@@ -1583,6 +1611,7 @@ class PgSuspensionRepository implements SuspensionRepository {
 const repositories = (x: Executor): Repositories => ({
   avatars: new PgAvatarRepository(x),
   actAs: new PgActAsRepository(x),
+  dataLifecycle: new PgDataLifecycleRepository(x),
   suspensions: new PgSuspensionRepository(x),
   audit: new PgAuditRepository(x),
   access: new PgAccessRepository(x),

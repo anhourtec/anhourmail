@@ -6,6 +6,7 @@
   "type": "module",
   "exports": {
     "./memory": "./src/memory/index.ts",
+    "./archive": "./src/archive/index.ts",
     "./postgres": "./src/db-postgres/index.ts",
     "./postgres/schema": "./src/db-postgres/schema.ts",
     "./contract": "./src/contract/index.ts",
@@ -13,6 +14,7 @@
     "./breached-passwords": "./src/breached-passwords/index.ts",
     "./mail": "./src/mail/index.ts",
     "./mail/layout": "./src/mail/layout.ts",
+    "./mail/data-lifecycle": "./src/mail/data-lifecycle.ts",
     "./stalwart": "./src/stalwart/index.ts",
     "./dns": "./src/dns/index.ts",
     "./image": "./src/image/index.ts"

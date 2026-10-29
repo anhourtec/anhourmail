@@ -44,11 +44,13 @@ import {
 import type { PasskeyRecord, SecurityRepository, SessionRecord } from "@anhourmail/core/security";
 import type { ForwardingTarget, StoredSignature, WebmailSettingsRepository } from "@anhourmail/core/webmail";
 import type { ProfileDetails } from "@anhourmail/shared/profile";
-import type { PlanId } from "@anhourmail/shared/plans";
+import { ALIAS_YEAR_DAYS, type PlanId } from "@anhourmail/shared/plans";
 import type { SignInPolicy } from "@anhourmail/shared/security";
 import type { AccountRole, PlatformRole } from "@anhourmail/shared/rbac";
 
 import { memoryActAs, type MemoryActAsRow } from "./act-as";
+import type { AccountDeletion } from "@anhourmail/core/data";
+import { memoryDataLifecycle, type MemoryExportRow } from "./data-lifecycle";
 
 /**
  * In-memory adapter for unit tests (ADR-0008). Same contract as Postgres (src/contract): `run` is atomic —
@@ -130,6 +132,10 @@ export type MemoryState = {
   avatars: StoredAvatar[];
   /** Staff act-as sessions (Postgres: `act_as_session`, ADR-0023). */
   actAsSessions: MemoryActAsRow[];
+  /** Data exports with their sealed archives (Postgres: `data_export`, ADR-0025). */
+  dataExports: MemoryExportRow[];
+  /** Accounts waiting to be deleted (Postgres: `account_deletion`). */
+  accountDeletions: AccountDeletion[];
 };
 
 export const emptyState = (): MemoryState => ({
@@ -173,6 +179,8 @@ export const emptyState = (): MemoryState => ({
   mustChangePassword: [],
   avatars: [],
   actAsSessions: [],
+  dataExports: [],
+  accountDeletions: [],
 });
 
 const EPOCH = new Date(0);
@@ -180,8 +188,8 @@ const EPOCH = new Date(0);
 const clone = <T>(v: T): T => structuredClone(v);
 
 /** The UTC day before `day` (`YYYY-MM-DD`). */
-const dayBefore = (day: string): string =>
-  new Date(Date.parse(`${day}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+const daysBefore = (day: string, n: number): string =>
+  new Date(Date.parse(`${day}T00:00:00Z`) - n * 86_400_000).toISOString().slice(0, 10);
 
 /** Mirrors the Postgres filter: act-as entries count as staff. */
 const actorKindOf = (e: AuditEntry) =>
@@ -638,12 +646,19 @@ function repositories(s: MemoryState): Repositories {
     delete: async (id) => {
       s.aliases = s.aliases.filter((a) => a.id !== id);
     },
+    countForMailbox: async (accountId, mailboxId) =>
+      s.aliases.filter((a) => a.accountId === accountId && a.mailboxId === mailboxId).length,
     creationsOn: async (accountId, kind, day) =>
       s.aliasCreations.find((c) => c.accountId === accountId && c.kind === kind && c.day === day)?.count ?? 0,
+    creationsSince: async (accountId, kind, fromDay) =>
+      s.aliasCreations
+        .filter((c) => c.accountId === accountId && c.kind === kind && c.day >= fromDay)
+        .sort((a, b) => a.day.localeCompare(b.day))
+        .map((c) => ({ day: c.day, count: c.count })),
     recordCreation: async (accountId, kind, day) => {
-      // Mirrors Postgres: today's and yesterday's counts are kept per account (yesterday's survives clock skew between
-      // instances around midnight, so a late "yesterday" count never resets today's early).
-      const keepFrom = dayBefore(day);
+      // Mirrors Postgres: the yearly window's days plus one are kept per account (the extra day survives clock skew
+      // between instances around midnight, so a late count never falls out of the window early).
+      const keepFrom = daysBefore(day, ALIAS_YEAR_DAYS + 1);
       s.aliasCreations = s.aliasCreations.filter((c) => c.accountId !== accountId || c.day >= keepFrom);
       const row = s.aliasCreations.find((c) => c.accountId === accountId && c.kind === kind && c.day === day);
       if (row) row.count += 1;
@@ -1121,6 +1136,7 @@ function repositories(s: MemoryState): Repositories {
   return {
     avatars,
     actAs: memoryActAs(s),
+    dataLifecycle: memoryDataLifecycle(s),
     suspensions,
     webmailSettings,
     appPasswords,
