@@ -37,9 +37,12 @@ const STATUS: Record<string, number> = {
   step_up_required: 403,
   email_unverified: 403,
   account_suspended: 403,
+  account_deleting: 403,
   alias_admin_locked: 403,
   rate_limited: 429,
   alias_daily_limit: 429,
+  alias_yearly_limit: 429,
+  alias_mailbox_limit: 409,
   // Console → webmail handoff (ADR-0024): a code we don't know (or already used), and a refusal with a reason.
   handoff_invalid: 400,
   handoff_refused: 409,

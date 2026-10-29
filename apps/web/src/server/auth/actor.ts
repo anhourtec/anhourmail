@@ -22,19 +22,28 @@ export async function getActorAndSession(headers: Headers): Promise<{ actor: Act
   const ctx = requestContext();
   if (ctx) ctx.userId = user.id;
   // Sequential: a transaction holds one database connection, which runs one query at a time.
-  const [platformRoles, memberships, suspended, mustEnrol, refusal, suspendedAccountIds, mustChangePassword] =
-    await container().deps.uow.run(
-      async (r) =>
-        [
-          await r.access.platformRoles(user.id),
-          await r.access.memberships(user.id),
-          await r.access.isSuspended(user.id),
-          await requiredEnrolment(r, user.id),
-          await sessionRefusalFor(r, user.id, user.signInMethod),
-          await r.suspensions.suspendedAccountsOf(user.id),
-          await r.people.passwordChangeRequired(user.id),
-        ] as const,
-    );
+  const [
+    platformRoles,
+    memberships,
+    suspended,
+    mustEnrol,
+    refusal,
+    suspendedAccountIds,
+    mustChangePassword,
+    deletingAccountIds,
+  ] = await container().deps.uow.run(
+    async (r) =>
+      [
+        await r.access.platformRoles(user.id),
+        await r.access.memberships(user.id),
+        await r.access.isSuspended(user.id),
+        await requiredEnrolment(r, user.id),
+        await sessionRefusalFor(r, user.id, user.signInMethod),
+        await r.suspensions.suspendedAccountsOf(user.id),
+        await r.people.passwordChangeRequired(user.id),
+        await r.dataLifecycle.deletingAccountsOf(user.id),
+      ] as const,
+  );
   if (refusal) {
     const c = requestContext();
     await endSessionForRequirement(
@@ -56,6 +65,7 @@ export async function getActorAndSession(headers: Headers): Promise<{ actor: Act
     ...(mustChangePassword ? { mustChangePassword: true as const } : {}),
     ...(user.signInMethod ? { signInMethod: user.signInMethod } : {}),
     ...(suspendedAccountIds.length > 0 ? { suspendedAccountIds } : {}),
+    ...(deletingAccountIds.length > 0 ? { deletingAccountIds } : {}),
   };
   return { actor: (await withActAs(actor, user.sessionId)) ?? actor, sessionId: user.sessionId };
 }
