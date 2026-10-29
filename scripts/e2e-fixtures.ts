@@ -65,6 +65,7 @@ if (mode === "create") {
   const mailboxes: Record<string, { owner: string; member: string }> = {};
   const suspension: Record<string, { accountName: string; owner: string; member: string }> = {};
   const firstSignIn: Record<string, { owner: string; domain: string }> = {};
+  const avatars: Record<string, { person: string; mailbox: string; mailboxPassword: string }> = {};
   const mgmt = stalwartDevAdmin();
   for (const project of ["desktop", "mobile"]) {
     const [secAccount] = await db
@@ -153,6 +154,38 @@ if (mode === "create") {
       stalwartId: await mgmt.upsertDomain({ name: fsDomain }),
     });
     firstSignIn[project] = { owner: fsOwner.email, domain: fsDomain };
+    // Profile photos journey: a person (Owner of their own account) with a mailbox of their own on the mail server, so
+    // a photo set in the console shows in that mailbox's webmail and back (rule 61).
+    const [avAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} Photos ${project}`, plan: "plus" })
+      .returning();
+    if (!avAccount) throw new Error("photos account not created");
+    const avPerson = await addLogin(`av-${project}-person`);
+    await db.insert(schema.accountMembership).values({ accountId: avAccount.id, userId: avPerson.id, role: "owner" });
+    const avDomain = `${run}-av-${project}.test`;
+    const avPassword = `${randomBytes(12).toString("base64url")}-E2e`;
+    await db.insert(schema.customerDomain).values({
+      accountId: avAccount.id,
+      name: avDomain,
+      status: "active",
+      verifyToken: `${run}-av-${project}`,
+      stalwartId: await mgmt.upsertDomain({ name: avDomain }),
+    });
+    await db.insert(schema.mailbox).values({
+      accountId: avAccount.id,
+      userId: avPerson.id,
+      address: `me@${avDomain}`,
+      stalwartId: await mgmt.upsertUser({
+        name: "me",
+        domain: avDomain,
+        password: await hashPassword(avPassword),
+        quotaBytes: 50 * 1024 * 1024,
+      }),
+      status: "active",
+      quotaBytes: 50 * 1024 * 1024,
+    });
+    avatars[project] = { person: avPerson.email, mailbox: `me@${avDomain}`, mailboxPassword: avPassword };
     security[project] = {
       totp: logins.totp.email,
       passkey: logins.passkey.email,
@@ -204,6 +237,7 @@ if (mode === "create") {
         mailboxes,
         suspension,
         firstSignIn,
+        avatars,
       },
       null,
       2,

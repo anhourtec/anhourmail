@@ -19,6 +19,8 @@ export type E2eUsers = {
   suspension: Record<string, { accountName: string; owner: string; member: string }>;
   /** Per browser project: the first-sign-in password change journey's account (its Owner and verified domain). */
   firstSignIn: Record<string, { owner: string; domain: string }>;
+  /** Per browser project: the profile photos journey's person and their own mailbox (on the mail server). */
+  avatars: Record<string, { person: string; mailbox: string; mailboxPassword: string }>;
   security: Record<
     string,
     { totp: string; passkey: string; owner: string; member: string; pkOwner: string; pkMember: string }

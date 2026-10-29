@@ -22,11 +22,14 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
 
 import { and, eq } from "drizzle-orm";
+import sharp from "sharp";
 
 import { hashPassword } from "@anhourmail/adapters/auth";
+import { sharpImageNormaliser } from "@anhourmail/adapters/image";
 import { createDb, type Db, PgUnitOfWork, schema } from "@anhourmail/adapters/postgres";
 import { type Deps, systemClock } from "@anhourmail/core";
 import type { AuditAction, AuditEntryInput } from "@anhourmail/core/audit";
+import { prepareAvatar } from "@anhourmail/core/avatars";
 import { enqueueProvisioning } from "@anhourmail/core/provisioning";
 import { JmapClient } from "@anhourmail/jmap-client";
 import {
@@ -588,6 +591,20 @@ if (demo) {
     await enqueueProvisioning(deps, { kind: "mailbox.ensure", subjectId: id });
   }
 
+  // A profile photo for the family owner (ADR-0022): drawn here, then checked and re-encoded exactly like an upload, so
+  // the console app bar, People page and the owner's webmail show a photo rather than initials.
+  const [familyOwner] = await db
+    .select()
+    .from(schema.authUser)
+    .where(eq(schema.authUser.email, `owner@${fam}`));
+  if (familyOwner) {
+    const drawing = Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2f6fd6"/><stop offset="1" stop-color="#7c4dcc"/></linearGradient></defs><rect width="256" height="256" fill="url(#g)"/><circle cx="128" cy="100" r="46" fill="#f3e7da"/><ellipse cx="128" cy="236" rx="86" ry="70" fill="#f3e7da"/></svg>`,
+    );
+    const photo = await prepareAvatar(sharpImageNormaliser(), new Uint8Array(await sharp(drawing).png().toBuffer()));
+    await deps.uow.run((r) => r.avatars.set({ kind: "person", id: familyOwner.id }, photo, new Date()));
+  }
+
   // Catch-all on the group's domain (off by default everywhere else): unknown addresses go to its owner's mailbox.
   // Written as intent and applied by the worker's domain.ensure job, like the console does.
   const [groupDomain] = await db.select().from(schema.customerDomain).where(eq(schema.customerDomain.name, grp));
@@ -612,6 +629,10 @@ if (demo) {
     {
       label: "App password",
       detail: `\`${appUser}\` has one named "${SEED_APP_PASSWORD}" (Mail apps page; the secret is in section "Mail client settings")`,
+    },
+    {
+      label: "Profile photo",
+      detail: `\`owner@${fam}\` has one (console app bar and People page, their webmail); everyone else shows initials`,
     },
     {
       label: "Suspended mailbox",
