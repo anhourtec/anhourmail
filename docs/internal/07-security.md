@@ -294,7 +294,11 @@ Built 2026-10-28. Code: `apps/web/src/server/webmail/known-mailboxes.ts`, `apps/
   the mailbox is blocked without the password — information the mailbox's own user had there anyway. A person on a
   new device sees the generic error; the public docs tell them what a suspension looks like and whom to ask.
 - **Already signed in:** a session whose mailbox becomes blocked ends on its next request (`route()` + the BFF,
-  ≤ 30 s cache) and the sign-in page names the reason (05-webmail.md "Who may use the webmail").
+  ≤ 30 s cache) and the sign-in page names the reason (05-webmail.md "Who may use the webmail"). The reason reaches
+  the page only from the short-lived notice cookie or a `?reason=` our own pages signed (`reason.expiry.mac`,
+  HMAC-SHA256 under the server secret, 60 s), so a crafted link can't show a suspension or deletion notice. A genuine
+  signed link forwarded within its minute shows the same fixed text elsewhere (accepted: it needs one's own blocked
+  session and grants nothing).
 
 ## App passwords
 
