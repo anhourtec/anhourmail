@@ -11,13 +11,14 @@ import {
   FileImage,
   FileSpreadsheet,
   FileText,
+  Image as ImageIcon,
   ImageOff,
   type LucideIcon,
   Mail,
   MapPin,
   User,
 } from "lucide-react";
-import { Fragment, type ReactNode, useEffect, useState } from "react";
+import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Bone } from "@anhourmail/ui/skeletons";
 
@@ -27,8 +28,9 @@ import { Tooltip } from "@/components/tooltip";
 
 import { Modal } from "./dialogs";
 import { displayName, fileKind, fileSize, fullDate, subjectOf } from "./format";
-import type { MailClient } from "./mail-client";
+import { IMAGE_LINK_EXPIRED, type MailClient } from "./mail-client";
 import { MessageFrame } from "./message-frame";
+import { type ImagePolicy, imageLinks, loadsWithoutAsking, withLoadedImages } from "./remote-images";
 
 const KIND_ICON: Record<ReturnType<typeof fileKind>, LucideIcon> = {
   image: FileImage,
@@ -439,28 +441,182 @@ function AttachmentChips({
   );
 }
 
-function BlockedImages({ count, trackers }: { count: number; trackers: number }) {
+/** What the reader can do with remote images: the setting, remembered senders, contacts, and remembering one. */
+export type ImageOptions = {
+  policy: ImagePolicy;
+  /** Addresses on a contact card (lowercase), for "Load from contacts". */
+  contacts: ReadonlySet<string>;
+  /** Remembers (or forgets) a sender's key in the `imageSenders` preference. */
+  onRemember: (senderKey: string, on: boolean) => void;
+};
+
+type ImageState = "blocked" | "loading" | "loaded";
+
+/** Images of one message fetched through the image proxy at once (the proxy limits each session too). */
+const IMAGE_CONCURRENCY = 4;
+
+const plural = (n: number, one: string, many = `${one}s`) => `${String(n)} ${n === 1 ? one : many}`;
+
+function ImageNotice({
+  state,
+  count,
+  loadable,
+  trackers,
+  failed,
+  remembered,
+  canRemember,
+  onLoad,
+  onRemember,
+}: {
+  state: ImageState;
+  count: number;
+  loadable: number;
+  trackers: number;
+  failed: number;
+  remembered: boolean;
+  canRemember: boolean;
+  onLoad: () => void;
+  onRemember: (on: boolean) => void;
+}) {
+  const removed = trackers > 0 ? ` · ${plural(trackers, "tracker")} removed` : "";
+  const title = [
+    count > 0 ? `${plural(count, "remote image")} blocked` : null,
+    trackers > 0 ? `${plural(trackers, "tracker")} removed` : null,
+  ]
+    .filter((t) => t !== null)
+    .join(" · ")
+    .replace(/^./, (c) => c.toUpperCase());
+  const button =
+    "inline-flex h-8 shrink-0 items-center rounded-lg border bg-background px-3 text-[12.5px] transition-colors hover:bg-accent disabled:opacity-60";
+  const link = "text-left text-[12.5px] text-primary underline-offset-2 hover:underline";
+  if (state === "loaded") {
+    return (
+      <div role="status" className="flex flex-wrap items-start gap-3 rounded-xl border bg-muted/60 px-4 py-3">
+        <ImageIcon className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <p className="font-medium text-[13px]">Images loaded through our privacy proxy{removed}</p>
+          <p className="am-micro">
+            The sender can't see your IP address or your browser
+            {failed > 0 ? `. ${plural(failed, "image")} couldn't be loaded.` : "."}
+          </p>
+        </div>
+        {canRemember && (
+          <button
+            type="button"
+            className={link}
+            onClick={() => {
+              onRemember(!remembered);
+            }}
+          >
+            {remembered ? "Stop loading from this sender" : "Always load from this sender"}
+          </button>
+        )}
+      </div>
+    );
+  }
   return (
-    <div role="status" className="flex items-start gap-3 rounded-xl border bg-muted/60 px-4 py-3">
+    <div role="status" className="flex flex-wrap items-start gap-3 rounded-xl border bg-muted/60 px-4 py-3">
       <ImageOff className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <p className="font-medium text-[13px]">
-          {count === 1 ? "1 remote image blocked" : `${String(count)} remote images blocked`}
-          {trackers > 0 ? ` · ${String(trackers)} tracker${trackers === 1 ? "" : "s"} removed` : ""}
-        </p>
+        <p className="font-medium text-[13px]">{title}</p>
         <p className="am-micro">
-          Senders can't see when or where you opened this. Loading images through our privacy proxy is coming soon.
+          {loadable > 0
+            ? "Senders can't see when or where you opened this. Loading them goes through our privacy proxy, so the sender never sees your IP address."
+            : "Senders can't see when or where you opened this."}
         </p>
+        {loadable > 0 && canRemember && (
+          <button
+            type="button"
+            className={`${link} mt-1 w-fit`}
+            disabled={state === "loading"}
+            onClick={() => {
+              onRemember(true);
+            }}
+          >
+            Always load from this sender
+          </button>
+        )}
       </div>
-      <button
-        type="button"
-        disabled
-        className="hidden h-8 shrink-0 items-center rounded-lg border px-3 text-[12.5px] text-muted-foreground sm:inline-flex"
-      >
-        Load images
-      </button>
+      {loadable > 0 && (
+        <button type="button" className={button} disabled={state === "loading"} onClick={onLoad}>
+          {state === "loading" ? "Loading images…" : "Load images"}
+        </button>
+      )}
     </div>
   );
+}
+
+/**
+ * Remote images of one message: blocked until the person loads them (or a setting or a remembered sender does), then
+ * fetched through the image proxy and shown as `data:` images in the frame. Expired links (an old view) are
+ * refreshed once by loading the message again.
+ */
+function useRemoteImages(
+  view: MessageView,
+  client: MailClient,
+  reload: () => Promise<MessageView | null>,
+  images: ImageOptions | undefined,
+) {
+  const [html, setHtml] = useState(view.html);
+  const [loaded, setLoaded] = useState<ReadonlyMap<string, string>>(new Map());
+  const [state, setState] = useState<ImageState>("blocked");
+  const [failed, setFailed] = useState(0);
+  const busy = useRef(false);
+  const live = useRef(true);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, []);
+
+  const load = useCallback(async () => {
+    if (busy.current || html === null) return;
+    busy.current = true;
+    setState("loading");
+    const out = new Map<string, string>();
+    let source = html;
+    try {
+      for (let round = 0; round < 2; round++) {
+        const queue = imageLinks(source);
+        const seen = { expired: false };
+        const worker = async () => {
+          for (let link = queue.shift(); link !== undefined; link = queue.shift()) {
+            const got = await client.remoteImage(link);
+            if (got === IMAGE_LINK_EXPIRED) seen.expired = true;
+            else if (got !== null) out.set(link, got);
+          }
+        };
+        await Promise.all(Array.from({ length: IMAGE_CONCURRENCY }, worker));
+        if (!seen.expired || round > 0) break;
+        // The view is older than its image links: load the message again for fresh ones, once.
+        const fresh = await reload();
+        if (!fresh?.html) break;
+        source = fresh.html;
+        out.clear();
+      }
+    } catch {
+      // Signed out or offline meanwhile: what loaded is shown, the rest stays blocked.
+    } finally {
+      busy.current = false;
+    }
+    if (!live.current) return;
+    setHtml(source);
+    setLoaded(out);
+    setFailed(imageLinks(source).length - out.size);
+    setState("loaded");
+  }, [client, html, reload]);
+
+  const auto =
+    images !== undefined &&
+    view.loadableImages > 0 &&
+    loadsWithoutAsking(images.policy, view.senderKey, view.from[0]?.email, images.contacts);
+  useEffect(() => {
+    if (auto && state === "blocked") void load();
+  }, [auto, state, load]);
+
+  const shown = useMemo(() => (html === null ? null : withLoadedImages(html, loaded)), [html, loaded]);
+  return { html: shown, state, failed, load };
 }
 
 /** A forwarded or attached message, opened from its attachment chip. */
@@ -509,7 +665,12 @@ function NestedMessage({
               {view.sentAt ? ` · ${fullDate(view.sentAt)}` : ""}
             </p>
           </div>
-          <MessageContent view={view} client={client} paneHeight={420} />
+          <MessageContent
+            view={view}
+            client={client}
+            paneHeight={420}
+            reload={() => client.attachedMessage(emailId, attachment.blobId)}
+          />
         </div>
       )}
     </Modal>
@@ -526,6 +687,8 @@ export function MessageContent({
   paneHeight,
   onCompose,
   onViewFull,
+  images,
+  reload,
 }: {
   view: MessageView;
   client: MailClient;
@@ -533,12 +696,34 @@ export function MessageContent({
   paneHeight: number;
   onCompose?: (address: string) => void;
   onViewFull?: () => void;
+  /** Remote image settings; without them images still load on request, but never by themselves. */
+  images?: ImageOptions;
+  /** Loads this message again (fresh image links); defaults to the reader's own message. */
+  reload?: () => Promise<MessageView | null>;
 }) {
   const [nested, setNested] = useState<AttachmentView | null>(null);
+  const again = useCallback(() => (reload ? reload() : client.message(view.id)), [reload, client, view.id]);
+  const remote = useRemoteImages(view, client, again, images);
+  const remembered = view.senderKey !== null && (images?.policy.senders.includes(view.senderKey) ?? false);
   return (
     <div className="flex flex-col gap-4">
       {view.blockedImages + view.blockedTrackers > 0 && (
-        <BlockedImages count={view.blockedImages} trackers={view.blockedTrackers} />
+        <ImageNotice
+          state={remote.state}
+          count={view.blockedImages}
+          loadable={view.loadableImages}
+          trackers={view.blockedTrackers}
+          failed={remote.failed}
+          remembered={remembered}
+          canRemember={images !== undefined && view.senderKey !== null}
+          onLoad={() => {
+            void remote.load();
+          }}
+          onRemember={(on) => {
+            if (view.senderKey === null || !images) return;
+            images.onRemember(view.senderKey, on);
+          }}
+        />
       )}
       <AttachmentChips view={view} client={client} onOpenMessage={setNested} />
       {view.events.map((e, i) => (
@@ -558,9 +743,9 @@ export function MessageContent({
           )}
         </div>
       )}
-      {view.html !== null ? (
+      {remote.html !== null ? (
         <MessageFrame
-          html={view.html}
+          html={remote.html}
           title={`Message: ${subjectOf(view.subject)}`}
           height={Math.max(paneHeight - 24, 384)}
         />

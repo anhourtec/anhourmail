@@ -154,3 +154,198 @@ describe("changing the mailbox's own password", () => {
     await expect(changed).rejects.not.toBeInstanceOf(RefusedError);
   });
 });
+
+type MethodCall = [string, Record<string, unknown>, string];
+
+/**
+ * A fetch that answers JMAP requests with `handle` (one response per call) and every other path with `other`
+ * (status, body). Records each JMAP request's method names.
+ */
+function jmapServer(
+  handle: (calls: MethodCall[]) => unknown[],
+  other: (path: string) => Response = () => Response.json({ data: {} }),
+) {
+  const requests: string[][] = [];
+  const fetchFn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (url.pathname === "/api/webmail/session") return Promise.resolve(Response.json(SESSION));
+    if (url.pathname === "/api/webmail/jmap") {
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { methodCalls: MethodCall[] };
+      requests.push(body.methodCalls.map((c) => c[0]));
+      return Promise.resolve(Response.json({ methodResponses: handle(body.methodCalls) }));
+    }
+    return Promise.resolve(other(url.pathname));
+  });
+  return { fetchFn, requests };
+}
+
+const setOk = (calls: MethodCall[]) => calls.map(([, , id]) => ["Email/set", { updated: {}, destroyed: [] }, id]);
+
+describe("telling the app about changes", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reports moves, keyword changes, restores and deletes once each, after they are answered", async () => {
+    const server = jmapServer((calls) =>
+      calls.map(([name, , id]) =>
+        name === "Email/get"
+          ? ["Email/get", { list: [{ id: "e1", mailboxIds: { inbox: true } }] }, id]
+          : name === "Thread/get"
+            ? ["Thread/get", { list: [{ id: "t1", emailIds: ["e1"] }] }, id]
+            : ["Email/set", { updated: { e1: null }, destroyed: ["e1"] }, id],
+      ),
+    );
+    vi.stubGlobal("fetch", server.fetchFn);
+    const client = createMailClient(ORIGIN);
+    const seen = vi.fn();
+    client.onChange(seen);
+    await client.setKeyword(["e1"], "$seen", true);
+    expect(seen).toHaveBeenCalledTimes(1);
+    await client.move(["t1"], "inbox", "trash");
+    expect(seen).toHaveBeenCalledTimes(2);
+    await client.restore({ e1: { inbox: true } });
+    expect(seen).toHaveBeenCalledTimes(3);
+    await client.destroy(["e1"]);
+    expect(seen).toHaveBeenCalledTimes(4);
+  });
+
+  it("reports nothing for reads, and stops once unsubscribed", async () => {
+    const server = jmapServer((calls) => calls.map(([name, , id]) => [name, { list: [], state: "s" }, id]));
+    vi.stubGlobal("fetch", server.fetchFn);
+    const client = createMailClient(ORIGIN);
+    const seen = vi.fn();
+    const off = client.onChange(seen);
+    await client.folders();
+    await client.thread("t1");
+    expect(seen).not.toHaveBeenCalled();
+    off();
+    vi.stubGlobal("fetch", jmapServer(setOk).fetchFn);
+    await client.setKeyword(["e1"], "$flagged", true);
+    expect(seen).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed batch (part of it may have landed) but not a refusal", async () => {
+    vi.stubGlobal(
+      "fetch",
+      jmapServer((calls) => calls.map(([, , id]) => ["Email/set", { notUpdated: { e1: { type: "notFound" } } }, id]))
+        .fetchFn,
+    );
+    const client = createMailClient(ORIGIN);
+    const seen = vi.fn();
+    client.onChange(seen);
+    await expect(client.setKeyword(["e1"], "$seen", true)).rejects.toThrow("not updated");
+    expect(seen).toHaveBeenCalledTimes(1);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+        if (url.pathname === "/api/webmail/session") return Promise.resolve(Response.json(SESSION));
+        return Promise.resolve(new Response(null, { status: 400 }));
+      }),
+    );
+    await expect(client.setKeyword(["e1"], "$seen", true)).rejects.toBeInstanceOf(RefusedError);
+    expect(seen).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a new draft, a send and an undone send, but not saving over a draft", async () => {
+    vi.stubGlobal(
+      "fetch",
+      jmapServer(setOk, (path) =>
+        Response.json({
+          data: path.endsWith("/undo")
+            ? { draftId: "d1" }
+            : path.endsWith("/send")
+              ? { submissionId: "s1", sendAt: "", holdSeconds: 0 }
+              : { id: "d1" },
+        }),
+      ).fetchFn,
+    );
+    const client = createMailClient(ORIGIN);
+    const seen = vi.fn();
+    client.onChange(seen);
+    const draft = { identityId: "i1", to: [], cc: [], bcc: [], subject: "Hi", text: "", attachments: [] };
+    await client.saveDraft(draft);
+    expect(seen).toHaveBeenCalledTimes(1);
+    await client.saveDraft({ ...draft, replaces: "d1" });
+    expect(seen).toHaveBeenCalledTimes(1);
+    await client.send("d1", "i1");
+    expect(seen).toHaveBeenCalledTimes(2);
+    await client.undoSend("s1");
+    expect(seen).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps the change even when a listener throws", async () => {
+    vi.stubGlobal("fetch", jmapServer(setOk).fetchFn);
+    const client = createMailClient(ORIGIN);
+    const after = vi.fn();
+    client.onChange(() => {
+      throw new Error("listener");
+    });
+    client.onChange(after);
+    await expect(client.setKeyword(["e1"], "$seen", true)).resolves.toBeUndefined();
+    expect(after).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("automatic refresh", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("starts from both states in one request", async () => {
+    const server = jmapServer((calls) =>
+      calls.map(([name, , id]) => [name, { list: [], state: name === "Email/get" ? "e1" : "m1" }, id]),
+    );
+    vi.stubGlobal("fetch", server.fetchFn);
+    const r = await createMailClient(ORIGIN).mailChanges(null);
+    expect(r).toMatchObject({ state: { email: "e1", mailbox: "m1" }, changed: false, foldersChanged: false });
+    expect(server.requests).toEqual([["Email/get", "Mailbox/get"]]);
+  });
+
+  it("asks Email/changes and Mailbox/changes in one request and says which changed", async () => {
+    type Changes = { newState: string; created: string[]; updated: string[]; destroyed: string[] };
+    let mailbox: Changes = { newState: "m2", updated: ["inbox"], created: [], destroyed: [] };
+    let email: Changes = { newState: "e1", created: [], updated: [], destroyed: [] };
+    const server = jmapServer((calls) =>
+      calls.map(([name, , id]) =>
+        name === "Email/changes"
+          ? [name, email, id]
+          : name === "Mailbox/changes"
+            ? [name, mailbox, id]
+            : [name, { list: [] }, id],
+      ),
+    );
+    vi.stubGlobal("fetch", server.fetchFn);
+    const client = createMailClient(ORIGIN);
+    // Counts changed elsewhere (read on another device): only the folders.
+    const r = await client.mailChanges({ email: "e1", mailbox: "m1" });
+    expect(server.requests).toEqual([["Email/changes", "Email/get", "Mailbox/changes"]]);
+    expect(r).toMatchObject({ state: { email: "e1", mailbox: "m2" }, changed: false, foldersChanged: true });
+
+    email = { newState: "e2", created: [], updated: ["x"], destroyed: [] };
+    mailbox = { newState: "m2", updated: [], created: [], destroyed: [] };
+    const again = await client.mailChanges(r.state);
+    expect(again).toMatchObject({ changed: true, foldersChanged: false, touched: ["x"], reset: false });
+  });
+
+  it("starts again from fresh states when the server can't calculate the changes", async () => {
+    let first = true;
+    const server = jmapServer((calls) => {
+      if (first) {
+        first = false;
+        return [["error", { type: "cannotCalculateChanges" }, "b"]];
+      }
+      return calls.map(([name, , id]) => [name, { list: [], state: name === "Email/get" ? "e9" : "m9" }, id]);
+    });
+    vi.stubGlobal("fetch", server.fetchFn);
+    const r = await createMailClient(ORIGIN).mailChanges({ email: "e1", mailbox: "m1" });
+    expect(r).toMatchObject({
+      state: { email: "e9", mailbox: "m9" },
+      changed: true,
+      foldersChanged: true,
+      reset: true,
+    });
+  });
+});

@@ -65,3 +65,59 @@ export function unparkRemoteImages(html: string): string {
       : bare.replace(/^<([a-z][a-z0-9]*)\b/i, (_m, name: string) => `<${name} style="${style}"`);
   });
 }
+
+// ---- reading: images loaded through the image proxy -----------------------------------------------------------
+
+/**
+ * Remote images while reading (docs/internal/05-webmail.md "Remote images"): the server's sanitiser leaves each
+ * blocked image as a placeholder with a signed image link (`data-am-img`) and no address. "Load images" sends each
+ * link to the image proxy and puts the answer back as a `data:` image, so the message frame (no scripts, opaque
+ * origin, `img-src data:`) still makes no request of its own.
+ */
+
+/** Raster types the image proxy serves; anything else is never put into the frame. */
+const LOADED_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp"]);
+export const isLoadedImageType = (type: string): boolean => LOADED_TYPES.has(type);
+
+const LINK_ATTR = /\sdata-am-img="([A-Za-z0-9._-]+)"/;
+const LOADED_URL = /^data:image\/(?:png|jpeg|gif|webp|bmp);base64,[A-Za-z0-9+/]*={0,2}$/;
+
+/** The image links in sanitised message HTML, each once, in order. */
+export function imageLinks(html: string): string[] {
+  const out = new Set<string>();
+  for (const tag of html.match(IMG_TAG) ?? []) {
+    const link = LINK_ATTR.exec(tag)?.[1];
+    if (link) out.add(link);
+  }
+  return [...out];
+}
+
+/** The HTML with every loaded link's placeholder turned into its image (others stay blocked). */
+export function withLoadedImages(html: string, loaded: ReadonlyMap<string, string>): string {
+  if (loaded.size === 0) return html;
+  return html.replace(IMG_TAG, (tag) => {
+    const link = LINK_ATTR.exec(tag)?.[1];
+    const url = link ? loaded.get(link) : undefined;
+    if (url === undefined || !LOADED_URL.test(url)) return tag;
+    const bare = tag.replace(BLOCKED_ATTR, "").replace(LINK_ATTR, "").replace(SRC_ATTR, "");
+    return bare.replace(/^<img\b/i, () => `<img src="${url}"`);
+  });
+}
+
+export type ImagePolicy = {
+  mode: "ask" | "contacts" | "always";
+  /** Remembered senders' keys (the `imageSenders` preference). */
+  senders: readonly string[];
+};
+
+/** Whether a message's images load without asking: always, a remembered sender, or (if chosen) a contact. */
+export function loadsWithoutAsking(
+  policy: ImagePolicy,
+  senderKey: string | null,
+  from: string | undefined,
+  contacts: ReadonlySet<string>,
+): boolean {
+  if (policy.mode === "always") return true;
+  if (senderKey !== null && policy.senders.includes(senderKey)) return true;
+  return policy.mode === "contacts" && from !== undefined && contacts.has(from.toLowerCase());
+}

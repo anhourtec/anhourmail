@@ -8,6 +8,8 @@ import type { Junk, Vacation } from "@/server/webmail/sieve";
 import type { SettingsOverview } from "@/server/webmail/settings";
 import type { Address, MessageView } from "@/server/webmail/view";
 
+import { isLoadedImageType } from "./remote-images";
+
 /**
  * The webmail's data access in the browser. Everything goes to this origin's BFF (`/api/webmail/*`), which holds
  * the Stalwart tokens; the browser never sees one (ADR-0003). Lists use thread-collapsed `Email/query` windows and
@@ -150,6 +152,18 @@ export function listFilter(view: View, f: ListFilter, hidden: string[], opts: { 
 
 export type MailClient = ReturnType<typeof createMailClient>;
 
+/** What `remoteImage` answers for an expired image link (never a `data:` URL). */
+export const IMAGE_LINK_EXPIRED = "expired";
+
+/** A raster image blob as a `data:` URL; null for any other type (the proxy only serves these). */
+export async function imageDataUrl(blob: Blob): Promise<string | null> {
+  if (!isLoadedImageType(blob.type)) return null;
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return `data:${blob.type};base64,${btoa(bin)}`;
+}
+
 /** The account the app is showing, sent with contacts changes (the BFF refuses another active mailbox). */
 const ACCOUNT = "X-Webmail-Account";
 
@@ -183,6 +197,9 @@ async function api<T>(path: string, init: RequestInit = {}, go: typeof fetch = p
 }
 
 const asState = (v: unknown): string => (typeof v === "string" ? v : "");
+
+/** Where automatic refresh is: the mail server's `Email` and `Mailbox` states after the last check. */
+export type SyncState = { email: string; mailbox: string };
 
 /** `origin` "" (the default) means same-origin relative URLs, which is what the browser app uses. */
 export function createMailClient(origin = "") {
@@ -223,6 +240,30 @@ export function createMailClient(origin = "") {
     } catch (err) {
       hold = null;
       release?.();
+      throw err;
+    }
+  }
+
+  // Anything that changes which folders messages are in, or their read or draft state, tells the listeners when it
+  // has been answered (folder counts reload from there, in one place, whatever the action). A refusal changed
+  // nothing; any other failure may have changed part of it (a batch), so it tells them too.
+  const listeners = new Set<() => void>();
+  const changed = () => {
+    for (const listener of listeners) {
+      try {
+        listener();
+      } catch {
+        // A listener's failure is its own; the change itself went through.
+      }
+    }
+  };
+  async function mutating<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      const result = await fn();
+      changed();
+      return result;
+    } catch (err) {
+      if (!(err instanceof SignedOutError) && !(err instanceof RefusedError)) changed();
       throw err;
     }
   }
@@ -288,12 +329,14 @@ export function createMailClient(origin = "") {
     const ids = Object.keys(patches);
     if (ids.length === 0) return;
     const a = await accountId();
-    for (let i = 0; i < ids.length; i += 400) {
-      const chunk = Object.fromEntries(ids.slice(i, i + 400).map((id) => [id, patches[id]]));
-      const res = await call([["Email/set", { accountId: a, update: chunk }, "s"]]);
-      const notUpdated = res.get("s")?.notUpdated as Record<string, unknown> | undefined;
-      if (notUpdated && Object.keys(notUpdated).length > 0) throw new Error("Some messages were not updated");
-    }
+    await mutating(async () => {
+      for (let i = 0; i < ids.length; i += 400) {
+        const chunk = Object.fromEntries(ids.slice(i, i + 400).map((id) => [id, patches[id]]));
+        const res = await call([["Email/set", { accountId: a, update: chunk }, "s"]]);
+        const notUpdated = res.get("s")?.notUpdated as Record<string, unknown> | undefined;
+        if (notUpdated && Object.keys(notUpdated).length > 0) throw new Error("Some messages were not updated");
+      }
+    });
   }
 
   return {
@@ -303,6 +346,17 @@ export function createMailClient(origin = "") {
     },
     get grouping(): Grouping {
       return grouping;
+    },
+
+    /**
+     * Calls `listener` after every change this client makes to folder membership or read/draft state (moves,
+     * keywords, deletes, saving a new draft, sending, undoing a send). Returns the unsubscribe.
+     */
+    onChange(listener: () => void): () => void {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
     },
 
     async folders(): Promise<Folder[]> {
@@ -434,26 +488,43 @@ export function createMailClient(origin = "") {
     },
 
     /**
-     * The mail state for automatic refresh: with `since` null just the current state; otherwise what changed since
-     * then, with the newly created messages' summaries (for the new-mail sound). `reset` when the server can't say
-     * (the state is too old): the caller reloads everything.
+     * The mail state for automatic refresh, in one request: with `since` null just the current states; otherwise
+     * what changed since then (`Email/changes`, with the newly created messages' summaries for the new-mail sound,
+     * and `Mailbox/changes`, whose counts move when mail is read, moved or deleted anywhere — another device, an
+     * IMAP app). `reset` when the server can't say (a state is too old): the caller reloads everything.
      */
-    async mailChanges(since: string | null): Promise<{
-      state: string;
+    async mailChanges(since: SyncState | null): Promise<{
+      state: SyncState;
+      /** Messages were created, changed or removed since `since`. */
       changed: boolean;
+      /** Folders changed since `since` (their counts, names or the folders themselves). */
+      foldersChanged: boolean;
       created: Summary[];
       /** Ids of messages changed (keywords, folders) or removed since `since`. */
       touched: string[];
       reset: boolean;
     }> {
       const a = await accountId();
+      const current = async (): Promise<SyncState> => {
+        const res = await call([
+          ["Email/get", { accountId: a, ids: [], properties: ["id"] }, "g"],
+          ["Mailbox/get", { accountId: a, ids: [], properties: ["id"] }, "m"],
+        ]);
+        return { email: asState(res.get("g")?.state), mailbox: asState(res.get("m")?.state) };
+      };
       if (since === null) {
-        const res = await call([["Email/get", { accountId: a, ids: [], properties: ["id"] }, "g"]]);
-        return { state: asState(res.get("g")?.state), changed: false, created: [], touched: [], reset: false };
+        return {
+          state: await current(),
+          changed: false,
+          foldersChanged: false,
+          created: [],
+          touched: [],
+          reset: false,
+        };
       }
       try {
         const res = await call([
-          ["Email/changes", { accountId: a, sinceState: since, maxChanges: 200 }, "c"],
+          ["Email/changes", { accountId: a, sinceState: since.email, maxChanges: 200 }, "c"],
           [
             "Email/get",
             {
@@ -463,24 +534,26 @@ export function createMailClient(origin = "") {
             },
             "g",
           ],
+          ["Mailbox/changes", { accountId: a, sinceState: since.mailbox, maxChanges: 200 }, "b"],
         ]);
         const c = res.get("c") ?? {};
-        const count = (k: string) => (Array.isArray(c[k]) ? (c[k] as unknown[]).length : 0);
+        const b = res.get("b") ?? {};
+        const count = (r: Record<string, unknown>, k: string) => (Array.isArray(r[k]) ? (r[k] as unknown[]).length : 0);
+        const moved = (r: Record<string, unknown>) => count(r, "created") + count(r, "updated") + count(r, "destroyed");
         const ids = (k: string) =>
           Array.isArray(c[k]) ? (c[k] as unknown[]).filter((x): x is string => typeof x === "string") : [];
-        const state = asState(c.newState) || since;
-        const changed = state !== since || count("created") + count("updated") + count("destroyed") > 0;
+        const state = { email: asState(c.newState) || since.email, mailbox: asState(b.newState) || since.mailbox };
         return {
           state,
-          changed,
+          changed: state.email !== since.email || moved(c) > 0,
+          foldersChanged: state.mailbox !== since.mailbox || moved(b) > 0,
           created: (res.get("g")?.list ?? []) as Summary[],
           touched: [...ids("updated"), ...ids("destroyed")],
           reset: c.hasMoreChanges === true,
         };
       } catch (err) {
         if (err instanceof JmapError && err.type === "cannotCalculateChanges") {
-          const res = await call([["Email/get", { accountId: a, ids: [], properties: ["id"] }, "g"]]);
-          return { state: asState(res.get("g")?.state), changed: true, created: [], touched: [], reset: true };
+          return { state: await current(), changed: true, foldersChanged: true, created: [], touched: [], reset: true };
         }
         throw err;
       }
@@ -608,11 +681,13 @@ export function createMailClient(origin = "") {
     /** Deletes forever (only allowed for messages in Trash or Junk; the BFF checks). */
     async destroy(ids: string[]): Promise<void> {
       const a = await accountId();
-      for (let i = 0; i < ids.length; i += 400) {
-        const res = await call([["Email/set", { accountId: a, destroy: ids.slice(i, i + 400) }, "s"]]);
-        const notDestroyed = res.get("s")?.notDestroyed as Record<string, unknown> | undefined;
-        if (notDestroyed && Object.keys(notDestroyed).length > 0) throw new Error("Some messages were not deleted");
-      }
+      await mutating(async () => {
+        for (let i = 0; i < ids.length; i += 400) {
+          const res = await call([["Email/set", { accountId: a, destroy: ids.slice(i, i + 400) }, "s"]]);
+          const notDestroyed = res.get("s")?.notDestroyed as Record<string, unknown> | undefined;
+          if (notDestroyed && Object.keys(notDestroyed).length > 0) throw new Error("Some messages were not deleted");
+        }
+      });
     },
 
     /** Deletes everything in a Trash or Junk folder, in batches. */
@@ -690,6 +765,33 @@ export function createMailClient(origin = "") {
       return ((await res.json()) as { data: MessageView }).data;
     },
 
+    /**
+     * One remote image through the image proxy, as a `data:` URL for the message frame (which loads nothing itself).
+     * `EXPIRED` when the message's image links are too old (load the message again); null when it can't be loaded.
+     */
+    async remoteImage(token: string): Promise<string | null> {
+      for (let attempt = 0; ; attempt++) {
+        const res = await net(`${origin}/api/webmail/img`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token }),
+        });
+        if (res.status === 401) throw new SignedOutError("signed out");
+        if (res.status === 410) return IMAGE_LINK_EXPIRED;
+        // The server is busy with other images: wait a moment, twice at most.
+        if (res.status === 429 && attempt < 2) {
+          await res.body?.cancel();
+          await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+          continue;
+        }
+        if (!res.ok) {
+          await res.body?.cancel();
+          return null;
+        }
+        return imageDataUrl(await res.blob());
+      }
+    },
+
     /** The message source as text for "View original" (first 2 MB). */
     async rawText(emailId: string): Promise<{ text: string; cut: boolean }> {
       const res = await net(`${origin}/api/webmail/messages/${encodeURIComponent(emailId)}/raw`);
@@ -714,24 +816,34 @@ export function createMailClient(origin = "") {
     identities: () => bff<Identity[]>(`${origin}/api/webmail/identities`),
     // Drafts, sending, undo and uploads carry the account this tab shows: if another tab switched the session to a
     // different mailbox meanwhile, the BFF refuses (400) instead of acting on that other mailbox.
-    saveDraft: async (d: DraftPayload) =>
-      bff<{ id: string }>(`${origin}/api/webmail/drafts`, {
-        method: "PUT",
-        headers: { [ACCOUNT]: await accountId() },
-        body: JSON.stringify(d),
-      }),
-    send: async (draftId: string, identityId: string) =>
-      bff<{ submissionId: string; sendAt: string; holdSeconds: number }>(`${origin}/api/webmail/send`, {
-        method: "POST",
-        headers: { [ACCOUNT]: await accountId() },
-        body: JSON.stringify({ draftId, identityId }),
-      }),
-    undoSend: async (submissionId: string) =>
-      bff<{ draftId: string }>(`${origin}/api/webmail/send/undo`, {
-        method: "POST",
-        headers: { [ACCOUNT]: await accountId() },
-        body: JSON.stringify({ submissionId }),
-      }),
+    // A new draft adds one to Drafts; saving over an existing one (`replaces`) leaves the count as it was.
+    saveDraft: async (d: DraftPayload) => {
+      const headers = { [ACCOUNT]: await accountId() };
+      const save = () =>
+        bff<{ id: string }>(`${origin}/api/webmail/drafts`, { method: "PUT", headers, body: JSON.stringify(d) });
+      return d.replaces ? save() : mutating(save);
+    },
+    // Sending moves the draft from Drafts to Sent; undoing puts it back.
+    send: async (draftId: string, identityId: string) => {
+      const headers = { [ACCOUNT]: await accountId() };
+      return mutating(() =>
+        bff<{ submissionId: string; sendAt: string; holdSeconds: number }>(`${origin}/api/webmail/send`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ draftId, identityId }),
+        }),
+      );
+    },
+    undoSend: async (submissionId: string) => {
+      const headers = { [ACCOUNT]: await accountId() };
+      return mutating(() =>
+        bff<{ draftId: string }>(`${origin}/api/webmail/send/undo`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ submissionId }),
+        }),
+      );
+    },
     upload: async (file: File) =>
       bff<Attachment & { blobId: string }>(`${origin}/api/webmail/upload`, {
         method: "POST",

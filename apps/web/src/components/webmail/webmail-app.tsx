@@ -27,7 +27,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { MessageListSkeleton } from "@anhourmail/ui/skeletons";
-import type { WebmailPreferences } from "@anhourmail/shared/webmail";
+import { REMOTE_IMAGES, type WebmailPreferences } from "@anhourmail/shared/webmail";
 import { useTheme } from "next-themes";
 
 import type { Address, MessageView } from "@/server/webmail/view";
@@ -60,13 +60,23 @@ import {
   RefusedError,
   type SearchQuery,
   SignedOutError,
+  type SyncState,
   type View,
   type ContactsData,
 } from "./mail-client";
 import { iconButtonClass, Menu, type MenuEntry } from "./menu";
 import { MessageList } from "./message-list";
 import { type MailChange, restoreTarget } from "./conversation";
-import { newMailToAnnounce, playChime, pollDelay, shouldPoll, tabTitle } from "./sync";
+import {
+  adjustUnread,
+  coalescer,
+  FOLDER_RELOAD_MS,
+  newMailToAnnounce,
+  playChime,
+  pollDelay,
+  shouldPoll,
+  tabTitle,
+} from "./sync";
 import { Reader, type ReaderAction, type ReaderActions } from "./reader";
 import { type Mailboxes, Sidebar } from "./sidebar";
 import { ToastHost, useToasts } from "./toasts";
@@ -186,6 +196,10 @@ function Mailroom({
     listRef.current = list;
   });
   const [pinned, setPinned] = useState<ListRow[]>([]);
+  const pinnedRef = useRef<ListRow[]>([]);
+  useEffect(() => {
+    pinnedRef.current = pinned;
+  });
   const [selected, setSelected] = useState<number | null>(null);
   /** The open row's key (its conversation, or the message when not grouping) and the row itself. */
   const [openThread, setOpenThread] = useState<string | null>(null);
@@ -359,6 +373,35 @@ function Mailroom({
     [load],
   );
 
+  // Folder counts follow every change the webmail makes, from one place: the mail client reports each change to
+  // folder membership or read/draft state (any action — moves, deletes, read, discarding or sending a draft), and
+  // the counts reload once shortly after, however many changes came together. The Drafts list follows too while it
+  // is shown (the composer saves and discards drafts from anywhere). Changes made elsewhere arrive via the poll.
+  const countsRun = useRef<() => Promise<unknown>>(() => Promise.resolve());
+  useEffect(() => {
+    countsRun.current = async () => {
+      const f = await loadFolders();
+      const now = shownRef.current;
+      const drafts = f?.find((x) => x.role === "drafts")?.id;
+      if (drafts && now?.shown.view.kind === "folder" && now.shown.view.id === drafts) await reload({ keep: true });
+    };
+  });
+  const countsSoon = useRef<{ schedule: () => void } | null>(null);
+  useEffect(() => {
+    const c = coalescer(() => countsRun.current(), FOLDER_RELOAD_MS);
+    countsSoon.current = c;
+    const off = client.onChange(c.schedule);
+    return () => {
+      off();
+      c.cancel();
+      countsSoon.current = null;
+    };
+  }, [client]);
+  const reloadCounts = useCallback(() => {
+    if (countsSoon.current) countsSoon.current.schedule();
+    else void loadFolders();
+  }, [loadFolders]);
+
   // First paint: folders, the Inbox, the person's mailboxes and identities.
   useEffect(() => {
     let live = true;
@@ -425,9 +468,9 @@ function Mailroom({
   }, []);
 
   const refresh = useCallback(() => {
-    void loadFolders();
+    reloadCounts();
     void reload({ keep: true });
-  }, [loadFolders, reload]);
+  }, [reloadCounts, reload]);
 
   /** Refresh asked for by the person: the list, the folders and the open conversation. */
   const refreshAll = useCallback(() => {
@@ -435,14 +478,15 @@ function Mailroom({
     announceChange({ all: true, threadIds: new Set(), emailIds: new Set() });
   }, [refresh, announceChange]);
 
-  // Automatic refresh (until push lands): one cheap Email/changes call every 30 s while the tab is visible, at once
-  // when it becomes visible, gains focus or comes back online, backing off after errors. Only a real change reloads.
-  const syncRefs = useRef({ refresh, announceChange, signedOut, roles, mine, prefs });
+  // Automatic refresh (until push lands): one cheap request (Email/changes and Mailbox/changes) every 30 s while the
+  // tab is visible, at once when it becomes visible, gains focus or comes back online, backing off after errors. Only
+  // a real change reloads: changed mail reloads the list and the counts, changed folders alone just the counts.
+  const syncRefs = useRef({ refresh, reloadCounts, announceChange, signedOut, roles, mine, prefs });
   useEffect(() => {
-    syncRefs.current = { refresh, announceChange, signedOut, roles, mine, prefs };
+    syncRefs.current = { refresh, reloadCounts, announceChange, signedOut, roles, mine, prefs };
   });
   useEffect(() => {
-    let state: string | null = null;
+    let state: SyncState | null = null;
     let failures = 0;
     let timer: number | undefined;
     let running = false;
@@ -457,6 +501,7 @@ function Mailroom({
         const r = await client.mailChanges(state);
         state = r.state;
         failures = 0;
+        if (!first && !r.changed && r.foldersChanged) syncRefs.current.reloadCounts();
         if (!first && r.changed) {
           const ref = syncRefs.current;
           ref.refresh();
@@ -536,6 +581,19 @@ function Mailroom({
       });
     },
     [client, fail],
+  );
+
+  // Remote images: the setting and remembered senders (keys from the server, never addresses), newest kept.
+  const imagePolicy = useMemo(
+    () => ({ mode: prefs.remoteImages, senders: prefs.imageSenders }),
+    [prefs.remoteImages, prefs.imageSenders],
+  );
+  const rememberImages = useCallback(
+    (key: string, on: boolean) => {
+      const rest = prefsRef.current.imageSenders.filter((k) => k !== key);
+      updatePrefs({ imageSenders: on ? [...rest, key].slice(-REMOTE_IMAGES.maxSenders) : rest });
+    },
+    [updatePrefs],
   );
 
   // Theme: the saved choice wins on load; switching it anywhere (the sidebar toggle too) is saved.
@@ -638,18 +696,26 @@ function Mailroom({
       const apply = (value: boolean) => {
         patchRows((r) => (ids.includes(r.id) ? { ...r, keywords: { ...r.keywords, [keyword]: value } } : r));
       };
+      if (keyword === "$seen") {
+        // The unread counts move at once for the messages the list has; the reload that follows has the rest.
+        const known = [...pinnedRef.current, ...(listRef.current?.rows ?? [])].filter(
+          (r): r is ListRow => r !== undefined && ids.includes(r.id),
+        );
+        const unique = [...new Map(known.map((r) => [r.id, r])).values()];
+        setFolders((f) => (f ? adjustUnread(f, unique, on) : f));
+      }
       apply(on);
       try {
         await client.setKeyword(ids, keyword, on);
-        if (keyword === "$seen" || keyword === "$flagged") void loadFolders();
         if (keyword === "$pinned") void reload({ keep: true });
       } catch (err) {
         apply(!on);
+        if (keyword === "$seen") reloadCounts();
         fail(err);
         throw err;
       }
     },
-    [client, fail, loadFolders, patchRows, reload],
+    [client, fail, patchRows, reload, reloadCounts],
   );
 
   /** Moves conversations (archive, delete, junk, move to…), with an Undo toast. */
@@ -668,7 +734,6 @@ function Mailroom({
       try {
         const skip = [roles.sent, roles.drafts].filter((x): x is string => x !== undefined);
         const before = await client.move(threadIds, from, to, keywords, skip);
-        void loadFolders();
         // A reload that started before the move landed (e.g. after a pin) would bring the rows back: load again.
         void reload({ keep: true });
         toasts.show({
@@ -692,7 +757,7 @@ function Mailroom({
         void reload({ keep: true });
       }
     },
-    [currentFolder, dropThreads, roles, client, loadFolders, toasts, refresh, fail, reload],
+    [currentFolder, dropThreads, roles, client, toasts, refresh, fail, reload],
   );
 
   const deleteForever = useCallback(
@@ -712,7 +777,6 @@ function Mailroom({
             .threadEmails(threadIds)
             .then((emails) => client.destroy(emails.filter((e) => e.mailboxIds[folderId]).map((e) => e.id)))
             .then(() => {
-              void loadFolders();
               void reload({ keep: true });
               toasts.show({ message: "Deleted forever." });
             })
@@ -723,7 +787,7 @@ function Mailroom({
         },
       });
     },
-    [currentFolder, dropThreads, client, loadFolders, toasts, fail, reload],
+    [currentFolder, dropThreads, client, toasts, fail, reload],
   );
 
   const bulkKeyword = useCallback(
@@ -748,6 +812,15 @@ function Mailroom({
     (threadIds: string[], action: ReaderAction) => {
       switch (action.kind) {
         case "archive":
+          // Mailboxes made before Archive was added at provisioning get it from a one-off backfill; until then say
+          // so instead of doing nothing (customers can't create special folders over JMAP themselves).
+          if (!roles.archive) {
+            toasts.show({
+              message: "This mailbox has no Archive folder yet, so nothing was moved. Move it to a folder instead.",
+              tone: "error",
+            });
+            break;
+          }
           void moveThreads(
             threadIds,
             roles.archive,
@@ -786,7 +859,6 @@ function Mailroom({
               const { before, targets } = await client.restoreFromTrash(threadIds, trashId, (from) =>
                 restoreTarget(from, mine, roles),
               );
-              void loadFolders();
               void reload({ keep: true });
               const names = targets.map((id) => {
                 const f = folders?.find((x) => x.id === id);
@@ -859,7 +931,6 @@ function Mailroom({
       toasts,
       fail,
       dropThreads,
-      loadFolders,
       reload,
       refresh,
     ],
@@ -1447,7 +1518,6 @@ function Mailroom({
         onClose={({ savedDraft }) => {
           setComposer(null);
           if (savedDraft) toasts.show({ message: "Draft saved." });
-          void loadFolders();
         }}
         onSent={onSent}
       />
@@ -1763,6 +1833,8 @@ function Mailroom({
                 mine={mine}
                 authservIds={authservIds}
                 defaultReply={prefs.defaultReply}
+                imagePolicy={imagePolicy}
+                onRememberImages={rememberImages}
                 folders={folders ?? []}
                 currentFolder={currentFolder}
                 hiddenMailboxIds={hidden.filter((id) => id !== currentFolder?.id)}
@@ -1833,7 +1905,6 @@ function Mailroom({
           onClose={({ savedDraft }) => {
             setComposer(null);
             if (savedDraft) toasts.show({ message: "Draft saved." });
-            void loadFolders();
             if (currentFolder?.role === "drafts") void reload({ keep: true });
           }}
           onSent={onSent}

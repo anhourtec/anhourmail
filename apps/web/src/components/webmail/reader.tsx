@@ -55,8 +55,9 @@ import {
 import { displayName, folderLabel, folderTree, fullDate, initials, messageDate, subjectOf } from "./format";
 import type { Folder, MailClient, Summary } from "./mail-client";
 import { iconButtonClass, Menu, type MenuEntry } from "./menu";
-import { MessageContent } from "./message-body";
+import { type ImageOptions, MessageContent } from "./message-body";
 import { SenderAvatar } from "./message-list";
+import type { ImagePolicy } from "./remote-images";
 
 export type ReaderAction =
   | { kind: "archive" }
@@ -176,6 +177,7 @@ function MessageCard({
   onComposeTo,
   onViewFull,
   collapsible,
+  images,
 }: {
   summary: Summary;
   view: MessageView | "missing" | undefined;
@@ -192,6 +194,7 @@ function MessageCard({
   onComposeTo: (address: string) => void;
   onViewFull: () => void;
   collapsible: boolean;
+  images?: ImageOptions | undefined;
 }) {
   const [details, setDetails] = useState(false);
   const from = summary.from?.[0];
@@ -318,6 +321,7 @@ function MessageCard({
           paneHeight={paneHeight}
           onCompose={onComposeTo}
           onViewFull={onViewFull}
+          {...(images ? { images } : {})}
         />
       )}
     </article>
@@ -395,6 +399,8 @@ export function Reader({
   authservIds = [],
   markRead = { mode: "open", delay: 5 },
   defaultReply = "reply",
+  imagePolicy,
+  onRememberImages,
 }: {
   client: MailClient;
   threadId: string;
@@ -413,6 +419,10 @@ export function Reader({
   markRead?: { mode: "open" | "delay" | "never"; delay: number };
   /** What the Reply button and `r` do (a setting). */
   defaultReply?: "reply" | "replyAll";
+  /** When remote images load without asking (settings and remembered senders). */
+  imagePolicy?: ImagePolicy;
+  /** Remembers or forgets a sender for "Always load images from this sender". */
+  onRememberImages?: (senderKey: string, on: boolean) => void;
   folders: Folder[];
   /** The folder being viewed (null in Priority or search). */
   currentFolder: Folder | null;
@@ -437,6 +447,10 @@ export function Reader({
 }) {
   const [thread, setThread] = useState<Summary[] | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const images: ImageOptions | undefined =
+    imagePolicy && onRememberImages
+      ? { policy: imagePolicy, contacts: knownAddresses, onRemember: onRememberImages }
+      : undefined;
   const [views, setViews] = useState<Record<string, MessageView | "missing">>({});
   const [error, setError] = useState<string | null>(null);
   // The reading pane's height: an HTML message frame fills it (the frame can't measure its own content).
@@ -997,6 +1011,7 @@ export function Reader({
                     menu={messageMenu(e)}
                     knownAddresses={knownAddresses}
                     onAddContact={onAddContact}
+                    images={images}
                     collapsible={thread.length > 1}
                     onCollapse={() => {
                       setExpanded((s) => {
