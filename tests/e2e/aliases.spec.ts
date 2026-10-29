@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /** Aliases and masked aliases (Phase 3) on a mailbox of a domain verified through the development DNS. */
+import type { TestInfo } from "@playwright/test";
+
+import { ALIAS_CREATIONS_PER_YEAR, ALIAS_YEAR_DAYS, ALIASES_PER_MAILBOX } from "@anhourmail/shared/plans";
+
 import { e2eUsers, expect, openNav, panel, signIn, signOut, test, verifyDomain } from "./fixtures";
 
 test("an owner adds, turns off and deletes aliases; the member sees only their own and can't undo an admin's off", async ({
@@ -49,6 +53,11 @@ test("an owner adds, turns off and deletes aliases; the member sees only their o
   const hello = page.getByRole("row", { name: new RegExp(`hello@${domain}`) });
   await expect(hello).toBeVisible();
   await expect(hello.getByText("school")).toBeAttached();
+  // Paid plans: addresses per mailbox (aliases and masked aliases together), no yearly count.
+  const perMailbox = page.getByTestId("alias-mailbox-counts");
+  await expect(perMailbox).toContainText(`up to ${String(ALIASES_PER_MAILBOX)} each`);
+  await expect(perMailbox).toContainText(`kid@${domain} 1`);
+  await expect(page.getByTestId("alias-year-remaining")).toHaveCount(0);
 
   // An address that's already a mailbox is refused.
   await page.getByLabel("Address", { exact: true }).fill("boss");
@@ -111,4 +120,31 @@ test("an owner adds, turns off and deletes aliases; the member sees only their o
   await hello.getByRole("switch", { name: `Receive mail at hello@${domain}` }).click();
   await expect(hello.getByRole("switch")).toHaveAttribute("aria-checked", "true");
   await expect(hello.getByText("Turned off by an administrator")).toHaveCount(0);
+});
+
+const aliasLimitsFor = (info: TestInfo) => {
+  const a = e2eUsers().aliasLimits[info.project.name];
+  if (!a) throw new Error(`no alias limits fixture for ${info.project.name}`);
+  return a;
+};
+
+test("on Free, a used-up year hides Add and says when more can be added", async ({ page }, testInfo) => {
+  const al = aliasLimitsFor(testInfo);
+  await signIn(page, al.owner, e2eUsers().password);
+  await (await openNav(page)).getByRole("link", { name: "Aliases" }).click();
+  await expect(page.getByRole("heading", { name: "Aliases", level: 1 })).toBeVisible();
+  const perYear = ALIAS_CREATIONS_PER_YEAR.free;
+  await expect(page.getByTestId("alias-year-remaining")).toContainText(
+    `0 of ${String(perYear.alias)} aliases · 0 of ${String(perYear.masked)} masked aliases`,
+  );
+  const next = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium", timeZone: "UTC" }).format(
+    new Date(Date.parse(`${al.day}T00:00:00Z`) + ALIAS_YEAR_DAYS * 86_400_000),
+  );
+  await expect(page.getByRole("status").filter({ hasText: "the most its plan allows in a year" })).toContainText(
+    `${String(perYear.alias)} new aliases this year (more on ${next})`,
+  );
+  await expect(page.getByRole("link", { name: "Add an alias" })).toHaveCount(0);
+  // The panel's URL doesn't open it either; the server refuses a create regardless (unit and contract tests).
+  await page.goto(`${page.url().split("?")[0] ?? ""}?new=1`);
+  await expect(page.getByRole("heading", { name: "Add an alias" })).toHaveCount(0);
 });

@@ -10,6 +10,7 @@ import { like } from "drizzle-orm";
 
 import { hashPassword } from "@anhourmail/adapters/auth";
 import { createDb, schema } from "@anhourmail/adapters/postgres";
+import { ALIAS_CREATIONS_PER_YEAR } from "@anhourmail/shared/plans";
 import { stalwartDevAdmin } from "@anhourmail/stalwart-client";
 
 const FILE = "test-results/e2e-users.json";
@@ -67,7 +68,9 @@ if (mode === "create") {
   const suspension: Record<string, { accountName: string; owner: string; member: string }> = {};
   const firstSignIn: Record<string, { owner: string; domain: string }> = {};
   const avatars: Record<string, { person: string; mailbox: string; mailboxPassword: string }> = {};
+  const aliasLimits: Record<string, { owner: string; mailbox: string; day: string }> = {};
   const actAs: Record<string, { accountName: string; accountId: string; owner: string; member: string }> = {};
+  const data: Record<string, { accountName: string; owner: string; member: string; leaver: string }> = {};
   const mgmt = stalwartDevAdmin();
   for (const project of ["desktop", "mobile"]) {
     const [secAccount] = await db
@@ -156,6 +159,33 @@ if (mode === "create") {
       owner: actOwner.email,
       member: actMember.email,
     };
+    // Data export and account deletion journey (ADR-0025): an account per project that its Owner schedules for deletion
+    // and cancels (its Member sees the notice), and a login that is the only person in an empty account of its own,
+    // which it deletes together with its login.
+    const [dataAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} Data ${project}`, plan: "plus" })
+      .returning();
+    if (!dataAccount) throw new Error("data account not created");
+    const dataOwner = await addLogin(`data-${project}-owner`);
+    const dataMember = await addLogin(`data-${project}-member`);
+    await db.insert(schema.accountMembership).values([
+      { accountId: dataAccount.id, userId: dataOwner.id, role: "owner" },
+      { accountId: dataAccount.id, userId: dataMember.id, role: "member" },
+    ]);
+    const [leaverAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} Leaver ${project}`, plan: "free" })
+      .returning();
+    if (!leaverAccount) throw new Error("leaver account not created");
+    const leaver = await addLogin(`leaver-${project}`);
+    await db.insert(schema.accountMembership).values({ accountId: leaverAccount.id, userId: leaver.id, role: "owner" });
+    data[project] = {
+      accountName: dataAccount.name,
+      owner: dataOwner.email,
+      member: dataMember.email,
+      leaver: leaver.email,
+    };
     // First-sign-in password change journey: an account per project with a domain already verified (on the mail
     // server and active here), where its Owner adds a user who must choose their own password.
     const [fsAccount] = await db
@@ -206,6 +236,30 @@ if (mode === "create") {
       quotaBytes: 50 * 1024 * 1024,
     });
     avatars[project] = { person: avPerson.email, mailbox: `me@${avDomain}`, mailboxPassword: avPassword };
+    // Alias limits journey: a Free account whose yearly alias and masked alias creations are used up today (counted in
+    // the control plane only). Nothing is created, so its mailbox isn't on the mail server: it stays `provisioning`, so
+    // the reconciler doesn't report it missing.
+    const [alAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} Alias limits ${project}`, plan: "free" })
+      .returning();
+    if (!alAccount) throw new Error("alias limits account not created");
+    const alOwner = await addLogin(`al-${project}-owner`);
+    await db.insert(schema.accountMembership).values({ accountId: alAccount.id, userId: alOwner.id, role: "owner" });
+    const alMailbox = `me@${run}-al-${project}.test`;
+    await db.insert(schema.mailbox).values({
+      accountId: alAccount.id,
+      userId: alOwner.id,
+      address: alMailbox,
+      status: "provisioning",
+      quotaBytes: 50 * 1024 * 1024,
+    });
+    const alDay = new Date().toISOString().slice(0, 10);
+    await db.insert(schema.aliasCreationDay).values([
+      { accountId: alAccount.id, day: alDay, kind: "alias", count: ALIAS_CREATIONS_PER_YEAR.free.alias },
+      { accountId: alAccount.id, day: alDay, kind: "masked", count: ALIAS_CREATIONS_PER_YEAR.free.masked },
+    ]);
+    aliasLimits[project] = { owner: alOwner.email, mailbox: alMailbox, day: alDay };
     security[project] = {
       totp: logins.totp.email,
       passkey: logins.passkey.email,
@@ -259,6 +313,8 @@ if (mode === "create") {
         actAs,
         firstSignIn,
         avatars,
+        data,
+        aliasLimits,
       },
       null,
       2,
