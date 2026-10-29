@@ -37,7 +37,9 @@ const STATUS: Record<string, number> = {
   step_up_required: 403,
   email_unverified: 403,
   account_suspended: 403,
+  alias_admin_locked: 403,
   rate_limited: 429,
+  alias_daily_limit: 429,
 };
 
 export type RouteOptions = {

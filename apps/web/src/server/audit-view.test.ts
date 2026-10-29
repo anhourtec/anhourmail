@@ -44,7 +44,10 @@ describe("audit rows", () => {
 
   it("shows act-as staff and their reason, and no meta block when empty", () => {
     const [row] = auditRows([
-      entry({ onBehalfOf: { userId: "s", email: "s@anhourtec.test" }, meta: { reason: "ticket 42" } }),
+      entry({
+        onBehalfOf: { userId: "s", email: "s@anhourtec.test", accountId: "a", sessionId: "x" },
+        meta: { reason: "ticket 42" },
+      }),
     ]);
     expect(row?.actor).toMatchObject({ kind: "staff", label: "Anhourtec staff" });
     expect(row?.reason).toBe("ticket 42");

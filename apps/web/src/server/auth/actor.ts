@@ -2,7 +2,8 @@
 import "server-only";
 
 import { sessionUser } from "@anhourmail/adapters/auth";
-import { ANONYMOUS, type Actor } from "@anhourmail/core";
+import { ANONYMOUS, type Actor, type UserActor } from "@anhourmail/core";
+import { actingActorFor } from "@anhourmail/core/platform";
 import { endSessionForRequirement, requiredEnrolment, sessionRefusalFor } from "@anhourmail/core/security";
 import { requestContext } from "@anhourmail/server/request-context";
 
@@ -43,22 +44,25 @@ export async function getActorAndSession(headers: Headers): Promise<{ actor: Act
     );
     return { actor: ANONYMOUS, sessionId: null };
   }
-  return {
-    actor: {
-      kind: "user",
-      userId: user.id,
-      email: user.email,
-      name: user.name,
-      platformRoles,
-      memberships,
-      suspended,
-      ...(mustEnrol ? { mustEnrol } : {}),
-      ...(mustChangePassword ? { mustChangePassword: true as const } : {}),
-      ...(user.signInMethod ? { signInMethod: user.signInMethod } : {}),
-      ...(suspendedAccountIds.length > 0 ? { suspendedAccountIds } : {}),
-    },
-    sessionId: user.sessionId,
+  const actor: UserActor = {
+    kind: "user",
+    userId: user.id,
+    email: user.email,
+    name: user.name,
+    platformRoles,
+    memberships,
+    suspended,
+    ...(mustEnrol ? { mustEnrol } : {}),
+    ...(mustChangePassword ? { mustChangePassword: true as const } : {}),
+    ...(user.signInMethod ? { signInMethod: user.signInMethod } : {}),
+    ...(suspendedAccountIds.length > 0 ? { suspendedAccountIds } : {}),
   };
+  return { actor: (await withActAs(actor, user.sessionId)) ?? actor, sessionId: user.sessionId };
+}
+
+/** Staff support access (ADR-0023): the acting actor when this console session has one open (core decides). */
+function withActAs(actor: UserActor, sessionId: string): Promise<UserActor | null> {
+  return actingActorFor(container().deps, actor, sessionId);
 }
 
 /** The actor for this request, from the console session (roles from the database). */

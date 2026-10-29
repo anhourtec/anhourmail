@@ -7,14 +7,15 @@ import type { Permission } from "@anhourmail/shared/rbac";
  * missing here (CLAUDE.md rule 35).
  *
  * `guard`: "public" (anyone), "session" (any signed-in person), "webmail" (a webmail session on the webmail origin —
- * a console session never grants it), or a permission from the matrix.
+ * a console session never grants it), "act_as" (a staff member with support access open: 404 for everyone else
+ * signed in, ADR-0023), or a permission from the matrix.
  * `accountParam`: the path parameter holding the account id, for account-scoped permissions.
  */
 export type RouteSpec = {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   path: string;
   file: string;
-  guard: "public" | "session" | "webmail" | "infra" | Permission;
+  guard: "public" | "session" | "webmail" | "infra" | "act_as" | Permission;
   accountParam?: string;
   /** Audit action written by a mutating route (asserted by the harness). */
   audits?: string;
@@ -23,6 +24,11 @@ export type RouteSpec = {
    * subject id → 404, a junk token → 400). Denied callers still get 401/403/404 from the matrix.
    */
   probeStatus?: number;
+  /**
+   * Refused (403, audited as denied `act_as`) for staff with support access open, though the acting role holds the
+   * permission: the staff member's own profile and photo (ADR-0023).
+   */
+  refusedWhileActing?: true;
 };
 
 export const ROUTES: readonly RouteSpec[] = [
@@ -39,6 +45,7 @@ export const ROUTES: readonly RouteSpec[] = [
     file: "app/api/me/profile/route.ts",
     guard: "self.profile.manage",
     audits: "account.profile_changed",
+    refusedWhileActing: true,
   },
   // The person's own profile photo (packages/core/src/avatars, ADR-0022). The harness's empty body isn't an image (400).
   { method: "GET", path: "/api/me/avatar", file: "app/api/me/avatar/route.ts", guard: "self.profile.read" },
@@ -49,6 +56,7 @@ export const ROUTES: readonly RouteSpec[] = [
     guard: "self.profile.manage",
     audits: "account.avatar_changed",
     probeStatus: 400,
+    refusedWhileActing: true,
   },
   {
     method: "DELETE",
@@ -56,6 +64,7 @@ export const ROUTES: readonly RouteSpec[] = [
     file: "app/api/me/avatar/route.ts",
     guard: "self.profile.manage",
     audits: "account.avatar_removed",
+    refusedWhileActing: true,
   },
   // A profile photo on the console origin: any signed-in person may ask; the service then answers 404 unless they may
   // see that person or mailbox (the harness's random ids are 404 for everyone signed in).
@@ -484,6 +493,30 @@ export const ROUTES: readonly RouteSpec[] = [
     // The harness sends no address: allowed callers get a validation error.
     probeStatus: 400,
   },
+  // Staff support access (ADR-0023): start from Platform → account (fresh step-up; the harness's random id → 404),
+  // then renew or end it while it is open (everyone else signed in: 404). The harness's empty body has no reason: 400.
+  {
+    method: "POST",
+    path: "/api/platform/accounts/:accountId/act-as",
+    file: "app/api/platform/accounts/[accountId]/act-as/route.ts",
+    guard: "platform.accounts.actAs",
+    audits: "staff.act_as_started",
+    probeStatus: 404,
+  },
+  {
+    method: "POST",
+    path: "/api/me/act-as/renew",
+    file: "app/api/me/act-as/renew/route.ts",
+    guard: "act_as",
+    probeStatus: 400,
+  },
+  {
+    method: "DELETE",
+    path: "/api/me/act-as",
+    file: "app/api/me/act-as/route.ts",
+    guard: "act_as",
+    audits: "staff.act_as_ended",
+  },
   // Staff suspension (Global Administrator; fresh step-up). The harness probes random ids: allowed callers get 404.
   {
     method: "POST",
@@ -656,6 +689,37 @@ export const ROUTES: readonly RouteSpec[] = [
     method: "PATCH",
     path: "/api/webmail/settings/identities/:identityId",
     file: "app/api/webmail/settings/identities/[identityId]/route.ts",
+    guard: "webmail",
+  },
+  // Named signatures and their defaults (docs/internal/05-webmail.md "Signatures"): the session's own mailbox only.
+  {
+    method: "GET",
+    path: "/api/webmail/settings/signatures",
+    file: "app/api/webmail/settings/signatures/route.ts",
+    guard: "webmail",
+  },
+  {
+    method: "POST",
+    path: "/api/webmail/settings/signatures",
+    file: "app/api/webmail/settings/signatures/route.ts",
+    guard: "webmail",
+  },
+  {
+    method: "PATCH",
+    path: "/api/webmail/settings/signatures/:signatureId",
+    file: "app/api/webmail/settings/signatures/[signatureId]/route.ts",
+    guard: "webmail",
+  },
+  {
+    method: "DELETE",
+    path: "/api/webmail/settings/signatures/:signatureId",
+    file: "app/api/webmail/settings/signatures/[signatureId]/route.ts",
+    guard: "webmail",
+  },
+  {
+    method: "PUT",
+    path: "/api/webmail/settings/signatures/defaults",
+    file: "app/api/webmail/settings/signatures/defaults/route.ts",
     guard: "webmail",
   },
   {
