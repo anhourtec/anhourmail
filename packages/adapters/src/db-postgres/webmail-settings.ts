@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 
 import type {
   ForwardingStatus,
   ForwardingTarget,
+  StoredSignature,
   WebmailMailbox,
   WebmailSettingsRepository,
 } from "@anhourmail/core/webmail";
 
 import type { Executor } from "./client";
-import { forwardingTarget, mailbox, webmailPreference } from "./schema";
+import { forwardingTarget, mailbox, webmailPreference, webmailSignature } from "./schema";
 
 const isId = (v: string) => /^[0-9a-f-]{36}$/i.test(v);
 
@@ -27,7 +28,7 @@ const toTarget = (r: Row): ForwardingTarget => ({
   windowStartedAt: r.windowStartedAt,
 });
 
-/** Webmail preferences and forwarding confirmations (docs/internal/05-webmail.md "Settings"). */
+/** Webmail preferences, forwarding confirmations and signatures (docs/internal/05-webmail.md "Settings"). */
 export class PgWebmailSettingsRepository implements WebmailSettingsRepository {
   constructor(private readonly x: Executor) {}
 
@@ -112,5 +113,90 @@ export class PgWebmailSettingsRepository implements WebmailSettingsRepository {
   async clearForwarding(mailboxId: string): Promise<void> {
     if (!isId(mailboxId)) return;
     await this.x.delete(forwardingTarget).where(eq(forwardingTarget.mailboxId, mailboxId));
+  }
+
+  async lockSignatures(mailboxId: string): Promise<void> {
+    await this.x.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`webmail-signature:${mailboxId}`}, 0))`);
+  }
+
+  async signatures(mailboxId: string): Promise<StoredSignature[]> {
+    if (!isId(mailboxId)) return [];
+    return this.x
+      .select()
+      .from(webmailSignature)
+      .where(eq(webmailSignature.mailboxId, mailboxId))
+      .orderBy(asc(webmailSignature.createdAt), asc(webmailSignature.id));
+  }
+
+  async signaturesStarted(mailboxId: string): Promise<boolean> {
+    if (!isId(mailboxId)) return false;
+    const [r] = await this.x
+      .select({ at: webmailPreference.signaturesStartedAt })
+      .from(webmailPreference)
+      .where(eq(webmailPreference.mailboxId, mailboxId));
+    return r?.at != null;
+  }
+
+  async markSignaturesStarted(mailboxId: string, at: Date): Promise<void> {
+    // A mailbox that never saved a preference has no row yet: an empty one reads back as the defaults.
+    await this.x
+      .insert(webmailPreference)
+      .values({ mailboxId, prefs: {}, signaturesStartedAt: at, updatedAt: at })
+      .onConflictDoUpdate({
+        target: webmailPreference.mailboxId,
+        set: {
+          signaturesStartedAt: sql`coalesce(${webmailPreference.signaturesStartedAt}, ${at.toISOString()}::timestamptz)`,
+        },
+      });
+  }
+
+  async insertSignature(sig: StoredSignature): Promise<void> {
+    await this.x.insert(webmailSignature).values(sig);
+  }
+
+  async updateSignature(
+    mailboxId: string,
+    id: string,
+    change: { name?: string; html?: string; text?: string },
+    at: Date,
+  ): Promise<boolean> {
+    if (!isId(mailboxId) || !isId(id)) return false;
+    const rows = await this.x
+      .update(webmailSignature)
+      .set({ ...change, updatedAt: at })
+      .where(and(eq(webmailSignature.mailboxId, mailboxId), eq(webmailSignature.id, id)))
+      .returning({ id: webmailSignature.id });
+    return rows.length > 0;
+  }
+
+  async deleteSignature(mailboxId: string, id: string): Promise<boolean> {
+    if (!isId(mailboxId) || !isId(id)) return false;
+    const rows = await this.x
+      .delete(webmailSignature)
+      .where(and(eq(webmailSignature.mailboxId, mailboxId), eq(webmailSignature.id, id)))
+      .returning({ id: webmailSignature.id });
+    return rows.length > 0;
+  }
+
+  async setSignatureDefaults(
+    mailboxId: string,
+    defaults: { newMessage: string | null; reply: string | null },
+  ): Promise<void> {
+    if (!isId(mailboxId)) return;
+    // Clear first, then set: one UPDATE flipping two rows could trip the one-default-per-mailbox index midway.
+    await this.x
+      .update(webmailSignature)
+      .set({ defaultNew: false, defaultReply: false })
+      .where(eq(webmailSignature.mailboxId, mailboxId));
+    for (const [column, id] of [
+      ["defaultNew", defaults.newMessage],
+      ["defaultReply", defaults.reply],
+    ] as const) {
+      if (id === null || !isId(id)) continue;
+      await this.x
+        .update(webmailSignature)
+        .set({ [column]: true })
+        .where(and(eq(webmailSignature.mailboxId, mailboxId), eq(webmailSignature.id, id)));
+    }
   }
 }

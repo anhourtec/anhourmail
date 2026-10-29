@@ -47,6 +47,7 @@ describeAdapterContract("memory", async () => {
         address: alias,
         kind: "alias",
         enabled: true,
+        adminLocked: false,
         description: null,
         createdAt: new Date(0),
       });

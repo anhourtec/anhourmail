@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import { ConflictError, type UnitOfWork } from "@anhourmail/core";
 import { type AuditEntryInput, type AuditQuery, verifyChain } from "@anhourmail/core/audit";
+import { type ClaimedJob, STALE_RUNNING_MS } from "@anhourmail/core/provisioning";
 
 /** `createUser` makes a console user the adapter can reference (memberships need one in Postgres). */
 export type AdapterFactory = () => Promise<{
@@ -50,6 +51,20 @@ const auditInput = (
   userAgent: null,
   meta: { n: 1 },
 });
+
+/**
+ * Claims jobs until this worker holds `id` (a shared test database may hold older claimable jobs: those are
+ * completed with their own claims). Fails if it never comes up.
+ */
+async function claimUntil(uow: UnitOfWork, id: string, now: Date): Promise<ClaimedJob> {
+  for (let i = 0; i < 50; i++) {
+    const j = await uow.run((r) => r.provisioning.claimNext(now));
+    if (!j) break;
+    if (j.id === id) return j;
+    await uow.run((r) => r.provisioning.complete(j, new Date()));
+  }
+  throw new Error(`job ${id} was not claimable`);
+}
 
 export function describeAdapterContract(name: string, factory: AdapterFactory): void {
   describe(`${name} adapter contract`, () => {
@@ -323,6 +338,7 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
           address: `hi-${tag}@contract.example.ca`,
           kind: "masked" as const,
           enabled: true,
+          adminLocked: false,
           description: "shop",
           createdAt: new Date(),
         };
@@ -343,13 +359,49 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         await expect(uow.run((r) => r.aliases.insert({ ...alias, id: randomUUID() }))).rejects.toThrow(
           "already in use",
         );
-        await uow.run((r) => r.aliases.setEnabled(alias.id, false));
-        expect((await uow.run((r) => r.aliases.get(a.id, alias.id)))?.enabled).toBe(false);
+        expect(await uow.run((r) => r.aliases.get(a.id, alias.id))).toMatchObject({ adminLocked: false });
+        // Off with an administrator's lock, then off without one: both stored as given.
+        await uow.run((r) => r.aliases.setEnabled(alias.id, false, true));
+        expect(await uow.run((r) => r.aliases.get(a.id, alias.id))).toMatchObject({
+          enabled: false,
+          adminLocked: true,
+        });
+        expect((await uow.run((r) => r.aliases.listByAccount(a.id)))[0]).toMatchObject({ adminLocked: true });
         expect((await uow.run((r) => r.directory.getMailbox(m.id)))?.aliases).toEqual([
           { address: alias.address, kind: "masked", enabled: false, description: "shop" },
         ]);
+        await uow.run((r) => r.aliases.setEnabled(alias.id, false, false));
+        expect(await uow.run((r) => r.aliases.get(a.id, alias.id))).toMatchObject({
+          enabled: false,
+          adminLocked: false,
+        });
+        // Daily creation counts: per account, day and kind; they survive deleting the alias. Yesterday's count is kept
+        // (clock skew between instances around midnight must not reset a day early); older days go.
+        const day = "2026-10-29";
+        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", day))).toBe(0);
+        await uow.run((r) => r.aliases.recordCreation(a.id, "masked", "2026-10-27"));
+        await uow.run((r) => r.aliases.recordCreation(a.id, "masked", "2026-10-28"));
+        await uow.run((r) => r.aliases.recordCreation(a.id, "masked", day));
+        await uow.run((r) => r.aliases.recordCreation(a.id, "masked", day));
+        await uow.run((r) => r.aliases.recordCreation(a.id, "alias", day));
+        await uow.run((r) => r.aliases.recordCreation(b.id, "masked", day));
+        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", day))).toBe(2);
+        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "alias", day))).toBe(1);
+        expect(await uow.run((r) => r.aliases.creationsOn(b.id, "masked", day))).toBe(1);
+        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", "2026-10-28"))).toBe(1); // yesterday: kept
+        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", "2026-10-27"))).toBe(0); // older: dropped
+        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", "2026-10-30"))).toBe(0);
+        // An instance whose clock is still on yesterday counts into yesterday and leaves today's count alone.
+        await uow.run((r) => r.aliases.recordCreation(a.id, "masked", "2026-10-28"));
+        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", "2026-10-28"))).toBe(2);
+        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", day))).toBe(2);
+        // Across a month boundary too.
+        await uow.run((r) => r.aliases.recordCreation(a.id, "alias", "2026-11-01"));
+        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "alias", "2026-10-31"))).toBe(0);
+        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "masked", day))).toBe(0); // 2026-10-29 < 2026-10-31
         await uow.run((r) => r.aliases.delete(alias.id));
         expect(await uow.run((r) => r.aliases.get(a.id, alias.id))).toBeNull();
+        expect(await uow.run((r) => r.aliases.creationsOn(a.id, "alias", "2026-11-01"))).toBe(1);
       } finally {
         await cleanup();
       }
@@ -359,7 +411,8 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
       const { uow, cleanup } = await factory();
       try {
         const subject = randomUUID();
-        const t0 = new Date(Date.UTC(2000, 0, 1));
+        const t0 = new Date(Date.UTC(1990, 0, 1));
+        const now = new Date(Date.UTC(1990, 0, 2));
         const a = await uow.run((r) =>
           r.provisioning.enqueue({ kind: "domain.ensure", subjectId: subject, runAfter: t0 }),
         );
@@ -367,20 +420,44 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
           r.provisioning.enqueue({ kind: "domain.ensure", subjectId: subject, runAfter: t0 }),
         );
         expect(again.id).toBe(a.id);
-        const claimed = await uow.run((r) => r.provisioning.claimNext(new Date(Date.UTC(2000, 0, 2))));
+        expect(a.lockToken).toBeNull();
+        const claimed = await claimUntil(uow, a.id, now);
         expect(claimed).toMatchObject({ id: a.id, status: "running", attempts: 1 });
+        expect(typeof claimed.lockToken).toBe("string");
         const future = new Date(Date.UTC(2999, 0, 1));
-        await uow.run((r) => r.provisioning.retry(a.id, "boom", future, new Date()));
-        expect(await uow.run((r) => r.provisioning.get(a.id))).toMatchObject({ status: "queued", lastError: "boom" });
-        await uow.run((r) => r.provisioning.complete(a.id, new Date()));
-        expect((await uow.run((r) => r.provisioning.get(a.id)))?.status).toBe("succeeded");
+        expect(await uow.run((r) => r.provisioning.retry(claimed, "boom", t0, new Date()))).toBe(true);
+        expect(await uow.run((r) => r.provisioning.get(a.id))).toMatchObject({
+          status: "queued",
+          lastError: "boom",
+          lockToken: null,
+        });
+        // The claim ended with the retry: it can't finish the job any more.
+        expect(await uow.run((r) => r.provisioning.complete(claimed, new Date()))).toBe(false);
+        expect((await uow.run((r) => r.provisioning.get(a.id)))?.status).toBe("queued");
+        // Claimed again: a new token, and that claim completes it.
+        const second = await claimUntil(uow, a.id, now);
+        expect(second).toMatchObject({ attempts: 2 });
+        expect(second.lockToken).not.toBe(claimed.lockToken);
+        expect(await uow.run((r) => r.provisioning.complete(second, new Date()))).toBe(true);
+        expect(await uow.run((r) => r.provisioning.get(a.id))).toMatchObject({
+          status: "succeeded",
+          lastError: null,
+          lockToken: null,
+        });
         const b = await uow.run((r) =>
-          r.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: randomUUID(), runAfter: future }),
+          r.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: randomUUID(), runAfter: t0 }),
         );
-        await uow.run((r) => r.provisioning.giveUp(b.id, "gave up", new Date()));
+        // Only a claim can give a job up: a queued job with no claim is left alone.
+        expect(
+          await uow.run((r) => r.provisioning.giveUp({ id: b.id, lockToken: randomUUID() }, "x", new Date())),
+        ).toBe(false);
+        expect((await uow.run((r) => r.provisioning.get(b.id)))?.status).toBe("queued");
+        const bClaim = await claimUntil(uow, b.id, now);
+        expect(await uow.run((r) => r.provisioning.giveUp(bClaim, "gave up", new Date()))).toBe(true);
         expect(await uow.run((r) => r.provisioning.get(b.id))).toMatchObject({
           status: "failed",
           lastError: "gave up",
+          lockToken: null,
         });
         expect(await uow.run((r) => r.provisioning.get(randomUUID()))).toBeNull();
         // The latest job of a kind for a subject, whatever its status.
@@ -518,8 +595,9 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
           uow.run((r) => r.provisioning.claimNext(now)),
           uow.run((r) => r.provisioning.claimNext(now)),
         ]);
-        expect([x?.id, y?.id].filter((id) => id === job.id)).toHaveLength(1);
-        await uow.run((r) => r.provisioning.complete(job.id, new Date()));
+        const mine = [x, y].filter((j) => j?.id === job.id);
+        expect(mine).toHaveLength(1);
+        for (const j of [x, y]) if (j) await uow.run((r) => r.provisioning.complete(j, new Date()));
       } finally {
         await cleanup();
       }
@@ -535,12 +613,7 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         const first = await uow.run((r) =>
           r.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: subject, runAfter: t0 }),
         );
-        // Claim until we hold `first` (a shared database may have older claimable jobs; finish those).
-        for (let i = 0; i < 50; i++) {
-          const j = await uow.run((r) => r.provisioning.claimNext(now));
-          if (!j || j.id === first.id) break;
-          await uow.run((r) => r.provisioning.complete(j.id, new Date()));
-        }
+        const firstClaim = await claimUntil(uow, first.id, now);
         expect((await uow.run((r) => r.provisioning.get(first.id)))?.status).toBe("running");
         // While it runs, a newer job for the same subject waits; another subject's job doesn't.
         const second = await uow.run((r) =>
@@ -555,21 +628,67 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
           const j = await uow.run((r) => r.provisioning.claimNext(now));
           if (!j) break;
           claimed.push(j.id);
-          await uow.run((r) => r.provisioning.complete(j.id, new Date()));
+          await uow.run((r) => r.provisioning.complete(j, new Date()));
           if (j.id === third.id) break;
         }
         expect(claimed).toContain(third.id);
         expect(claimed).not.toContain(second.id);
         // Once the first is done, the second can run.
-        await uow.run((r) => r.provisioning.complete(first.id, new Date()));
+        await uow.run((r) => r.provisioning.complete(firstClaim, new Date()));
         let got = false;
         for (let i = 0; i < 50 && !got; i++) {
           const j = await uow.run((r) => r.provisioning.claimNext(now));
           if (!j) break;
           got = j.id === second.id;
-          await uow.run((r) => r.provisioning.complete(j.id, new Date()));
+          await uow.run((r) => r.provisioning.complete(j, new Date()));
         }
         expect(got).toBe(true);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("provisioning: a stale claim taken over by another worker can't overwrite the newer claim", async () => {
+      const { uow, cleanup } = await factory();
+      try {
+        const t0 = new Date(Date.UTC(1990, 0, 1));
+        const now = new Date(Date.UTC(1990, 0, 2));
+        const job = await uow.run((r) =>
+          r.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: randomUUID(), runAfter: t0 }),
+        );
+        const first = await claimUntil(uow, job.id, now);
+        // Still fresh: nobody else gets it.
+        const early = await uow.run((r) => r.provisioning.claimNext(new Date(now.getTime() + STALE_RUNNING_MS - 1)));
+        expect(early?.id).not.toBe(job.id);
+        if (early) await uow.run((r) => r.provisioning.complete(early, new Date()));
+        // A worker that is still working renews its lease before each side effect: not stale yet.
+        const renewedAt = new Date(now.getTime() + STALE_RUNNING_MS - 1);
+        expect(await uow.run((r) => r.provisioning.renew(first, renewedAt))).toBe(true);
+        const notYet = await uow.run((r) => r.provisioning.claimNext(new Date(now.getTime() + STALE_RUNNING_MS + 1)));
+        expect(notYet?.id).not.toBe(job.id);
+        if (notYet) await uow.run((r) => r.provisioning.complete(notYet, new Date()));
+        // The first worker then stalls past the stale limit: a second worker takes the job over under a new token.
+        const second = await claimUntil(uow, job.id, new Date(renewedAt.getTime() + STALE_RUNNING_MS + 1));
+        expect(second).toMatchObject({ status: "running", attempts: 2 });
+        expect(second.lockToken).not.toBe(first.lockToken);
+        // The first worker's late outcome changes nothing, whichever it is; it can't renew either.
+        expect(await uow.run((r) => r.provisioning.renew(first, new Date()))).toBe(false);
+        expect(await uow.run((r) => r.provisioning.complete(first, new Date()))).toBe(false);
+        expect(await uow.run((r) => r.provisioning.retry(first, "late", t0, new Date()))).toBe(false);
+        expect(await uow.run((r) => r.provisioning.giveUp(first, "late", new Date()))).toBe(false);
+        expect(await uow.run((r) => r.provisioning.get(job.id))).toMatchObject({
+          status: "running",
+          attempts: 2,
+          lastError: null,
+          lockToken: second.lockToken,
+        });
+        // The newer claim decides, once.
+        expect(await uow.run((r) => r.provisioning.retry(second, "boom", t0, new Date()))).toBe(true);
+        expect(await uow.run((r) => r.provisioning.complete(second, new Date()))).toBe(false);
+        expect(await uow.run((r) => r.provisioning.renew(second, new Date()))).toBe(false); // not running any more
+        expect(await uow.run((r) => r.provisioning.get(job.id))).toMatchObject({ status: "queued", lastError: "boom" });
+        const third = await claimUntil(uow, job.id, now);
+        expect(await uow.run((r) => r.provisioning.complete(third, new Date()))).toBe(true);
       } finally {
         await cleanup();
       }
@@ -967,7 +1086,11 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
           await r.audit.append(entry({ action: "mailbox.created", actor: member }), new Date());
           await r.audit.append(entry({ action: "mailbox.suspended", actor: staff, result: "denied" }), new Date());
           await r.audit.append(
-            entry({ action: "alias.created", actor: member, onBehalfOf: { userId: "s", email: "s@anhourtec.test" } }),
+            entry({
+              action: "alias.created",
+              actor: member,
+              onBehalfOf: { userId: "s", email: "s@anhourtec.test", accountId: randomUUID(), sessionId: randomUUID() },
+            }),
             new Date(),
           );
           await r.audit.append(
@@ -1290,6 +1413,113 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
       }
     });
 
+    it("webmail signatures: per mailbox, unique names ignoring case, one default of each kind, started once", async () => {
+      const { uow, cleanup, seedMail } = await factory();
+      try {
+        const tag = randomUUID().slice(0, 8);
+        const one = await seedMail({
+          domain: `sg-${tag}.test`,
+          address: `one@sg-${tag}.test`,
+          alias: `a@sg-${tag}.test`,
+          quotaBytes: 1024,
+        });
+        const two = await seedMail({
+          domain: `sg2-${tag}.test`,
+          address: `two@sg2-${tag}.test`,
+          alias: `b@sg2-${tag}.test`,
+          quotaBytes: 1024,
+        });
+        const accountOf = async (address: string) =>
+          (await uow.run((r) => r.webmailSettings.mailboxByAddress(address)))?.accountId ?? "";
+        const acc1 = await accountOf(`one@sg-${tag}.test`);
+        const acc2 = await accountOf(`two@sg2-${tag}.test`);
+        const t0 = new Date("2026-10-29T10:00:00Z");
+        const sig = (id: string, mailboxId: string, accountId: string, name: string, at: Date) => ({
+          id,
+          mailboxId,
+          accountId,
+          name,
+          html: `<p>${name}</p>`,
+          text: name,
+          defaultNew: false,
+          defaultReply: false,
+          createdAt: at,
+          updatedAt: at,
+        });
+        const [a, b, c] = [randomUUID(), randomUUID(), randomUUID()];
+        expect(await uow.run((r) => r.webmailSettings.signatures(one.mailboxId))).toEqual([]);
+        // The per-mailbox lock is taken inside a unit of work and released with it (a second one gets it at once).
+        await uow.run(async (r) => {
+          await r.webmailSettings.lockSignatures(one.mailboxId);
+        });
+        await uow.run(async (r) => {
+          await r.webmailSettings.lockSignatures(one.mailboxId);
+        });
+        expect(await uow.run((r) => r.webmailSettings.signatures("not-a-uuid"))).toEqual([]);
+        expect(await uow.run((r) => r.webmailSettings.signaturesStarted(one.mailboxId))).toBe(false);
+        await uow.run((r) =>
+          r.webmailSettings.insertSignature({ ...sig(a, one.mailboxId, acc1, "Work", t0), defaultNew: true }),
+        );
+        await uow.run((r) =>
+          r.webmailSettings.insertSignature(sig(b, one.mailboxId, acc1, "Home", new Date(t0.getTime() + 1000))),
+        );
+        await uow.run((r) => r.webmailSettings.insertSignature(sig(c, two.mailboxId, acc2, "Work", t0)));
+        // Same name in another case: refused (the other mailbox's "Work" is fine).
+        await expect(
+          uow.run((r) => r.webmailSettings.insertSignature(sig(randomUUID(), one.mailboxId, acc1, "WORK", t0))),
+        ).rejects.toThrow();
+        // A second default for new messages: refused.
+        await expect(
+          uow.run((r) =>
+            r.webmailSettings.insertSignature({
+              ...sig(randomUUID(), one.mailboxId, acc1, "Third", t0),
+              defaultNew: true,
+            }),
+          ),
+        ).rejects.toThrow();
+        const list = await uow.run((r) => r.webmailSettings.signatures(one.mailboxId));
+        expect(list.map((x) => [x.name, x.defaultNew, x.defaultReply])).toEqual([
+          ["Work", true, false],
+          ["Home", false, false],
+        ]);
+
+        // Another mailbox's id behaves as unknown.
+        expect(await uow.run((r) => r.webmailSettings.updateSignature(one.mailboxId, c, { name: "Mine" }, t0))).toBe(
+          false,
+        );
+        expect(await uow.run((r) => r.webmailSettings.deleteSignature(one.mailboxId, c))).toBe(false);
+        expect(
+          await uow.run((r) =>
+            r.webmailSettings.updateSignature(one.mailboxId, b, { name: "Personal", html: "<p>P</p>", text: "P" }, t0),
+          ),
+        ).toBe(true);
+        await uow.run((r) => r.webmailSettings.setSignatureDefaults(one.mailboxId, { newMessage: b, reply: a }));
+        const swapped = await uow.run((r) => r.webmailSettings.signatures(one.mailboxId));
+        expect(swapped.map((x) => [x.name, x.text, x.defaultNew, x.defaultReply])).toEqual([
+          ["Work", "Work", false, true],
+          ["Personal", "P", true, false],
+        ]);
+        // Deleting a default leaves none of that kind.
+        expect(await uow.run((r) => r.webmailSettings.deleteSignature(one.mailboxId, b))).toBe(true);
+        const left = await uow.run((r) => r.webmailSettings.signatures(one.mailboxId));
+        expect(left.map((x) => [x.id, x.defaultNew, x.defaultReply])).toEqual([[a, false, true]]);
+        await uow.run((r) => r.webmailSettings.setSignatureDefaults(one.mailboxId, { newMessage: null, reply: null }));
+        expect((await uow.run((r) => r.webmailSettings.signatures(one.mailboxId)))[0]?.defaultReply).toBe(false);
+        expect((await uow.run((r) => r.webmailSettings.signatures(two.mailboxId))).map((x) => x.id)).toEqual([c]);
+
+        // Started once; preferences saved before or after keep it (and an empty row reads back as no preferences set).
+        await uow.run((r) => r.webmailSettings.markSignaturesStarted(one.mailboxId, t0));
+        expect(await uow.run((r) => r.webmailSettings.signaturesStarted(one.mailboxId))).toBe(true);
+        await uow.run((r) => r.webmailSettings.savePreferences(one.mailboxId, { density: "compact" }, t0));
+        await uow.run((r) => r.webmailSettings.markSignaturesStarted(one.mailboxId, new Date()));
+        expect(await uow.run((r) => r.webmailSettings.signaturesStarted(one.mailboxId))).toBe(true);
+        expect(await uow.run((r) => r.webmailSettings.preferences(one.mailboxId))).toEqual({ density: "compact" });
+        expect(await uow.run((r) => r.webmailSettings.signaturesStarted(two.mailboxId))).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("app passwords: metadata per mailbox, newest first, conditional revoke, rows go with their mailbox", async () => {
       const { uow, cleanup, seedMail } = await factory();
       try {
@@ -1516,6 +1746,154 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         expect(await uow.run((r) => r.suspensions.person(userId))).toBeNull();
         expect(await uow.run((r) => r.access.isSuspended(userId))).toBe(false);
         expect(await uow.run((r) => r.suspensions.suspendedAccountsOf(userId))).toEqual([]);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("act-as: one open session per console session, renew and end once, due sessions with their reason", async () => {
+      const { uow, cleanup, createUser, seedAuth } = await factory();
+      try {
+        const email = `act-as-${randomUUID()}@anhourtec.test`;
+        const staff = await createUser(email);
+        const other = await createUser(`act-as-other-${randomUUID()}@anhourtec.test`);
+        const now = new Date("2026-10-29T10:00:00Z");
+        const later = (min: number) => new Date(now.getTime() + min * 60_000);
+        const [signedIn, gone, otherSession] = [randomUUID(), randomUUID(), randomUUID()];
+        await seedAuth(staff, { sessions: [{ id: signedIn, expiresAt: later(600), updatedAt: now }] });
+        await seedAuth(other, { sessions: [{ id: otherSession, expiresAt: later(600), updatedAt: now }] });
+        const name = `Act as ${randomUUID()}`;
+        const accountId = await uow.run(async (r) => {
+          await r.staff.grantRole(staff, "support_admin", "contract");
+          await r.staff.grantRole(other, "support_admin", "contract");
+          return (await r.accounts.create({ name, plan: "plus" })).id;
+        });
+        const base = { staffRole: "support_admin" as const, accountId, startedAt: now, expiresAt: later(30) };
+        const s1 = await uow.run((r) =>
+          r.actAs.create({ ...base, staffUserId: staff, authSessionId: signedIn, reason: "Ticket 1234: DNS help" }),
+        );
+        expect(s1).toMatchObject({
+          staffUserId: staff,
+          staffEmail: email,
+          staffRole: "support_admin",
+          accountId,
+          accountName: name,
+          reason: "Ticket 1234: DNS help",
+          endedAt: null,
+          endReason: null,
+        });
+        expect((await uow.run((r) => r.actAs.active(staff, signedIn, now)))?.id).toBe(s1.id);
+        // Bound to its console session and its person; gone once expired.
+        expect(await uow.run((r) => r.actAs.active(staff, randomUUID(), now))).toBeNull();
+        expect(await uow.run((r) => r.actAs.active(other, signedIn, now))).toBeNull();
+        expect(await uow.run((r) => r.actAs.active(staff, signedIn, later(30)))).toBeNull();
+        expect((await uow.run((r) => r.actAs.openFor(staff, now)))?.id).toBe(s1.id);
+        expect(await uow.run((r) => r.actAs.openFor(other, now))).toBeNull();
+        expect(await uow.run((r) => r.actAs.get("not-a-uuid"))).toBeNull();
+        expect(await uow.run((r) => r.actAs.get(randomUUID()))).toBeNull();
+        // One unclosed session per staff member, whichever console session: a second start loses (409).
+        await expect(
+          uow.run((r) =>
+            r.actAs.create({ ...base, staffUserId: staff, authSessionId: randomUUID(), reason: "Ticket 9: twice" }),
+          ),
+        ).rejects.toThrow(/already have support access/);
+        await expect(
+          uow.run((r) =>
+            r.actAs.create({ ...base, staffUserId: staff, authSessionId: randomUUID(), reason: "Ticket 9: twice" }),
+          ),
+        ).rejects.toBeInstanceOf(ConflictError);
+
+        expect(await uow.run((r) => r.actAs.renew(s1.id, later(60), "Ticket 1234: still on it", later(10)))).toBe(true);
+        expect(await uow.run((r) => r.actAs.get(s1.id))).toMatchObject({
+          expiresAt: later(60),
+          reason: "Ticket 1234: still on it",
+        });
+        expect(await uow.run((r) => r.actAs.renew(s1.id, later(90), "too late", later(61)))).toBe(false);
+
+        // This test's own staff members only: the database is shared with earlier runs and other tests.
+        const ours = async (at: Date, roles: readonly ("global_admin" | "support_admin")[]) =>
+          (
+            await uow.run(async (r) => [
+              ...(await r.actAs.due(at, roles, 10, staff)),
+              ...(await r.actAs.due(at, roles, 10, other)),
+            ])
+          ).sort((a, b) => a.session.startedAt.getTime() - b.session.startedAt.getTime());
+        // Nothing due while it is open, signed in and the role is held.
+        expect(await ours(later(10), ["global_admin", "support_admin"])).toEqual([]);
+        // Its console session gone; another past its expiry; the role removed.
+        const s2 = await uow.run((r) =>
+          r.actAs.create({
+            ...base,
+            startedAt: later(1),
+            staffUserId: other,
+            authSessionId: gone,
+            reason: "Ticket 5678: signed out",
+          }),
+        );
+        const due = await ours(later(10), ["global_admin", "support_admin"]);
+        expect(due.map((d) => [d.session.id, d.reason])).toEqual([[s2.id, "signed_out"]]);
+        const all = await ours(later(61), ["global_admin", "support_admin"]);
+        expect(all.map((d) => d.reason).sort()).toEqual(["expired", "expired"]);
+        expect(await uow.run((r) => r.actAs.due(later(61), ["global_admin", "support_admin"], 1))).toHaveLength(1);
+        // Only one staff member's when asked.
+        expect(
+          (await uow.run((r) => r.actAs.due(later(61), ["global_admin", "support_admin"], 10, staff))).map(
+            (d) => d.session.id,
+          ),
+        ).toEqual([s1.id]);
+        expect(await uow.run((r) => r.actAs.due(later(10), ["global_admin", "support_admin"], 10, staff))).toEqual([]);
+        expect((await ours(later(10), ["global_admin"])).map((d) => [d.session.id, d.reason])).toEqual([
+          [s1.id, "role_removed"],
+          [s2.id, "signed_out"],
+        ]);
+
+        expect(await uow.run((r) => r.actAs.end(s1.id, later(20), "staff"))).toBe(true);
+        expect(await uow.run((r) => r.actAs.end(s1.id, later(21), "expired"))).toBe(false);
+        expect(await uow.run((r) => r.actAs.get(s1.id))).toMatchObject({ endedAt: later(20), endReason: "staff" });
+        expect(await uow.run((r) => r.actAs.active(staff, signedIn, later(20)))).toBeNull();
+        expect(await uow.run((r) => r.actAs.renew(s1.id, later(90), "after the end", later(20)))).toBe(false);
+        expect(await uow.run((r) => r.actAs.end("junk", now, "staff"))).toBe(false);
+        // Once ended, the staff member may start again.
+        const s3 = await uow.run((r) =>
+          r.actAs.create({ ...base, staffUserId: staff, authSessionId: signedIn, reason: "Ticket 1235: again" }),
+        );
+        expect(await uow.run((r) => r.actAs.end(s3.id, later(22), "staff"))).toBe(true);
+
+        // Staff in the account (rule 28): a platform role, or a sign-in at the company domain or a subdomain of it.
+        expect(await uow.run((r) => r.actAs.staffInAccount(accountId))).toBe(false);
+        expect(await uow.run((r) => r.actAs.staffInAccount("not-a-uuid"))).toBe(false);
+        expect(await uow.run((r) => r.actAs.staffInAccount(randomUUID()))).toBe(false);
+        const customer = await createUser(`act-as-c-${randomUUID()}@example.test`);
+        const lookalike = await createUser(`act-as-l-${randomUUID()}@notanhourtec.com`);
+        const lookalike2 = await createUser(`anhourtec.com-${randomUUID()}@example.test`);
+        await uow.run(async (r) => {
+          for (const userId of [customer, lookalike, lookalike2]) {
+            await r.accounts.addMember({ accountId, userId, role: "member" });
+          }
+        });
+        expect(await uow.run((r) => r.actAs.staffInAccount(accountId))).toBe(false);
+        const sub = await createUser(`act-as-s-${randomUUID()}@EU.Anhourtec.com`);
+        await uow.run((r) => r.accounts.addMember({ accountId, userId: sub, role: "member" }));
+        expect(await uow.run((r) => r.actAs.staffInAccount(accountId))).toBe(true);
+        // …and the open session in it becomes due as `staff_account`.
+        const s4 = await uow.run((r) =>
+          r.actAs.create({ ...base, staffUserId: staff, authSessionId: signedIn, reason: "Ticket 1236: staff joined" }),
+        );
+        expect(
+          (await uow.run((r) => r.actAs.due(now, ["global_admin", "support_admin"], 10, staff))).map((d) => [
+            d.session.id,
+            d.reason,
+          ]),
+        ).toEqual([[s4.id, "staff_account"]]);
+        const name2 = `Act as ${randomUUID()}`;
+        const account2 = await uow.run(async (r) => {
+          const a = await r.accounts.create({ name: name2, plan: "plus" });
+          await r.accounts.addMember({ accountId: a.id, userId: customer, role: "owner" });
+          await r.accounts.addMember({ accountId: a.id, userId: other, role: "member" });
+          return a.id;
+        });
+        // `other` signs in at a test domain but holds a platform role.
+        expect(await uow.run((r) => r.actAs.staffInAccount(account2))).toBe(true);
       } finally {
         await cleanup();
       }

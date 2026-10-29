@@ -26,14 +26,17 @@ import {
   type MailboxStorageRepository,
   type PlatformAddressRepository,
 } from "@anhourmail/core/mailboxes";
-import type {
-  DesiredMailbox,
-  DomainState,
-  JobKind,
-  MailboxState,
-  MailDirectoryRepository,
-  ProvisioningJob,
-  ProvisioningRepository,
+import {
+  type ClaimedJob,
+  type DesiredMailbox,
+  type DomainState,
+  type JobClaim,
+  type JobKind,
+  type MailboxState,
+  type MailDirectoryRepository,
+  type ProvisioningJob,
+  type ProvisioningRepository,
+  STALE_RUNNING_MS,
 } from "@anhourmail/core/provisioning";
 import {
   type AuditEntry,
@@ -53,8 +56,11 @@ import { PgAppPasswordRepository, PgCatchAllRepository } from "./app-passwords";
 import { PgSecurityRepository } from "./security";
 import { PgWebmailSettingsRepository } from "./webmail-settings";
 import { PgAvatarRepository } from "./avatars";
+import { PgActAsRepository } from "./act-as";
+import { isUniqueViolation } from "./errors";
 import {
   accountMembership,
+  aliasCreationDay,
   auditLog,
   authAccount,
   authUser,
@@ -73,14 +79,6 @@ import {
 } from "./schema";
 
 // Row <-> domain mapping happens only here (ADR-0008).
-
-/** Postgres unique violation (23505), whether or not the driver error is wrapped. */
-function isUniqueViolation(err: unknown): boolean {
-  for (let e: unknown = err, depth = 0; e instanceof Error && depth < 3; e = e.cause, depth++) {
-    if ((e as Error & { code?: unknown }).code === "23505") return true;
-  }
-  return false;
-}
 
 /** Runs an insert; a duplicate address becomes a 409 rather than a 500. */
 async function insertAddress(write: () => Promise<unknown>): Promise<void> {
@@ -317,9 +315,6 @@ class PgAccountRepository implements AccountRepository {
   }
 }
 
-/** A job left `running` this long (crashed worker) is claimable again. */
-const STALE_RUNNING_MS = 10 * 60 * 1000;
-
 function toJob(r: typeof provisioningJob.$inferSelect): ProvisioningJob {
   return {
     id: r.id,
@@ -329,6 +324,7 @@ function toJob(r: typeof provisioningJob.$inferSelect): ProvisioningJob {
     attempts: r.attempts,
     lastError: r.lastError,
     runAfter: r.runAfter,
+    lockToken: r.lockToken,
   };
 }
 
@@ -363,14 +359,17 @@ class PgProvisioningRepository implements ProvisioningRepository {
   }
 
   /** Atomic claim: FOR UPDATE SKIP LOCKED, so concurrent workers never take the same job. */
-  async claimNext(now: Date): Promise<ProvisioningJob | null> {
+  async claimNext(now: Date): Promise<ClaimedJob | null> {
     const stale = new Date(now.getTime() - STALE_RUNNING_MS);
     // Claims are serialised (cheap, held only for this transaction) so the "no other job for this subject is
     // running" check below can't be passed by two workers at once: one subject is never applied twice in parallel,
     // so an older job can't land after a newer one (e.g. an unsuspend after a suspend).
     await this.x.execute(sql`select pg_advisory_xact_lock(hashtextextended('provisioning_job:claim', 0))`);
+    // A new token per claim, also when a stale claim is taken over: the old claim's outcome then changes nothing.
+    const lockToken = randomUUID();
     const res = await this.x.execute<{ id: string }>(sql`
-      update provisioning_job set status = 'running', attempts = attempts + 1, locked_at = ${now}, updated_at = ${now}
+      update provisioning_job
+      set status = 'running', attempts = attempts + 1, locked_at = ${now}, lock_token = ${lockToken}, updated_at = ${now}
       where id = (
         select j.id from provisioning_job j
         where ((j.status = 'queued' and j.run_after <= ${now}) or (j.status = 'running' and j.locked_at < ${stale}))
@@ -385,28 +384,55 @@ class PgProvisioningRepository implements ProvisioningRepository {
       returning id`);
     const id = res.rows[0]?.id;
     if (!id) return null;
-    return this.get(id);
+    const job = await this.get(id);
+    return job ? { ...job, status: "running", lockToken } : null;
   }
 
-  async complete(id: string, now: Date): Promise<void> {
-    await this.x
+  /** Records a claim's outcome only while that claim still holds the job (running, same lock token). */
+  private async finish(
+    claim: JobClaim,
+    update: Partial<typeof provisioningJob.$inferInsert>,
+    now: Date,
+  ): Promise<boolean> {
+    const rows = await this.x
       .update(provisioningJob)
-      .set({ status: "succeeded", lastError: null, lockedAt: null, updatedAt: now })
-      .where(eq(provisioningJob.id, id));
+      .set({ ...update, lockedAt: null, lockToken: null, updatedAt: now })
+      .where(
+        and(
+          eq(provisioningJob.id, claim.id),
+          eq(provisioningJob.status, "running"),
+          eq(provisioningJob.lockToken, claim.lockToken),
+        ),
+      )
+      .returning({ id: provisioningJob.id });
+    return rows.length > 0;
   }
 
-  async retry(id: string, error: string, runAfter: Date, now: Date): Promise<void> {
-    await this.x
+  async renew(claim: JobClaim, now: Date): Promise<boolean> {
+    const rows = await this.x
       .update(provisioningJob)
-      .set({ status: "queued", lastError: error, runAfter, lockedAt: null, updatedAt: now })
-      .where(eq(provisioningJob.id, id));
+      .set({ lockedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(provisioningJob.id, claim.id),
+          eq(provisioningJob.status, "running"),
+          eq(provisioningJob.lockToken, claim.lockToken),
+        ),
+      )
+      .returning({ id: provisioningJob.id });
+    return rows.length > 0;
   }
 
-  async giveUp(id: string, error: string, now: Date): Promise<void> {
-    await this.x
-      .update(provisioningJob)
-      .set({ status: "failed", lastError: error, lockedAt: null, updatedAt: now })
-      .where(eq(provisioningJob.id, id));
+  async complete(claim: JobClaim, now: Date): Promise<boolean> {
+    return this.finish(claim, { status: "succeeded", lastError: null }, now);
+  }
+
+  async retry(claim: JobClaim, error: string, runAfter: Date, now: Date): Promise<boolean> {
+    return this.finish(claim, { status: "queued", lastError: error, runAfter }, now);
+  }
+
+  async giveUp(claim: JobClaim, error: string, now: Date): Promise<boolean> {
+    return this.finish(claim, { status: "failed", lastError: error }, now);
   }
 
   async get(id: string): Promise<ProvisioningJob | null> {
@@ -986,6 +1012,7 @@ const toAlias = (r: typeof mailAlias.$inferSelect): MailAlias => ({
   address: r.address,
   kind: r.kind === "masked" ? "masked" : "alias",
   enabled: r.enabled,
+  adminLocked: r.adminLocked,
   description: r.description,
   createdAt: r.createdAt,
 });
@@ -1027,18 +1054,44 @@ class PgAliasRepository implements AliasRepository {
         address: a.address,
         kind: a.kind,
         enabled: a.enabled,
+        adminLocked: a.adminLocked,
         description: a.description,
         createdAt: a.createdAt,
       }),
     );
   }
 
-  async setEnabled(id: string, enabled: boolean): Promise<void> {
-    await this.x.update(mailAlias).set({ enabled }).where(eq(mailAlias.id, id));
+  async setEnabled(id: string, enabled: boolean, adminLocked: boolean): Promise<void> {
+    await this.x.update(mailAlias).set({ enabled, adminLocked }).where(eq(mailAlias.id, id));
   }
 
   async delete(id: string): Promise<void> {
     await this.x.delete(mailAlias).where(eq(mailAlias.id, id));
+  }
+
+  async creationsOn(accountId: string, kind: AliasKind, day: string): Promise<number> {
+    const [r] = await this.x
+      .select({ n: aliasCreationDay.count })
+      .from(aliasCreationDay)
+      .where(
+        and(eq(aliasCreationDay.accountId, accountId), eq(aliasCreationDay.day, day), eq(aliasCreationDay.kind, kind)),
+      );
+    return r?.n ?? 0;
+  }
+
+  async recordCreation(accountId: string, kind: AliasKind, day: string): Promise<void> {
+    await this.x
+      .insert(aliasCreationDay)
+      .values({ accountId, day, kind, count: 1 })
+      .onConflictDoUpdate({
+        target: [aliasCreationDay.accountId, aliasCreationDay.day, aliasCreationDay.kind],
+        set: { count: sql`${aliasCreationDay.count} + 1` },
+      });
+    // Today's and yesterday's counts stay (yesterday's survives clock skew between instances around midnight, so a
+    // late "yesterday" count never resets today's early); older days go (at most four rows per account remain).
+    await this.x
+      .delete(aliasCreationDay)
+      .where(and(eq(aliasCreationDay.accountId, accountId), lt(aliasCreationDay.day, sql`${day}::date - 1`)));
   }
 }
 
@@ -1529,6 +1582,7 @@ class PgSuspensionRepository implements SuspensionRepository {
 
 const repositories = (x: Executor): Repositories => ({
   avatars: new PgAvatarRepository(x),
+  actAs: new PgActAsRepository(x),
   suspensions: new PgSuspensionRepository(x),
   audit: new PgAuditRepository(x),
   access: new PgAccessRepository(x),

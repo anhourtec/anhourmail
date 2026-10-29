@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 
 import { type AccessRepository, ConflictError, type Repositories, type UnitOfWork } from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
-import type { AliasRepository, MailAlias } from "@anhourmail/core/aliases";
+import type { AliasKind, AliasRepository, MailAlias } from "@anhourmail/core/aliases";
 import type { AppPassword, AppPasswordRepository } from "@anhourmail/core/app-passwords";
 import { type AvatarRepository, avatarVersion, type StoredAvatar } from "@anhourmail/core/avatars";
 import type { Invite, InviteRepository, PeopleRepository } from "@anhourmail/core/people";
@@ -24,11 +24,14 @@ import {
   type MailboxStorageRepository,
   type PlatformAddressRepository,
 } from "@anhourmail/core/mailboxes";
-import type {
-  DomainState,
-  MailDirectoryRepository,
-  ProvisioningJob,
-  ProvisioningRepository,
+import {
+  type ClaimedJob,
+  type DomainState,
+  type JobClaim,
+  type MailDirectoryRepository,
+  type ProvisioningJob,
+  type ProvisioningRepository,
+  STALE_RUNNING_MS,
 } from "@anhourmail/core/provisioning";
 import {
   type AuditEntry,
@@ -39,11 +42,13 @@ import {
   hashEntry,
 } from "@anhourmail/core/audit";
 import type { PasskeyRecord, SecurityRepository, SessionRecord } from "@anhourmail/core/security";
-import type { ForwardingTarget, WebmailSettingsRepository } from "@anhourmail/core/webmail";
+import type { ForwardingTarget, StoredSignature, WebmailSettingsRepository } from "@anhourmail/core/webmail";
 import type { ProfileDetails } from "@anhourmail/shared/profile";
 import type { PlanId } from "@anhourmail/shared/plans";
 import type { SignInPolicy } from "@anhourmail/shared/security";
 import type { AccountRole, PlatformRole } from "@anhourmail/shared/rbac";
+
+import { memoryActAs, type MemoryActAsRow } from "./act-as";
 
 /**
  * In-memory adapter for unit tests (ADR-0008). Same contract as Postgres (src/contract): `run` is atomic —
@@ -67,10 +72,13 @@ export type MemoryState = {
     signInPolicy?: SignInPolicy;
   }[];
   userStates: Record<string, string>;
-  jobs: ProvisioningJob[];
+  /** `lockedAt`: when the claim holding a running job was taken (mirrors Postgres `locked_at`). */
+  jobs: (ProvisioningJob & { lockedAt?: Date | null })[];
   domains: CustomerDomain[];
   mailboxes: Mailbox[];
   aliases: MailAlias[];
+  /** Alias creations per account, UTC day and kind (the daily cap counts these, not live rows). */
+  aliasCreations: { accountId: string; kind: AliasKind; day: string; count: number }[];
   /** Sign-in emails by user id (memberships reference them). */
   userEmails: Record<string, string>;
   /** Display names by user id (defaults to the email). */
@@ -86,6 +94,9 @@ export type MemoryState = {
   trustedDevices: { userId: string; id: string }[];
   webmailPreferences: { mailboxId: string; prefs: Record<string, unknown>; updatedAt: Date }[];
   forwardingTargets: ForwardingTarget[];
+  webmailSignatures: StoredSignature[];
+  /** Mailboxes whose named signatures were started, and when. */
+  signaturesStarted: { mailboxId: string; at: Date }[];
   appPasswords: AppPassword[];
   /** Mailbox password tracking (Postgres: `mailbox.pending_password_hash`, `mailbox.password_credential_id`). */
   mailboxPasswords: {
@@ -115,6 +126,8 @@ export type MemoryState = {
   mustChangePassword: string[];
   /** Profile photos by owner (Postgres: `avatar`). */
   avatars: StoredAvatar[];
+  /** Staff act-as sessions (Postgres: `act_as_session`, ADR-0023). */
+  actAsSessions: MemoryActAsRow[];
 };
 
 export const emptyState = (): MemoryState => ({
@@ -130,6 +143,7 @@ export const emptyState = (): MemoryState => ({
   domains: [],
   mailboxes: [],
   aliases: [],
+  aliasCreations: [],
   userEmails: {},
   userNames: {},
   logins: [],
@@ -141,6 +155,8 @@ export const emptyState = (): MemoryState => ({
   trustedDevices: [],
   webmailPreferences: [],
   forwardingTargets: [],
+  webmailSignatures: [],
+  signaturesStarted: [],
   appPasswords: [],
   mailboxPasswords: [],
   catchAll: [],
@@ -153,11 +169,16 @@ export const emptyState = (): MemoryState => ({
   profiles: {},
   mustChangePassword: [],
   avatars: [],
+  actAsSessions: [],
 });
 
 const EPOCH = new Date(0);
 
 const clone = <T>(v: T): T => structuredClone(v);
+
+/** The UTC day before `day` (`YYYY-MM-DD`). */
+const dayBefore = (day: string): string =>
+  new Date(Date.parse(`${day}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
 
 /** Mirrors the Postgres filter: act-as entries count as staff. */
 const actorKindOf = (e: AuditEntry) =>
@@ -239,10 +260,19 @@ function repositories(s: MemoryState): Repositories {
     },
   };
 
+  const toJob = ({ lockedAt: _lockedAt, ...job }: (typeof s.jobs)[number]): ProvisioningJob => clone(job);
+  /** Records a claim's outcome only while that claim still holds the job (running, same lock token). */
+  const finish = (claim: JobClaim, update: Partial<ProvisioningJob>): boolean => {
+    const job = s.jobs.find((j) => j.id === claim.id);
+    if (job?.status !== "running" || job.lockToken !== claim.lockToken) return false;
+    Object.assign(job, update, { lockToken: null, lockedAt: null });
+    return true;
+  };
+
   const provisioning: ProvisioningRepository = {
     enqueue: async ({ kind, subjectId, runAfter }) => {
       const existing = s.jobs.find((j) => j.kind === kind && j.subjectId === subjectId && j.status === "queued");
-      if (existing) return clone(existing);
+      if (existing) return toJob(existing);
       const job: ProvisioningJob = {
         id: randomUUID(),
         kind,
@@ -251,36 +281,44 @@ function repositories(s: MemoryState): Repositories {
         attempts: 0,
         lastError: null,
         runAfter,
+        lockToken: null,
       };
       s.jobs.push(job);
       return clone(job);
     },
     claimNext: async (now) => {
-      // Never a second job for a subject that already has one running (mirrors Postgres).
-      const busy = new Set(s.jobs.filter((j) => j.status === "running").map((j) => j.subjectId));
+      // Mirrors Postgres: queued and due, or running under a stale claim (taken over with a new token); never a second
+      // job for a subject that already has one running under a live claim.
+      const stale = now.getTime() - STALE_RUNNING_MS;
+      const live = (j: (typeof s.jobs)[number]) => j.status === "running" && (j.lockedAt?.getTime() ?? 0) >= stale;
+      const claimable = (j: (typeof s.jobs)[number]) =>
+        (j.status === "queued" && j.runAfter <= now) || (j.status === "running" && !live(j));
       const job = s.jobs
-        .filter((j) => j.status === "queued" && j.runAfter <= now && !busy.has(j.subjectId))
+        .filter((j) => claimable(j) && !s.jobs.some((r) => r.id !== j.id && r.subjectId === j.subjectId && live(r)))
         .sort((a, b) => a.runAfter.getTime() - b.runAfter.getTime())[0];
       if (!job) return null;
-      job.status = "running";
-      job.attempts += 1;
-      return clone(job);
+      const lockToken = randomUUID();
+      Object.assign(job, { status: "running", attempts: job.attempts + 1, lockToken, lockedAt: now });
+      const claimed: ClaimedJob = { ...toJob(job), status: "running", lockToken };
+      return claimed;
     },
-    complete: async (id) => {
+    renew: async (claim, now) => {
+      const job = s.jobs.find((j) => j.id === claim.id);
+      if (job?.status !== "running" || job.lockToken !== claim.lockToken) return false;
+      job.lockedAt = now;
+      return true;
+    },
+    complete: async (claim) => finish(claim, { status: "succeeded", lastError: null }),
+    retry: async (claim, error, runAfter) => finish(claim, { status: "queued", lastError: error, runAfter }),
+    giveUp: async (claim, error) => finish(claim, { status: "failed", lastError: error }),
+    get: async (id) => {
       const job = s.jobs.find((j) => j.id === id);
-      if (job) Object.assign(job, { status: "succeeded", lastError: null });
+      return job ? toJob(job) : null;
     },
-    retry: async (id, error, runAfter) => {
-      const job = s.jobs.find((j) => j.id === id);
-      if (job) Object.assign(job, { status: "queued", lastError: error, runAfter });
+    latest: async (kind, subjectId) => {
+      const job = s.jobs.findLast((j) => j.kind === kind && j.subjectId === subjectId);
+      return job ? toJob(job) : null;
     },
-    giveUp: async (id, error) => {
-      const job = s.jobs.find((j) => j.id === id);
-      if (job) Object.assign(job, { status: "failed", lastError: error });
-    },
-    get: async (id) => clone(s.jobs.find((j) => j.id === id) ?? null),
-    latest: async (kind, subjectId) =>
-      clone(s.jobs.findLast((j) => j.kind === kind && j.subjectId === subjectId) ?? null),
   };
 
   const passwordOf = (mailboxId: string) => s.mailboxPasswords.find((p) => p.mailboxId === mailboxId);
@@ -570,6 +608,8 @@ function repositories(s: MemoryState): Repositories {
       s.mailboxes = s.mailboxes.filter((x) => x.id !== id);
       s.aliases = s.aliases.filter((a) => a.mailboxId !== id); // mirrors ON DELETE CASCADE in Postgres
       s.webmailPreferences = s.webmailPreferences.filter((p) => p.mailboxId !== id);
+      s.webmailSignatures = s.webmailSignatures.filter((x) => x.mailboxId !== id);
+      s.signaturesStarted = s.signaturesStarted.filter((x) => x.mailboxId !== id);
       s.forwardingTargets = s.forwardingTargets.filter((t) => t.mailboxId !== id);
       s.appPasswords = s.appPasswords.filter((p) => p.mailboxId !== id); // ON DELETE CASCADE
       s.mailboxPasswords = s.mailboxPasswords.filter((p) => p.mailboxId !== id); // columns of the row
@@ -588,12 +628,23 @@ function repositories(s: MemoryState): Repositories {
       if (s.aliases.some((x) => x.address === a.address)) throw new ConflictError("That address is already in use.");
       s.aliases.push(clone(a));
     },
-    setEnabled: async (id, enabled) => {
+    setEnabled: async (id, enabled, adminLocked) => {
       const a = s.aliases.find((x) => x.id === id);
-      if (a) a.enabled = enabled;
+      if (a) Object.assign(a, { enabled, adminLocked });
     },
     delete: async (id) => {
       s.aliases = s.aliases.filter((a) => a.id !== id);
+    },
+    creationsOn: async (accountId, kind, day) =>
+      s.aliasCreations.find((c) => c.accountId === accountId && c.kind === kind && c.day === day)?.count ?? 0,
+    recordCreation: async (accountId, kind, day) => {
+      // Mirrors Postgres: today's and yesterday's counts are kept per account (yesterday's survives clock skew between
+      // instances around midnight, so a late "yesterday" count never resets today's early).
+      const keepFrom = dayBefore(day);
+      s.aliasCreations = s.aliasCreations.filter((c) => c.accountId !== accountId || c.day >= keepFrom);
+      const row = s.aliasCreations.find((c) => c.accountId === accountId && c.kind === kind && c.day === day);
+      if (row) row.count += 1;
+      else s.aliasCreations.push({ accountId, kind, day, count: 1 });
     },
   };
 
@@ -938,6 +989,58 @@ function repositories(s: MemoryState): Repositories {
     clearForwarding: async (mailboxId) => {
       s.forwardingTargets = s.forwardingTargets.filter((t) => t.mailboxId !== mailboxId);
     },
+    // The memory unit of work runs one unit at a time, so it is already exclusive.
+    lockSignatures: async () => undefined,
+    signatures: async (mailboxId) =>
+      clone(
+        s.webmailSignatures
+          .filter((x) => x.mailboxId === mailboxId)
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id)),
+      ),
+    signaturesStarted: async (mailboxId) => s.signaturesStarted.some((x) => x.mailboxId === mailboxId),
+    markSignaturesStarted: async (mailboxId, at) => {
+      if (!s.signaturesStarted.some((x) => x.mailboxId === mailboxId)) s.signaturesStarted.push({ mailboxId, at });
+    },
+    insertSignature: async (sig) => {
+      const mine = s.webmailSignatures.filter((x) => x.mailboxId === sig.mailboxId);
+      // The same rules as the Postgres indexes: names unique per mailbox ignoring case, one default of each kind.
+      if (mine.some((x) => x.id === sig.id || x.name.toLowerCase() === sig.name.toLowerCase())) {
+        throw new Error("duplicate signature");
+      }
+      if (
+        (sig.defaultNew && mine.some((x) => x.defaultNew)) ||
+        (sig.defaultReply && mine.some((x) => x.defaultReply))
+      ) {
+        throw new Error("duplicate default signature");
+      }
+      s.webmailSignatures.push(clone(sig));
+    },
+    updateSignature: async (mailboxId, id, change, at) => {
+      const x = s.webmailSignatures.find((v) => v.mailboxId === mailboxId && v.id === id);
+      if (!x) return false;
+      if (
+        change.name !== undefined &&
+        s.webmailSignatures.some(
+          (v) => v.mailboxId === mailboxId && v.id !== id && v.name.toLowerCase() === change.name?.toLowerCase(),
+        )
+      ) {
+        throw new Error("duplicate signature");
+      }
+      Object.assign(x, clone(change), { updatedAt: at });
+      return true;
+    },
+    deleteSignature: async (mailboxId, id) => {
+      const before = s.webmailSignatures.length;
+      s.webmailSignatures = s.webmailSignatures.filter((v) => !(v.mailboxId === mailboxId && v.id === id));
+      return s.webmailSignatures.length < before;
+    },
+    setSignatureDefaults: async (mailboxId, defaults) => {
+      for (const v of s.webmailSignatures) {
+        if (v.mailboxId !== mailboxId) continue;
+        v.defaultNew = v.id === defaults.newMessage;
+        v.defaultReply = v.id === defaults.reply;
+      }
+    },
   };
 
   const suspensions: SuspensionRepository = {
@@ -1010,6 +1113,7 @@ function repositories(s: MemoryState): Repositories {
 
   return {
     avatars,
+    actAs: memoryActAs(s),
     suspensions,
     webmailSettings,
     appPasswords,
