@@ -50,15 +50,19 @@ built in the open; billing, abuse controls and the production deployment come ne
 - **Free address** — every account can claim one free `you@anhourmail.com` address after confirming its email
   (paid plans can hold more); names that would pass for system or staff addresses are reserved and a name is never
   given out again.
-- **Console** — custom domains with guided DNS and live checks; mailboxes with a password set at creation (or
-  generated), owner resets with step-up, storage, suspend, resume and delete with a 30-day restore window; aliases and masked aliases; people, invites and roles; an audit log;
-  global search; staff pages for customer accounts; app passwords for mail apps (scoped to IMAP, SMTP, contacts
-  or mail over HTTPS, shown once); catch-all addresses on custom domains.
+- **Console** — custom domains with guided DNS and live checks (DKIM published as TXT keys and checked against
+  DNS); "Add a user" in four steps, creating the mailbox, the person's sign-in and their role together, with a
+  password change at first sign-in; shared addresses (such as support@) that can later be made a user; mailboxes
+  with a password set at creation (or generated), owner resets with step-up, storage, suspend, resume and delete
+  with a 30-day restore window; aliases and masked aliases; people, invites, roles and editable profile details; an
+  audit log; global search; staff pages for customer accounts, including suspending an account or a person; app
+  passwords for mail apps (scoped to IMAP, SMTP, contacts or mail over HTTPS, shown once); catch-all addresses on
+  custom domains.
 - **Sign-in security** — two-factor sign-in with an authenticator app, recovery codes and passkeys; owners can
   require a second factor; a Security page with sessions and recent activity.
 - **Webmail** — sign in with a mailbox, folders and threads, a safe reader (plain text, markdown, invitations,
-  forwarded mail; HTML in a sandboxed frame with remote images blocked), writing, replying and forwarding with
-  drafts and undo send, archive / delete / junk / move / pin, search, several mailboxes in one session, and
+  forwarded mail; HTML in a sandboxed frame with remote images blocked), writing in rich text or plain text (rich
+  text is cleaned and sent with a plain-text copy), replying and forwarding with drafts and undo send, archive / delete / junk / move / pin, search, several mailboxes in one session, and
   contacts that also sync to phones and desktop apps over CardDAV, and settings for appearance, reading, writing
   and signatures, automatic replies, confirmed forwarding, blocked senders and changing the mailbox password.
 - **Engineering** — role-based access checked on every route, an append-only audit trail, rate limits on every
