@@ -34,6 +34,11 @@ type Sample = {
   replyTo?: string;
   /** A ready-made body (Content-Type + encoded body) for the special shapes: markdown, calendar, rfc822, charsets. */
   mime?: { type: string; body: string; encoding?: string };
+  /**
+   * Arrived from outside and passed the sender's checks: carries the dev mail server's own `Received` plus
+   * `Authentication-Results` pair on top, as real inbound mail does (the webmail trusts only that pair).
+   */
+  checked?: boolean;
 };
 
 const SAMPLE_HEADER = "X-AnhourMail-Sample";
@@ -184,6 +189,7 @@ export function sampleMessages(owner: Addr, domain: string): Sample[] {
       key: "newsletter",
       folder: "inbox",
       ago: [0, 7, 30],
+      checked: true,
       from: club,
       to: [owner],
       subject: "This month: stories set by the sea",
@@ -670,12 +676,21 @@ export function toRfc822(s: Sample, domain: string, now: number): { raw: string;
     ]);
     plainHeaders.length = 0;
   }
+  const fromDomain = s.from.email.slice(s.from.email.lastIndexOf("@") + 1);
+  const date = d.toUTCString().replace("GMT", "+0000");
   const headers = [
+    ...(s.checked
+      ? [
+          `Received: from mx.${fromDomain} by mail.dev.test with ESMTPS; ${date}`,
+          `Authentication-Results: mail.dev.test; spf=pass smtp.mailfrom=${s.from.email}; ` +
+            `dkim=pass header.d=${fromDomain}; dmarc=pass header.from=${fromDomain}`,
+        ]
+      : []),
     `From: ${fmt(s.from)}`,
     `To: ${s.to.map(fmt).join(", ")}`,
     ...(s.cc?.length ? [`Cc: ${s.cc.map(fmt).join(", ")}`] : []),
     `Subject: ${encodeWord(s.subject)}`,
-    `Date: ${d.toUTCString().replace("GMT", "+0000")}`,
+    `Date: ${date}`,
     `Message-ID: ${id(s.key)}`,
     ...(s.replyTo ? [`In-Reply-To: ${id(s.replyTo)}`, `References: ${id(s.replyTo)}`] : []),
     `${SAMPLE_HEADER}: 1`,
