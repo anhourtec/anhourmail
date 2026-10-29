@@ -30,7 +30,8 @@ the properties and values it needs) with tests and a `/security-review`, then e2
 **Next session (then):** stale sidebar folder counts after discarding a draft; Archive does nothing because no
 mailbox has an Archive folder (create at provisioning + backfill); several named rich signatures with Add / Edit /
 Delete and defaults for new messages and for replies and forwards (pulled forward from the second wave below).
-Details in the handoff's "Next phases" 0c–0e.
+Then avatars: photo upload on console Profile and webmail Account, one source for the person, shown and synced
+everywhere (CLAUDE.md rule 61). Details in the handoff's "Next phases" 0c–0f.
 
 1. **Pre-staging on one VM (now, deployed 2026-10-23; live-server fixes open).** Deploy `anhourmail-ops` topology A
    on the chosen provider (`deploy.md`): real DNS, ACME certificates, rDNS, inbound and outbound mail with a real
