@@ -12,7 +12,8 @@ import { newNonce, webmailCsp } from "./server/webmail/csp";
  * carries two). Console and webmail pages get a per-request nonce policy: Next applies the nonce to its own scripts
  * when it sees it in the request's CSP header, and the root layout passes `x-nonce` to the theme script. Console API
  * responses get the data-only policy; the webmail API (`/api/webmail/*`) sets its own per response (sandboxes for
- * print views, previews and raw sources), so the proxy leaves it alone there.
+ * print views, previews and raw sources), and so do console profile photos (`/api/avatars/*`), so the proxy leaves
+ * them alone there (`route()` still gives any response without one the data-only policy).
  */
 export function proxy(request: NextRequest) {
   const host = request.headers.get("host") ?? "";
@@ -51,7 +52,10 @@ export function proxy(request: NextRequest) {
   headers.delete("x-nonce");
   let csp: string | null = null;
   if (target === "/api" || target.startsWith("/api/")) {
-    if (!target.startsWith("/api/webmail/") && target !== "/api/webmail") csp = API_CSP;
+    // Profile photos (`/api/avatars/*`) carry their own sandboxing policy, like the webmail API.
+    if (!target.startsWith("/api/webmail/") && target !== "/api/webmail" && !target.startsWith("/api/avatars/")) {
+      csp = API_CSP;
+    }
   } else {
     const nonce = newNonce();
     csp = webmailPage ? webmailCsp(nonce, !production) : consoleCsp(nonce, !production);

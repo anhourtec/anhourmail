@@ -49,6 +49,11 @@ export type RouteOptions = {
    * password change itself and sign-out set it; every other webmail route answers 403 `password_change_required`.
    */
   passwordChange?: "allowed";
+  /**
+   * The handler's own `Cache-Control` is kept (profile photos, cached privately under a versioned URL). Every other
+   * response is `no-store`.
+   */
+  cache?: "handler";
 };
 
 export type RouteContext = { req: Request; meta: RequestMeta };
@@ -185,7 +190,7 @@ export function route(handler: Handler, opts: RouteOptions = {}) {
       if (!res.headers.has("Content-Security-Policy")) {
         res.headers.set("Content-Security-Policy", API_CSP);
       }
-      res.headers.set("Cache-Control", "no-store");
+      if (opts.cache !== "handler" || !res.headers.has("Cache-Control")) res.headers.set("Cache-Control", "no-store");
       const status = res.status;
       log.at(status >= 500 ? "error" : status >= 400 && status !== 401 && status !== 404 ? "warn" : "info", "request", {
         method: req.method,

@@ -82,6 +82,23 @@ describe("route()", () => {
     expect(res.headers.get("ratelimit-limit")).toBeTruthy();
   });
 
+  it("keeps a handler's own Cache-Control only when the route asks for it", async () => {
+    const cached = async () =>
+      new Response("x", { headers: { "Cache-Control": "private, max-age=60", "Content-Security-Policy": "sandbox" } });
+    const req = () => new Request("http://localhost:43200/api/x");
+    const kept = await route(cached, { cache: "handler" })(req(), params);
+    expect(kept.headers.get("cache-control")).toBe("private, max-age=60");
+    expect(kept.headers.get("content-security-policy")).toBe("sandbox");
+    expect((await route(cached)(req(), params)).headers.get("cache-control")).toBe("no-store");
+    const failing = await route(
+      async () => {
+        throw new ForbiddenError();
+      },
+      { cache: "handler" },
+    )(req(), params);
+    expect(failing.headers.get("cache-control")).toBe("no-store");
+  });
+
   it("maps domain errors, bad JSON and unexpected errors", async () => {
     const forbidden = await route(async () => {
       throw new ForbiddenError();

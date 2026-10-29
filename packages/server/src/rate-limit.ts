@@ -46,6 +46,9 @@ export const LIMITS = {
   // The contacts list reads every card (up to 5,000 in batches): tighter than the proxy.
   webmailContacts: { limit: 120, windowSec: 60, by: "caller", failMode: "open" },
   webmailUpload: { limit: 60, windowSec: 600, by: "caller", failMode: "closed" },
+  // Profile photo uploads (console and webmail): each one is an image decode on our servers. Fail closed: without the
+  // limiter nothing would bound how much decoding one caller makes us do.
+  avatarUpload: { limit: 20, windowSec: 3600, by: "caller", failMode: "closed" },
   // The settings window reads preferences, identities, quota and the managed Sieve script at once.
   webmailSettings: { limit: 60, windowSec: 60, by: "caller", failMode: "open" },
   // Mailbox passwords: an admin's reset (console) and a person's own change (webmail). Each one hashes with argon2id
