@@ -795,7 +795,7 @@ stalwart-cli create Action/ReloadSettings
 - ~~Whether an impersonated session can create an `AppPassword` for the target user.~~ Yes (see "App passwords").
 - The exact behaviour and listener availability of the 8080 HTTP listener after normal startup.
 - Whether a long-lived EventSource or WebSocket counts against `maxConcurrentRequests`.
-- That `Domain.dkimManagement: Automatic` with `dnsManagement: Manual` generates the initial key on creation. A 0.16.25 changelog fix implies keys are generated under manual DNS [S2], but this is not tested.
+- ~~That `Domain.dkimManagement: Automatic` with `dnsManagement: Manual` generates the initial key on creation.~~ Yes (verified 2026-10-28 on v0.16.27): one Ed25519 and one RSA key, selectors `v1-ed25519-YYYYMMDD` and `v1-rsa-YYYYMMDD`, listed in `dnsZoneFile`; the RSA key appears a second or two after the domain, and right after the create the zone may list no key at all. `nextTransitionAt` stays null (no rotation under manual DNS).
 - The legal status of running the official enterprise-feature image unlicensed. The vendor says Community is AGPL and free [S66]. Get counsel's review of the SEL text [S65].
 - The open-source page mentions "SELv1" while the repo licence is "SELv2" [S66][S65]. The inconsistency is minor.
 

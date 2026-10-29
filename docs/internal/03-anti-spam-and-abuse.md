@@ -1,6 +1,6 @@
 # 03 — Anti-spam and abuse
 
-Last updated: 2026-10-21. Research: `research/deliverability.md` §6–8, `research/market-and-legal.md` §4.
+Last updated: 2026-10-29. Research: `research/deliverability.md` §6–8, `research/market-and-legal.md` §4.
 
 Outbound abuse is the priority. One spammer on a shared IP hurts every user's inbox placement, and under CASL a host that knowingly helps spammers can be liable.
 
@@ -95,7 +95,10 @@ Lists multiply one message into many deliveries, so they are an abuse amplifier 
 ### Sender identity and outbound scanning (Phase 1 results)
 
 - **Header From = envelope sender** for every authenticated submission (ADR-0019, `sender-identity` Sieve system
-  script). Stops users showing another address — ours or anyone's — in mail we DKIM-sign.
+  script). Stops users showing another address — ours or anyone's — in mail we DKIM-sign. The same script deletes
+  every `Authentication-Results` header from submitted mail (2026-10-28), so a sender can't plant passing results
+  for a recipient's webmail to show (`02-mail-infrastructure.md`, `07-security.md` "Authentication results in the
+  webmail"); `stack:verify` checks it.
 - **Outbound spam scanning:** `MtaStageData.enableSpamFilter` defaults to `is_empty(authenticated_as)` (inbound
   only). Enabling it for authenticated mail (`true`) in dev let a GTUBE message through with no verdict and no
   headers — inconclusive, because dev Stalwart has no internet and the spam rule set
@@ -129,9 +132,13 @@ Stalwart directly (or use PROXY protocol) so client IPs survive.
 | Compromised account (new country/device then a burst of sends, many failed logins, app password created then a burst) | Audit + Stalwart auth WebHook events                     | Force sign-out everywhere, `restricted`, notify the user |
 | Signup farming (same device/IP/phone patterns, disposable phone numbers)                                              | Signup flow                                              | Block or require extra verification                      |
 | Blocklist listing of our IPs                                                                                          | Daily sweep (scheduler)                                  | Page operator                                            |
-| OVH anti-spam block on our IP                                                                                         | OVH API poll                                             | Page operator                                            |
+| Hosting provider anti-spam block on our IP                                                                            | Provider API poll                                        | Page operator                                            |
 
 Each produces an `AbuseEvent` (`04-data-model.md`) and an audit entry.
+
+Prevention, built 2026-10-23: a password found in public breach data is refused at sign-up, reset, invite acceptance
+and for every mailbox password (k-anonymity range check, only a hash prefix leaves the server; `07-security.md`
+"Breached-password check"), so credential stuffing with leaked passwords has less to work with.
 
 ## Escalation
 
@@ -148,9 +155,10 @@ guard rail 17; code `packages/core/src/platform/suspension.ts`). Procedure:
 1. Confirm the signal in the platform audit and the account's page (Platform → Customer accounts → the account):
    sign-ups and sign-ins from one network, abuse reports to `abuse@`, a receiving provider's complaint, a legal order.
 2. Choose the scope. **Suspend account** when the account itself is the problem (every mailbox stops: no sign-in,
-   sending or receiving; mail kept; its people see only a notice). **Suspend person** (People tab) when one person's
-   login is compromised or abusive in an otherwise fine account (their sessions end, their sign-in is refused, the
-   mailboxes assigned to them stop). Staff and yourself can't be suspended here.
+   sending or receiving; mail kept; its people can still sign in to the console, where every account action is
+   refused with a notice). **Suspend person** (People tab) when one person's login is compromised or abusive in an
+   otherwise fine account (their sessions end, their console sign-in is refused, the mailboxes assigned to them stop,
+   in any account). Staff and yourself can't be suspended, and nobody can suspend while acting as someone.
 3. Pick the reason category (spam, abuse, phishing or impersonation, payment, legal, other — what the customer sees)
    and write the internal note: ticket or report reference, what you saw. The note never leaves staff views.
 4. Confirm with a fresh step-up. The customer is emailed the category and the appeal address (`SUPPORT_EMAIL`).
@@ -158,7 +166,11 @@ guard rail 17; code `packages/core/src/platform/suspension.ts`). Procedure:
    the suspension stopped come back (within a minute or two); ones the customer had suspended stay suspended.
 
 Mail sent to a suspended mailbox is bounced (Stalwart `emailReceive` denied; `SUSPENDED_PERMISSIONS`). Nothing is
-deleted; closing an account after a suspension is a separate, later decision.
+deleted; closing an account after a suspension is a separate, later decision. The webmail refuses a suspended mailbox,
+or any mailbox of a suspended person, within 30 s, open sessions included (`packages/core/src/webmail/access.ts`).
+Stalwart refuses a suspended mailbox's right password like a wrong one, so the webmail sign-in says the mailbox is
+blocked only to a browser that signed in to it before; anyone else sees an ordinary failed sign-in, so the message
+can't be used to learn which addresses exist.
 
 **Planned (Phase 6, not built):** per-account staff metrics on the account page — outbound volume, bounces,
 complaints and blocklist hits — so the decision in step 1 doesn't depend on outside reports.

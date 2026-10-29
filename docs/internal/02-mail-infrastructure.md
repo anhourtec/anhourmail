@@ -1,13 +1,13 @@
 # 02 — Mail infrastructure
 
-Last updated: 2026-10-23. Research: `research/stalwart.md`, `research/deliverability.md`.
+Last updated: 2026-10-29. Research: `research/stalwart.md`, `research/deliverability.md`.
 
 ## URL and hostname map
 
 Public facts are defined once in `packages/shared/src/platform.ts`. This table explains them; it does not redefine them.
 Every host below `anhourmail.com` is built from the deployment's `PLATFORM_DOMAIN` (default `anhourmail.com`;
 `01-architecture.md` "Platform hostnames"): a staging or self-hosted install on `staging.example.org` serves
-`mx1.staging.example.org`, `_spf.staging.example.org`, `<sel>.<domain>.dkim.staging.example.org` and so on, and its
+`mx1.staging.example.org`, `_spf.staging.example.org`, `autoconfig.staging.example.org` and so on, and its
 console tells customers exactly those names. The marketing site and public docs always show the product's names.
 
 | Host / path                                                | Purpose                                                   | Served by                |
@@ -49,7 +49,8 @@ signature)`). Now each key Stalwart signs with is a TXT at `<selector>._domainke
   `v1-ed25519-YYYYMMDD` and `v1-rsa-YYYYMMDD`; the RSA key appears 1–2 s after the domain). The worker's
   `domain.ensure` reads them from `x:Domain/get` → `dnsZoneFile` (`StalwartManagement.domainDkimRecords`,
   `parseDkimRecords` handles single and parenthesised multi-string TXT) and caches the public halves in
-  `customer_domain.dkim_keys` (migration 0019); it retries ("DKIM keys not ready yet") until an RSA key is listed.
+  `customer_domain.dkim_keys` (migration 0019). It waits up to about 5 s for the RSA key (`domainDkimKeys`, 20 × 250 ms,
+  `packages/adapters/src/stalwart`), then fails and retries ("DKIM keys not ready yet") until one is listed.
   The console never calls Stalwart to render records.
 - **Pending domains reach Stalwart once ownership and MX pass** (`checkDomain` queues `domain.ensure`), because the keys
   only exist there. Never earlier: a domain on Stalwart is local to it, so an unproven name would divert our other
@@ -118,14 +119,25 @@ headers:{From,To,Date,Subject,Message-ID: true}}`. **`headers` must be set expli
 ## Domain lifecycle
 
 ```
-pending_verification ──(ownership TXT ok)──► verifying_records ──(all required ok)──► active
-        │                                           │                                   │
-        └──(14 days, no TXT)──► expired             └──(record breaks later)──► degraded (warn, keep receiving)
-active ──(user removes)──► removing (grace 7 days; mail kept) ──► removed (Stalwart domain destroyed by an explicit job)
+pending_dns ──(ownership TXT + MX found)──► on Stalwart, DKIM keys cached (still pending_dns)
+pending_dns ──(every required record passes, each DKIM key included)──► active
+pending_dns ──(never on Stalwart, 30 days)──► row deleted
+pending_dns ──(on Stalwart: 14 days unverified, records gone, or proven elsewhere)──► removing ──► row deleted
+active ──(user removes; no mailbox or alias left on it)──► removing ──(domain.remove)──► row deleted
 ```
 
-- DNS checks run in the scheduler: every 5 min for 1 h after an edit, then hourly while pending, then daily for active domains. Each check result is stored (`dns_check`) and audited when its state changes.
-- A domain can only be active in one account. Claiming an already-active domain requires the ownership TXT again, and the old owner is notified.
+- Statuses are `pending_dns`, `active` and `removing` (`packages/core/src/domains/entity.ts`). There is no degraded
+  state: an active domain is not re-checked on a schedule, and a record that breaks later isn't reported yet.
+- The `domain-recheck` scheduler job (every 5 minutes) re-checks pending domains added in the last 7 days
+  (`AUTO_RECHECK_MS`; at most 50 per run, 5 per account, 3-minute budget — `RECHECK_LIMITS`) and activates the ones
+  that pass; older ones wait for the customer's Check. Scheduler re-checks that fail aren't audited; a person's are
+  (`domain.verify_failed`). Results aren't stored: the console checks live.
+- Removal never deletes mail: a domain with mailboxes or aliases on it can't be removed. A pending domain never put on
+  Stalwart is deleted at once; any other goes `removing`, and `domain.remove` takes it off Stalwart (unless another
+  row is recorded there for the name), then deletes the row.
+- A domain can only be active in one account. Adding a name that is active (or being removed) in another account is
+  refused ("already connected to another account. Contact support"); pending claims don't block each other until one
+  is on Stalwart (above).
 
 ## The platform domain (free addresses)
 
