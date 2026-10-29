@@ -32,6 +32,8 @@ export type AliasRow = {
   mailbox: string;
   /** The mailbox is in its deletion grace period: the alias is off on the mail server and can't be turned on. */
   locked: boolean;
+  /** An administrator turned it off. Only an administrator can turn it back on or delete it (the server decides). */
+  adminLocked: boolean;
 };
 
 type Filter = "all" | "alias" | "masked" | "off";
@@ -48,7 +50,18 @@ const bulkAction =
   "inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-[14px] transition-colors hover:bg-accent disabled:opacity-50 [&>svg]:size-4 [&>svg]:text-primary";
 
 /** On/off switch for one alias. Applies on the mail server once the worker syncs the mailbox. */
-function AliasSwitch({ row, onError, url }: { row: AliasRow; onError: (m: string) => void; url: string }) {
+function AliasSwitch({
+  row,
+  held,
+  onError,
+  url,
+}: {
+  row: AliasRow;
+  /** Turned off by an administrator and this person can't lift it. */
+  held: boolean;
+  onError: (m: string) => void;
+  url: string;
+}) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
   return (
@@ -57,7 +70,7 @@ function AliasSwitch({ row, onError, url }: { row: AliasRow; onError: (m: string
       role="switch"
       aria-checked={row.enabled}
       aria-label={`Receive mail at ${row.address}`}
-      disabled={pending || row.locked}
+      disabled={pending || row.locked || held}
       onClick={() => {
         setPending(true);
         void callApi(url, { method: "PATCH", body: { enabled: !row.enabled } }).then((res) => {
@@ -79,7 +92,8 @@ function AliasSwitch({ row, onError, url }: { row: AliasRow; onError: (m: string
 /**
  * The aliases list (console page template): "Add an alias", search, type chips, a sortable list with checkboxes
  * and bulk on / off / delete, an on/off switch per row and a ⋮ menu (copy, on/off, delete). Members see only their
- * own mailboxes' aliases — the server decides that.
+ * own mailboxes' aliases — the server decides that. An alias an administrator turned off says so; for someone who
+ * can't lift that (`canLift` false) its switch, "Turn on" and "Delete…" are disabled (the server refuses them too).
  */
 export function AliasList({
   accountId,
@@ -87,12 +101,15 @@ export function AliasList({
   createHref,
   docsHref,
   initialQuery,
+  canLift,
 }: {
   accountId: string;
   rows: AliasRow[];
   createHref: string | null;
   docsHref: string;
   initialQuery: string;
+  /** The viewer manages every mailbox's aliases (`alias.manage.any`), so an administrator's lock doesn't hold them. */
+  canLift: boolean;
 }) {
   const router = useRouter();
   const [refreshing, startRefresh] = useTransition();
@@ -256,6 +273,7 @@ export function AliasList({
                         </span>
                         <span className="am-micro break-all md:hidden">to {a.mailbox}</span>
                         {a.locked && <span className="am-micro">Mailbox being deleted</span>}
+                        {a.adminLocked && <span className="am-micro">Turned off by an administrator</span>}
                       </div>
                       <RowMenu
                         label={`Actions for ${a.address}`}
@@ -272,7 +290,7 @@ export function AliasList({
                           {
                             label: a.enabled ? "Turn off" : "Turn on",
                             icon: a.enabled ? <PowerOff /> : <Power />,
-                            disabled: a.locked,
+                            disabled: a.locked || (a.adminLocked && !canLift),
                             onSelect: () => {
                               void callApi(`${api}/${a.id}`, { method: "PATCH", body: { enabled: !a.enabled } }).then(
                                 (res) => {
@@ -286,6 +304,7 @@ export function AliasList({
                             label: "Delete…",
                             icon: <Trash2 />,
                             danger: true,
+                            disabled: a.adminLocked && !canLift,
                             onSelect: () => {
                               setConfirm([a.id]);
                             },
@@ -305,6 +324,7 @@ export function AliasList({
                     <span className="flex items-center gap-2.5">
                       <AliasSwitch
                         row={a}
+                        held={a.adminLocked && !canLift}
                         url={`${api}/${a.id}`}
                         onError={(m) => {
                           setNotice({ error: true, text: m });

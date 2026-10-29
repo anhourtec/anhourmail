@@ -44,12 +44,22 @@ export default async function AliasesPage({
     );
   }
   const { aliases, mailboxes, domains, limits } = data;
-  const room = {
+  const planRoom = {
     alias: limits.alias.max === null || limits.alias.used < limits.alias.max,
     masked: limits.masked.max === null || limits.masked.used < limits.masked.max,
   };
+  // The plan's daily creation caps (UTC day; deleting gives none back). The server enforces them; this only explains.
+  const todayRoom = {
+    alias: limits.alias.createdToday < limits.alias.perDay,
+    masked: limits.masked.createdToday < limits.masked.perDay,
+  };
+  const room = { alias: planRoom.alias && todayRoom.alias, masked: planRoom.masked && todayRoom.masked };
   const path = `/accounts/${accountId}/aliases`;
   const canAdd = mailboxes.length > 0 && (room.alias || room.masked);
+  const todayFull = [
+    planRoom.alias && !todayRoom.alias ? `${String(limits.alias.perDay)} aliases` : null,
+    planRoom.masked && !todayRoom.masked ? `${String(limits.masked.perDay)} masked aliases` : null,
+  ].filter((x) => x !== null);
 
   return (
     <>
@@ -77,7 +87,14 @@ export default async function AliasesPage({
           )}
         </p>
       ) : (
-        !canAdd && <p className="am-small">This account has all the aliases its plan includes.</p>
+        !canAdd &&
+        todayFull.length === 0 && <p className="am-small">This account has all the aliases its plan includes.</p>
+      )}
+      {mailboxes.length > 0 && todayFull.length > 0 && (
+        <p className="am-small" role="status">
+          This account has created {todayFull.join(" and ")} today, the most it can in one day. You can create more
+          after midnight UTC.
+        </p>
       )}
 
       <AliasList
@@ -90,7 +107,9 @@ export default async function AliasesPage({
           note: a.description,
           mailbox: a.mailbox.address,
           locked: a.mailbox.deleting,
+          adminLocked: a.adminLocked,
         }))}
+        canLift={can(actor, "alias.manage.any", accountId)}
         createHref={canAdd ? `${path}?new=1` : null}
         docsHref={`${env().SITE_URL.replace(/\/$/, "")}/docs/aliases`}
         initialQuery={param(sp, "q") ?? ""}
