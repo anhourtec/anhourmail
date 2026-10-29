@@ -23,7 +23,7 @@ test("an owner adds, turns off and deletes aliases; the member sees only their o
     ["boss", u.users.owner],
     ["kid", u.users.member],
   ] as const) {
-    await page.getByLabel("Address").fill(local);
+    await page.getByLabel("Address", { exact: true }).fill(local);
     await page.getByLabel("Domain").selectOption({ label: domain });
     await page.getByLabel("Belongs to").selectOption({ label: owner });
     await page.getByLabel("Storage (GB)").fill("1");
@@ -39,7 +39,7 @@ test("an owner adds, turns off and deletes aliases; the member sees only their o
   const adding = panel(page, "Add an alias");
 
   // A chosen alias for the member's mailbox.
-  await page.getByLabel("Address").fill("Hello");
+  await page.getByLabel("Address", { exact: true }).fill("Hello");
   await page.getByLabel("Domain").selectOption({ label: domain });
   await page.getByLabel("Delivers to").selectOption({ label: `kid@${domain}` });
   await page.getByLabel(/Note/).fill("school");
@@ -49,7 +49,7 @@ test("an owner adds, turns off and deletes aliases; the member sees only their o
   await expect(hello.getByText("school")).toBeAttached();
 
   // An address that's already a mailbox is refused.
-  await page.getByLabel("Address").fill("boss");
+  await page.getByLabel("Address", { exact: true }).fill("boss");
   await page.getByLabel("Domain").selectOption({ label: domain });
   await page.getByRole("button", { name: "Create alias" }).click();
   await expect(page.getByRole("alert").filter({ hasText: "That address is already in use." })).toBeVisible();

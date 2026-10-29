@@ -74,11 +74,11 @@ test("sign up, confirm the email, claim a free address and sign in to the webmai
   await page.goto(urls.app);
   await page.getByRole("link", { name: "Choose your address" }).first().click();
   await expect(claim.getByText("Confirm your email address first.")).toHaveCount(0);
-  await claim.getByLabel("Address").fill("abc");
+  await claim.getByLabel("Address", { exact: true }).fill("abc");
   await expect(claim.getByText("Use at least 4 characters.")).toBeVisible();
-  await claim.getByLabel("Address").fill("postmaster");
+  await claim.getByLabel("Address", { exact: true }).fill("postmaster");
   await expect(claim.getByText("That name is reserved.")).toBeVisible();
-  await claim.getByLabel("Address").fill(name.toUpperCase());
+  await claim.getByLabel("Address", { exact: true }).fill(name.toUpperCase());
   const address = `${name}@${domain}`;
   await expect(claim.getByText(`${address} is available.`)).toBeVisible();
   await claim.getByRole("button", { name: "Generate a strong password" }).click();
@@ -128,7 +128,7 @@ test("staff create a free address in a customer's account; its owner sees it as 
   await expect(page.getByRole("heading", { name: who, level: 1 })).toBeVisible();
   await page.getByRole("tab", { name: /^Mailboxes/ }).click();
   const form = page.getByRole("form", { name: `Create a free @${domain} address` });
-  await form.getByLabel("Address").fill(name);
+  await form.getByLabel("Address", { exact: true }).fill(name);
   await form.getByLabel("Belongs to").selectOption({ label: email });
   await form.getByRole("button", { name: "Create address" }).click();
   await expect(form.getByRole("status").filter({ hasText: `${name}@${domain}` })).toBeVisible();
