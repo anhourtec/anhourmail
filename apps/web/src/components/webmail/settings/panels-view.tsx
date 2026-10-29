@@ -10,7 +10,7 @@ import { folderLabel, folderTree } from "../format";
 import type { Folder, ListRow } from "../mail-client";
 import { MessageRow, rowHeight } from "../message-list";
 import { notificationHelp, type NotifyPermission } from "../sync";
-import { Choice, Group, Note, SelectRow, Toggle } from "./controls";
+import { Choice, Group, Note, Row, SelectRow, smallSecondary, Toggle } from "./controls";
 
 type Change = (patch: Partial<WebmailPreferences>) => void;
 
@@ -275,10 +275,38 @@ export function ReadingPanel({ prefs, onChange }: { prefs: WebmailPreferences; o
         )}
       </Group>
       <Group title="Privacy">
-        <Note label="Remote images are blocked">
-          Images a sender links to never load, so they can't see when or where you opened their mail. Pictures sent as
-          attachments still show.
-        </Note>
+        <Choice
+          label="Remote images"
+          description="Images a sender links to load only through our privacy proxy, so senders never see your IP address. Known trackers are always removed; pictures sent as attachments always show."
+          value={prefs.remoteImages}
+          options={[
+            { value: "ask", label: "Always ask" },
+            { value: "contacts", label: "Load from contacts" },
+            { value: "always", label: "Always load" },
+          ]}
+          onChange={(remoteImages) => {
+            onChange({ remoteImages });
+          }}
+        />
+        <Row
+          label="Senders whose images always load"
+          description={
+            prefs.imageSenders.length === 0
+              ? "None yet. Choose \u201cAlways load from this sender\u201d on a message."
+              : `${String(prefs.imageSenders.length)} ${prefs.imageSenders.length === 1 ? "sender" : "senders"}. Only a private fingerprint of each address is kept, so they can't be listed here.`
+          }
+        >
+          <button
+            type="button"
+            disabled={prefs.imageSenders.length === 0}
+            onClick={() => {
+              onChange({ imageSenders: [] });
+            }}
+            className={smallSecondary}
+          >
+            Forget all
+          </button>
+        </Row>
         <Note label="Read receipts are never sent">
           When a sender asks to know that you read their message, we don't tell them.
         </Note>
