@@ -1,13 +1,15 @@
 # 05 — Webmail
 
-Last updated: 2026-10-22 (settings, part 1).
+Last updated: 2026-10-29 (reading: conversations, message menu, Show original page, restore; auto refresh, chime and
+notifications; quoted replies; compose image placeholders; first-sign-in password step; sign-in links not pre-filled).
 
 **Status (2026-10-22): slice 1 is built** — webmail sign-in (OAuth code flow + PKCE, tokens sealed server-side), the
 JMAP proxy (allow-list, per-user queue ≤ 4, `limit` retry), folders with counts and nesting, the thread-collapsed
 windowed list, the reader (server-sanitised HTML in a sandboxed `srcdoc` frame, remote images blocked, attachments as
 downloads), read/unread/flag, basic shortcuts, and the control-plane mailbox gate. Next slices: push (SSE fan-out),
 IndexedDB cache and `*/changes` sync, the image proxy ("Load images" is shown disabled until then), composer,
-move/archive/delete, search. Until push lands the client refreshes on tab focus and every 5 minutes. Details:
+move/archive/delete, search. Until push lands the client refreshes on tab focus and every 5 minutes (superseded
+2026-10-23: a 30 s `Email/changes` check, see "Push"). Details:
 `01-architecture.md` "How the webmail gets a Stalwart session". Research: `research/legacy-audit.md`, `research/ui-references.md`, `research/stalwart.md` §5.
 
 ## Why HourMail was slow, and what we do instead
@@ -25,8 +27,30 @@ everywhere) and pinned conversations (`$pinned` keyword, verified), multi-select
 session ("Add another mailbox", switcher tiles), previous/next, the inline reply box, relative times, a collapsible
 sidebar, and a bottom action bar on phones.
 
+**Since then (2026-10-23 … 2026-10-28):** rich-text compose with a plain-text option and Insert HTML (below);
+whole conversations in the reader, a complete per-message menu, a Show original page and Restore from Trash; an
+automatic change check with an optional chime and desktop notifications; quoted replies kept as quotes; remote-image
+placeholders while writing; a floating **New email** button on phones and tablets; the first-sign-in password step;
+and the access states at sign-in ("Who may use the webmail").
+
 ### Reading (slice 2 viewer)
 
+- **Whole conversations (2026-10-23).** The reader shows the subject with folder chips (Inbox's chip has an ✕ that
+  archives) and every message of the thread oldest first (`components/webmail/reader.tsx` `Reader`). The newest
+  message that isn't a draft and every unread one open expanded (`defaultExpanded` in `conversation.ts`); the rest
+  are one-line rows, and bodies load only when a message is expanded. **Expand all / Collapse all** sits in the
+  toolbar and the ⋮ menu for threads of more than one message. Each message's recipients line opens its details
+  (from, to, cc, date, and **mailed-by** / **signed-by** read only from our own server's Authentication-Results,
+  trusted by authserv-id; 07-security.md).
+- **Per-message menu** (`messageMenu` in `reader.tsx`, conventional order): Reply, Reply all, Forward · Delete (Delete
+  forever in Trash/Junk), Mark unread from here (`fromHere`) · Block "address" (adds it to the managed junk rules'
+  blocked list and moves the thread to Junk), Report spam / Not spam, Report phishing (to Junk with `$junk` and
+  `$phishing`) · Print, Download message (`.eml` via `/raw?download=1`), Show original. The toolbar's ⋮ adds Restore
+  (in Trash), Mark as read/unread, Add to/Remove from Priority, Expand/Collapse all and Move to.
+- **Restore from Trash.** The primary move button is Archive normally, Restore in Trash and Not spam in Junk. Restore
+  sends each message back by its sender — our own identities to Sent, everything else to the Inbox
+  (`restoreTarget`; JMAP doesn't record the folder a message was deleted from) — with an Undo toast that puts the
+  previous `mailboxIds` back.
 - **One surface.** The reader is a single scrolling pane: subject and date, sender card (To/Cc), attachments, then
   the body, with the reply box pinned at the bottom. No message markup ever enters the page's DOM:
   - **text/plain** → `body.ts` `textBlocks`: format=flowed decoded (RFC 3676, from the part's `header:Content-Type`),
@@ -44,8 +68,15 @@ sidebar, and a bottom action bar on phones.
     a risk we don't take; production needs a separate attachment origin first (open item).
   - Charsets: Stalwart returns decoded `bodyValues` (verified with ISO-8859-1). Bodies over 1 MB are cut with
     "View entire message" (`?full=1`, up to 8 MB).
-  - **View original** (`/messages/:id/raw`, text/plain, nosniff, sandbox CSP, first 2 MB shown, .eml download) and
-    **Print** (`/messages/:id/print`: escaped headers + the sanitised body, served with `sandbox` CSP — an opaque
+  - **Show original** (2026-10-23) opens `/message/:emailId/original` in a new tab
+    (`app/webmail/message/[emailId]/original/page.tsx`): a server page that checks the session, the access gate
+    and the first-sign-in gate, rate-limits on `webmailDownload`, and reads the source with the session's token for
+    the active mailbox only (any other id is a 404). It shows Message ID, Created at (with "Delivered after …" from
+    Date vs receivedAt), From, To, Cc, Subject and SPF / DKIM / DMARC (`server/webmail/original.ts`: only the
+    Authentication-Results our own authserv-ids added are trusted, `MAIL_AUTHSERV_ID` or the MX hosts), then the
+    source as text (first 2 MB) with **Download original** (`/api/webmail/messages/:id/raw?download=1`, `.eml`) and
+    **Copy to clipboard**. The source is never rendered as HTML. `/raw` without `download` still serves text/plain
+    with nosniff and a sandbox CSP. **Print** (`/messages/:id/print`: escaped headers + the sanitised body, served with `sandbox` CSP — an opaque
     origin with no scripts — opened in a new tab for the browser's print command).
 - **text/html** stays in the sandboxed `srcdoc` frame (no `allow-scripts`, no `allow-same-origin` — unchanged).
   Quoted replies inside it (the quote containers and reply header blocks common mail apps add, `blockquote type=cite`) become
@@ -96,7 +127,15 @@ frame-ancestors 'none'` unless the route sets its own sandboxing one). `next.con
   and on the whole body before each save; `PUT /api/webmail/drafts` sanitises `html` again (`draftBody` in
   `compose.ts`) and stores `textBody` + `htmlBody` (multipart/alternative), generating the text part from the HTML
   when the person wrote none. Rules and their reasons: 07-security.md "Outgoing HTML". Replies and forwards quote the
-  reading view's sanitised HTML (no remote images; ≤ 256 KB, else the text). Drafts reopen in the format they were
+  reading view's sanitised HTML (no remote images; ≤ 256 KB, else the text). **Quotes stay quotes (2026-10-28):**
+  a rich reply's quote is a `blockquote type=cite` (the outgoing sanitiser keeps `type=cite` and turns the reading
+  view's folded `<details>` quote back into one), so readers fold it, and the generated text part prefixes quoted
+  lines with `> ` per level, capped at eight levels so a crafted draft can't make the text part quadratic.
+  **Remote images while writing** (`components/webmail/remote-images.ts`): images on other servers in pasted or
+  inserted HTML are "parked" for display (address moved to `data-am-src`, a sized blank placeholder shown; remote
+  CSS backgrounds kept in `data-am-style`) and put back before sanitising and saving, so nothing loads them while
+  writing or previewing and they are sent as written; the outgoing sanitiser drops every `data-*`. Switching a
+  formatted message to plain text asks first. Drafts reopen in the format they were
   written in. Known limits: a reopened rich draft loses its https images (the reading view blocks them); Quote has no
   toggle-off (undo works).
 - **Proxy allow-list changes:** `Email/set` may now update `keywords/*` and `mailboxIds` (moves) and `destroy`, and
@@ -337,7 +376,8 @@ JMAP proxy still refuses every `SieveScript/*`, `VacationResponse/*`, `Identity/
   either. No `x:AllowedIp` exemption and no change to Stalwart's thresholds. Caveat: a local `.env` with
   `DEV_HOST=0.0.0.0` lets LAN machines reach the app port directly and claim any address there (dev only).
 - **Proxy allow-list is minimal until the next slices.** `Email/set` may only set or clear `keywords/*` on existing
-  messages (no create, destroy, moves or other properties); the composer and move slices widen it deliberately.
+  messages (no create, destroy, moves or other properties); the composer and move slices widen it deliberately
+  (done in slice 2, see "Proxy allow-list changes").
 - **CSS scrubbing is linear and capped** (style attribute 8 KB, `<style>` block 64 KB, over-cap CSS dropped and
   counted as blocked); `<style>` keeps no attributes; inline `cid:` images are fetched only when the HTML references
   them, at most 32 per message.
@@ -391,7 +431,23 @@ on v0.16.27 (2026-10-21):
 
 The mailbox secret therefore comes from the user at webmail sign-in; it is used once and never stored (mailbox
 passwords are argon2id PHC strings in Stalwart, so we cannot derive tokens without the user). The console → webmail
-handoff (ADR-0003) pre-fills the address only.
+link (ADR-0003) used to pre-fill the address with `?address=`; since 2026-10-23 nothing in the URL pre-fills the
+sign-in form, because a sign-in link carrying an email address is the shape of a phishing link (browsers' phishing
+checks flag it) and anyone could craft one (`app/webmail/sign-in/page.tsx`). The console's **Open webmail** links to
+the bare sign-in page, and only for people with an account that isn't suspended.
+
+### First-sign-in password step (2026-10-24, hardened 2026-10-28)
+
+A mailbox created by **Add a user** with "Require this user to change their password when they first sign in" (or
+given a new password by **Make this a user**) carries a must-change flag. `PasswordChangeGate`
+(`packages/core/src/webmail/password-change-gate.ts`; a "required" answer is never cached, "not required" for ≤ 30 s)
+makes the webmail page show **Choose your own password** (`components/webmail/first-password.tsx`: the password you
+were given, a new one twice, Generate a strong password, **Save and open my mail**) instead of the inbox, and
+`route()` answers `403 password_change_required` for every webmail route except the password change and sign-out
+(a test pins that list). The flag clears only when the worker has applied the person's own password, in the same unit
+of work; until then the step says "Your new password is being applied … sign in again", and a job that gave up shows
+that the last change didn't go through. The console has its own step for the console password
+(`app/(console)/change-password/page.tsx`). Details: 07-security.md, 01-architecture.md.
 
 ### Who may use the webmail (control-plane access, 2026-10-28)
 
@@ -432,6 +488,12 @@ it can't reach the check above; the suspension is named only to a browser that s
   the conversation loads again in place — what the person expanded or collapsed stays, newly arrived messages open
   like on first opening, the scroll position and loaded bodies are kept (`mergeExpanded`, `touchesThread` in
   `components/webmail/conversation.ts`). New arrivals aren't marked read automatically.
+- **New mail alerts (2026-10-23; chime and permission help in `components/webmail/sync.ts`, the check in
+  `webmail-app.tsx`):** when the check finds new Inbox mail, an optional
+  short chime (Web Audio, `newMailSound`, default on) and an optional desktop notification naming only the sender,
+  never the subject or text (`desktopNotifications`, default off; Settings → Reading → New mail). Turning
+  notifications on asks the browser; if it refused, `notificationHelp` explains how to allow them in the site
+  settings (2026-10-28).
 - **Answered (Phase 1, ADR-0018):** long-lived channels do **not** count against `maxConcurrentRequests`. With one
   WebSocket (`/jmap/ws`, subprotocol `jmap`, `WebSocketPushEnable`) and five EventSource streams open for the same
   user, bursts of 4 and 8 requests still all succeeded, and the 40-request overload test produced the same share of
@@ -471,16 +533,21 @@ it can't reach the check above; the suspension is named only to a browser that s
 
 ### Keyboard shortcuts (conventional webmail defaults, rebindable later)
 
-| Key                   | Action                      | Key                   | Action                      |
-| --------------------- | --------------------------- | --------------------- | --------------------------- |
-| `j` / `k`             | next / previous message     | `c`                   | compose                     |
-| `o` / `Enter`         | open                        | `r` / `a` / `f`       | reply / reply all / forward |
-| `u`                   | back to list                | `e`                   | archive                     |
-| `#`                   | delete                      | `!`                   | report junk                 |
-| `s`                   | star                        | `Shift+i` / `Shift+u` | mark read / unread          |
-| `x`                   | select                      | `/`                   | search                      |
-| `g i` / `g s` / `g d` | go to inbox / sent / drafts | `?`                   | shortcut help               |
-| `⌘/Ctrl+Enter`        | send                        | `Esc`                 | close composer / dialog     |
+Built (`SHORTCUTS` and the key handler in `components/webmail/webmail-app.tsx`; the `?` dialog lists the same set;
+off when Settings → Region and shortcuts turns them off):
+
+| Key           | Action                        | Key                   | Action                          |
+| ------------- | ----------------------------- | --------------------- | ------------------------------- |
+| `j` / `k`     | next / previous conversation  | `c`                   | new email                       |
+| `o` / `Enter` | open                          | `r` / `a` / `f`       | reply / reply all / forward     |
+| `u` / `Esc`   | back to list                  | `e`                   | archive                         |
+| `#`           | delete                        | `!`                   | report spam (in Junk: not spam) |
+| `s`           | add to / remove from Priority | `p`                   | pin / unpin                     |
+| `x`           | select                        | `Shift+i` / `Shift+u` | mark read / unread              |
+| `/`           | search                        | `,`                   | settings                        |
+| `?`           | shortcut help                 | `⌘/Ctrl+Enter`        | send (composer)                 |
+
+Not built yet: the `g i` / `g s` / `g d` go-to sequences.
 
 ## Folders (ADR-0014)
 

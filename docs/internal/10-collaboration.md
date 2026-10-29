@@ -1,6 +1,6 @@
 # Collaboration features (a familiar business-mail feature set)
 
-Date: 2026-10-21 · Status: design accepted (ADR-0013); build phases in `09-roadmap.md`.
+Date: 2026-10-21 · Last updated: 2026-10-29 · Status: design accepted (ADR-0013); build phases in `09-roadmap.md`.
 
 AnhourMail aims for the **mail collaboration** feature set people know from mainstream business mail suites,
 sized for families and small groups: shared mailboxes, distribution lists, groups, delegated access (full access,
@@ -17,6 +17,14 @@ afterwards), and the Stalwart docs ([Group](https://stalw.art/docs/auth/principa
 [JMAP sharing gaps](https://support.stalw.art/t/jmap-sharing-is-incomplete-and-fails-real-world-use-cases/1555),
 [read-only calendar share bug](https://support.stalw.art/t/read-only-calendar-share-grants-access-to-the-sharers-mailbox/1890)).
 Forum posts are community reports, not vendor statements; they are marked as such below.
+
+**Update (2026-10-29): "shared address" is not the shared mailbox below.** Since 2026-10-28 the console's Mailboxes ⋯
+menu has **Add a shared address** (`components/mailboxes/create-mailbox-form.tsx`): an ordinary mailbox (a Stalwart
+individual account) with its own password and storage that belongs to no person, for addresses like `support@`;
+people reach it by signing in with its password, and **Make this a user** later turns it into one person's mailbox
+(`mailboxes/make-user.ts`, new password, app passwords revoked; 01-architecture.md). The shared mailbox in this doc —
+a Stalwart group with no login of its own, members' full access and send as — is still not built; when it ships,
+the public guides must tell the two apart.
 
 ## Feature set and placement
 
