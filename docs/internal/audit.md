@@ -1,6 +1,6 @@
 # Audit
 
-Last updated: 2026-10-21. Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
+Last updated: 2026-10-29. Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
 
 Every meaningful action is recorded, tamper-evident, searchable and visible to the right people. Audit is a core module, not a logging side effect.
 
@@ -200,31 +200,32 @@ Collaboration events (`shared_mailbox.*`, `distribution_list.*`, `delegation.*`,
 
 ## Entry fields
 
-| Field                                                 | Notes                                                                              |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `id`, `seq`, `scope`                                  | `scope` = `account:<id>` or `platform`; `seq` increases per scope                  |
-| `occurred_at`                                         | UTC                                                                                |
-| `actor_type`                                          | `user` / `staff` / `system` / `api_token` / `anonymous`                            |
-| `actor_user_id`, `actor_email_snapshot`, `actor_role` | Snapshots keep entries readable after deletion                                     |
-| `on_behalf_of_user_id`, `act_as_session_id`           | Set during act-as                                                                  |
-| `account_id`                                          | Account scope (null for platform-only events)                                      |
-| `action`                                              | From the catalogue                                                                 |
-| `target_type`, `target_id`, `target_label_snapshot`   | e.g. `domain`, id, `example.com`                                                   |
-| `result`, `error_code`                                | `success` / `denied` / `failed`                                                    |
-| `request_id`, `ip`, `user_agent`                      | From the request context; IP is stored as-is for 1 year, then truncated (/24, /48) |
-| `meta`                                                | JSON, redacted; before/after values for changes                                    |
-| `prev_hash`, `hash`                                   | Chain (below)                                                                      |
+Columns as in `packages/adapters/src/db-postgres/schema.ts` (`audit_log`):
+
+| Field                                                         | Notes                                                                                                   |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `id`, `seq`, `scope`                                          | `scope` = `account:<id>` or `platform`; `seq` increases per scope (unique `scope, seq`)                 |
+| `at`                                                          | UTC                                                                                                     |
+| `actor_type`                                                  | `user` / `staff` / `system` / `anonymous` (`api_token` reserved for API tokens, not built)              |
+| `actor_user_id`, `actor_email`, `actor_role`, `actor_account_id` | Snapshots keep entries readable after deletion; a system actor's name is in `actor_email`            |
+| `on_behalf_of`                                                | JSON `{ userId, email }` of the staff member during act-as (`auditActor`, `packages/core/src/audit/record.ts`) |
+| `action`                                                      | From the catalogue                                                                                      |
+| `target_type`, `target_id`, `target_label`                    | e.g. `domain`, id, `example.com`                                                                        |
+| `result`, `error_code`                                        | `success` / `denied` / `failed`                                                                         |
+| `request_id`, `ip`, `user_agent`                              | From the request context; IP is stored as-is for 1 year, then truncated (/24, /48)                      |
+| `meta`                                                        | JSON, redacted; before/after values for changes                                                         |
+| `prev_hash`, `hash`                                           | Chain (below)                                                                                           |
 
 ## Never in audit
 
-Mail content, subjects, bodies, previews, attachments, recipient lists, passwords, tokens, secrets, keys, OTP codes and full payment details. `recordAudit()` passes `meta` through the **same redaction list as the logger** (`packages/server/src/log.ts` `REDACT_KEYS`), and unit tests assert it (rule 48).
+Mail content, subjects, bodies, previews, attachments, recipient lists, passwords, tokens, secrets, keys, OTP codes and full payment details. `mutation()` (`packages/core/src/mutation.ts`) passes `meta` through `redactMeta()`, which uses the **same redaction list as the logger** (`packages/server/src/log.ts` `REDACT_KEYS`), and unit tests assert it (rule 48).
 
 ## Integrity
 
 - **Same unit of work:** the audit row is written in the same transaction as the change. If the audit write fails, the change fails. Denied attempts are written on their own (no change to roll back).
-- **Append-only:** the app's DB role has `INSERT, SELECT` on `audit_log`, with no `UPDATE`/`DELETE`, granted by migration. No repository method updates or deletes audit rows (rule 47).
+- **Append-only:** migration 0001 adds triggers on `audit_log` that refuse `UPDATE`, `DELETE` and `TRUNCATE` for every role, owner included. No repository method updates or deletes audit rows (rule 47; `check:audit` fails on one).
 - **Hash chain per scope:** `hash = sha256(prev_hash ‖ canonical_json(entry without hash))`. `prev_hash` of the first entry is a fixed genesis value. Writes take a per-scope advisory lock to read the previous hash.
-- **Verification:** the scheduler job `audit-chain-verify` walks each scope from its last checkpoint nightly. A break raises `platform.audit_chain.break` and pages the operator.
+- **Verification:** the scheduler job `audit-verify` (`apps/worker/src/jobs/audit-verify.ts`, every 6 hours) walks every scope's chain (`verifyAuditScope`). A break is logged at `fatal` and the job exits non-zero; `platform.audit_chain_broken` is catalogued for it and the alert channel arrives with monitoring (`09-roadmap.md` "Path to production").
 - **Retention purge** runs under a separate maintenance role. Before deleting a prefix it records a checkpoint (`scope`, `seq`, `hash`), and the purge itself is audited.
 
 ## Visibility
@@ -278,4 +279,4 @@ Receiver design (apps/worker, Phase 3):
 
 - The RBAC harness asserts that every mutating route and server action writes the expected entry (action, actor, target, result), including **denied** attempts.
 - Unit tests cover redaction, canonical JSON, hash chaining (tamper detection), snapshots and act-as attribution.
-- `scripts/check-audit.mjs` (pre-commit + CI) fails when a service mutation (a function under `packages/core/src/**/service.ts` whose name starts with a mutating verb, or that is marked `@mutation`) has no `recordAudit` / `withAudit` call.
+- `scripts/check-audit.mjs` (pre-commit + CI) fails when a `packages/core/src/**/service.ts` file writes through a repository without `mutation(`, when anything but `mutation.ts` calls `audit.append`, when a `mutation(` action is missing from `audit/catalogue.ts` or this file, when an adapter adds an update/delete path for audit rows, and when the generated event table above is stale.
