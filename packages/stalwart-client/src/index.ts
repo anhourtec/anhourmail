@@ -17,6 +17,18 @@ export {
 } from "./client";
 export { type DkimRecord, dkimTags, parseDkimRecords } from "./dkim";
 export {
+  ARCHIVE_DEFAULT_FOLDER,
+  ARCHIVE_FOLDER_NAME,
+  type ArchiveBackfillReport,
+  type ArchivePlan,
+  type ArchiveResult,
+  applyDefaultFolders,
+  backfillArchiveFolders,
+  ensureArchiveFolder,
+  type FolderSummary,
+  planArchiveFolder,
+} from "./folders";
+export {
   appPasswordPermissions,
   type AppPasswordScope,
   isAppPasswordSecret,
