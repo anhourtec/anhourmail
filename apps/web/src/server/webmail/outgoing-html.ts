@@ -29,6 +29,9 @@ import { WEBMAIL_HTML } from "@anhourmail/shared";
  *   sizes and spacing as bounded, non-negative lengths; alignment and decoration as keywords. Anything else in those
  *   properties is dropped, so no function, escape or unit trick gets through them.
  * - The whole input is capped at `MAX_OUTGOING_HTML` characters.
+ * - Signatures (`embeddedImagesOnly`) are stricter still: images only as embedded raster `data:` images whose bytes
+ *   start like the type they claim, up to a smaller size; no https or `cid:` images and no CSS `url()` at all, so a
+ *   signature never loads anything from anywhere when it is read.
  */
 
 /** The longest HTML a message body may have (characters, roughly bytes for markup). */
@@ -49,7 +52,44 @@ export type OutgoingHtml = {
   removedAttributes: string[];
   /** https images (and CSS backgrounds) left in: they load from someone else's server when the mail is read. */
   remoteImages: number;
+  /** Embedded (`data:`) images left in. */
+  embeddedImages: number;
+  /** Embedded images removed for being over the size cap. */
+  oversizedImages: number;
 };
+
+export type OutgoingOptions = {
+  /**
+   * Keep only embedded raster images (`data:` PNG, JPEG, GIF, WebP whose first bytes match the type), drop https and
+   * `cid:` images and every CSS `url()` (signatures: nothing in them may load from a server).
+   */
+  embeddedImagesOnly?: boolean;
+  /** The largest `data:` image kept, in characters of the URI (default `MAX_DATA_IMAGE_BYTES`). */
+  maxDataImage?: number;
+};
+
+/** Whether a `data:` image's bytes start like the type it names (PNG, JPEG, GIF or WebP). */
+export function dataImageMatchesType(uri: string): boolean {
+  const m = /^data:image\/(png|jpeg|gif|webp);base64,([A-Za-z0-9+/]{16})/i.exec(uri);
+  if (!m?.[1] || !m[2]) return false;
+  let head: string;
+  try {
+    head = atob(m[2]);
+  } catch {
+    return false;
+  }
+  const b = (i: number) => head.charCodeAt(i);
+  switch (m[1].toLowerCase()) {
+    case "png":
+      return b(0) === 0x89 && head.slice(1, 4) === "PNG";
+    case "jpeg":
+      return b(0) === 0xff && b(1) === 0xd8 && b(2) === 0xff;
+    case "gif":
+      return head.startsWith("GIF87a") || head.startsWith("GIF89a");
+    default:
+      return head.startsWith("RIFF") && head.slice(8, 12) === "WEBP";
+  }
+}
 
 export const OUTGOING_TAGS = [
   "a", "b", "blockquote", "br", "caption", "center", "code", "col", "colgroup", "div", "em", "font", "h1", "h2",
@@ -298,7 +338,11 @@ function urlsIn(value: string): string[] | null {
  * Keeps the allow-listed declarations of a `style` attribute. Returns the kept CSS and the names it dropped
  * (as `style:<property>`), and counts https backgrounds as remote images.
  */
-export function cleanOutgoingCss(input: string, counter: { remote: number } = { remote: 0 }) {
+export function cleanOutgoingCss(
+  input: string,
+  counter: { remote: number } = { remote: 0 },
+  options: OutgoingOptions = {},
+) {
   const dropped: string[] = [];
   if (input.length > MAX_OUTGOING_STYLE) return { css: "", dropped: ["style"] };
   const kept: string[] = [];
@@ -323,6 +367,7 @@ export function cleanOutgoingCss(input: string, counter: { remote: number } = { 
       (Object.hasOwn(STRICT_CSS, prop) && STRICT_CSS[prop]?.(value) !== true) ||
       (prop === "position" && !/^(?:static|relative)$/.test(lower)) ||
       urls === null ||
+      (options.embeddedImagesOnly === true && urls.length > 0) ||
       urls.some((u) => !IMG_HTTPS.test(u) && !(DATA_IMAGE.test(u) && u.length <= MAX_DATA_IMAGE_BYTES)) ||
       urls.some((u) => /["'()\s]/.test(u));
     if (bad) {
@@ -336,13 +381,25 @@ export function cleanOutgoingCss(input: string, counter: { remote: number } = { 
 }
 
 /** Sanitises HTML for sending. Pure; safe to run in the browser and on the server. */
-export function sanitizeOutgoingHtml(input: string): OutgoingHtml {
+export function sanitizeOutgoingHtml(input: string, options: OutgoingOptions = {}): OutgoingHtml {
   if (input.length > MAX_OUTGOING_HTML) {
-    return { html: "", tooLarge: true, removedTags: [], removedAttributes: [], remoteImages: 0 };
+    return {
+      html: "",
+      tooLarge: true,
+      removedTags: [],
+      removedAttributes: [],
+      remoteImages: 0,
+      embeddedImages: 0,
+      oversizedImages: 0,
+    };
   }
+  const embeddedOnly = options.embeddedImagesOnly === true;
+  const maxData = options.maxDataImage ?? MAX_DATA_IMAGE_BYTES;
   const removedTags = new Set<string>();
   const removedAttributes = new Set<string>();
   const counter = { remote: 0 };
+  let embedded = 0;
+  let oversized = 0;
 
   const filter = (tag: string, attribs: Record<string, string>): Record<string, string> => {
     const allowed = attrsFor(tag);
@@ -353,7 +410,7 @@ export function sanitizeOutgoingHtml(input: string): OutgoingHtml {
         continue;
       }
       if (name === "style") {
-        const { css, dropped } = cleanOutgoingCss(raw, counter);
+        const { css, dropped } = cleanOutgoingCss(raw, counter, options);
         for (const d of dropped) removedAttributes.add(d);
         if (css !== "") out.style = css;
         continue;
@@ -417,11 +474,23 @@ export function sanitizeOutgoingHtml(input: string): OutgoingHtml {
       img: (tagName, attribs) => {
         const out = filter(tagName, attribs);
         const src = (attribs.src ?? "").trim();
-        if (IMG_HTTPS.test(src) && !/[\s"'<>]/.test(src)) {
+        const data = DATA_IMAGE.test(src);
+        if (data && src.length > maxData) {
+          oversized += 1;
+          removedAttributes.add("src");
+        } else if (embeddedOnly) {
+          if (data && dataImageMatchesType(src)) {
+            out.src = src;
+            embedded += 1;
+          } else if (attribs.src !== undefined) {
+            removedAttributes.add("src");
+          }
+        } else if (IMG_HTTPS.test(src) && !/[\s"'<>]/.test(src)) {
           out.src = src;
           counter.remote += 1;
-        } else if (IMG_CID.test(src) || (DATA_IMAGE.test(src) && src.length <= MAX_DATA_IMAGE_BYTES)) {
+        } else if (IMG_CID.test(src) || data) {
           out.src = src;
+          if (data) embedded += 1;
         } else if (attribs.src !== undefined) {
           removedAttributes.add("src");
         }
@@ -438,6 +507,8 @@ export function sanitizeOutgoingHtml(input: string): OutgoingHtml {
     removedTags: [...removedTags].sort(),
     removedAttributes: [...removedAttributes].sort(),
     remoteImages: counter.remote,
+    embeddedImages: embedded,
+    oversizedImages: oversized,
   };
 }
 

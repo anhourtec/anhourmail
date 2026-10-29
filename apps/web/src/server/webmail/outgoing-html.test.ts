@@ -213,7 +213,15 @@ describe("sanitizeOutgoingHtml: what is kept", () => {
 
   it("returns nothing for input over the cap", () => {
     const r = sanitizeOutgoingHtml("a".repeat(MAX_OUTGOING_HTML + 1));
-    expect(r).toEqual({ html: "", tooLarge: true, removedTags: [], removedAttributes: [], remoteImages: 0 });
+    expect(r).toEqual({
+      html: "",
+      tooLarge: true,
+      removedTags: [],
+      removedAttributes: [],
+      remoteImages: 0,
+      embeddedImages: 0,
+      oversizedImages: 0,
+    });
   });
 
   it("escapes text that looks like markup", () => {

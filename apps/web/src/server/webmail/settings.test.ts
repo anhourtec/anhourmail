@@ -5,14 +5,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { MemoryUnitOfWork } from "@anhourmail/adapters/memory";
 import type { MailMessage } from "@anhourmail/adapters/mail";
-import { WebmailSettingsService } from "@anhourmail/core/webmail";
+import { WebmailSettingsService, WebmailSignaturesService } from "@anhourmail/core/webmail";
 import { createKeyRing } from "@anhourmail/server/keyring";
 import { setLogSinkForTests } from "@anhourmail/server/log";
 import { memorySlidingQuota } from "@anhourmail/server/rate-limit";
 import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 
 import { checkJmapRequest } from "./jmap-policy";
-import { GrantRefusedError, signatureHtml, WebmailRefusedError, WebmailService } from "./service";
+import { GrantRefusedError, WebmailRefusedError, WebmailService } from "./service";
 import { memoryKv, WebmailSessionStore } from "./session-store";
 import { IdentityChange, WebmailSettings } from "./settings";
 import { DEFAULT_RULES, parseScript } from "./sieve";
@@ -194,15 +194,31 @@ async function setup() {
   };
   const core = new WebmailSettingsService({ uow, clock: { now: () => new Date() }, platform: PUBLIC_PLATFORM });
   confirmedSource.core = core;
+  const signatures = new WebmailSignaturesService({ uow, clock: { now: () => new Date() }, platform: PUBLIC_PLATFORM });
   const settings = new WebmailSettings({
     mail: svc,
     settings: core,
+    signatures,
     mailer,
     webmailUrl: "https://mail.example/",
     siteHost: "example.test",
   });
   const script = () => managed.get("acc1") ?? "";
-  return { svc, sessionId, uow, sent, mailer, core, settings, script, managed, sieveFail, inactive, ...fake };
+  return {
+    svc,
+    sessionId,
+    uow,
+    sent,
+    mailer,
+    core,
+    signatures,
+    settings,
+    script,
+    managed,
+    sieveFail,
+    inactive,
+    ...fake,
+  };
 }
 
 describe("settings in the mail server", () => {
@@ -211,24 +227,18 @@ describe("settings in the mail server", () => {
     expect(await t.svc.quota(t.sessionId)).toEqual({ used: 1234, limit: 5000 });
   });
 
-  it("changes the sender name and signature of own identities only, with an escaped HTML twin", async () => {
+  it("changes the sender name of own identities only", async () => {
     const t = await setup();
-    const out = await t.svc.updateIdentity(t.sessionId, "acc1", "i1", { name: "Sam", signature: "Sam <b>\nCo & co" });
-    expect(out).toMatchObject({ id: "i1", name: "Sam", signature: "Sam <b>\nCo & co" });
-    expect(t.state.identities.get("i1")).toMatchObject({
-      name: "Sam",
-      textSignature: "Sam <b>\nCo & co",
-      htmlSignature: "<div>Sam &lt;b&gt;<br>Co &amp; co</div>",
-    });
-    // The composer's identities now carry it.
-    expect((await t.svc.identities(t.sessionId)).find((i) => i.id === "i1")?.signature).toBe("Sam <b>\nCo & co");
+    const out = await t.svc.updateIdentity(t.sessionId, "acc1", "i1", { name: "Sam" });
+    expect(out).toMatchObject({ id: "i1", name: "Sam" });
+    expect(t.state.identities.get("i1")).toMatchObject({ name: "Sam", textSignature: "" });
+    expect((await t.svc.identities(t.sessionId)).find((i) => i.id === "i1")?.name).toBe("Sam");
     await expect(t.svc.updateIdentity(t.sessionId, "acc1", "other", { name: "x" })).rejects.toThrow(
       /isn't one of yours/,
     );
     await expect(t.svc.updateIdentity(t.sessionId, "acc2", "i1", { name: "x" })).rejects.toThrow(/active mailbox/);
     t.state.refuseIdentity = true;
     await expect(t.svc.updateIdentity(t.sessionId, "acc1", "i1", { name: "x" })).rejects.toThrow(/wasn't saved/);
-    expect(signatureHtml("")).toBe("");
   });
 
   it("writes and reads back the one managed script with management credentials", async () => {
@@ -424,8 +434,8 @@ describe("webmail settings: control plane and mail server together", () => {
     const junk = t.uow.state.audit.at(-1);
     expect(junk).toMatchObject({ action: "junk_rules.changed", meta: { blocked: 1, safe: 0, trustedOnly: false } });
     expect(JSON.stringify(junk)).not.toContain("bad@spam.example");
-    await t.settings.updateIdentity(t.sessionId, "acc1", "i1", { signature: "Sam" }, req);
-    expect(t.uow.state.audit.at(-1)).toMatchObject({ action: "identity.changed", meta: { fields: ["signature"] } });
+    await t.settings.updateIdentity(t.sessionId, "acc1", "i1", { name: "Sam" }, req);
+    expect(t.uow.state.audit.at(-1)).toMatchObject({ action: "identity.changed", meta: { fields: ["name"] } });
     await expect(
       t.settings.saveJunk(t.sessionId, "acc2", { blocked: [], safe: [], trustedOnly: false }, req),
     ).rejects.toThrow(/active mailbox/);
@@ -476,10 +486,81 @@ describe("webmail settings: control plane and mail server together", () => {
     expect((await t.settings.overview(t.sessionId)).forwardingTarget).toBeNull();
   });
 
-  it("validates sender names and signatures", () => {
+  it("validates sender names (signatures are named signatures now, not identity fields)", () => {
     expect(IdentityChange.parse({ name: ' Sam "S" <x>\n' })).toEqual({ name: "Sam S x" });
-    expect(IdentityChange.parse({ signature: "Line one\r\nTwo\u0007  \n\n" })).toEqual({ signature: "Line one\nTwo" });
+    expect(IdentityChange.safeParse({ signature: "Hi" }).success).toBe(false);
     expect(IdentityChange.safeParse({}).success).toBe(false);
     expect(IdentityChange.safeParse({ name: "x".repeat(101) }).success).toBe(false);
+  });
+});
+
+describe("signatures", () => {
+  const PNG = `data:image/png;base64,${Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...new Array<number>(12).fill(0)]).toString("base64")}`;
+
+  it("brings the old plain-text signature over once, as the default for both", async () => {
+    const t = await setup();
+    const first = await t.settings.signatures(t.sessionId, req);
+    // i1 (the mailbox's own address) has none, so the alias's "Hi there" is brought over.
+    expect(first.signatures).toEqual([
+      { id: first.defaults.newMessage, name: "Signature", html: "<div>Hi there</div>", text: "Hi there" },
+    ]);
+    expect(first.defaults.reply).toBe(first.defaults.newMessage);
+    // Read again: the same one, not a second copy.
+    expect((await t.settings.signatures(t.sessionId, req)).signatures).toHaveLength(1);
+    await t.settings.removeSignature(t.sessionId, "acc1", first.defaults.newMessage ?? "", req);
+    expect((await t.settings.signatures(t.sessionId, req)).signatures).toEqual([]);
+    expect(JSON.stringify(t.uow.state.audit)).not.toContain("Hi there");
+  });
+
+  it("sanitises on save, keeps embedded images, refuses remote ones, and mirrors the new-message default", async () => {
+    const t = await setup();
+    t.state.identities.get("i2")!.textSignature = "";
+    const made = await t.settings.createSignature(
+      t.sessionId,
+      "acc1",
+      {
+        name: "Work",
+        html: `<p onclick="x()"><b>Sam</b></p><img src="https://tracker.example/p.gif"><img src="${PNG}"><script>x</script>`,
+      },
+      req,
+    );
+    const work = made.signatures[0];
+    expect(work?.html).toBe(`<p><b>Sam</b></p><img src="${PNG}" />`);
+    expect(work?.text).toBe("Sam");
+    expect(made.mirrored).toBe(true);
+    // Every identity of the mailbox carries the default for new messages.
+    for (const id of ["i1", "i2"]) {
+      expect(t.state.identities.get(id)).toMatchObject({ htmlSignature: work?.html, textSignature: "Sam" });
+    }
+    await expect(
+      t.settings.createSignature(
+        t.sessionId,
+        "acc1",
+        { name: "Big", html: `<img src="${PNG}${"A".repeat(90_000)}">` },
+        req,
+      ),
+    ).rejects.toThrow(/up to 64 KB/);
+
+    // A second signature as the default for new messages: mirrored; "(No signature)" clears the identities.
+    const home = await t.settings.createSignature(t.sessionId, "acc1", { name: "Home", html: "<p>Home</p>" }, req);
+    const homeId = home.signatures.find((s) => s.name === "Home")?.id ?? null;
+    await t.settings.setSignatureDefaults(t.sessionId, "acc1", { newMessage: homeId, reply: work?.id ?? null }, req);
+    expect(t.state.identities.get("i1")).toMatchObject({ htmlSignature: "<p>Home</p>", textSignature: "Home" });
+    await t.settings.setSignatureDefaults(t.sessionId, "acc1", { newMessage: null, reply: null }, req);
+    expect(t.state.identities.get("i1")).toMatchObject({ htmlSignature: "", textSignature: "" });
+
+    // A refused mirror is reported, not fatal: the signature is still saved.
+    t.state.refuseIdentity = true;
+    const out = await t.settings.setSignatureDefaults(t.sessionId, "acc1", { newMessage: homeId, reply: null }, req);
+    expect(out).toMatchObject({ mirrored: false, defaults: { newMessage: homeId } });
+    expect(JSON.stringify(t.uow.state.audit)).not.toMatch(/Sam|Home</);
+  });
+
+  it("refuses a change aimed at another mailbox than the active one", async () => {
+    const t = await setup();
+    await expect(t.settings.createSignature(t.sessionId, "acc2", { name: "X", html: "<p>x</p>" }, req)).rejects.toThrow(
+      /active mailbox/,
+    );
+    await expect(t.settings.signatures("no-such-session", req)).rejects.toThrow(/signed out/);
   });
 });

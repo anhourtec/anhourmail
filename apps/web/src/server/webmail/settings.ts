@@ -3,7 +3,14 @@ import { z } from "zod";
 
 import type { RequestMeta } from "@anhourmail/core";
 import { maskEmail } from "@anhourmail/core/audit";
-import { FORWARDING_LINK_HOURS, type ForwardingView, type WebmailSettingsService } from "@anhourmail/core/webmail";
+import {
+  FORWARDING_LINK_HOURS,
+  type ForwardingView,
+  type SignatureChange,
+  type WebmailSettingsService,
+  type WebmailSignaturesService,
+} from "@anhourmail/core/webmail";
+import { SIGNATURE_HTML_MAX, type SignatureSet } from "@anhourmail/shared/signatures";
 import type { WebmailPreferences } from "@anhourmail/shared/webmail";
 import { log } from "@anhourmail/server/log";
 
@@ -11,6 +18,7 @@ import { forwardingConfirmEmail } from "../mail/system-email";
 import { type Identity, sendingTier } from "./compose";
 import { type Junk, type JunkInput, type MailRules, type Vacation, VacationInput, zoneOffset } from "./sieve";
 import { type RulesState, WebmailRefusedError, WebmailSignedOutError, type WebmailService } from "./service";
+import { cleanSignature, identitySignature, textAsHtml } from "./signature-html";
 
 /**
  * Webmail settings (docs/internal/05-webmail.md "Settings"): the one place that joins the control plane
@@ -20,7 +28,14 @@ import { type RulesState, WebmailRefusedError, WebmailSignedOutError, type Webma
 
 type MailServer = Pick<
   WebmailService,
-  "session" | "identities" | "quota" | "mailRules" | "saveMailRules" | "updateIdentity"
+  | "session"
+  | "identities"
+  | "quota"
+  | "mailRules"
+  | "saveMailRules"
+  | "updateIdentity"
+  | "legacySignature"
+  | "mirrorSignature"
 >;
 type Mailer = { send(message: ReturnType<typeof forwardingConfirmEmail>): Promise<void> };
 
@@ -49,18 +64,30 @@ export const IdentityChange = z
           .trim(),
       )
       .optional(),
-    signature: z
-      .string()
-      .max(2_000)
-      .transform((s) =>
-        s
-          .replace(/\r\n?/g, "\n")
-          .replace(/[^\P{Cc}\n\t]/gu, "")
-          .replace(/\s+$/u, ""),
-      )
-      .optional(),
   })
-  .refine((v) => v.name !== undefined || v.signature !== undefined, { message: "Nothing to change." });
+  .refine((v) => v.name !== undefined, { message: "Nothing to change." });
+
+/** The longest signature request body: the HTML cap plus room for JSON escaping and the name. */
+export const MAX_SIGNATURE_BODY = SIGNATURE_HTML_MAX * 2 + 4096;
+
+/** A new signature or a change to one (the HTML is sanitised by `cleanSignature` before anything is stored). */
+export const SignatureInput = z.object({
+  name: z.string().max(200).optional(),
+  html: z
+    .string()
+    .max(SIGNATURE_HTML_MAX * 2)
+    .optional(),
+});
+
+const sigId = z.uuid().nullable();
+export const SignatureDefaultsInput = z.object({ newMessage: sigId, reply: sigId });
+
+/**
+ * A signature change as the browser gets it: the set; whether the mail server's identities took the new default for
+ * other mail apps (`mirrored`), and whether they got a shortened copy (`shortened`: the server keeps about 2 KB, so a
+ * signature with images goes there without them).
+ */
+export type SignatureResult = SignatureSet & { mirrored: boolean; shortened: boolean };
 
 export const VacationChange = z.object({ vacation: VacationInput, timeZone: z.string().max(64) });
 
@@ -69,6 +96,7 @@ export class WebmailSettings {
     private readonly d: {
       mail: MailServer;
       settings: WebmailSettingsService;
+      signatures: WebmailSignaturesService;
       mailer: Mailer;
       webmailUrl: string;
       /** The deployment's public site host, for the footer of the confirmation email. */
@@ -141,12 +169,8 @@ export class WebmailSettings {
     const { address } = await this.#pinned(sessionId, account);
     const updated = await this.d.mail.updateIdentity(sessionId, account, identityId, {
       ...(change.name !== undefined ? { name: change.name } : {}),
-      ...(change.signature !== undefined ? { signature: change.signature } : {}),
     });
-    const fields = [
-      ...(change.name !== undefined ? ["name"] : []),
-      ...(change.signature !== undefined ? ["signature"] : []),
-    ];
+    const fields = change.name !== undefined ? ["name"] : [];
     await this.d.settings.recordMailFlow(
       address,
       "identity.changed",
@@ -154,6 +178,99 @@ export class WebmailSettings {
       req,
     );
     return updated;
+  }
+
+  // ---- signatures (docs/internal/05-webmail.md "Signatures") ---------------------------------------------------
+
+  /**
+   * The mailbox's signatures and defaults. The first time, the signature its addresses had from before named
+   * signatures is brought over as "Signature" (the default for both kinds of message), once.
+   */
+  async signatures(sessionId: string, req: RequestMeta): Promise<SignatureSet> {
+    const address = await this.#address(sessionId);
+    const list = await this.d.signatures.list(address);
+    if (list.started || list.signatures.length > 0) return { signatures: list.signatures, defaults: list.defaults };
+    const old = await this.d.mail.legacySignature(sessionId);
+    if (!old) return { signatures: list.signatures, defaults: list.defaults };
+    // Old signatures were plain text with an escaped HTML twin; another mail app may have written real HTML.
+    const source = old.html.trim() !== "" ? old.html : textAsHtml(old.text);
+    const clean = cleanSignature(source);
+    const content = clean.problem === null && clean.html !== "" ? clean : cleanSignature(textAsHtml(old.text));
+    if (content.problem !== null || content.html === "")
+      return { signatures: list.signatures, defaults: list.defaults };
+    const made = await this.d.signatures.bringOver(address, { html: content.html, text: content.text }, req);
+    if (!made) {
+      const again = await this.d.signatures.list(address);
+      return { signatures: again.signatures, defaults: again.defaults };
+    }
+    // The identities keep what they had (it is the same signature); nothing to mirror yet.
+    return { signatures: made.signatures, defaults: made.defaults };
+  }
+
+  /** Mirrors the new default for new messages into the identities when it changed; logs a failure (no content). */
+  async #mirror(sessionId: string, account: string, change: SignatureChange): Promise<SignatureResult> {
+    const out = { signatures: change.signatures, defaults: change.defaults };
+    if (change.mirror === undefined) return { ...out, mirrored: true, shortened: false };
+    const copy = identitySignature(change.mirror);
+    try {
+      const mirrored = await this.d.mail.mirrorSignature(sessionId, account, { html: copy.html, text: copy.text });
+      return { ...out, mirrored, shortened: mirrored && !copy.complete };
+    } catch (err) {
+      if (err instanceof WebmailSignedOutError) throw err;
+      log.warn("signature mirror to identities failed", { component: "webmail", err });
+      return { ...out, mirrored: false, shortened: false };
+    }
+  }
+
+  #content(html: string): { html: string; text: string } {
+    const clean = cleanSignature(html);
+    if (clean.problem !== null) throw new WebmailRefusedError(clean.problem);
+    return { html: clean.html, text: clean.text };
+  }
+
+  async createSignature(
+    sessionId: string,
+    account: string,
+    input: z.infer<typeof SignatureInput>,
+    req: RequestMeta,
+  ): Promise<SignatureResult> {
+    const { address } = await this.#pinned(sessionId, account);
+    const content = this.#content(input.html ?? "");
+    const change = await this.d.signatures.create(address, { name: input.name, ...content }, req);
+    return this.#mirror(sessionId, account, change);
+  }
+
+  async updateSignature(
+    sessionId: string,
+    account: string,
+    id: string,
+    input: z.infer<typeof SignatureInput>,
+    req: RequestMeta,
+  ): Promise<SignatureResult> {
+    const { address } = await this.#pinned(sessionId, account);
+    const content = input.html === undefined ? {} : this.#content(input.html);
+    const change = await this.d.signatures.update(
+      address,
+      id,
+      { ...(input.name !== undefined ? { name: input.name } : {}), ...content },
+      req,
+    );
+    return this.#mirror(sessionId, account, change);
+  }
+
+  async removeSignature(sessionId: string, account: string, id: string, req: RequestMeta): Promise<SignatureResult> {
+    const { address } = await this.#pinned(sessionId, account);
+    return this.#mirror(sessionId, account, await this.d.signatures.remove(address, id, req));
+  }
+
+  async setSignatureDefaults(
+    sessionId: string,
+    account: string,
+    defaults: z.infer<typeof SignatureDefaultsInput>,
+    req: RequestMeta,
+  ): Promise<SignatureResult> {
+    const { address } = await this.#pinned(sessionId, account);
+    return this.#mirror(sessionId, account, await this.d.signatures.setDefaults(address, defaults, req));
   }
 
   /**

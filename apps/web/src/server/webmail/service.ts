@@ -185,11 +185,6 @@ export type ManagedSieve = {
   write(accountId: string, script: string): Promise<void>;
 };
 
-const escapeHtml = (s: string) =>
-  s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
-/** The HTML twin of a plain-text signature: escaped text with line breaks, nothing else (no links, no images). */
-export const signatureHtml = (text: string): string =>
-  text === "" ? "" : `<div>${text.split("\n").map(escapeHtml).join("<br>")}</div>`;
 /** At most this many recipients of one message are saved to Other contacts. */
 const MAX_AUTO_SAVE = 100;
 /** Cards per `ContactCard/get` (the server's `getMaxResults`); MAX_CONTACTS / CARD_BATCH ≤ 16 calls a request. */
@@ -1679,22 +1674,21 @@ export class WebmailService {
     return { used: octets?.used ?? 0, limit: typeof octets?.hardLimit === "number" ? octets.hardLimit : null };
   }
 
-  /** Changes one of the mailbox's own identities: the sender name and/or the plain-text signature (+ its HTML twin). */
+  /**
+   * Changes the sender name of one of the mailbox's own identities. Signatures are named signatures now
+   * (`mirrorSignature` copies the default into every identity).
+   */
   async updateIdentity(
     sessionId: string,
     account: string,
     identityId: string,
-    change: { name?: string; signature?: string },
+    change: { name?: string },
   ): Promise<Identity> {
     this.#identities.delete(account);
     const own = (await this.identities(sessionId)).find((i) => i.id === identityId);
     if (!own) throw new WebmailRefusedError("That address isn't one of yours.");
     const patch: Record<string, string> = {};
     if (change.name !== undefined) patch.name = change.name;
-    if (change.signature !== undefined) {
-      patch.textSignature = change.signature;
-      patch.htmlSignature = signatureHtml(change.signature);
-    }
     const r = await this.#call(
       sessionId,
       (x) => [["Identity/set", { accountId: x.accountId, update: { [identityId]: patch } }, "u"]],
@@ -1704,11 +1698,69 @@ export class WebmailService {
     this.#identities.delete(account);
     const updated = r.get("u")?.updated as Record<string, unknown> | undefined;
     if (!updated || !(identityId in updated)) throw new WebmailRefusedError("That change wasn't saved.");
-    return {
-      ...own,
-      ...(change.name !== undefined ? { name: change.name } : {}),
-      ...(change.signature !== undefined ? { signature: change.signature } : {}),
-    };
+    return { ...own, ...(change.name !== undefined ? { name: change.name } : {}) };
+  }
+
+  /**
+   * The signature the mailbox's identities carry on the mail server from before named signatures (ADR-0014): the
+   * mailbox's own address first, then any other address that has one. Plain text, and the HTML when one is set.
+   */
+  async legacySignature(sessionId: string): Promise<{ text: string; html: string } | null> {
+    const s = await this.session(sessionId);
+    if (!s) throw new WebmailSignedOutError("signed out");
+    const r = await this.#call(
+      sessionId,
+      (x) => [
+        [
+          "Identity/get",
+          { accountId: x.accountId, ids: null, properties: ["email", "textSignature", "htmlSignature"] },
+          "i",
+        ],
+      ],
+      USING_SUBMISSION,
+    );
+    const list = (r.get("i")?.list ?? []) as {
+      email: string;
+      textSignature?: string | null;
+      htmlSignature?: string | null;
+    }[];
+    const has = (i: (typeof list)[number]) =>
+      (i.textSignature ?? "").trim() !== "" || (i.htmlSignature ?? "").trim() !== "";
+    const own = s.username.toLowerCase();
+    const pick = list.find((i) => i.email.toLowerCase() === own && has(i)) ?? list.find(has);
+    return pick ? { text: pick.textSignature ?? "", html: pick.htmlSignature ?? "" } : null;
+  }
+
+  /**
+   * Copies the default signature for new messages into every one of the mailbox's identities (`htmlSignature` +
+   * `textSignature`; empty for none), so other JMAP mail apps and server-side features see it. The HTML was sanitised
+   * on save. Returns whether every identity took it.
+   */
+  async mirrorSignature(
+    sessionId: string,
+    account: string,
+    signature: { html: string; text: string } | null,
+  ): Promise<boolean> {
+    this.#identities.delete(account);
+    const ids = (await this.identities(sessionId)).map((i) => i.id);
+    if (ids.length === 0) return true;
+    const patch = { htmlSignature: signature?.html ?? "", textSignature: signature?.text ?? "" };
+    const r = await this.#call(
+      sessionId,
+      (x) => [
+        ["Identity/set", { accountId: x.accountId, update: Object.fromEntries(ids.map((id) => [id, patch])) }, "u"],
+      ],
+      USING_SUBMISSION,
+      account,
+    );
+    this.#identities.delete(account);
+    const updated = (r.get("u")?.updated ?? {}) as Record<string, unknown>;
+    const refused = Object.values((r.get("u")?.notUpdated ?? {}) as Record<string, { type?: unknown }>);
+    if (refused.length > 0) {
+      const type = refused[0]?.type;
+      log.warn("identity signature not saved", { component: "webmail", type: typeof type === "string" ? type : "" });
+    }
+    return ids.every((id) => id in updated);
   }
 
   /**

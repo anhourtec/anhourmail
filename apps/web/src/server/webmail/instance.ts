@@ -2,7 +2,12 @@
 import "server-only";
 
 import { db, pgMailboxStatusLookup } from "@anhourmail/adapters/postgres";
-import { MailboxAccessGate, PasswordChangeGate, WebmailSettingsService } from "@anhourmail/core/webmail";
+import {
+  MailboxAccessGate,
+  PasswordChangeGate,
+  WebmailSettingsService,
+  WebmailSignaturesService,
+} from "@anhourmail/core/webmail";
 import { keyRingFromEnv } from "@anhourmail/server/keyring";
 import { type FailureStore, redisFailureStore, redisSlidingQuota } from "@anhourmail/server/rate-limit";
 import { redis } from "@anhourmail/server/redis";
@@ -145,6 +150,7 @@ export function webmailSettings(): WebmailSettings {
   settingsInstance ??= new WebmailSettings({
     mail: webmail(),
     settings: settingsService(),
+    signatures: new WebmailSignaturesService(container().deps),
     mailer: container().mailer,
     webmailUrl: env().WEBMAIL_URL,
     siteHost: platform().hosts.site,

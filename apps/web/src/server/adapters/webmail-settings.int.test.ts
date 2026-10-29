@@ -15,7 +15,7 @@ import { hashPassword } from "@anhourmail/adapters/auth";
 import { MemoryUnitOfWork } from "@anhourmail/adapters/memory";
 import type { MailMessage } from "@anhourmail/adapters/mail";
 import { systemClock } from "@anhourmail/core";
-import { WebmailSettingsService } from "@anhourmail/core/webmail";
+import { WebmailSettingsService, WebmailSignaturesService } from "@anhourmail/core/webmail";
 import { memorySlidingQuota } from "@anhourmail/server/rate-limit";
 import { createKeyRing } from "@anhourmail/server/keyring";
 import { stalwartDevAdmin } from "@anhourmail/stalwart-client";
@@ -205,6 +205,7 @@ describe("webmail settings on the dev Stalwart", () => {
   const settings = new WebmailSettings({
     mail,
     settings: core,
+    signatures: new WebmailSignaturesService({ uow, clock: systemClock, platform: PUBLIC_PLATFORM }),
     mailer: { send: async (m) => void sent.push(m) },
     webmailUrl: WEBMAIL_URL,
     siteHost: PUBLIC_PLATFORM.hosts.site,
@@ -435,5 +436,62 @@ describe("webmail settings on the dev Stalwart", () => {
     }))) as { methodResponses: [string, { list: { name: string; isActive: boolean }[] }, string][] };
     const names = (scripts.methodResponses[0]?.[1].list ?? []).map((x) => x.name);
     expect(names).not.toContain("mine");
+  }, 60_000);
+
+  it("brings the old signature over, then mirrors the default for new messages into the identities", async () => {
+    // The mailbox's identity as an older webmail left it: a plain-text signature with no HTML.
+    expect(await mail.mirrorSignature(ownerSession, account, { html: "", text: `Old ${run}` })).toBe(true);
+    const first = await settings.signatures(ownerSession, req);
+    expect(first.signatures).toEqual([
+      { id: first.defaults.newMessage, name: "Signature", html: `<div>Old ${run}</div>`, text: `Old ${run}` },
+    ]);
+    expect(first.defaults.reply).toBe(first.defaults.newMessage);
+    expect((await settings.signatures(ownerSession, req)).signatures).toHaveLength(1);
+
+    // A full-size signature: three embedded images just under the per-image cap. Stalwart stores it as sent.
+    const png = (n: number) =>
+      `data:image/png;base64,${Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        Buffer.alloc(n),
+      ]).toString("base64")}`;
+    const html = `<p><b>Sam</b> ${run}</p>${[1, 2, 3].map(() => `<img src="${png(60 * 1024)}" alt="Logo">`).join("")}`;
+    const made = await settings.createSignature(
+      ownerSession,
+      account,
+      { name: "Logo", html: `${html}<img src="https://tracker.example/p.gif">` },
+      req,
+    );
+    const logo = made.signatures.find((x) => x.name === "Logo");
+    expect(logo?.html).not.toContain("tracker.example");
+    expect(logo?.html.length).toBeGreaterThan(240_000);
+    const set = await settings.setSignatureDefaults(
+      ownerSession,
+      account,
+      { newMessage: logo?.id ?? null, reply: first.defaults.newMessage },
+      req,
+    );
+    // The mail server keeps about 2 KB per identity signature: other mail apps get it without the images.
+    expect(set).toMatchObject({ mirrored: true, shortened: true });
+    expect(await mail.legacySignature(ownerSession)).toEqual({ html: `<p><b>Sam</b> ${run}</p>`, text: `Sam ${run}` });
+    // A small one goes there as it is.
+    const small = await settings.createSignature(
+      ownerSession,
+      account,
+      { name: "Small", html: `<p style="color: rgb(37, 99, 235)">Small ${run}</p>` },
+      req,
+    );
+    const smallId = small.signatures.find((x) => x.name === "Small")?.id ?? null;
+    const done = await settings.setSignatureDefaults(ownerSession, account, { newMessage: smallId, reply: null }, req);
+    expect(done).toMatchObject({ mirrored: true, shortened: false });
+    expect(await mail.legacySignature(ownerSession)).toEqual({
+      html: `<p style="color: rgb(37, 99, 235)">Small ${run}</p>`,
+      text: `Small ${run}`,
+    });
+
+    // "(No signature)" for new messages empties the identities.
+    await settings.setSignatureDefaults(ownerSession, account, { newMessage: null, reply: null }, req);
+    expect(await mail.legacySignature(ownerSession)).toBeNull();
+    // The audit trail has ids, counts and sizes only (the run tag is also in the mailbox address).
+    expect(JSON.stringify(uow.state.audit)).not.toMatch(/Old |Small |Sam<|<p|data:image|"Logo"/);
   }, 60_000);
 });
