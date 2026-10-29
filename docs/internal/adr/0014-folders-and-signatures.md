@@ -120,3 +120,27 @@ keys can act inside a mailbox (`Mailbox/get`/`set` on a customer → `forbidden`
   scheduler's keys don't have). Letting the web app create a missing Archive on first use would mean adding
   `jmapMailbox{Get,Create,Update}` to the operations key: a key-scope change that needs a security review and new
   keys in production.
+
+## Update (2026-10-29, evening) — named signatures built
+
+Signatures decision 1 and 2 are now built, with these changes from the original wording (05-webmail.md "Signatures"):
+
+- **Per mailbox, not per identity.** A mailbox keeps up to 20 named signatures and two defaults (new messages;
+  replies and forwards), each may be none. Any of its addresses can use any signature, and changing From keeps the
+  chosen one. Per-address defaults are left as a later override. Stored in `webmail_signature` (migration 0023), not
+  the planned `signature` + `signature_default` pair: the defaults are two flags with partial unique indexes, so
+  deleting a default simply leaves none.
+- **Images are embedded `data:` images**, not uploaded blobs sent as `cid:`: PNG, JPEG, GIF or WebP whose bytes match
+  the type, 64 KB each, 3 per signature, 300 KB in all (`WEBMAIL_SIGNATURES` in `packages/shared`). https and `cid:`
+  images and CSS `url()` are removed on save (`signature-html.ts`, the outgoing sanitiser's `embeddedImagesOnly`
+  mode). They are sent inside the HTML part as the composer already sends pasted images; converting them to `cid:`
+  parts at send time, for mail apps that don't show `data:` images, is open.
+- **Mirror to the identities is size-limited.** Stalwart v0.16.27 keeps at most 2,047 bytes per `htmlSignature` or
+  `textSignature` (2,048 is refused with `invalidProperties`; measured with the integration test). The default for
+  new messages is copied to every identity of the mailbox as its HTML when it fits, else without images, else as its
+  text; the settings panel says when the copy is shorter or failed. The drift check (Consequences) is still open.
+- **The old single signature** (the plain-text `Identity.textSignature` the webmail used to edit) is brought over once
+  as "Signature", the default for both, the first time the mailbox's signatures are read
+  (`webmail_preference.signatures_started_at` makes it once only). The identity route now changes the sender name
+  only.
+- Templates, the disclaimer and shared-mailbox signature sets (decisions 3–5) are unchanged and still ahead.
