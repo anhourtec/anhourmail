@@ -5,6 +5,7 @@ import { type AccessRepository, ConflictError, type Repositories, type UnitOfWor
 import type { AccountRepository } from "@anhourmail/core/account";
 import type { AliasRepository, MailAlias } from "@anhourmail/core/aliases";
 import type { AppPassword, AppPasswordRepository } from "@anhourmail/core/app-passwords";
+import { type AvatarRepository, avatarVersion, type StoredAvatar } from "@anhourmail/core/avatars";
 import type { Invite, InviteRepository, PeopleRepository } from "@anhourmail/core/people";
 import type {
   AccountSummary,
@@ -112,6 +113,8 @@ export type MemoryState = {
   profiles: Record<string, ProfileDetails>;
   /** People who must choose a new console password first (Postgres: `user_profile.must_change_password`). */
   mustChangePassword: string[];
+  /** Profile photos by owner (Postgres: `avatar`). */
+  avatars: StoredAvatar[];
 };
 
 export const emptyState = (): MemoryState => ({
@@ -149,6 +152,7 @@ export const emptyState = (): MemoryState => ({
   mailboxHolds: [],
   profiles: {},
   mustChangePassword: [],
+  avatars: [],
 });
 
 const EPOCH = new Date(0);
@@ -971,7 +975,41 @@ function repositories(s: MemoryState): Repositories {
     },
   };
 
+  const toAvatarMailbox = (m: Mailbox) => ({ id: m.id, accountId: m.accountId, address: m.address, userId: m.userId });
+  const avatars: AvatarRepository = {
+    get: async (owner) => clone(s.avatars.find((a) => a.owner.kind === owner.kind && a.owner.id === owner.id) ?? null),
+    versions: async (owners) =>
+      owners.flatMap((o) => {
+        const a = s.avatars.find((x) => x.owner.kind === o.kind && x.owner.id === o.id);
+        return a ? [{ kind: o.kind, id: o.id, version: avatarVersion(a.sha256) }] : [];
+      }),
+    set: async (owner, image, at) => {
+      // Like the foreign keys in Postgres: a photo belongs to a person or a mailbox that exists.
+      const exists =
+        owner.kind === "person"
+          ? s.userEmails[owner.id] !== undefined || s.memberships.some((m) => m.userId === owner.id)
+          : s.mailboxes.some((m) => m.id === owner.id);
+      if (!exists) throw new Error(`no ${owner.kind} ${owner.id}`);
+      s.avatars = s.avatars.filter((a) => !(a.owner.kind === owner.kind && a.owner.id === owner.id));
+      s.avatars.push({ owner: { ...owner }, ...clone(image), updatedAt: at });
+    },
+    remove: async (owner) => {
+      const before = s.avatars.length;
+      s.avatars = s.avatars.filter((a) => !(a.owner.kind === owner.kind && a.owner.id === owner.id));
+      return s.avatars.length < before;
+    },
+    mailboxesByAddress: async (addresses) => {
+      const wanted = new Set(addresses.map((a) => a.trim().toLowerCase()));
+      return s.mailboxes.filter((m) => wanted.has(m.address)).map(toAvatarMailbox);
+    },
+    mailboxById: async (id) => {
+      const m = s.mailboxes.find((x) => x.id === id);
+      return m ? toAvatarMailbox(m) : null;
+    },
+  };
+
   return {
+    avatars,
     suspensions,
     webmailSettings,
     appPasswords,

@@ -52,6 +52,7 @@ import type { Db, Executor } from "./client";
 import { PgAppPasswordRepository, PgCatchAllRepository } from "./app-passwords";
 import { PgSecurityRepository } from "./security";
 import { PgWebmailSettingsRepository } from "./webmail-settings";
+import { PgAvatarRepository } from "./avatars";
 import {
   accountMembership,
   auditLog,
@@ -1527,6 +1528,7 @@ class PgSuspensionRepository implements SuspensionRepository {
 }
 
 const repositories = (x: Executor): Repositories => ({
+  avatars: new PgAvatarRepository(x),
   suspensions: new PgSuspensionRepository(x),
   audit: new PgAuditRepository(x),
   access: new PgAccessRepository(x),

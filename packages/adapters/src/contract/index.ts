@@ -1551,5 +1551,90 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         await cleanup();
       }
     });
+
+    it("avatars: one photo per person or mailbox, replaced on upload, versions, lookups by address and id", async () => {
+      const { uow, cleanup, createUser } = await factory();
+      try {
+        const tag = randomUUID().slice(0, 8);
+        const a = await uow.run((r) => r.accounts.create({ name: "Contract avatars", plan: "plus" }));
+        const userId = await createUser(`photo-${tag}@example.com`);
+        await uow.run((r) => r.accounts.addMember({ accountId: a.id, userId, role: "member" }));
+        const box = {
+          id: randomUUID(),
+          accountId: a.id,
+          userId: null,
+          address: `shared-${tag}@contract.example.ca`,
+          status: "active" as const,
+          quotaBytes: 1024,
+          stalwartId: null,
+          lastError: null,
+          purgeAfter: null,
+          createdAt: new Date(),
+        };
+        const owned = { ...box, id: randomUUID(), userId, address: `own-${tag}@contract.example.ca` };
+        await uow.run(async (r) => {
+          await r.mailboxes.insert(box);
+          await r.mailboxes.insert(owned);
+        });
+        const person = { kind: "person" as const, id: userId };
+        const mbx = { kind: "mailbox" as const, id: box.id };
+        const image = (fill: number) => {
+          const bytes = new Uint8Array(64).fill(fill);
+          return { contentType: "image/webp" as const, bytes, sha256: fill.toString(16).padStart(2, "0").repeat(32) };
+        };
+
+        expect(await uow.run((r) => r.avatars.get(person))).toBeNull();
+        expect(await uow.run((r) => r.avatars.versions([person, mbx]))).toEqual([]);
+        const at = new Date("2026-10-29T10:00:00Z");
+        await uow.run((r) => r.avatars.set(person, image(1), at));
+        await uow.run((r) => r.avatars.set(mbx, image(2), at));
+        const got = await uow.run((r) => r.avatars.get(person));
+        expect(got?.owner).toEqual(person);
+        expect(got?.contentType).toBe("image/webp");
+        expect(Array.from(got?.bytes ?? [])).toEqual(Array.from(image(1).bytes));
+        expect(got?.sha256).toBe(image(1).sha256);
+
+        // Replacing keeps one row; the version follows the content hash.
+        await uow.run((r) => r.avatars.set(person, image(3), new Date("2026-10-29T11:00:00Z")));
+        const versions = await uow.run((r) => r.avatars.versions([person, mbx, { kind: "mailbox", id: "not-a-uuid" }]));
+        expect(versions.sort((x, y) => x.kind.localeCompare(y.kind))).toEqual([
+          { kind: "mailbox", id: box.id, version: "02".repeat(8) },
+          { kind: "person", id: userId, version: "03".repeat(8) },
+        ]);
+        expect((await uow.run((r) => r.avatars.get(person)))?.bytes[0]).toBe(3);
+
+        // Mailboxes as photos see them: by address (normalised, any account) and by id; unknown ones are left out.
+        expect(
+          await uow.run((r) => r.avatars.mailboxesByAddress([` ${owned.address.toUpperCase()} `, "nobody@x.test"])),
+        ).toEqual([{ id: owned.id, accountId: a.id, address: owned.address, userId }]);
+        expect(await uow.run((r) => r.avatars.mailboxById(box.id))).toEqual({
+          id: box.id,
+          accountId: a.id,
+          address: box.address,
+          userId: null,
+        });
+        expect(await uow.run((r) => r.avatars.mailboxById(randomUUID()))).toBeNull();
+        expect(await uow.run((r) => r.avatars.mailboxById("not-a-uuid"))).toBeNull();
+
+        // A photo needs an owner that exists; removing is conditional; a rolled-back change leaves nothing.
+        await expect(
+          uow.run((r) => r.avatars.set({ kind: "mailbox", id: randomUUID() }, image(4), at)),
+        ).rejects.toThrow();
+        await expect(
+          uow.run(async (r) => {
+            await r.avatars.remove(person);
+            throw new Error("boom");
+          }),
+        ).rejects.toThrow("boom");
+        expect(await uow.run((r) => r.avatars.get(person))).not.toBeNull();
+        expect(await uow.run((r) => r.avatars.remove(person))).toBe(true);
+        expect(await uow.run((r) => r.avatars.remove(person))).toBe(false);
+        expect(await uow.run((r) => r.avatars.get(person))).toBeNull();
+        expect(await uow.run((r) => r.avatars.remove({ kind: "mailbox", id: "not-a-uuid" }))).toBe(false);
+        expect(await uow.run((r) => r.avatars.get(mbx))).not.toBeNull();
+      } finally {
+        await cleanup();
+      }
+    });
   });
 }
