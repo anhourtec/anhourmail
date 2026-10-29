@@ -21,7 +21,13 @@ import { WEBMAIL_HTML } from "@anhourmail/shared";
  * - Images keep https, `cid:` and raster `data:` images up to `MAX_DATA_IMAGE_BYTES`; remote images are counted
  *   so the composer can warn that they may be trackers.
  * - Inline `style` keeps only allow-listed CSS properties; `url()` survives only for https and raster data images,
- *   and `expression()`, `behavior`, `-moz-binding`, `@import` and `position` other than static/relative are dropped.
+ *   and `expression()`, `behavior`, `-moz-binding`, `@import`, `var()`, `env()`, `attr()` and `position` other than
+ *   static/relative are dropped.
+ * - The properties the composer's toolbar writes (colour, highlight, font, size, alignment, indent, strikethrough)
+ *   and the legacy `<font>` attributes must also match a narrow value grammar (`STRICT_CSS`, `fontAttribute`):
+ *   colours as `#hex`, `rgb()`/`rgba()` or a plain colour word; font families as a short list of plain names;
+ *   sizes and spacing as bounded, non-negative lengths; alignment and decoration as keywords. Anything else in those
+ *   properties is dropped, so no function, escape or unit trick gets through them.
  * - The whole input is capped at `MAX_OUTGOING_HTML` characters.
  */
 
@@ -109,14 +115,18 @@ const CSS_PROPS = new Set([
 
 /** Decodes CSS escapes (`\75 rl(` → `url(`) and drops comments, so checks see what a mail app would. */
 function decodeCss(css: string): string {
-  return css
-    .replace(/\/\*[\s\S]*?(?:\*\/|$)/g, "")
-    .replace(/\\([0-9a-fA-F]{1,6})\s?/g, (_m, hex: string) => {
-      const code = Number.parseInt(hex, 16);
-      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
-    })
-    .replace(/\\(.)/g, "$1")
-    .replace(/\\/g, "");
+  return (
+    css
+      .replace(/\/\*[\s\S]*?(?:\*\/|$)/g, "")
+      .replace(/\\([0-9a-fA-F]{1,6})\s?/g, (_m, hex: string) => {
+        const code = Number.parseInt(hex, 16);
+        return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
+      })
+      .replace(/\\(.)/g, "$1")
+      .replace(/\\/g, "")
+      // An escaped `/*` decodes into a comment opener the recipient's parser would honour: drop it too.
+      .replace(/\/\*[\s\S]*$/, "")
+  );
 }
 
 /** Splits declarations on `;` outside quotes and parentheses (a `data:` URL has its own `;`). Linear. */
@@ -139,6 +149,125 @@ function declarations(css: string): string[] {
   }
   out.push(css.slice(start));
   return out;
+}
+
+/** `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`. */
+const HEX_COLOR = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+/** `rgb(185, 28, 28)` / `rgba(0, 0, 0, 0.5)` as browsers write them: numbers (or percentages) and commas only. */
+const RGB_COLOR =
+  /^rgba?\(\s*\d{1,3}(?:\.\d{1,3})?%?\s*,\s*\d{1,3}(?:\.\d{1,3})?%?\s*,\s*\d{1,3}(?:\.\d{1,3})?%?\s*(?:,\s*(?:\d|\d?\.\d{1,3}|\d{1,3}%)\s*)?\)$/i;
+/** A colour keyword (`red`, `transparent`, `windowtext`): letters only, so nothing can hide in it. */
+const COLOR_WORD = /^[a-z]{3,20}$/i;
+
+/** A colour value: `#hex`, `rgb()`/`rgba()` or a colour keyword. */
+export const isSafeColor = (v: string): boolean => HEX_COLOR.test(v) || RGB_COLOR.test(v) || COLOR_WORD.test(v);
+
+/** One font family: a plain name (letters, digits, spaces, `-`, `_`), optionally in quotes. */
+const FAMILY = /^(?:[a-z0-9][a-z0-9 _-]{0,39}|"[a-z0-9][a-z0-9 _-]{0,39}"|'[a-z0-9][a-z0-9 _-]{0,39}')$/i;
+/** The most families one `font-family` may list. */
+const MAX_FAMILIES = 8;
+
+/** A `font-family` list of plain names (the composer writes `sans-serif`, `serif` or `monospace`). */
+export function isSafeFontFamily(v: string): boolean {
+  const parts = v.split(",");
+  return parts.length <= MAX_FAMILIES && parts.every((p) => FAMILY.test(p.trim()));
+}
+
+type Units = Partial<Record<"px" | "pt" | "em" | "rem" | "ex" | "%", number>>;
+
+/** Largest font size per unit (the composer writes keywords; pasted mail uses px and pt). */
+const FONT_SIZE_MAX: Units = { px: 96, pt: 72, em: 6, rem: 6, ex: 12, "%": 600 };
+/** Largest margin or padding per unit (indent steps are 40px; quotes use ex). */
+const SPACING_MAX: Units = { px: 400, pt: 300, em: 25, rem: 25, ex: 50, "%": 100 };
+
+const LENGTH = /^(\d{1,4}(?:\.\d{1,3})?|\.\d{1,3})(px|pt|em|rem|ex|%)$/i;
+
+/** A non-negative length within `max` for its unit; a bare `0` too. */
+function isLength(v: string, max: Units): boolean {
+  if (/^0(?:\.0+)?$/.test(v)) return true;
+  const m = LENGTH.exec(v);
+  if (!m?.[1] || !m[2]) return false;
+  const limit = max[m[2].toLowerCase() as keyof Units];
+  return limit !== undefined && Number(m[1]) <= limit;
+}
+
+const FONT_SIZE_WORDS = new Set([
+  "xx-small", "x-small", "small", "medium", "large", "x-large", "xx-large", "xxx-large", "smaller", "larger",
+]); // prettier-ignore
+
+/** A font size: a size keyword or a bounded length (0 is not a size). */
+export const isSafeFontSize = (v: string): boolean =>
+  FONT_SIZE_WORDS.has(v.toLowerCase()) || (!/^0(?:\.0+)?$/.test(v) && isLength(v, FONT_SIZE_MAX));
+
+/** One to four bounded, non-negative lengths (`auto` too, for margins). */
+const spacing =
+  (auto: boolean) =>
+  (v: string): boolean => {
+    const parts = v.split(/\s+/);
+    return parts.length <= 4 && parts.every((p) => (auto && p.toLowerCase() === "auto") || isLength(p, SPACING_MAX));
+  };
+
+const DECORATION_LINES = new Set(["none", "underline", "overline", "line-through"]);
+const DECORATION_STYLES = new Set(["solid", "double", "dotted", "dashed", "wavy"]);
+
+/** `text-decoration`: line and style keywords plus at most one colour. */
+function isSafeDecoration(v: string): boolean {
+  const functions = v.match(/rgba?\([^()]*\)/gi) ?? [];
+  if (!functions.every((m) => RGB_COLOR.test(m))) return false;
+  const parts = v
+    .replace(/rgba?\([^()]*\)/gi, " #000 ")
+    .trim()
+    .split(/\s+/);
+  if (parts.length > 4) return false;
+  const words = parts.filter((p) => DECORATION_LINES.has(p.toLowerCase()) || DECORATION_STYLES.has(p.toLowerCase()));
+  const colors = parts.filter((p) => !words.includes(p));
+  return colors.length <= 1 && colors.every(isSafeColor) && words.length >= 1;
+}
+
+const keywords =
+  (...words: string[]) =>
+  (v: string): boolean =>
+    v
+      .toLowerCase()
+      .split(/\s+/)
+      .every((w) => words.includes(w));
+
+/**
+ * The value grammar for the properties the composer writes (and the closely related ones a pasted message uses).
+ * A declaration of one of these properties is kept only when its whole value matches.
+ */
+export const STRICT_CSS: Readonly<Record<string, (value: string) => boolean>> = {
+  color: isSafeColor,
+  "background-color": isSafeColor,
+  "font-family": isSafeFontFamily,
+  "font-size": isSafeFontSize,
+  "text-align": (v) => /^(?:left|right|center|justify|start|end)$/i.test(v),
+  margin: spacing(true),
+  "margin-left": spacing(true),
+  "margin-right": spacing(true),
+  "margin-top": spacing(true),
+  "margin-bottom": spacing(true),
+  padding: spacing(false),
+  "padding-left": spacing(false),
+  "padding-right": spacing(false),
+  "padding-top": spacing(false),
+  "padding-bottom": spacing(false),
+  "text-decoration": isSafeDecoration,
+  "text-decoration-line": (v) => v.split(/\s+/).length <= 3 && keywords(...DECORATION_LINES)(v),
+  "text-decoration-style": keywords(...DECORATION_STYLES),
+  "text-decoration-color": isSafeColor,
+};
+
+/**
+ * The legacy `<font>` attributes (and `color`/`bgcolor` on any element) with the same grammar as their CSS
+ * counterparts; `size` is HTML's 1–7 (or a relative step). Returns false to drop the attribute.
+ */
+export function fontAttribute(name: string, value: string): boolean {
+  const v = value.trim();
+  if (name === "color" || name === "bgcolor") return isSafeColor(v);
+  if (name === "face") return isSafeFontFamily(v);
+  if (name === "size") return /^(?:[1-7]|[+-][1-6])$/.test(v);
+  return true;
 }
 
 const balancedQuotes = (v: string) => (v.split('"').length - 1) % 2 === 0 && (v.split("'").length - 1) % 2 === 0;
@@ -189,6 +318,9 @@ export function cleanOutgoingCss(input: string, counter: { remote: number } = { 
       value.replace(/url\s*\([^)]*\)/gi, "").includes(";") ||
       !balancedQuotes(value) ||
       /expression\s*\(|javascript:|vbscript:|behavior|-moz-binding|image-set\s*\(|element\s*\(/.test(lower) ||
+      // Custom properties and environment or attribute lookups would let the reader's app style the message.
+      /(?:var|env|attr)\s*\(/i.test(value) ||
+      (Object.hasOwn(STRICT_CSS, prop) && STRICT_CSS[prop]?.(value) !== true) ||
       (prop === "position" && !/^(?:static|relative)$/.test(lower)) ||
       urls === null ||
       urls.some((u) => !IMG_HTTPS.test(u) && !(DATA_IMAGE.test(u) && u.length <= MAX_DATA_IMAGE_BYTES)) ||
@@ -227,6 +359,10 @@ export function sanitizeOutgoingHtml(input: string): OutgoingHtml {
         continue;
       }
       if (name === "href" || name === "src" || name === "target" || name === "rel") continue;
+      if (!fontAttribute(name, raw)) {
+        removedAttributes.add(name);
+        continue;
+      }
       if (name === "type") {
         if (raw.trim().toLowerCase() === "cite") out.type = "cite";
         else removedAttributes.add("type");
@@ -250,6 +386,7 @@ export function sanitizeOutgoingHtml(input: string): OutgoingHtml {
     enforceHtmlBoundary: true,
     onOpenTag: (name, attribs) => {
       if (name === "details" && attribs[QUOTE_MARK] !== undefined) return; // a quote the reading view folded
+      if (name === "strike") return; // becomes `<s>`
       if (!ALLOWED_TAG_SET.has(name) && name !== "html" && name !== "body") {
         removedTags.add(/^[a-z][a-z0-9-]{0,40}$/i.test(name) ? name.toLowerCase() : "element");
       }
@@ -269,6 +406,8 @@ export function sanitizeOutgoingHtml(input: string): OutgoingHtml {
         else if (attribs.href !== undefined) removedAttributes.add("href");
         return { tagName, attribs: { ...out, target: "_blank", rel: "noopener noreferrer" } };
       },
+      // `<strike>` (what some editors write for strikethrough) is the same as `<s>`.
+      strike: (_tagName, attribs) => ({ tagName: "s", attribs: filter("s", attribs) }),
       // The reading view folds quoted replies into `<details data-am-quote>`; quoting that message again keeps them
       // quotes (its `summary` toggle is dropped with its label).
       details: (tagName, attribs) =>
@@ -302,6 +441,13 @@ export function sanitizeOutgoingHtml(input: string): OutgoingHtml {
   };
 }
 
+/** A line without its trailing spaces and tabs (a linear scan). */
+function trimLineEnd(line: string): string {
+  let end = line.length;
+  while (end > 0 && (line[end - 1] === " " || line[end - 1] === "\t")) end--;
+  return line.slice(0, end);
+}
+
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", nbsp: " " };
 
 /**
@@ -313,6 +459,9 @@ export const MAX_QUOTE_PREFIX = 8;
 /** Private-use markers for the start and end of a quote while the text is built (removed from the input first). */
 const QUOTE_OPEN = "\uE000";
 const QUOTE_CLOSE = "\uE001";
+/** Private-use markers for a line boundary (a `div` edge; a run of them is one line break) and an empty line. */
+const LINE = "\uE002";
+const EMPTY_LINE = "\uE003";
 
 /**
  * Prefixes the lines between quote markers with "> " per level (">" alone on an empty line) and drops the markers.
@@ -327,20 +476,21 @@ function quoteLines(text: string): string {
     return { kind: "text", text: line };
   });
   const blank = (i: Item | undefined) => i?.kind === "text" && i.text.trim() === "";
-  // The nearest item before / after `at` that isn't a blank line.
-  const near = (at: number, step: 1 | -1): Item | undefined => {
-    for (let i = at + step; i >= 0 && i < items.length; i += step) if (!blank(items[i])) return items[i];
-    return undefined;
-  };
-  const kept = items.filter((item, i) => {
-    if (!blank(item)) return true;
-    return (
-      near(i, -1)?.kind !== "open" &&
-      near(i, -1)?.kind !== "close" &&
-      near(i, 1)?.kind !== "open" &&
-      near(i, 1)?.kind !== "close"
-    );
-  });
+  // The nearest non-blank item before and after each index, in two passes (a long run of blank lines stays linear).
+  const before: (Item | undefined)[] = new Array<Item | undefined>(items.length);
+  const after: (Item | undefined)[] = new Array<Item | undefined>(items.length);
+  let last: Item | undefined;
+  for (let i = 0; i < items.length; i++) {
+    before[i] = last;
+    if (!blank(items[i])) last = items[i];
+  }
+  last = undefined;
+  for (let i = items.length - 1; i >= 0; i--) {
+    after[i] = last;
+    if (!blank(items[i])) last = items[i];
+  }
+  const marker = (i: Item | undefined) => i?.kind === "open" || i?.kind === "close";
+  const kept = items.filter((item, i) => !blank(item) || (!marker(before[i]) && !marker(after[i])));
   const out: string[] = [];
   let depth = 0;
   let separate = false;
@@ -359,9 +509,18 @@ function quoteLines(text: string): string {
 }
 
 /**
- * The text/plain alternative for sanitised HTML: block ends become line breaks, list items get a dash, links keep
- * their address in brackets when it differs from the text, and quoted replies (`blockquote`) get "> " per level.
- * Expects `sanitizeOutgoingHtml` output (attributes double-quoted and escaped), and is linear on it.
+ * Whether a sanitised `<blockquote …>` opening tag is an indent rather than a quote: it says `border: none` and
+ * isn't a cited reply. Browsers' "indent" command writes exactly that (`margin: 0 0 0 40px; border: none; …`).
+ */
+export function isIndentBlock(tag: string): boolean {
+  const style = /\sstyle="([^"]*)"/i.exec(tag)?.[1] ?? "";
+  return /(?:^|;)\s*border:\s*none\s*(?:;|$)/i.test(style) && !/\stype="cite"/i.test(tag);
+}
+
+/**
+ * The text/plain alternative for sanitised HTML: block ends become line breaks, list items get a dash or a number, links keep
+ * their address in brackets when it differs from the text, and quoted replies (`blockquote`) get "> " per level
+ * (indents don't). Expects `sanitizeOutgoingHtml` output (attributes double-quoted and escaped), and is linear on it.
  */
 export function outgoingText(html: string): string {
   const withLinks = html.replace(
@@ -373,18 +532,51 @@ export function outgoingText(html: string): string {
       return text === "" ? url : text === shown || text === url ? text : `${inner} (${url})`;
     },
   );
+  // An indent (the editor's "Indent" writes a borderless `<blockquote>`) is not a quote: its lines get no "> ".
+  const quotes: boolean[] = [];
+  const lists: { ordered: boolean; n: number }[] = [];
   const text = withLinks
-    .replace(/[\uE000\uE001]/g, "")
-    .replace(/<blockquote\b[^>]*>/gi, `\n${QUOTE_OPEN}\n`)
-    .replace(/<\/blockquote>/gi, `\n${QUOTE_CLOSE}\n`)
-    .replace(/<li\b[^>]*>/gi, "\n- ")
-    .replace(/<\/(?:p|div|tr|h[1-6]|blockquote|table|ul|ol|pre)>|<br\s*\/?>|<hr\s*\/?>/gi, "$&\n")
-    .replace(/<(?:p|div|h[1-6]|blockquote|table|ul|ol|pre)\b[^>]*>/gi, "\n$&")
+    .replace(/[\uE000-\uE003]/g, "")
+    // Editors write one `div` per line: its edges are line breaks, not paragraph breaks. A `div` holding only a
+    // `<br>` is an empty line; any other `<br>` that ends a block adds nothing (it only gives the block a height).
+    .replace(/<div\b[^>]*>\s*<br\s*\/?>\s*<\/div>/gi, `${LINE}${EMPTY_LINE}${LINE}`)
+    .replace(/<br\s*\/?>(?=\s*<\/(?:div|p|li|h[1-6])>)/gi, "")
+    .replace(/<\/?div\b[^>]*>/gi, LINE)
+    .replace(/<blockquote\b[^>]*>|<\/blockquote>/gi, (tag) => {
+      if (tag[1] === "/") return (quotes.pop() ?? true) ? `\n${QUOTE_CLOSE}\n` : LINE;
+      const quote = !isIndentBlock(tag);
+      quotes.push(quote);
+      return quote ? `\n${QUOTE_OPEN}\n` : LINE;
+    })
+    // List items get "- " (or "1. " in a numbered list), indented two spaces per nested list (capped).
+    .replace(/<(?:ul|ol)\b[^>]*>|<\/(?:ul|ol)>|<li\b[^>]*>/gi, (tag) => {
+      const t = tag.toLowerCase();
+      if (t.startsWith("</")) {
+        lists.pop();
+        return lists.length === 0 ? "\n\n" : "";
+      }
+      if (t.startsWith("<li")) {
+        const list = lists.at(-1);
+        if (!list) return "\n- ";
+        list.n += 1;
+        const indent = "  ".repeat(Math.min(lists.length - 1, MAX_QUOTE_PREFIX));
+        return `\n${indent}${list.ordered ? `${String(list.n)}.` : "-"} `;
+      }
+      lists.push({ ordered: t.startsWith("<ol"), n: 0 });
+      return lists.length === 1 ? "\n\n" : "";
+    })
+    .replace(/<\/(?:p|tr|h[1-6]|blockquote|table|pre)>|<br\s*\/?>|<hr\s*\/?>/gi, "$&\n")
+    .replace(/<(?:p|h[1-6]|blockquote|table|pre)\b[^>]*>/gi, "\n$&")
     .replace(/<\/t[dh]>/gi, "\t")
     .replace(/<[^>]*>/g, "")
     .replace(/\u00a0/g, " ")
     .replace(/&(amp|lt|gt|quot|#39|nbsp);/g, (_m, e: string) => ENTITIES[e] ?? "")
-    .replace(/[ \t]+\n/g, "\n")
+    .replace(/[ \t]*\uE002(?:[ \t]*\uE002)*[ \t]*/g, "\n")
+    .replace(/\uE003/g, "")
+    // Trailing spaces and tabs go per line by a scan: a regex like /[ \t]+\n/ is quadratic on a long run of spaces.
+    .split("\n")
+    .map(trimLineEnd)
+    .join("\n")
     .replace(/^[ \t]+/gm, (s) => (s.includes("\t") ? "" : s))
     .replace(/\n{3,}/g, "\n\n");
   return quoteLines(text)

@@ -3,12 +3,18 @@ import { describe, expect, it } from "vitest";
 
 import {
   cleanOutgoingCss,
+  fontAttribute,
+  isIndentBlock,
+  isSafeColor,
+  isSafeFontFamily,
+  isSafeFontSize,
   MAX_DATA_IMAGE_BYTES,
   MAX_OUTGOING_HTML,
   MAX_OUTGOING_STYLE,
   MAX_QUOTE_PREFIX,
   outgoingText,
   sanitizeOutgoingHtml,
+  STRICT_CSS,
 } from "./outgoing-html";
 
 const clean = (html: string) => sanitizeOutgoingHtml(html).html;
@@ -334,5 +340,323 @@ describe("outgoingText", () => {
 
   it("ignores stray quote markers in the input", () => {
     expect(outgoingText("<p>a\uE000b\uE001c</p>")).toBe("abc");
+  });
+});
+
+/** What the composer's toolbar writes in a Chromium-based browser (styleWithCSS on), as the editor holds it. */
+const TOOLBAR_HTML =
+  '<div><span style="color: rgb(185, 28, 28);">red</span> <span style="background-color: rgb(254, 240, 138);">marked</span></div>' +
+  '<div><span style="font-family: serif;">serif</span> <span style="font-family: monospace;">mono</span></div>' +
+  '<div><span style="font-size: small;">s</span> <span style="font-size: medium;">n</span> ' +
+  '<span style="font-size: x-large;">l</span> <span style="font-size: xx-large;">h</span></div>' +
+  '<div style="text-align: center;">centred</div><div style="text-align: right;">right</div>' +
+  '<blockquote style="margin: 0 0 0 40px; border: none; padding: 0px;"><div>indented</div></blockquote>' +
+  '<div><span style="text-decoration-line: line-through;">struck</span> <strike>old</strike></div>' +
+  "<ul><li>one</li><ul><li>nested</li></ul></ul>";
+
+describe("sanitizeOutgoingHtml: the composer's formatting", () => {
+  it("keeps every style the toolbar writes, unchanged", () => {
+    const r = sanitizeOutgoingHtml(TOOLBAR_HTML);
+    expect(r.html).toBe(
+      TOOLBAR_HTML.replace(/;"/g, '"')
+        .replace(/padding: 0px"/, 'padding: 0px"')
+        .replace("<strike>old</strike>", "<s>old</s>"),
+    );
+    expect(r.removedAttributes).toEqual([]);
+    expect(r.removedTags).toEqual([]);
+  });
+
+  it("is idempotent on the toolbar's output", () => {
+    const once = clean(TOOLBAR_HTML);
+    expect(clean(once)).toBe(once);
+  });
+
+  it("writes a sensible text part: no styles, no quote marks for an indent", () => {
+    expect(outgoingText(clean(TOOLBAR_HTML))).toBe(
+      [
+        "red marked",
+        "serif mono",
+        "s n l h",
+        "centred",
+        "right",
+        "indented",
+        "struck old",
+        "",
+        "- one",
+        "  - nested",
+      ].join("\n"),
+    );
+  });
+
+  it("still quotes a cited reply and a plain quote, even with a borderless style", () => {
+    expect(outgoingText(clean('<blockquote type="cite" style="border: none">a</blockquote>'))).toBe("> a");
+    expect(outgoingText(clean("<blockquote>a</blockquote>"))).toBe("> a");
+    expect(
+      outgoingText(clean('<blockquote style="margin: 0 0 0 0.8ex; border-left: 1px solid #ccc">a</blockquote>')),
+    ).toBe("> a");
+  });
+
+  it("mixes indents and quotes by nesting", () => {
+    const indent = '<blockquote style="margin: 0 0 0 40px; border: none; padding: 0px">';
+    expect(
+      outgoingText(
+        clean(`<div>top</div>${indent}<blockquote>q</blockquote>${indent}deep</blockquote></blockquote><div>end</div>`),
+      ),
+    ).toBe("top\n> q\n\ndeep\nend");
+  });
+
+  it("tells an indent from a quote", () => {
+    expect(isIndentBlock('<blockquote style="margin: 0 0 0 40px; border: none; padding: 0px">')).toBe(true);
+    expect(isIndentBlock('<blockquote style="border: none">')).toBe(true);
+    expect(isIndentBlock('<blockquote type="cite" style="border: none">')).toBe(false);
+    expect(isIndentBlock('<blockquote style="border: none 1px">')).toBe(false);
+    expect(isIndentBlock('<blockquote style="border-left: none">')).toBe(false);
+    expect(isIndentBlock('<blockquote title="border: none">')).toBe(false);
+    expect(isIndentBlock("<blockquote>")).toBe(false);
+  });
+
+  it("turns <strike> into <s> without reporting it removed", () => {
+    const r = sanitizeOutgoingHtml('<strike title="t" onclick="x()">old</strike>');
+    expect(r.html).toBe('<s title="t">old</s>');
+    expect(r.removedTags).toEqual([]);
+    expect(r.removedAttributes).toEqual(["onclick"]);
+  });
+});
+
+describe("cleanOutgoingCss: value grammars for the composer's properties", () => {
+  it.each([
+    "color: #b91c1c",
+    "color: #FFF",
+    "color: #0000ff80",
+    "color: rgb(185, 28, 28)",
+    "color: rgba(0, 0, 0, 0.5)",
+    "color: rgb(10%, 20%, 30%)",
+    "color: red",
+    "background-color: transparent",
+    "background-color: rgb(254, 240, 138)",
+    "font-family: sans-serif",
+    "font-family: serif",
+    "font-family: monospace",
+    "font-family: Arial, Helvetica, sans-serif",
+    "font-family: 'Segoe UI', \"Helvetica Neue\", sans-serif",
+    "font-size: small",
+    "font-size: medium",
+    "font-size: x-large",
+    "font-size: xx-large",
+    "font-size: 14px",
+    "font-size: 11pt",
+    "font-size: 1.2em",
+    "font-size: 120%",
+    "text-align: left",
+    "text-align: center",
+    "text-align: right",
+    "text-align: justify",
+    "margin-left: 40px",
+    "margin-left: 2em",
+    "padding-left: 1ex",
+    "padding-left: 0",
+    "margin: 0 0 0 40px",
+    "margin: 0 auto",
+    "padding: 0px",
+    "text-decoration: line-through",
+    "text-decoration: underline dotted rgb(0, 0, 0)",
+    "text-decoration: underline #333",
+    "text-decoration-line: line-through",
+    "text-decoration-line: underline line-through",
+    "text-decoration-style: wavy",
+    "text-decoration-color: #ff0000",
+  ])("keeps %s", (css) => {
+    expect(cleanOutgoingCss(css)).toEqual({ css, dropped: [] });
+  });
+
+  it.each([
+    // Colours: no functions besides rgb()/rgba(), no custom properties, no stray text.
+    ["color", "var(--primary)"],
+    ["color", "rgb(var(--x))"],
+    ["color", "hsl(0, 100%, 50%)"],
+    ["color", "#ggg"],
+    ["color", "#12345"],
+    ["color", "red blue"],
+    ["color", "red !important"],
+    ["color", "rgb(1, 2)"],
+    ["color", "rgb(1, 2, 3) url(https://x.example/a.png)"],
+    ["color", "currentColor2"],
+    ["background-color", "url(https://track.example/p.gif)"],
+    ["background-color", "env(safe-area-inset-top)"],
+    ["background-color", "attr(data-x)"],
+    // Fonts: plain names only.
+    ["font-family", "url(https://fonts.example/x.woff)"],
+    ["font-family", "var(--font)"],
+    ["font-family", "'a'b"],
+    ["font-family", "sans-serif, "],
+    ["font-family", "Ari@l"],
+    ["font-family", "a,b,c,d,e,f,g,h,i"],
+    ["font-family", "x".repeat(41)],
+    // Sizes: keywords or bounded positive lengths.
+    ["font-size", "0"],
+    ["font-size", "-1px"],
+    ["font-size", "500px"],
+    ["font-size", "100em"],
+    ["font-size", "calc(100vw)"],
+    ["font-size", "10vw"],
+    ["font-size", "huge"],
+    ["font-size", "var(--s)"],
+    // Alignment: left, right, center (and justify/start/end).
+    ["text-align", "-webkit-center"],
+    ["text-align", "center !important"],
+    ["text-align", "var(--a)"],
+    // Spacing: bounded, non-negative.
+    ["margin-left", "-9999px"],
+    ["margin-left", "10000px"],
+    ["margin-left", "calc(1px + 2px)"],
+    ["margin-left", "1px 2px 3px 4px 5px"],
+    ["padding-left", "auto"],
+    ["padding-left", "50vw"],
+    ["margin", "-20px 0 0 0"],
+    // Decoration: keywords and one colour.
+    ["text-decoration", "url(https://x.example/a.png)"],
+    ["text-decoration", "blink"],
+    ["text-decoration", "underline red blue"],
+    ["text-decoration", "underline rgb(var(--x))"],
+    ["text-decoration-line", "blink"],
+    ["text-decoration-line", "underline underline underline underline"],
+    ["text-decoration-style", "groove"],
+    ["text-decoration-color", "var(--x)"],
+  ])("drops %s: %s", (prop, value) => {
+    expect(cleanOutgoingCss(`${prop}: ${value}`)).toEqual({ css: "", dropped: [`style:${prop}`] });
+  });
+
+  it("drops custom properties and environment lookups anywhere", () => {
+    expect(cleanOutgoingCss("border: 1px solid var(--x); width: env(x); height: attr(h); --x: red").css).toBe("");
+    expect(cleanOutgoingCss("border: 1px solid v/**/ar(--x)").css).toBe("");
+    expect(cleanOutgoingCss("border: 1px solid \\76 ar(--x)").css).toBe("");
+  });
+
+  it("checks the decoded value, so escapes can't smuggle a function past a grammar", () => {
+    expect(cleanOutgoingCss("color: \\72 gb(1,2,3)").css).toBe("color: rgb(1,2,3)");
+    expect(cleanOutgoingCss("color: r\\65 d").css).toBe("color: red");
+    expect(cleanOutgoingCss("font-family: \\75 rl(x)").css).toBe("");
+    expect(cleanOutgoingCss("font-size: 1\\30 px").css).toBe("font-size: 10px");
+  });
+
+  it("keeps the safe declarations of a mixed style", () => {
+    expect(
+      cleanOutgoingCss("color: rgb(1, 2, 3); font-family: url(x); text-align: center; margin-left: -50px").css,
+    ).toBe("color: rgb(1, 2, 3); text-align: center");
+  });
+
+  it("covers every property the toolbar writes", () => {
+    for (const prop of [
+      "color",
+      "background-color",
+      "font-family",
+      "font-size",
+      "text-align",
+      "margin",
+      "margin-left",
+      "padding",
+      "padding-left",
+      "text-decoration",
+      "text-decoration-line",
+    ]) {
+      expect(STRICT_CSS[prop]).toBeTypeOf("function");
+    }
+  });
+
+  it("checks the grammar helpers directly", () => {
+    expect(isSafeColor("#abc")).toBe(true);
+    expect(isSafeColor("rgb( 1 , 2 , 3 )")).toBe(true);
+    expect(isSafeColor("rgb(1,2,3);x")).toBe(false);
+    expect(isSafeFontFamily("serif")).toBe(true);
+    expect(isSafeFontFamily('"serif')).toBe(false);
+    expect(isSafeFontSize("xx-large")).toBe(true);
+    expect(isSafeFontSize("97px")).toBe(false);
+    expect(isSafeFontSize("96px")).toBe(true);
+  });
+});
+
+describe("sanitizeOutgoingHtml: legacy font attributes", () => {
+  it("keeps colours, plain faces and HTML sizes", () => {
+    const html =
+      '<font color="#b91c1c" face="Georgia, serif" size="5">f</font><font size="+1">g</font>' +
+      '<table bgcolor="red"><tbody><tr><td bgcolor="#fff">x</td></tr></tbody></table>';
+    expect(clean(html)).toBe(html);
+  });
+
+  it.each([
+    ['<font color="var(--x)">f</font>', "color"],
+    ['<font color="expression(alert(1))">f</font>', "color"],
+    ['<font face="url(https://x.example/f.woff)">f</font>', "face"],
+    ['<font face="a;b">f</font>', "face"],
+    ['<font size="8">f</font>', "size"],
+    ['<font size="99px">f</font>', "size"],
+    ['<table bgcolor="url(https://x.example/p.gif)"><tr><td>x</td></tr></table>', "bgcolor"],
+  ])("drops a bad attribute: %s", (html, attr) => {
+    const r = sanitizeOutgoingHtml(html);
+    expect(r.html).not.toContain(`${attr}=`);
+    expect(r.removedAttributes).toContain(attr);
+  });
+
+  it("validates attributes on their own", () => {
+    expect(fontAttribute("color", " #fff ")).toBe(true);
+    expect(fontAttribute("size", "-2")).toBe(true);
+    expect(fontAttribute("size", "0")).toBe(false);
+    expect(fontAttribute("title", "anything")).toBe(true);
+  });
+});
+
+describe("outgoingText: editor lines and lists", () => {
+  it.each([
+    ["<div>a</div><div>b</div>", "a\nb"],
+    ["<div>a</div><div><br></div><div>b</div>", "a\n\nb"],
+    ["a<div>b</div>c", "a\nb\nc"],
+    ["<div><div>a</div></div><div>b</div>", "a\nb"],
+    ["<div>a<br></div><div>b</div>", "a\nb"],
+    ["<div>a<br>b</div>", "a\nb"],
+    ["<p>a</p><p>b</p>", "a\n\nb"],
+    ["<div>a</div><p>b</p>", "a\n\nb"],
+  ])("writes %s as %j", (html, text) => {
+    expect(outgoingText(html)).toBe(text);
+  });
+
+  it("numbers ordered lists and indents nested ones", () => {
+    expect(outgoingText("<ol><li>a</li><li>b<ol><li>c</li></ol></li><li>d</li></ol><div>after</div>")).toBe(
+      "1. a\n2. b\n  1. c\n3. d\n\nafter",
+    );
+    expect(outgoingText("<div>before</div><ul><li>a</li><ul><li>b</li></ul></ul>")).toBe("before\n\n- a\n  - b");
+  });
+
+  it("caps the list indent", () => {
+    const depth = 50;
+    const text = outgoingText(`${"<ul><li>x".repeat(depth)}${"</li></ul>".repeat(depth)}`);
+    expect(text.split("\n").at(-1)).toBe(`${"  ".repeat(MAX_QUOTE_PREFIX)}- x`);
+  });
+
+  it("ignores stray line markers in the input", () => {
+    expect(outgoingText("<p>a\uE002b\uE003c</p>")).toBe("abc");
+  });
+});
+
+describe("outgoingText: linear on hostile whitespace", () => {
+  it.each([
+    ["spaces", `<p>a${" ".repeat(400_000)}b</p>`],
+    ["tabs and spaces", `<div>${" \t".repeat(200_000)}x</div>`],
+    ["spaces before line breaks", "x   <br>".repeat(50_000)],
+    ["empty lines", "<div><br></div>".repeat(50_000)],
+    ["unclosed-looking brs", `${"<br>".repeat(20_000)}${" ".repeat(200_000)}`],
+    ["lines of no-break spaces", "\u00a0<br>".repeat(100_000)],
+    ["lines of ideographic spaces", "\u3000<br>".repeat(100_000)],
+  ])("handles %s quickly", (_name, html) => {
+    const started = performance.now();
+    outgoingText(html);
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+});
+
+describe("cleanOutgoingCss: comment openers made from escapes", () => {
+  it("drops a decoded /* so the recipient can't swallow the rest of the style", () => {
+    const out = clean('<span style="color: red; font-family: serif \\2f* hidden">x</span>');
+    expect(out).not.toContain("/*");
+    expect(out).toContain("color: red");
   });
 });
