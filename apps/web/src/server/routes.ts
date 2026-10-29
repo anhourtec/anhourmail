@@ -40,6 +40,32 @@ export const ROUTES: readonly RouteSpec[] = [
     guard: "self.profile.manage",
     audits: "account.profile_changed",
   },
+  // The person's own profile photo (packages/core/src/avatars, ADR-0022). The harness's empty body isn't an image (400).
+  { method: "GET", path: "/api/me/avatar", file: "app/api/me/avatar/route.ts", guard: "self.profile.read" },
+  {
+    method: "POST",
+    path: "/api/me/avatar",
+    file: "app/api/me/avatar/route.ts",
+    guard: "self.profile.manage",
+    audits: "account.avatar_changed",
+    probeStatus: 400,
+  },
+  {
+    method: "DELETE",
+    path: "/api/me/avatar",
+    file: "app/api/me/avatar/route.ts",
+    guard: "self.profile.manage",
+    audits: "account.avatar_removed",
+  },
+  // A profile photo on the console origin: any signed-in person may ask; the service then answers 404 unless they may
+  // see that person or mailbox (the harness's random ids are 404 for everyone signed in).
+  {
+    method: "GET",
+    path: "/api/avatars/:kind/:id",
+    file: "app/api/avatars/[kind]/[id]/route.ts",
+    guard: "self.profile.read",
+    probeStatus: 404,
+  },
   {
     method: "DELETE",
     path: "/api/me/sessions",
@@ -165,6 +191,23 @@ export const ROUTES: readonly RouteSpec[] = [
     method: "PUT",
     path: "/api/accounts/:accountId/mailboxes/:mailboxId/name",
     file: "app/api/accounts/[accountId]/mailboxes/[mailboxId]/name/route.ts",
+    guard: "mailbox.manage",
+    accountParam: "accountId",
+    probeStatus: 404,
+  },
+  // The photo of a mailbox without a person (core avatars/service.ts). Random ids → 404 for allowed callers.
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/mailboxes/:mailboxId/avatar",
+    file: "app/api/accounts/[accountId]/mailboxes/[mailboxId]/avatar/route.ts",
+    guard: "mailbox.manage",
+    accountParam: "accountId",
+    probeStatus: 404,
+  },
+  {
+    method: "DELETE",
+    path: "/api/accounts/:accountId/mailboxes/:mailboxId/avatar",
+    file: "app/api/accounts/[accountId]/mailboxes/[mailboxId]/avatar/route.ts",
     guard: "mailbox.manage",
     accountParam: "accountId",
     probeStatus: 404,
@@ -349,6 +392,23 @@ export const ROUTES: readonly RouteSpec[] = [
     method: "PUT",
     path: "/api/accounts/:accountId/people/:userId/profile",
     file: "app/api/accounts/[accountId]/people/[userId]/profile/route.ts",
+    guard: "member.manage",
+    accountParam: "accountId",
+    probeStatus: 404,
+  },
+  // A person's photo on their panel: the "Edit profile" rule (core avatars/service.ts). Random ids → 404 when allowed.
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/people/:userId/avatar",
+    file: "app/api/accounts/[accountId]/people/[userId]/avatar/route.ts",
+    guard: "member.manage",
+    accountParam: "accountId",
+    probeStatus: 404,
+  },
+  {
+    method: "DELETE",
+    path: "/api/accounts/:accountId/people/:userId/avatar",
+    file: "app/api/accounts/[accountId]/people/[userId]/avatar/route.ts",
     guard: "member.manage",
     accountParam: "accountId",
     probeStatus: 404,
@@ -552,6 +612,20 @@ export const ROUTES: readonly RouteSpec[] = [
     file: "app/api/webmail/mailboxes/active/route.ts",
     guard: "webmail",
   },
+  // Profile photos in the webmail (ADR-0022): the session's mailboxes' photos, lookups and images (same account only).
+  { method: "GET", path: "/api/webmail/avatars", file: "app/api/webmail/avatars/route.ts", guard: "webmail" },
+  {
+    method: "POST",
+    path: "/api/webmail/avatars/lookup",
+    file: "app/api/webmail/avatars/lookup/route.ts",
+    guard: "webmail",
+  },
+  {
+    method: "GET",
+    path: "/api/webmail/avatars/:kind/:id",
+    file: "app/api/webmail/avatars/[kind]/[id]/route.ts",
+    guard: "webmail",
+  },
   // Webmail settings (docs/internal/05-webmail.md "Settings"): the session's own mailbox only.
   { method: "GET", path: "/api/webmail/settings", file: "app/api/webmail/settings/route.ts", guard: "webmail" },
   {
@@ -564,6 +638,18 @@ export const ROUTES: readonly RouteSpec[] = [
     method: "PATCH",
     path: "/api/webmail/settings/preferences",
     file: "app/api/webmail/settings/preferences/route.ts",
+    guard: "webmail",
+  },
+  {
+    method: "POST",
+    path: "/api/webmail/settings/avatar",
+    file: "app/api/webmail/settings/avatar/route.ts",
+    guard: "webmail",
+  },
+  {
+    method: "DELETE",
+    path: "/api/webmail/settings/avatar",
+    file: "app/api/webmail/settings/avatar/route.ts",
     guard: "webmail",
   },
   {
