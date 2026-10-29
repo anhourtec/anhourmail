@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { Bone, ListSkeleton, PageHeaderSkeleton, SkeletonPage } from "@anhourmail/ui/skeletons";
 
-/** Mirrors a customer account for staff: header, the audit notice, the suspension action, the field grid, tabs and the people list. */
+/** Mirrors a customer account for staff: header, the audit notice, the support-access and suspension actions, the field grid, tabs and the people list. */
 export default function Loading() {
   return (
     <SkeletonPage label="Loading the account">
       <PageHeaderSkeleton lead={false} />
       <Bone className="h-12 w-full max-w-prose rounded-lg" />
-      <Bone className="h-9 w-40 rounded-lg" />
+      <div className="flex flex-wrap gap-3">
+        <Bone className="h-9 w-52 rounded-lg" />
+        <Bone className="h-9 w-40 rounded-lg" />
+      </div>
       <div className="grid gap-x-12 gap-y-7 sm:grid-cols-2">
         {Array.from({ length: 4 }, (_, i) => (
           <div key={i} className="flex flex-col gap-2">

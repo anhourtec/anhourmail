@@ -9,6 +9,7 @@ import { type MenuAccount, type MenuUser, useSignOut } from "./account-menu";
 import { AppBar } from "./console/app-bar";
 import { Flyout } from "./console/flyout";
 import { LeftNav, type NavCounts, type PrimaryAction } from "./console/left-nav";
+import { ActAsBanner } from "./platform/act-as";
 import { SIDEBAR_COOKIE, writeSidebarCookie } from "./sidebar-cookies";
 
 const SHORTCUTS: [string, string][] = [
@@ -38,6 +39,7 @@ export function ConsoleChrome({
   orgName,
   staff,
   initialCompact,
+  actAs = null,
   children,
 }: {
   tree: NavTreeSection[];
@@ -50,6 +52,8 @@ export function ConsoleChrome({
   orgName: string | null;
   staff: boolean;
   initialCompact: boolean;
+  /** Set while staff act in this account (ADR-0023): the banner with End shows under the app bar on every page. */
+  actAs?: { accountId: string; accountName: string; expiresAt: string } | null;
   children: ReactNode;
 }) {
   const [compact, setCompact] = useState(initialCompact);
@@ -150,6 +154,8 @@ export function ConsoleChrome({
         onToggleCompact={toggle}
         menuButtonRef={menuButton}
       />
+
+      {actAs && <ActAsBanner accountId={actAs.accountId} accountName={actAs.accountName} expiresAt={actAs.expiresAt} />}
 
       {signOutFailed && (
         <p role="alert" className="am-small border-b bg-destructive/10 px-4 py-2 text-destructive">

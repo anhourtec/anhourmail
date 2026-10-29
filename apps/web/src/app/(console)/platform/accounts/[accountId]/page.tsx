@@ -19,6 +19,7 @@ import { DetailTabs, Field, FieldGrid } from "@/components/console/flyout";
 import { StatusText, type Tone } from "@/components/console/status-text";
 import { CopyValue } from "@/components/copy-value";
 import { MailboxStatus } from "@/components/mailboxes/mailbox-status";
+import { ActAsStart } from "@/components/platform/act-as";
 import { StaffCreateAddress } from "@/components/platform/staff-create-address";
 import { SuspensionControl } from "@/components/platform/suspension-control";
 import { requireUser } from "@/server/console-frame";
@@ -61,6 +62,9 @@ export default async function CustomerAccountPage({ params }: { params: Promise<
   };
   // Suspending and lifting: Global Administrator only, never while acting as someone (the server checks again).
   const canSuspend = can(actor, "platform.account.suspend") && actor.actingAs === undefined;
+  // Read-only support access (ADR-0023): Global and Support Administrators; the server refuses staff and suspended
+  // accounts and checks the reason and a fresh step-up.
+  const canActAs = can(actor, "platform.accounts.actAs") && actor.actingAs === undefined;
 
   const peopleTab = (
     <>
@@ -218,14 +222,17 @@ export default async function CustomerAccountPage({ params }: { params: Promise<
       <p className="am-small max-w-prose rounded-lg border px-4 py-3">
         Opening this page is recorded in the account&apos;s audit log, where its admins see it as Anhourtec staff.
       </p>
-      {canSuspend && (
+      {(canSuspend || canActAs) && (
         <div className="flex flex-wrap items-start gap-3">
-          <SuspensionControl
-            kind="account"
-            url={`/api/platform/accounts/${encodeURIComponent(summary.id)}/suspension`}
-            suspended={suspension.account !== null}
-            subject={summary.name}
-          />
+          {canActAs && <ActAsStart accountId={summary.id} accountName={summary.name} />}
+          {canSuspend && (
+            <SuspensionControl
+              kind="account"
+              url={`/api/platform/accounts/${encodeURIComponent(summary.id)}/suspension`}
+              suspended={suspension.account !== null}
+              subject={summary.name}
+            />
+          )}
         </div>
       )}
       <FieldGrid>

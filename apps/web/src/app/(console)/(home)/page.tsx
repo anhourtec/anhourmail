@@ -539,10 +539,12 @@ export default async function ConsoleHome() {
   const cards = first ? recommendations(actor, first.accountId, first.o, freeDomain) : [];
   const base = current ? `/accounts/${current}` : "";
   const staff = actor.platformRoles.length > 0;
-  // Webmail only when one of the person's accounts is open (a suspended account's mailboxes can't sign in).
-  const webmail = actor.memberships.some((m) => !actor.suspendedAccountIds?.includes(m.accountId))
-    ? `${env().WEBMAIL_URL.replace(/\/$/, "")}/sign-in`
-    : null;
+  // Webmail only when one of the person's accounts is open (a suspended account's mailboxes can't sign in), and never
+  // while staff act in an account (ADR-0023).
+  const webmail =
+    !actor.actingAs && actor.memberships.some((m) => !actor.suspendedAccountIds?.includes(m.accountId))
+      ? `${env().WEBMAIL_URL.replace(/\/$/, "")}/sign-in`
+      : null;
 
   const quick: {
     href: string;

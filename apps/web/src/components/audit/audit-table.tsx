@@ -90,6 +90,10 @@ export function AuditTable({ rows, ipKind = "network" }: { rows: AuditRow[]; ipK
                     <span className="font-medium text-[14px]">{r.actionLabel}</span>
                     <span className="am-micro">{r.areaLabel}</span>
                     <span className="am-micro break-all md:hidden">{r.actor.label}</span>
+                    {/* Staff, and support access in particular, stay identifiable on narrow screens too (rule 49). */}
+                    {r.actor.kind === "staff" && r.actor.detail && (
+                      <span className="am-micro break-all md:hidden">{r.actor.detail}</span>
+                    )}
                     {r.result !== "success" && (
                       <span className="sm:hidden">
                         <StatusText tone={RESULT[r.result].tone}>{RESULT[r.result].text}</StatusText>

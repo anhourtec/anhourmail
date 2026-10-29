@@ -89,7 +89,8 @@ export async function ConsoleShell({
   const accounts: MenuAccount[] = actor.memberships.map((m) => ({
     id: m.accountId,
     name: names[m.accountId] ?? "Account",
-    role: ROLE_LABELS[`account:${m.role}`],
+    // Staff acting in the account hold a read-only role there (ADR-0023); say what it is, not "Auditor".
+    role: actor.actingAs ? "Anhourtec support (read-only)" : ROLE_LABELS[`account:${m.role}`],
     href:
       navTree(actor, m.accountId)
         .filter((s) => s.id !== "platform")
@@ -114,9 +115,9 @@ export async function ConsoleShell({
         email: actor.email,
         photoUrl: photo ? avatarPath("/api/avatars", photo) : null,
         staffRole: staffRole ? ROLE_LABELS[`platform:${staffRole}`] : null,
-        // Customers only (roles.md "Mail (webmail link)": staff ✗), with an account that isn't suspended (its
-        // mailboxes can't sign in). Never a credential.
-        ...(actor.memberships.some((m) => !actor.suspendedAccountIds?.includes(m.accountId))
+        // Customers only (roles.md "Mail (webmail link)": staff ✗, never during act-as), with an account that isn't
+        // suspended (its mailboxes can't sign in). Never a credential.
+        ...(!actor.actingAs && actor.memberships.some((m) => !actor.suspendedAccountIds?.includes(m.accountId))
           ? {
               webmailHref: `${env().WEBMAIL_URL.replace(/\/$/, "")}/sign-in`,
             }
@@ -127,6 +128,15 @@ export async function ConsoleShell({
       orgName={current ? (names[current] ?? "Account") : actor.platformRoles.length > 0 ? "Anhourtec staff" : null}
       staff={actor.platformRoles.length > 0}
       initialCompact={compact}
+      actAs={
+        actor.actingAs
+          ? {
+              accountId: actor.actingAs.accountId,
+              accountName: names[actor.actingAs.accountId] ?? "Account",
+              expiresAt: actor.actingAs.expiresAt.toISOString(),
+            }
+          : null
+      }
     >
       {current && suspendedNotice ? (
         <>
