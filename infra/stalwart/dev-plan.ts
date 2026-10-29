@@ -106,6 +106,10 @@ export async function applyDevMailPlan(
     redirectUris: opts.webmailOrigins.map(webmailRedirectUri),
   });
 
+  // No catch-all on dev.test (`upsertDomain` writes `catchAllAddress: null`): unknown local parts are refused at RCPT with
+  // 550 5.1.2 by Stalwart's directory lookup, on 25 and on submission. `x:MtaStageRcpt` stays at its defaults (no
+  // `rewrite`, no RCPT `script`), which this relies on; the production plan is the same (02-mail-infrastructure.md
+  // "Unknown recipients"; `stack:verify` checks it).
   const domainId = await mgmt.upsertDomain({ name: DEV_DOMAIN });
   for (const name of DEV_MAILBOXES) {
     await mgmt.upsertUser({

@@ -11,6 +11,10 @@
  *      null envelope sender is refused.
  *   7. A submitted message reaches a local mailbox without any Authentication-Results header, so a sender can't
  *      plant results our server never produced (07-security.md "Authentication results in the webmail").
+ *   8. Unknown local recipients (02-mail-infrastructure.md "Unknown recipients"): refused at RCPT with 550 on a
+ *      domain without a catch-all, inbound on 25 and on authenticated submission (465); a catch-all domain still
+ *      accepts them; a JMAP submission to one is created but reports the 550 in `deliveryStatus` (no bounce), which
+ *      is what the webmail must show the sender. No message content is sent: each SMTP probe stops at RCPT.
  *
  *   npm run stack:verify      (after `npm run stack:up` and `npm run db:seed`)
  */
@@ -279,6 +283,68 @@ await protocolCheck("ManageSieve 4190: greeting", async () => {
   const res = await w.read(/^OK/m);
   w.close();
   return /"IMPLEMENTATION"/i.test(res);
+});
+
+// Unknown local recipients: refused during the SMTP conversation, never accepted and dropped. Each probe stops at RCPT.
+async function rcptReply(to: string, opts: { submission?: boolean } = {}): Promise<string> {
+  const w = opts.submission
+    ? await wire(port("STALWART_SUBMISSIONS_PORT", 465), true)
+    : await wire(port("STALWART_SMTP_PORT", 25), false);
+  try {
+    await w.read(/^220 /m);
+    w.send("EHLO verify.local");
+    await w.read(/^250 /m);
+    if (opts.submission) {
+      w.send(`AUTH PLAIN ${Buffer.from(`\0${user}\0${password}`).toString("base64")}`);
+      if (!(await w.read(/^\d{3} /m)).startsWith("235")) throw new Error("submission sign-in refused");
+    }
+    w.send(`MAIL FROM:<${opts.submission ? user : `verify@sender-${token}.example`}>`);
+    await w.read(/^\d{3} /m);
+    w.send(`RCPT TO:<${to}>`);
+    const reply = await w.read(/^\d{3} /m);
+    w.send("QUIT");
+    return reply.trim().split("\r\n").at(-1) ?? "";
+  } finally {
+    w.close();
+  }
+}
+const unknownLocal = `nobody-${token}@${DEV_DOMAIN}`;
+await protocolCheck("SMTP 25: unknown local recipient refused at RCPT (550, no catch-all)", async () =>
+  (await rcptReply(unknownLocal)).startsWith("550 "),
+);
+await protocolCheck("SMTP 25: known local recipient accepted at RCPT", async () =>
+  (await rcptReply(`bob@${DEV_DOMAIN}`)).startsWith("250 "),
+);
+await protocolCheck("SMTP 465: unknown local recipient refused at RCPT for a signed-in sender (550)", async () =>
+  (await rcptReply(unknownLocal, { submission: true })).startsWith("550 "),
+);
+await protocolCheck("Catch-all domain: unknown recipient accepted at RCPT", async () => {
+  // A throwaway domain whose catch-all is bob's mailbox; removed again whatever happens.
+  const admin = stalwartDevAdmin();
+  const name = `verify-catchall-${token}.test`;
+  const id = await admin.upsertDomain({ name, catchAllAddress: `bob@${DEV_DOMAIN}` });
+  try {
+    return (await rcptReply(`anything-${token}@${name}`)).startsWith("250 ");
+  } finally {
+    await admin.destroyDomain(id);
+  }
+});
+await protocolCheck("JMAP submission: unknown local recipient reported as not delivered (550)", async () => {
+  const id = await alice.sendText({
+    from: user,
+    to: [unknownLocal],
+    subject: `stack-verify unknown ${token}`,
+    text: "Unknown recipient check.",
+  });
+  const accountId = await alice.accountId();
+  type Status = Record<string, { delivered?: string; smtpReply?: string }>;
+  const status = await waitFor(async () => {
+    const res = await alice.request([["EmailSubmission/get", { accountId, ids: [id] }, "g"]]);
+    const list = (res.get("g")?.list ?? []) as { deliveryStatus?: Status }[];
+    const s = list[0]?.deliveryStatus?.[unknownLocal];
+    return s?.delivered === "no" ? s : undefined;
+  }, 10_000);
+  return status?.smtpReply?.startsWith("550") === true;
 });
 
 console.log(failures === 0 ? "\nstack:verify — all checks passed." : `\nstack:verify — ${failures} check(s) failed.`);
