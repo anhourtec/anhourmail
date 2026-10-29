@@ -5,6 +5,8 @@ import { ACCOUNT_A, ACCOUNT_B, anonymous, deps as makeDeps, fixedClock, req, use
 import {
   AliasAdminLockedError,
   AliasDailyLimitError,
+  AliasMailboxLimitError,
+  AliasYearlyLimitError,
   ConflictError,
   ForbiddenError,
   NotFoundError,
@@ -13,8 +15,8 @@ import {
   ValidationError,
 } from "../errors";
 import { maskedLocalPart, normaliseDescription } from "./entity";
-import { createAlias, deleteAlias, listAliases, setAliasEnabled } from "./service";
-import { PLANS } from "@anhourmail/shared/plans";
+import { createAlias, deleteAlias, listAliases, setAliasEnabled, yearlyUse } from "./service";
+import { ALIAS_CREATIONS_PER_YEAR, ALIASES_PER_MAILBOX, PLANS } from "@anhourmail/shared/plans";
 
 const owner = user({ id: "owner", account: [[ACCOUNT_A, "owner"]] });
 const userAdmin = user({ id: "uadmin", account: [[ACCOUNT_A, "user_admin"]] });
@@ -143,14 +145,34 @@ describe("aliases service", () => {
 
   it("enforces the plan's limits per account and kind", async () => {
     const d = setup("free");
-    for (let i = 0; i < 5; i++) await createAlias(d, owner, ACCOUNT_A, chosen(`a${String(i)}`), req);
-    await expect(createAlias(d, owner, ACCOUNT_A, chosen("a5"), req)).rejects.toThrow(PlanLimitError);
+    for (let i = 0; i < 10; i++) await createAlias(d, owner, ACCOUNT_A, chosen(`a${String(i)}`), req);
+    const err = await createAlias(d, owner, ACCOUNT_A, chosen("a10"), req).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PlanLimitError);
+    expect(err).toMatchObject({ message: "This account can have up to 10 aliases at a time." });
     await createAlias(d, owner, ACCOUNT_A, { kind: "masked", mailboxId: MBX_OWNER }, req);
     const o = await listAliases(d, owner, ACCOUNT_A);
     expect(o.limits).toEqual({
-      alias: { used: 5, max: 5, createdToday: 5, perDay: PLANS.free.aliasCreationsPerDay.alias },
-      masked: { used: 1, max: 10, createdToday: 1, perDay: PLANS.free.aliasCreationsPerDay.masked },
+      alias: {
+        used: 10,
+        max: 10,
+        createdToday: 10,
+        perDay: PLANS.free.aliasCreationsPerDay.alias,
+        createdThisYear: 10,
+        perYear: 10,
+        nextSlot: "2027-10-22",
+      },
+      masked: {
+        used: 1,
+        max: 10,
+        createdToday: 1,
+        perDay: PLANS.free.aliasCreationsPerDay.masked,
+        createdThisYear: 1,
+        perYear: ALIAS_CREATIONS_PER_YEAR.free.masked,
+        nextSlot: null,
+      },
     });
+    expect(o.perMailbox).toBe(ALIASES_PER_MAILBOX);
+    expect(o.mailboxes.find((m) => m.id === MBX_OWNER)).toMatchObject({ addresses: 11 });
   });
 
   it("masked aliases need the mailbox's domain to still be the account's", async () => {
@@ -321,10 +343,11 @@ describe("admin lock: an alias an administrator turned off", () => {
 });
 
 describe("daily alias creation cap", () => {
-  const perDay = PLANS.free.aliasCreationsPerDay;
+  // Free's daily caps are no tighter than its yearly ones, so the daily brake is shown on a paid plan.
+  const perDay = PLANS.plus.aliasCreationsPerDay;
 
   it("counts creations per UTC day and kind, not live aliases: deleting gives none back", async () => {
-    const d = setup("free");
+    const d = setup("plus");
     for (let i = 0; i < perDay.alias; i++) {
       const a = await createAlias(d, owner, ACCOUNT_A, chosen(`churn${String(i)}`), req);
       await deleteAlias(d, owner, ACCOUNT_A, a.id, req);
@@ -356,25 +379,27 @@ describe("daily alias creation cap", () => {
 
   it("is per account, and resets at midnight UTC", async () => {
     const clock = fixedClock("2026-10-22T23:59:00Z");
-    const d = setup("free");
+    const d = setup("plus");
     d.clock = clock;
-    for (let i = 0; i < perDay.masked; i++) {
-      const m = await createAlias(d, owner, ACCOUNT_A, { kind: "masked", mailboxId: MBX_OWNER }, req);
+    for (let i = 0; i < perDay.alias; i++) {
+      const m = await createAlias(d, owner, ACCOUNT_A, chosen(`day${String(i)}`), req);
       await deleteAlias(d, owner, ACCOUNT_A, m.id, req);
     }
-    await expect(createAlias(d, member, ACCOUNT_A, { kind: "masked", mailboxId: MBX_MEMBER }, req)).rejects.toThrow(
+    await expect(createAlias(d, member, ACCOUNT_A, chosen("kid.one", MBX_MEMBER), req)).rejects.toThrow(
       AliasDailyLimitError,
     );
     // Another account isn't affected.
     expect(await createAlias(d, ownerB, ACCOUNT_B, { kind: "masked", mailboxId: MBX_B }, req)).toBeTruthy();
     clock.set(new Date("2026-10-23T00:00:00Z"));
-    expect(await createAlias(d, owner, ACCOUNT_A, { kind: "masked", mailboxId: MBX_OWNER }, req)).toBeTruthy();
-    expect((await listAliases(d, owner, ACCOUNT_A)).limits.masked.createdToday).toBe(1);
+    expect(await createAlias(d, owner, ACCOUNT_A, chosen("next.day"), req)).toBeTruthy();
+    expect((await listAliases(d, owner, ACCOUNT_A)).limits.alias.createdToday).toBe(1);
   });
 
-  it("paid plans have their own (higher) daily caps", () => {
-    expect(PLANS.plus.aliasCreationsPerDay.alias).toBeGreaterThan(perDay.alias);
+  it("each plan has daily caps; paid plans' are higher and Free's are no looser than its yearly ones", () => {
+    expect(PLANS.plus.aliasCreationsPerDay.alias).toBeGreaterThan(PLANS.free.aliasCreationsPerDay.alias);
     expect(PLANS.supporter.aliasCreationsPerDay).toEqual(PLANS.plus.aliasCreationsPerDay);
+    expect(PLANS.free.aliasCreationsPerDay.alias).toBeLessThanOrEqual(ALIAS_CREATIONS_PER_YEAR.free.alias);
+    expect(PLANS.free.aliasCreationsPerDay.masked).toBeLessThanOrEqual(ALIAS_CREATIONS_PER_YEAR.free.masked);
   });
 
   it("a refused create (bad input, plan limit) isn't counted", async () => {
@@ -382,5 +407,226 @@ describe("daily alias creation cap", () => {
     await expect(createAlias(d, owner, ACCOUNT_A, chosen("bad local"), req)).rejects.toThrow(ValidationError);
     await expect(createAlias(d, ownerB, ACCOUNT_A, chosen("x"), req)).rejects.toThrow(NotFoundError);
     expect((await listAliases(d, owner, ACCOUNT_A)).limits.alias.createdToday).toBe(0);
+  });
+});
+
+describe("yearly alias creation cap (Free)", () => {
+  const perYear = ALIAS_CREATIONS_PER_YEAR.free;
+
+  /** Creates and deletes `n` aliases of a kind on the owner's mailbox (so the at-a-time limit never binds). */
+  async function churn(d: ReturnType<typeof setup>, n: number, kind: "alias" | "masked", tag: string) {
+    for (let i = 0; i < n; i++) {
+      const input = kind === "alias" ? chosen(`${tag}${String(i)}`) : { kind, mailboxId: MBX_OWNER };
+      const a = await createAlias(d, owner, ACCOUNT_A, input, req);
+      await deleteAlias(d, owner, ACCOUNT_A, a.id, req);
+    }
+  }
+
+  it("Free allows 10 new aliases a year; paid plans have no yearly cap", () => {
+    expect(PLANS.free.aliases).toBe(10);
+    expect(PLANS.free.aliasCreationsPerYear).toEqual({ alias: 10, masked: perYear.masked });
+    expect(PLANS.free.maskedAliases).toBe(10); // masked aliases keep their own at-a-time limit
+    expect(PLANS.plus.aliasCreationsPerYear).toBeNull();
+    expect(PLANS.supporter.aliasCreationsPerYear).toBeNull();
+    expect(PLANS.plus.aliases).toBeNull();
+    expect(ALIASES_PER_MAILBOX).toBe(400);
+  });
+
+  it("deleting gives no slot back: refused with the date one returns (429 code), audited as denied", async () => {
+    const d = setup("free");
+    await churn(d, perYear.alias, "alias", "y");
+    expect(d.uow.state.aliases).toHaveLength(0);
+    const err = await createAlias(d, owner, ACCOUNT_A, chosen("one.more"), req).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AliasYearlyLimitError);
+    expect(err).toMatchObject({
+      code: "alias_yearly_limit",
+      message: "You can create 10 new aliases a year on Free; you can add more on Oct 22, 2027.",
+    });
+    expect(d.uow.state.audit.at(-1)).toMatchObject({
+      action: "alias.created",
+      result: "denied",
+      errorCode: "alias_yearly_limit",
+      meta: { kind: "alias", perYear: perYear.alias, nextSlot: "2027-10-22" },
+    });
+    expect(d.uow.state.aliases).toHaveLength(0);
+    expect((await listAliases(d, owner, ACCOUNT_A)).limits.alias).toMatchObject({
+      used: 0,
+      createdThisYear: perYear.alias,
+      perYear: perYear.alias,
+      nextSlot: "2027-10-22",
+    });
+    // Masked aliases have their own yearly count.
+    expect(await createAlias(d, owner, ACCOUNT_A, { kind: "masked", mailboxId: MBX_OWNER }, req)).toMatchObject({
+      kind: "masked",
+    });
+  });
+
+  it("masked aliases have a yearly cap of the same shape", async () => {
+    const d = setup("free");
+    d.clock = fixedClock("2026-10-22T12:00:00Z");
+    await churn(d, 10, "masked", "m");
+    (d.clock as ReturnType<typeof fixedClock>).set(new Date("2026-10-23T12:00:00Z")); // past the daily brake
+    await churn(d, perYear.masked - 10, "masked", "m");
+    const err = await createAlias(d, owner, ACCOUNT_A, { kind: "masked", mailboxId: MBX_OWNER }, req).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toMatchObject({
+      code: "alias_yearly_limit",
+      message: `You can create ${String(perYear.masked)} new masked aliases a year on Free; you can add more on Oct 22, 2027.`,
+    });
+    expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "masked_alias.created", result: "denied" });
+  });
+
+  it("the year rolls: each creation counts for 365 days, then its slot comes back", async () => {
+    const clock = fixedClock("2026-01-10T08:00:00Z");
+    const d = setup("free");
+    d.clock = clock;
+    await churn(d, 3, "alias", "jan");
+    clock.set(new Date("2026-06-01T08:00:00Z"));
+    await churn(d, 7, "alias", "jun");
+    clock.set(new Date("2026-12-01T08:00:00Z"));
+    await expect(createAlias(d, owner, ACCOUNT_A, chosen("dec"), req)).rejects.toThrow(
+      "you can add more on Jan 10, 2027.",
+    );
+    clock.set(new Date("2027-01-09T23:59:59Z")); // the January creations still count, day 365
+    await expect(createAlias(d, owner, ACCOUNT_A, chosen("dec"), req)).rejects.toThrow(AliasYearlyLimitError);
+    clock.set(new Date("2027-01-10T00:00:00Z")); // …and drop out at midnight UTC: three slots back
+    expect((await listAliases(d, owner, ACCOUNT_A)).limits.alias).toMatchObject({
+      createdThisYear: 7,
+      nextSlot: null,
+    });
+    await churn(d, 3, "alias", "back");
+    await expect(createAlias(d, owner, ACCOUNT_A, chosen("dec"), req)).rejects.toThrow(
+      "you can add more on Jun 1, 2027.",
+    );
+  });
+
+  it("holds under concurrent creates: exactly the remaining slots succeed", async () => {
+    const d = setup("free");
+    await churn(d, perYear.masked - 5, "masked", "c");
+    const results = await Promise.allSettled(
+      Array.from({ length: 10 }, () => createAlias(d, owner, ACCOUNT_A, { kind: "masked", mailboxId: MBX_OWNER }, req)),
+    );
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(5);
+    const refused = results.flatMap((r) => (r.status === "rejected" ? [r.reason as unknown] : []));
+    expect(refused).toHaveLength(5);
+    for (const e of refused) expect(e).toBeInstanceOf(AliasYearlyLimitError);
+    expect((await listAliases(d, owner, ACCOUNT_A)).limits.masked).toMatchObject({
+      used: 5,
+      createdThisYear: perYear.masked,
+    });
+  });
+
+  it("refused creates never count: yearly, at-a-time, bad input", async () => {
+    const d = setup("free");
+    await churn(d, perYear.alias, "alias", "r");
+    for (let i = 0; i < 3; i++) {
+      await expect(createAlias(d, owner, ACCOUNT_A, chosen(`r.more${String(i)}`), req)).rejects.toThrow(
+        AliasYearlyLimitError,
+      );
+    }
+    await expect(createAlias(d, owner, ACCOUNT_A, chosen("bad local"), req)).rejects.toThrow(ValidationError);
+    expect((await listAliases(d, owner, ACCOUNT_A)).limits.alias.createdThisYear).toBe(perYear.alias);
+    // At-a-time refusals don't count either.
+    const e = setup("free");
+    for (let i = 0; i < 10; i++) await createAlias(e, owner, ACCOUNT_A, { kind: "masked", mailboxId: MBX_OWNER }, req);
+    await expect(createAlias(e, owner, ACCOUNT_A, { kind: "masked", mailboxId: MBX_OWNER }, req)).rejects.toThrow(
+      PlanLimitError,
+    );
+    expect((await listAliases(e, owner, ACCOUNT_A)).limits.masked.createdThisYear).toBe(10);
+  });
+
+  it("is per account", async () => {
+    const d = setup("free");
+    d.uow.state.accounts[1]!.plan = "free";
+    await churn(d, perYear.alias, "alias", "p");
+    await expect(createAlias(d, owner, ACCOUNT_A, chosen("p.more"), req)).rejects.toThrow(AliasYearlyLimitError);
+    expect(
+      await createAlias(d, ownerB, ACCOUNT_B, { localPart: "fine", domainId: DOMAIN_B, mailboxId: MBX_B }, req),
+    ).toBeTruthy();
+  });
+
+  it("paid plans have no yearly cap", async () => {
+    const d = setup("plus");
+    expect((await listAliases(d, owner, ACCOUNT_A)).limits.alias).toMatchObject({ perYear: null, nextSlot: null });
+  });
+
+  it("yearlyUse finds the day enough of the oldest creations drop out", () => {
+    expect(yearlyUse([], 10)).toEqual({ used: 0, nextSlot: null });
+    expect(yearlyUse([{ day: "2026-03-01", count: 4 }], null)).toEqual({ used: 4, nextSlot: null });
+    const days = [
+      { day: "2026-06-01", count: 6 },
+      { day: "2026-01-10", count: 3 },
+      { day: "2026-02-28", count: 1 },
+    ];
+    expect(yearlyUse(days, 11)).toEqual({ used: 10, nextSlot: null });
+    expect(yearlyUse(days, 10)).toEqual({ used: 10, nextSlot: "2027-01-10" }); // one slot: January's go first
+    expect(yearlyUse(days, 8)).toEqual({ used: 10, nextSlot: "2027-01-10" }); // three needed: January's three
+    expect(yearlyUse(days, 7)).toEqual({ used: 10, nextSlot: "2027-02-28" }); // four needed: 3 + 1 by February
+    expect(yearlyUse(days, 6)).toEqual({ used: 10, nextSlot: "2027-06-01" });
+    expect(yearlyUse(days, 2)).toEqual({ used: 10, nextSlot: "2027-06-01" });
+    // Across a leap day: 365 days after 2027-03-01 is 2028-02-29.
+    expect(yearlyUse([{ day: "2027-03-01", count: 1 }], 1)).toEqual({ used: 1, nextSlot: "2028-02-29" });
+  });
+});
+
+describe("addresses per mailbox", () => {
+  /** Puts `n` aliases (both kinds) straight onto a mailbox, as if created over time. */
+  function fill(d: ReturnType<typeof setup>, mailboxId: string, n: number) {
+    for (let i = 0; i < n; i++) {
+      d.uow.state.aliases.push({
+        id: crypto.randomUUID(),
+        accountId: ACCOUNT_A,
+        mailboxId,
+        address: `fill${String(i)}-${mailboxId.slice(0, 4)}@family.ca`,
+        kind: i % 2 === 0 ? "alias" : "masked",
+        enabled: true,
+        adminLocked: false,
+        description: null,
+        createdAt: new Date(0),
+      });
+    }
+  }
+
+  it("a mailbox takes up to 400 aliases and masked aliases together (409 code), audited as denied", async () => {
+    const d = setup("plus");
+    fill(d, MBX_OWNER, ALIASES_PER_MAILBOX - 1);
+    expect(await createAlias(d, owner, ACCOUNT_A, chosen("last"), req)).toMatchObject({ address: "last@family.ca" });
+    for (const input of [chosen("over"), { kind: "masked", mailboxId: MBX_OWNER }]) {
+      const err = await createAlias(d, owner, ACCOUNT_A, input, req).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AliasMailboxLimitError);
+      expect(err).toMatchObject({
+        code: "alias_mailbox_limit",
+        message:
+          "A mailbox can have at most 400 addresses (aliases and masked aliases together). Delete one, or point the new one at another mailbox.",
+      });
+    }
+    expect(d.uow.state.audit.at(-1)).toMatchObject({
+      action: "masked_alias.created",
+      result: "denied",
+      errorCode: "alias_mailbox_limit",
+      meta: { kind: "masked", perMailbox: ALIASES_PER_MAILBOX, mailbox: "o***@family.ca" }, // redacted like any address
+    });
+    expect(d.uow.state.aliases).toHaveLength(ALIASES_PER_MAILBOX);
+    // Refusals aren't counted toward the daily cap.
+    expect((await listAliases(d, owner, ACCOUNT_A)).limits.alias.createdToday).toBe(1);
+  });
+
+  it("is per mailbox, not per account; deleting one makes room again", async () => {
+    const d = setup("plus");
+    fill(d, MBX_OWNER, ALIASES_PER_MAILBOX);
+    expect(await createAlias(d, owner, ACCOUNT_A, chosen("kid.extra", MBX_MEMBER), req)).toBeTruthy();
+    const o = await listAliases(d, owner, ACCOUNT_A);
+    expect(o.mailboxes).toHaveLength(2);
+    expect(o.mailboxes).toEqual(
+      expect.arrayContaining([
+        { id: MBX_OWNER, address: "owner@family.ca", addresses: ALIASES_PER_MAILBOX },
+        { id: MBX_MEMBER, address: "kid@family.ca", addresses: 1 },
+      ]),
+    );
+    expect(o.limits.alias.max).toBeNull();
+    const one = d.uow.state.aliases.find((a) => a.mailboxId === MBX_OWNER);
+    await deleteAlias(d, owner, ACCOUNT_A, one!.id, req);
+    expect(await createAlias(d, owner, ACCOUNT_A, chosen("room"), req)).toBeTruthy();
   });
 });

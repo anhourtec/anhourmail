@@ -2,13 +2,16 @@
 import { randomUUID } from "node:crypto";
 
 import { isReservedPlatformLocalPart } from "@anhourmail/shared/addresses";
-import { ALIAS_CEILING, PLANS, type PlanId } from "@anhourmail/shared/plans";
+import { ALIAS_YEAR_DAYS, ALIASES_PER_MAILBOX, PLANS, type PlanId } from "@anhourmail/shared/plans";
 
 import { type Actor, authorize, can } from "../actor";
 import {
   AliasAdminLockedError,
   AliasDailyLimitError,
+  AliasMailboxLimitError,
+  AliasYearlyLimitError,
   ConflictError,
+  type DomainError,
   NotFoundError,
   PlanLimitError,
   ValidationError,
@@ -42,19 +45,67 @@ export type AliasView = {
 
 export type AliasOverview = {
   aliases: AliasView[];
-  /** Mailboxes the person can point an alias at (not ones being deleted). */
-  mailboxes: { id: string; address: string }[];
+  /**
+   * Mailboxes the person can point an alias at (not ones being deleted), each with its aliases and masked aliases
+   * together (`addresses`) against `perMailbox`.
+   */
+  mailboxes: { id: string; address: string; addresses: number }[];
+  /** Aliases and masked aliases together one mailbox can have (`ALIASES_PER_MAILBOX`, every plan). */
+  perMailbox: number;
   /** The account's active domains (chosen aliases can use any of them). */
   domains: { id: string; name: string }[];
   /**
-   * `max` is null when the plan lists it as unlimited (the abuse ceiling still applies). `createdToday` / `perDay`:
-   * creations this UTC day (deleted ones included) against the plan's daily cap.
+   * `max`: how many can exist in the account at a time; null when the plan has no account-wide count (then only
+   * `perMailbox` applies). `createdToday` / `perDay`: creations this UTC day (deleted ones included) against the
+   * plan's daily cap. `createdThisYear` / `perYear`: creations in the rolling year against the plan's yearly cap
+   * (`perYear` null: none); `nextSlot` is the UTC day (`YYYY-MM-DD`) a slot comes back while it is full, else null.
    */
-  limits: Record<AliasKind, { used: number; max: number | null; createdToday: number; perDay: number }>;
+  limits: Record<
+    AliasKind,
+    {
+      used: number;
+      max: number | null;
+      createdToday: number;
+      perDay: number;
+      createdThisYear: number;
+      perYear: number | null;
+      nextSlot: string | null;
+    }
+  >;
 };
 
 /** The UTC day a creation counts against (`YYYY-MM-DD`). */
 const utcDay = (d: Date): string => d.toISOString().slice(0, 10);
+
+const DAY_MS = 86_400_000;
+const addDays = (day: string, n: number): string => utcDay(new Date(Date.parse(`${day}T00:00:00Z`) + n * DAY_MS));
+
+/** The first UTC day of the rolling year that ends on `today` (`ALIAS_YEAR_DAYS` days, today included). */
+const yearStart = (today: string): string => addDays(today, 1 - ALIAS_YEAR_DAYS);
+
+/**
+ * Creations in the rolling year and, when they reach `perYear`, the UTC day the oldest counted ones fall out of the
+ * window far enough to free one slot (a creation on day D counts until D + 364 and is gone on D + 365).
+ */
+export function yearlyUse(
+  days: readonly { day: string; count: number }[],
+  perYear: number | null,
+): { used: number; nextSlot: string | null } {
+  const sorted = [...days].sort((a, b) => a.day.localeCompare(b.day));
+  const used = sorted.reduce((n, d) => n + d.count, 0);
+  if (perYear === null || used < perYear) return { used, nextSlot: null };
+  const need = used - perYear + 1;
+  let gone = 0;
+  for (const d of sorted) {
+    gone += d.count;
+    if (gone >= need) return { used, nextSlot: addDays(d.day, ALIAS_YEAR_DAYS) };
+  }
+  return { used, nextSlot: null }; // unreachable: `need` <= `used`
+}
+
+const slotDate = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium", timeZone: "UTC" });
+/** `2027-10-28` → `Oct 28, 2027` (the day is UTC). */
+const showDay = (day: string): string => slotDate.format(new Date(`${day}T00:00:00Z`));
 
 const isId = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
@@ -76,7 +127,7 @@ async function reachable(repos: Repositories, actor: Actor, accountId: string): 
 const planMax = (plan: PlanId, kind: AliasKind): number | null =>
   kind === "alias" ? PLANS[plan].aliases : PLANS[plan].maskedAliases;
 
-const maxFor = (plan: PlanId, kind: AliasKind): number => planMax(plan, kind) ?? ALIAS_CEILING;
+const perYearFor = (plan: PlanId, kind: AliasKind): number | null => PLANS[plan].aliasCreationsPerYear?.[kind] ?? null;
 
 async function planOf(repos: Repositories, accountId: string): Promise<PlanId> {
   const account = await repos.accounts.get(accountId);
@@ -114,21 +165,33 @@ export async function listAliases(deps: Deps, actor: Actor, accountId: string): 
   return deps.uow.run(async (r) => {
     const mailboxes = await reachable(r, actor, accountId);
     const byId = new Map(mailboxes.map((m) => [m.id, m] as const));
-    const aliases = (await r.aliases.listByAccount(accountId)).flatMap((a) => {
+    const all = await r.aliases.listByAccount(accountId);
+    const aliases = all.flatMap((a) => {
       const m = byId.get(a.mailboxId);
       return m ? [view(a, m)] : [];
     });
+    const onMailbox = (id: string) => all.filter((a) => a.mailboxId === id).length;
     const plan = await planOf(r, accountId);
     const day = utcDay(deps.clock.now());
-    const limit = async (kind: AliasKind) => ({
-      used: await r.aliases.count(accountId, kind),
-      max: planMax(plan, kind),
-      createdToday: await r.aliases.creationsOn(accountId, kind, day),
-      perDay: PLANS[plan].aliasCreationsPerDay[kind],
-    });
+    const limit = async (kind: AliasKind) => {
+      const perYear = perYearFor(plan, kind);
+      const year = yearlyUse(await r.aliases.creationsSince(accountId, kind, yearStart(day)), perYear);
+      return {
+        used: await r.aliases.count(accountId, kind),
+        max: planMax(plan, kind),
+        createdToday: await r.aliases.creationsOn(accountId, kind, day),
+        perDay: PLANS[plan].aliasCreationsPerDay[kind],
+        createdThisYear: year.used,
+        perYear,
+        nextSlot: year.nextSlot,
+      };
+    };
     return {
       aliases,
-      mailboxes: mailboxes.filter((m) => m.status !== "deleting").map((m) => ({ id: m.id, address: m.address })),
+      mailboxes: mailboxes
+        .filter((m) => m.status !== "deleting")
+        .map((m) => ({ id: m.id, address: m.address, addresses: onMailbox(m.id) })),
+      perMailbox: ALIASES_PER_MAILBOX,
       domains: (await r.domains.listByAccount(accountId))
         .filter((d) => d.status === "active")
         .map((d) => ({ id: d.id, name: d.name })),
@@ -139,10 +202,16 @@ export async function listAliases(deps: Deps, actor: Actor, accountId: string): 
 
 /**
  * Adds an alias to a mailbox. `alias`: a chosen local part on one of the account's active domains. `masked`: a
- * random address on the mailbox's own domain. Counts against the plan (per account): how many can exist, and how many
- * can be created per UTC day (`aliasCreationsPerDay`; deleting gives none back). Over the daily cap: 429
- * `alias_daily_limit`, audited as denied. Checked and counted under the account lock in the same unit of work, so it
- * holds under concurrent creates and fails closed.
+ * random address on the mailbox's own domain. Limits, aliases and masked aliases each on their own except the
+ * per-mailbox one:
+ *   - how many can exist in the account at a time (`PLANS[plan].aliases` / `maskedAliases`): 403 `plan_limit`;
+ *   - aliases and masked aliases together on the chosen mailbox (`ALIASES_PER_MAILBOX`): 409 `alias_mailbox_limit`;
+ *   - creations in the rolling year (`aliasCreationsPerYear`, Free only): 429 `alias_yearly_limit`, saying the date
+ *     a slot comes back;
+ *   - creations per UTC day (`aliasCreationsPerDay`): 429 `alias_daily_limit`.
+ * The creation caps count creations (deleting gives none back); a refused create counts nothing. The last three
+ * are audited as denied. All are checked, and the creation counted, under the account lock in the same unit of work,
+ * so they hold under concurrent creates and fail closed.
  */
 export async function createAlias(
   deps: Deps,
@@ -152,7 +221,7 @@ export async function createAlias(
   req: RequestMeta,
 ): Promise<AliasView> {
   const kind: AliasKind = input.kind === "masked" ? "masked" : "alias";
-  let overDailyCap = "";
+  const refused: { error?: DomainError } = {};
   const created = await mutation(
     deps,
     actor,
@@ -187,14 +256,40 @@ export async function createAlias(
       }
 
       const plan = await planOf(repos, accountId);
-      const max = maxFor(plan, kind);
-      if ((await repos.aliases.count(accountId, kind)) >= max) {
-        throw new PlanLimitError(`This account can have up to ${String(max)} ${KIND_LABEL[kind]}.`);
+      const max = planMax(plan, kind);
+      if (max !== null && (await repos.aliases.count(accountId, kind)) >= max) {
+        throw new PlanLimitError(`This account can have up to ${String(max)} ${KIND_LABEL[kind]} at a time.`);
+      }
+      if ((await repos.aliases.countForMailbox(accountId, mailbox.id)) >= ALIASES_PER_MAILBOX) {
+        refused.error = new AliasMailboxLimitError(
+          `A mailbox can have at most ${String(ALIASES_PER_MAILBOX)} addresses (aliases and masked aliases together). Delete one, or point the new one at another mailbox.`,
+        );
+        return {
+          result: null,
+          meta: { kind, perMailbox: ALIASES_PER_MAILBOX, mailbox: mailbox.address },
+          denied: { code: "alias_mailbox_limit" },
+        };
       }
       const day = utcDay(deps.clock.now());
+      const perYear = perYearFor(plan, kind);
+      if (perYear !== null) {
+        const year = yearlyUse(await repos.aliases.creationsSince(accountId, kind, yearStart(day)), perYear);
+        if (year.nextSlot !== null) {
+          refused.error = new AliasYearlyLimitError(
+            `You can create ${String(perYear)} new ${KIND_LABEL[kind]} a year on ${PLANS[plan].name}; you can add more on ${showDay(year.nextSlot)}.`,
+          );
+          return {
+            result: null,
+            meta: { kind, perYear, nextSlot: year.nextSlot },
+            denied: { code: "alias_yearly_limit" },
+          };
+        }
+      }
       const perDay = PLANS[plan].aliasCreationsPerDay[kind];
       if ((await repos.aliases.creationsOn(accountId, kind, day)) >= perDay) {
-        overDailyCap = `This account has created ${String(perDay)} ${KIND_LABEL[kind]} today, the most it can in one day. You can create more after midnight UTC.`;
+        refused.error = new AliasDailyLimitError(
+          `This account has created ${String(perDay)} ${KIND_LABEL[kind]} today, the most it can in one day. You can create more after midnight UTC.`,
+        );
         return { result: null, meta: { kind, perDay }, denied: { code: "alias_daily_limit" } };
       }
 
@@ -235,7 +330,7 @@ export async function createAlias(
       };
     },
   );
-  if (created === null) throw new AliasDailyLimitError(overDailyCap);
+  if (created === null) throw refused.error ?? new ConflictError("That alias can't be created right now.");
   return created;
 }
 
