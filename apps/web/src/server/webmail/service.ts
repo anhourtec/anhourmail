@@ -138,6 +138,16 @@ export type OAuthPort = {
 export type WebmailDeps = {
   store: WebmailSessionStore;
   oauth: OAuthPort;
+  /**
+   * The console → webmail handoff (ADR-0024): mints a throwaway mail-server credential for the mailbox, signs in once
+   * with it and destroys it, returning ordinary webmail tokens. Absent: the handoff isn't available.
+   */
+  handoffSignIn?: (target: { address: string; externalId: string }) => Promise<OAuthTokens>;
+  /**
+   * Whether a console session still exists (`session_id` of the person). A handoff-born webmail session ends with
+   * its console session; "alive" answers are cached for 30 s at most.
+   */
+  consoleSessionAlive?: (userId: string, sessionId: string) => Promise<boolean>;
   /** Stalwart's HTTP base URL (internal network). */
   stalwartUrl: string;
   /** Control-plane gate: may this mailbox use the webmail now, and if not why? (core `MailboxAccessGate`, ≤ 30 s) */
@@ -207,7 +217,10 @@ const MAX_INLINE_IMAGE = 512 * 1024;
 const MAX_INLINE_TOTAL = 2 * 1024 * 1024;
 
 export class WebmailService {
-  readonly #d: Required<Omit<WebmailDeps, "sleep">> & { sleep?: (ms: number) => Promise<void> };
+  readonly #d: Required<Omit<WebmailDeps, "sleep" | "handoffSignIn" | "consoleSessionAlive">> &
+    Pick<WebmailDeps, "sleep" | "handoffSignIn" | "consoleSessionAlive">;
+  /** Console sessions seen alive recently (handoff-born webmail sessions), until when. */
+  readonly #consoleAlive = new Map<string, number>();
   readonly #base: string;
   /** One refresh at a time per session (several tabs or calls may notice expiry together). */
   readonly #refreshing = new Map<string, Promise<WebmailSession | null>>();
@@ -263,6 +276,11 @@ export class WebmailService {
       log.warn("webmail sign-in: Stalwart unavailable", { component: "webmail", err });
       throw new WebmailUnavailableError("mail server unavailable");
     }
+    return this.#mailboxFor(tokens);
+  }
+
+  /** The mailbox behind fresh tokens (its JMAP session), once the control plane lets it use the webmail. */
+  async #mailboxFor(tokens: OAuthTokens): Promise<MailboxTokens> {
     const res = await this.#upstream(`${this.#base}/jmap/session`, { headers: this.#auth(tokens.accessToken) });
     if (!res.ok) {
       log.warn("webmail sign-in: session fetch failed", { component: "webmail", status: res.status });
@@ -282,6 +300,64 @@ export class WebmailService {
       refreshToken: tokens.refreshToken,
       expiresAt: tokens.expiresAt,
     };
+  }
+
+  /**
+   * The console → webmail handoff (ADR-0024), called by the core redemption once it has checked the person, the
+   * console session, the browser and the mailbox: signs in with a throwaway credential (minted, used once and
+   * destroyed by `handoffSignIn`) and starts an ordinary webmail session. The mail server must name exactly the
+   * mailbox the control plane chose; anything else is dropped. No password is involved anywhere.
+   */
+  async openHandoff(target: {
+    address: string;
+    externalId: string;
+    console: { userId: string; sessionId: string };
+  }): Promise<{
+    sessionId: string;
+    session: WebmailSession;
+  }> {
+    const signIn = this.#d.handoffSignIn;
+    if (!signIn) throw new WebmailUnavailableError("handoff not configured");
+    let tokens: OAuthTokens;
+    try {
+      tokens = await signIn({ address: target.address, externalId: target.externalId });
+    } catch (err) {
+      if (err instanceof WebmailBusyError) throw err;
+      // Our own fresh credential refused, or the mail server unreachable: never the person's fault.
+      log.warn("webmail handoff: sign-in failed", { component: "webmail", err });
+      throw new WebmailUnavailableError("mail server unavailable");
+    }
+    const mailbox = await this.#mailboxFor(tokens);
+    if (mailbox.username.toLowerCase() !== target.address.toLowerCase()) {
+      log.warn("webmail handoff: mail server named another mailbox", { component: "webmail" });
+      throw new WebmailUnavailableError("mail server named another mailbox");
+    }
+    const session: WebmailSession = { ...mailbox, createdAt: this.#d.now(), console: target.console };
+    const sessionId = await this.#d.store.create(session);
+    return { sessionId, session };
+  }
+
+  /**
+   * True when this webmail session came from the console handoff and that console session no longer exists (signed
+   * out, revoked, "sign out everywhere", a password reset): the webmail session must end with it. A failed check
+   * counts as ended (fail closed).
+   */
+  async consoleEnded(s: WebmailSession): Promise<boolean> {
+    if (!s.console) return false;
+    const check = this.#d.consoleSessionAlive;
+    if (!check) return true;
+    const key = `${s.console.userId} ${s.console.sessionId}`;
+    const until = this.#consoleAlive.get(key);
+    if (until !== undefined && until > this.#d.now()) return false;
+    let alive = false;
+    try {
+      alive = await check(s.console.userId, s.console.sessionId);
+    } catch (err) {
+      log.warn("webmail: console session check failed", { component: "webmail", err });
+    }
+    if (alive) this.#consoleAlive.set(key, this.#d.now() + 30_000);
+    else this.#consoleAlive.delete(key);
+    return !alive;
   }
 
   /** Signs in with the mailbox address and password (used once here, never stored or logged). */
@@ -343,12 +419,13 @@ export class WebmailService {
     if (!(await this.session(sessionId))) throw new WebmailSignedOutError("signed out");
     const added = await this.#authenticate(address, password);
     return this.#update(sessionId, (current) => {
-      const { others = [], createdAt, version, ...active } = current;
+      const { others = [], createdAt, version, console: bound, ...active } = current;
       const rest = [active, ...others].filter((m) => m.username !== added.username);
       if (rest.length + 1 > MAX_MAILBOXES) {
         throw new WebmailRefusedError(`You can have ${String(MAX_MAILBOXES)} mailboxes open at once.`);
       }
-      return { ...added, createdAt, version, others: rest };
+      // The console binding belongs to the whole session, whichever mailbox is active (ADR-0024).
+      return { ...added, createdAt, version, ...(bound ? { console: bound } : {}), others: rest };
     });
   }
 
@@ -368,10 +445,16 @@ export class WebmailService {
       throw new WebmailRefusedError("This mailbox can't be used right now.");
     }
     return this.#update(sessionId, (cur) => {
-      const { others = [], createdAt, version, ...active } = cur;
+      const { others = [], createdAt, version, console: bound, ...active } = cur;
       const t = others.find((m) => m.username === username);
       if (!t) throw new WebmailRefusedError("That mailbox isn't signed in here.");
-      return { ...t, createdAt, version, others: [active, ...others.filter((m) => m !== t)] };
+      return {
+        ...t,
+        createdAt,
+        version,
+        ...(bound ? { console: bound } : {}),
+        others: [active, ...others.filter((m) => m !== t)],
+      };
     });
   }
 
@@ -403,6 +486,11 @@ export class WebmailService {
   async session(sessionId: string, opts: { forceRefresh?: boolean } = {}): Promise<WebmailSession | null> {
     const s = await this.#d.store.read(sessionId);
     if (!s) return null;
+    if (await this.consoleEnded(s)) {
+      this.#refreshing.delete(sessionId);
+      await this.#d.store.destroy(sessionId);
+      return null;
+    }
     const access = await this.#d.access.state(s.username);
     if (access !== "ok") {
       this.#refreshing.delete(sessionId);

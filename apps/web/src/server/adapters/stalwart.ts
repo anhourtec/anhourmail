@@ -52,3 +52,22 @@ export function appPasswordIssuer(): AppPasswordIssuer {
     revoke: async (input) => stalwartAppPasswords(await operations()).revoke(input),
   };
 }
+
+/**
+ * The console → webmail handoff credential (ADR-0024), with the operations key: expired leftovers on the mailbox are
+ * cleared first (so they don't hold an app-password slot), then a credential that can only authenticate, for 60 s.
+ * The caller uses its secret once and destroys it.
+ */
+export function handoffCredentials(): {
+  mint(externalId: string, ttlMs: number): Promise<{ id: string; secret: string }>;
+  destroy(externalId: string, id: string): Promise<void>;
+} {
+  return {
+    async mint(externalId, ttlMs) {
+      const mgmt = await operations();
+      await mgmt.clearExpiredHandoffCredentials(externalId);
+      return mgmt.createHandoffCredential(externalId, ttlMs);
+    },
+    destroy: async (externalId, id) => (await operations()).destroyAppPassword(externalId, id),
+  };
+}

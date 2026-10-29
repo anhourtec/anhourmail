@@ -13,7 +13,7 @@ import { type FailureStore, redisFailureStore, redisSlidingQuota } from "@anhour
 import { redis } from "@anhourmail/server/redis";
 
 import { managedSieve } from "../adapters/stalwart";
-import { stalwartOAuthPort } from "../adapters/stalwart-oauth";
+import { stalwartHandoffSignIn, stalwartOAuthPort } from "../adapters/stalwart-oauth";
 import { container } from "../container";
 import { env } from "../env";
 import { platform } from "../platform";
@@ -110,6 +110,17 @@ export function webmail(): WebmailService {
         // Dev: a visitor without a forwarded address is this machine (servers bind to loopback by default).
         fallbackIp: e.NODE_ENV === "production" ? null : "127.0.0.1",
       }),
+      // Console → webmail handoff (ADR-0024): a throwaway credential minted with the operations key, used once.
+      handoffSignIn: stalwartHandoffSignIn({
+        stalwartUrl,
+        webmailUrl: e.WEBMAIL_URL,
+        fallbackIp: e.NODE_ENV === "production" ? null : "127.0.0.1",
+      }),
+      // A handoff-born webmail session ends with its console session (ADR-0024).
+      consoleSessionAlive: async (userId, sessionId) =>
+        (await container().deps.uow.run((r) => r.security.sessions(userId, new Date()))).some(
+          (x) => x.id === sessionId,
+        ),
       stalwartUrl,
       access: mailboxAccessGate(),
       quota: redisSlidingQuota(redis()),

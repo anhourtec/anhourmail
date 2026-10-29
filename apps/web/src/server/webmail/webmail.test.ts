@@ -14,6 +14,7 @@ import { sanitizeMessageHtml } from "./sanitize";
 import {
   GrantRefusedError,
   type OAuthPort,
+  type OAuthTokens,
   WebmailBlockedError,
   WebmailBusyError,
   WebmailService,
@@ -387,6 +388,8 @@ function setup(
     allowed?: (a: string) => boolean;
     state?: (a: string) => WebmailAccess;
     oauth?: Partial<OAuthPort>;
+    handoffSignIn?: (target: { address: string; externalId: string }) => Promise<OAuthTokens>;
+    consoleSessionAlive?: (userId: string, sessionId: string) => Promise<boolean>;
   } = {},
 ) {
   let now = 1_000_000;
@@ -432,6 +435,8 @@ function setup(
     fetch: fetchImpl,
     now: () => now,
     sleep: async () => undefined,
+    ...(opts.handoffSignIn ? { handoffSignIn: opts.handoffSignIn } : {}),
+    ...(opts.consoleSessionAlive ? { consoleSessionAlive: opts.consoleSessionAlive } : {}),
   });
   return {
     svc,
@@ -450,6 +455,8 @@ const body = {
   methodCalls: [["Mailbox/get", { accountId: "acc1" }, "m"]] as [string, Record<string, unknown>, string][],
 };
 
+const CONSOLE = { userId: "person-1", sessionId: "console-session-1" };
+
 describe("WebmailService", () => {
   it("signs in once with the password, stores tokens server-side and proxies with the bearer token", async () => {
     const t = setup();
@@ -462,6 +469,112 @@ describe("WebmailService", () => {
     expect(JSON.parse(t.calls[1]?.body ?? "{}")).toEqual(body);
     // The password never reaches storage.
     expect([...t.kv.raw().values()].join("")).not.toContain("right");
+  });
+
+  it("ends a handoff-born session with its console session (checked at most every 30 s; a failed check ends it)", async () => {
+    let alive = true;
+    let checks = 0;
+    const t = setup({
+      handoffSignIn: async () => ({ accessToken: "at-h", refreshToken: "rt-h", expiresAt: 9e12 }),
+      consoleSessionAlive: async (userId, sessionId) => {
+        checks += 1;
+        expect([userId, sessionId]).toEqual([CONSOLE.userId, CONSOLE.sessionId]);
+        return alive;
+      },
+    });
+    const { sessionId, session } = await t.svc.openHandoff({ address: "a@x.test", externalId: "s1", console: CONSOLE });
+    expect(session.console).toEqual(CONSOLE);
+    expect(await t.svc.session(sessionId)).not.toBeNull();
+    expect(await t.svc.session(sessionId)).not.toBeNull();
+    expect(checks).toBe(1);
+    // Signed out of the console (or "sign out everywhere", a revoke, a password reset): gone within 30 s.
+    alive = false;
+    t.advance(31_000);
+    expect(await t.svc.session(sessionId)).toBeNull();
+    expect(await t.store.read(sessionId)).toBeNull();
+    // A password sign-in has no console session to follow.
+    const { sessionId: pw } = await t.svc.signIn("a@x.test", "right");
+    expect(await t.svc.session(pw)).not.toBeNull();
+    // The check failing counts as ended.
+    const failing = setup({
+      handoffSignIn: async () => ({ accessToken: "at-h", refreshToken: "rt-h", expiresAt: 9e12 }),
+      consoleSessionAlive: () => Promise.reject(new Error("db down")),
+    });
+    const opened = await failing.svc.openHandoff({ address: "a@x.test", externalId: "s1", console: CONSOLE });
+    expect(await failing.svc.session(opened.sessionId)).toBeNull();
+  });
+
+  it("keeps the console binding on the whole session when another mailbox is added or switched to", async () => {
+    let alive = true;
+    const t = setup({
+      handoffSignIn: async () => ({ accessToken: "at-h", refreshToken: "rt-h", expiresAt: 9e12 }),
+      consoleSessionAlive: async () => alive,
+      // Each token names its own mailbox: the handoff one is a@, a password sign-in's is at-<address>.
+      upstream: (url, init) => {
+        const auth = new Headers(init.headers).get("authorization") ?? "";
+        const who = auth.includes("at-b@x.test") ? "b@x.test" : "a@x.test";
+        return url.endsWith("/jmap/session")
+          ? Response.json({ username: who, primaryAccounts: { [MAIL]: `acc-${who}` } })
+          : Response.json({ methodResponses: [["Mailbox/get", { list: [] }, "m"]] });
+      },
+    });
+    const { sessionId } = await t.svc.openHandoff({ address: "a@x.test", externalId: "s1", console: CONSOLE });
+    const added = await t.svc.addMailbox(sessionId, "b@x.test", "right");
+    expect(added.console).toEqual(CONSOLE);
+    expect(added.others?.some((m) => "console" in m)).toBe(false);
+    const first = added.others?.[0]?.username ?? "";
+    const back = await t.svc.switchMailbox(sessionId, first);
+    expect(back.console).toEqual(CONSOLE);
+    // The console session ends: the whole session goes, whichever mailbox is active.
+    await t.svc.switchMailbox(sessionId, added.username);
+    alive = false;
+    t.advance(31_000);
+    expect(await t.svc.session(sessionId)).toBeNull();
+  });
+
+  it("opens a handoff session (ADR-0024) only for the mailbox the control plane chose, with no password", async () => {
+    const asked: { address: string; externalId: string }[] = [];
+    const t = setup({
+      handoffSignIn: async (target) => {
+        asked.push(target);
+        return { accessToken: "at-handoff", refreshToken: "rt-handoff", expiresAt: 9e12 };
+      },
+      consoleSessionAlive: async () => true,
+    });
+    const { sessionId, session } = await t.svc.openHandoff({ address: "A@x.test", externalId: "s1", console: CONSOLE });
+    expect(asked).toEqual([{ address: "A@x.test", externalId: "s1" }]);
+    expect(session).toMatchObject({ username: "a@x.test", accountId: "acc1", accessToken: "at-handoff" });
+    expect(await t.svc.session(sessionId)).toMatchObject({ username: "a@x.test" });
+    expect(t.calls[0]).toMatchObject({ url: "http://stalwart:8080/jmap/session", auth: "Bearer at-handoff" });
+
+    // The mail server names another mailbox: nothing is kept.
+    const other = setup({
+      handoffSignIn: async () => ({ accessToken: "at", refreshToken: null, expiresAt: 9e12 }),
+      upstream: () => Response.json({ username: "b@x.test", primaryAccounts: { [MAIL]: "acc2" } }),
+    });
+    await expect(
+      other.svc.openHandoff({ address: "a@x.test", externalId: "s1", console: CONSOLE }),
+    ).rejects.toBeInstanceOf(WebmailUnavailableError);
+    expect(other.kv.size()).toBe(0);
+    // A blocked mailbox, a refused or failed credential, throttling, or no handoff configured.
+    const blocked = setup({
+      handoffSignIn: async () => ({ accessToken: "at", refreshToken: null, expiresAt: 9e12 }),
+      state: () => "suspended",
+    });
+    await expect(
+      blocked.svc.openHandoff({ address: "a@x.test", externalId: "s1", console: CONSOLE }),
+    ).rejects.toBeInstanceOf(WebmailBlockedError);
+    const refused = setup({ handoffSignIn: () => Promise.reject(new GrantRefusedError("no")) });
+    await expect(
+      refused.svc.openHandoff({ address: "a@x.test", externalId: "s1", console: CONSOLE }),
+    ).rejects.toBeInstanceOf(WebmailUnavailableError);
+    const busy = setup({ handoffSignIn: () => Promise.reject(new WebmailBusyError("throttled")) });
+    await expect(
+      busy.svc.openHandoff({ address: "a@x.test", externalId: "s1", console: CONSOLE }),
+    ).rejects.toBeInstanceOf(WebmailBusyError);
+    await expect(
+      setup().svc.openHandoff({ address: "a@x.test", externalId: "s1", console: CONSOLE }),
+    ).rejects.toBeInstanceOf(WebmailUnavailableError);
   });
 
   it("gives the same refusal for a wrong password, and maps outages", async () => {

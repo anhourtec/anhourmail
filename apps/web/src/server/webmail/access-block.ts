@@ -5,7 +5,7 @@ import type { WebmailAccess } from "@anhourmail/core/webmail";
 
 import { webmailErrorResponse } from "./http";
 import { mailboxAccessGate, webmail, webmailSessionId } from "./instance";
-import { WebmailBlockedError } from "./service";
+import { WebmailBlockedError, WebmailSignedOutError } from "./service";
 
 /**
  * The control-plane access check on the webmail API (docs/internal/05-webmail.md "Session acquisition"). `route()`
@@ -13,7 +13,8 @@ import { WebmailBlockedError } from "./service";
  * no webmail route, present or future, serves a session whose mailbox is suspended, being deleted or gone, or whose
  * person staff suspended, even one that never reaches the mail server (settings, contacts preferences). A blocked
  * session is ended (its record deleted, the cookie cleared) and answered 401 `mailbox_unavailable` with the reason's
- * message. The BFF's own per-use check (`WebmailService.session`) stays as the second line.
+ * message. A session the console handoff opened whose console session has ended is ended the same way (401
+ * `unauthorized`). The BFF's own per-use check (`WebmailService.session`) stays as the second line.
  */
 
 export type AccessBlockDeps = {
@@ -22,10 +23,16 @@ export type AccessBlockDeps = {
   state: (address: string) => Promise<WebmailAccess>;
   /** Ends the session (drops its record and tokens). */
   end: (sessionId: string) => Promise<void>;
+  /** True when the session came from the console handoff and its console session has ended (ADR-0024). */
+  consoleEnded?: (sessionId: string) => Promise<boolean>;
 };
 
 const defaults = (): AccessBlockDeps => ({
   username: async (id) => (await webmail().store.read(id))?.username ?? null,
+  consoleEnded: async (id) => {
+    const s = await webmail().store.read(id);
+    return s ? webmail().consoleEnded(s) : false;
+  },
   state: (address) => mailboxAccessGate().state(address),
   end: (id) => webmail().signOut(id),
 });
@@ -36,6 +43,11 @@ export async function mailboxAccessBlock(req: Request, deps: AccessBlockDeps = d
   if (!id) return null;
   const address = await deps.username(id);
   if (!address) return null;
+  // A handoff-born session ends with the console session it came from (signed out there, revoked, reset).
+  if (await deps.consoleEnded?.(id)) {
+    await deps.end(id);
+    return webmailErrorResponse(new WebmailSignedOutError("console session ended"));
+  }
   const access = await deps.state(address);
   if (access === "ok") return null;
   await deps.end(id);

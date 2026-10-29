@@ -29,6 +29,11 @@ export type MailboxTokens = {
 export type WebmailSession = MailboxTokens & {
   /** Sign-in time, epoch ms. */
   createdAt: number;
+  /**
+   * Set when the console handoff opened this session (ADR-0024): the console session it came from. When that console
+   * session ends (sign-out, "sign out everywhere", a revoke, a password reset), this webmail session ends too.
+   */
+  console?: { userId: string; sessionId: string };
   /** Other signed-in mailboxes (not active). At most `MAX_MAILBOXES - 1`. */
   others?: MailboxTokens[];
   /**

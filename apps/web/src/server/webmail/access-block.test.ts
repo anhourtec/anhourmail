@@ -54,6 +54,17 @@ describe("webmail access check on every route", () => {
     expect(cookies.some((c) => c.startsWith(`${NOTICE_COOKIE}=person_suspended;`))).toBe(true);
   });
 
+  it("ends a handoff-born session whose console session ended, on every route (401, cookie cleared)", async () => {
+    const { d, ended } = deps({ "a@x.test": "ok" }, { s1: "a@x.test", s2: "a@x.test" });
+    d.consoleEnded = async (id) => id === "s1";
+    const res = await mailboxAccessBlock(withCookie("am.webmail=s1"), d);
+    expect(res?.status).toBe(401);
+    expect(((await res?.json()) as { error: { code: string } }).error.code).toBe("unauthorized");
+    expect(res?.headers.getSetCookie().some((c) => c.startsWith("am.webmail=;"))).toBe(true);
+    expect(ended).toEqual(["s1"]);
+    expect(await mailboxAccessBlock(withCookie("am.webmail=s2"), d)).toBeNull();
+  });
+
   it("names each reason: suspended mailbox, being deleted, gone", async () => {
     for (const reason of ["suspended", "deleting", "gone"] as const) {
       const { d } = deps({ "a@x.test": reason }, { s1: "a@x.test" });

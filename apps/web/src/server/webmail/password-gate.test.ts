@@ -91,8 +91,15 @@ describe("webmail password-change gate", () => {
       }
     }
     expect(allowed).toEqual(["DELETE auth/route.ts", "POST settings/password/route.ts"]);
-    // No webmail session: sign-in (it starts one) and the forwarding confirmation link (opened by the target).
-    expect(unsessioned).toEqual(["POST auth/route.ts", "POST forwarding/confirm/route.ts"]);
+    // No webmail session: sign-in (it starts one), the forwarding confirmation link (opened by the target), and the
+    // console handoff's start and redemption (ADR-0024: it starts one, and refuses a mailbox that owes its password
+    // change before any session exists — core `redeemWebmailHandoff`).
+    expect(unsessioned).toEqual([
+      "POST auth/route.ts",
+      "POST forwarding/confirm/route.ts",
+      "GET handoff/route.ts",
+      "POST handoff/route.ts",
+    ]);
     for (const key of [
       "POST jmap/route.ts",
       "POST send/route.ts",
