@@ -155,6 +155,41 @@
       "when": 1793270438493,
       "tag": "0021_avatar",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1793275843089,
+      "tag": "0022_provisioning_lock_token",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793275946060,
+      "tag": "0023_webmail_signature",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1793276203857,
+      "tag": "0024_alias_admin_lock",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1793276338836,
+      "tag": "0025_alias_creation_day",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1793276402947,
+      "tag": "0026_act_as_session",
+      "breakpoints": true
     }
   ]
 }

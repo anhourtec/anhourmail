@@ -1,0 +1,1 @@
+ALTER TABLE "mail_alias" ADD COLUMN "admin_locked" boolean DEFAULT false NOT NULL;

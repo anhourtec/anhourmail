@@ -1,0 +1,1 @@
+ALTER TABLE "provisioning_job" ADD COLUMN "lock_token" uuid;

@@ -9,6 +9,7 @@ import {
   boolean,
   check,
   customType,
+  date,
   index,
   integer,
   jsonb,
@@ -386,10 +387,34 @@ export const mailAlias = pgTable(
     /** `alias` (chosen) or `masked` (random, per-site); both are Stalwart account aliases (ADR-0009). */
     kind: text("kind").notNull(),
     enabled: boolean("enabled").notNull().default(true),
+    /** Turned off by an account administrator: the mailbox's own person can't turn it back on or delete it. */
+    adminLocked: boolean("admin_locked").notNull().default(false),
     description: text("description"),
     createdAt: createdAt(),
   },
   (t) => [index("mail_alias_mailbox_idx").on(t.mailboxId)],
+);
+
+/**
+ * Aliases (and, separately, masked aliases) each account created per UTC day: the plan's daily creation cap counts
+ * these, never live rows, so deleting gives none back. One row per account, day and kind; days before yesterday are
+ * dropped as a new day is counted (yesterday's stays, for clock skew between instances around midnight).
+ */
+export const aliasCreationDay = pgTable(
+  "alias_creation_day",
+  {
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    day: date("day", { mode: "string" }).notNull(),
+    /** `alias` | `masked` */
+    kind: text("kind").notNull(),
+    count: integer("count").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.accountId, t.day, t.kind] }),
+    check("alias_creation_day_count", sql`${t.count} > 0`),
+  ],
 );
 
 /**
@@ -456,6 +481,8 @@ export const provisioningJob = pgTable(
     lastError: text("last_error"),
     runAfter: timestamp("run_after", { withTimezone: true }).notNull(),
     lockedAt: timestamp("locked_at", { withTimezone: true }),
+    /** A fresh random value per claim (null while not running): only that claim may finish, retry or give up the job. */
+    lockToken: uuid("lock_token"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -476,8 +503,50 @@ export const webmailPreference = pgTable("webmail_preference", {
     .primaryKey()
     .references(() => mailbox.id, { onDelete: "cascade" }),
   prefs: jsonb("prefs").notNull(),
+  /**
+   * When the mailbox's named signatures were started (its old single signature brought over, or one added). Set once,
+   * so deleting every signature never brings the old one back.
+   */
+  signaturesStartedAt: timestamp("signatures_started_at", { withTimezone: true }),
   updatedAt: updatedAt(),
 });
+
+/**
+ * A mailbox's named signatures (docs/internal/05-webmail.md "Signatures", ADR-0014). `html` is sanitised by the webmail
+ * BFF before it is stored (embedded images only, never remote URLs) and `text` is generated from it; neither is mail
+ * content in the sense of rule 24, but they are personal and never logged or audited. At most one default for new
+ * messages and one for replies per mailbox; deleting a default leaves none.
+ */
+export const webmailSignature = pgTable(
+  "webmail_signature",
+  {
+    id: uuid("id").primaryKey(),
+    mailboxId: uuid("mailbox_id")
+      .notNull()
+      .references(() => mailbox.id, { onDelete: "cascade" }),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    html: text("html").notNull(),
+    text: text("text").notNull(),
+    defaultNew: boolean("default_new").notNull().default(false),
+    defaultReply: boolean("default_reply").notNull().default(false),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("webmail_signature_name_idx").on(t.mailboxId, sql`lower(${t.name})`),
+    uniqueIndex("webmail_signature_default_new_idx")
+      .on(t.mailboxId)
+      .where(sql`${t.defaultNew}`),
+    uniqueIndex("webmail_signature_default_reply_idx")
+      .on(t.mailboxId)
+      .where(sql`${t.defaultReply}`),
+    check("webmail_signature_name_length", sql`char_length(${t.name}) BETWEEN 1 AND 32`),
+    check("webmail_signature_size", sql`char_length(${t.html}) <= 307200 AND char_length(${t.text}) <= 10000`),
+  ],
+);
 
 /**
  * A mailbox's one forwarding target and its confirmation (the target's owner must confirm before forwarding can be
@@ -566,5 +635,47 @@ export const avatar = pgTable(
       "avatar_size",
       sql`${t.byteSize} > 0 AND ${t.byteSize} <= 262144 AND octet_length(${t.data}) = ${t.byteSize}`,
     ),
+  ],
+);
+
+// --- staff act-as (ADR-0023) ---------------------------------------------------------------------------------------
+
+/**
+ * Staff support access to one customer account ("act as"): read-only, time-boxed, bound to the console session that
+ * started it. Kept after it ends (who opened which account, why and for how long); every action in it is in the audit
+ * log with `on_behalf_of`. The reason is the staff member's own words and the account's admins see it; no secrets.
+ */
+export const actAsSession = pgTable(
+  "act_as_session",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    staffUserId: text("staff_user_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    /** global_admin | support_admin (rbac ACT_AS_ROLES) when it started. */
+    staffRole: text("staff_role").notNull(),
+    /** The console session (`auth_session.id`) it belongs to; no foreign key, so ending a sign-in keeps the row. */
+    authSessionId: text("auth_session_id").notNull(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    reason: text("reason").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    /** staff | expired | signed_out | role_removed */
+    endReason: text("end_reason"),
+  },
+  (t) => [
+    index("act_as_session_staff_idx").on(t.staffUserId, t.authSessionId),
+    index("act_as_session_open_idx")
+      .on(t.expiresAt)
+      .where(sql`${t.endedAt} is null`),
+    // One unclosed session per staff member (ADR-0023), so two concurrent starts can't both insert.
+    uniqueIndex("act_as_session_one_open_idx")
+      .on(t.staffUserId)
+      .where(sql`${t.endedAt} is null`),
+    check("act_as_session_reason_length", sql`char_length(${t.reason}) between 1 and 500`),
+    check("act_as_session_window", sql`${t.expiresAt} > ${t.startedAt}`),
   ],
 );
