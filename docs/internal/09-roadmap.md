@@ -38,8 +38,9 @@ the properties and values it needs) with tests and a `/security-review`, then e2
 1. The remote-image proxy, so "Load images" works.
 2. One composer that starts in rich text, with plain text moved into a "More options" menu.
 3. Folder counts that go stale, like Drafts still showing 1 after the last draft is discarded.
-4. The Archive fix: no mailbox ever gets an Archive folder, so the Archive button and the `e` shortcut do nothing,
-   although the docs say one is created; create it at setup and add it to existing mailboxes.
+4. ~~The Archive fix~~ — done 2026-10-29: Stalwart's `x:Email.defaultFolders` creates Archive for new mailboxes,
+   a one-off backfill in the Stalwart bootstrap adds it to existing ones, and the webmail says so when a mailbox
+   has none (ADR-0014 update).
 5. Signatures: several named ones with Add / Edit / Delete, a rich editor with embedded images, and defaults for new
    messages and for replies and forwards (pulled forward from the second wave below).
 6. Avatars: photo upload on console Profile and in webmail Account, synced everywhere (CLAUDE.md rule 61). Today all

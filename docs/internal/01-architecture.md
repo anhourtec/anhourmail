@@ -168,6 +168,12 @@ Built in Phase 4 slice 1 (2026-10-22; ADR-0018):
    a sandboxed `srcdoc` frame. Mail the webmail sends may carry HTML: the composer and the drafts route both run it
    through the stricter outgoing allow-list (`server/webmail/outgoing-html.ts`) and send multipart/alternative with a
    text part. Attachments stream from `/api/webmail/download/:blobId` as `attachment`, `nosniff`.
+   **Remote images** stay blocked in that frame; each one carries a signed image link instead of its address, and
+   "Load images" posts the links to `/api/webmail/img`, the **image proxy**: the BFF (not the browser) fetches the image
+   under SSRF guards (public addresses only, pinned connection, every redirect checked, size and type checks) and the
+   browser shows it as a `data:` image, so the frame still loads nothing and the sender never sees the reader
+   (`07-security.md` "Image proxy (SSRF)"). This is the one place the app makes outbound HTTP requests to addresses
+   from mail; it needs outbound HTTP/HTTPS from the app container in production (check the ops repo's network rules).
    **The browser never sees a Stalwart token.** Webmail pages get a nonce-based CSP from `src/proxy.ts` (console pages
    get their own, stricter one there too; `07-security.md` "Standards"), which
    also sends visits to the webmail app page without a session cookie straight to sign-in (presence only; the page
