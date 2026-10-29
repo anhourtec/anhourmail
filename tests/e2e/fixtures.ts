@@ -134,8 +134,13 @@ export async function openSearch(page: Page) {
 
 /** Signs out through the person's menu in the app bar. */
 export async function signOut(page: Page) {
-  await page.getByRole("button", { name: "Your account", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Sign out" }).click();
+  // A click that lands before the app bar hydrates opens nothing: open it again until the menu shows.
+  const item = page.getByRole("menuitem", { name: "Sign out" });
+  await expect(async () => {
+    if (!(await item.isVisible())) await page.getByRole("button", { name: "Your account", exact: true }).click();
+    await expect(item).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
+  await item.click();
   await expect(page).toHaveURL(/\/sign-in$/);
 }
 
