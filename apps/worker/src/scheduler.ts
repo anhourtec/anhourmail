@@ -37,6 +37,8 @@ export const JOBS: readonly Job[] = [
     enabled: true,
     stalwartKeys: ["audit"],
   },
+  // ADR-0023: close staff act-as sessions that ran out, signed out or lost the role (database only), every minute.
+  { name: "act-as-expiry", script: "job:act-as-expiry", everyMs: 60_000, timeoutMs: 60_000, enabled: true },
   // ADR-0020: the service accounts hold API keys only — a cheap check, every minute.
   { name: "service-accounts", script: "job:service-accounts", everyMs: 60_000, timeoutMs: 60_000, enabled: true },
   // Pending customer domains: activate them once their DNS checks out (docs: "re-checks automatically").

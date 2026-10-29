@@ -38,7 +38,10 @@ l.info("worker started");
 while (!stopping()) {
   try {
     const job = await runNextJob(deps, mail);
-    if (job) l.info("job processed", { jobId: job.id, kind: job.kind, attempt: job.attempts });
+    if (job?.lockLost) {
+      // This run's claim went stale and another worker took the job over: its outcome was discarded.
+      l.warn("job lock lost", { jobId: job.id, kind: job.kind, attempt: job.attempts });
+    } else if (job) l.info("job processed", { jobId: job.id, kind: job.kind, attempt: job.attempts });
     else await new Promise((r) => setTimeout(r, IDLE_MS));
   } catch (err) {
     // Queue or database trouble: back off and keep going (the job itself is retried by the queue).

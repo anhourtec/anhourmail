@@ -8,6 +8,7 @@
     "dev": "tsx watch --env-file-if-exists=../../.env src/worker.ts",
     "scheduler": "tsx src/scheduler.ts",
     "job:audit-verify": "tsx src/jobs/audit-verify.ts",
+    "job:act-as-expiry": "tsx src/jobs/act-as-expiry.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "dev:scheduler": "tsx watch --env-file-if-exists=../../.env src/scheduler.ts",
     "job:reconcile": "tsx src/jobs/reconcile.ts",
