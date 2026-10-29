@@ -6,10 +6,28 @@ description: Read and write mail in the browser — signing in, several mailboxe
 The webmail is AnhourMail in your browser, at <Value of="webmailHost" />. It's a separate address from the console
 (<Value of="appHost" />), so signing in to one doesn't sign you in to the other.
 
+## Open webmail from the console
+
+If you're signed in to the console, choose **Open webmail** in the sidebar, your menu or on the home page. Your own
+mailbox opens straight away, without its password. If you have more than one mailbox, pick the one to open. If you
+didn't sign in to the console in the last few minutes, you're asked to confirm it's you first (your console password
+or a code), as when you make an app password.
+
+- It only opens mailboxes that are **yours** (assigned to you), never someone else's or a shared address.
+- The link works once, for <Value of="webmailHandoffSeconds" /> seconds, and only in the browser you started from. If you copy it to another
+  browser or open it again, you're asked to start over from the console.
+- It isn't available while Anhourtec support has your account open, for Auditors, while a mailbox is suspended or
+  being deleted, or before you've chosen your own password for a new mailbox. In those cases you're offered the
+  ordinary sign-in below.
+- No password is involved: the console never sees or passes along your mailbox password, and the one-time key used
+  to open your mailbox is deleted straight away. Signing out of the webmail, or changing the
+  mailbox password, ends the session as usual. Signing out of the console (or signing out everywhere) ends a webmail
+  session opened this way too.
+
 ## Sign in
 
-1. Go to <Value of="webmailHost" />. From the console you can also choose **Open webmail** in the sidebar or your
-   menu. The sign-in page never fills in an address from a link, so type it yourself (or let your password manager).
+1. Go to <Value of="webmailHost" />. The sign-in page never fills in an address from a link, so type it yourself (or
+   let your password manager).
 2. Enter your **mailbox address** and your **mailbox password** — the password of the mailbox itself, not an app
    password.
 3. Choose **Sign in**.
