@@ -4,6 +4,10 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import {
   appPasswordPermissions,
   type AppPasswordScope,
+  CUSTOMER_APP_PASSWORD_QUOTA,
+  HANDOFF_CREDENTIAL_DESCRIPTION,
+  handoffCredentialPermissions,
+  isHandoffCredential,
   PRINCIPAL_READ_PERMISSIONS,
   SELF_SERVICE_PERMISSIONS,
 } from "./app-passwords";
@@ -272,7 +276,8 @@ export class StalwartManagement {
       return d.id;
     };
     const fields = {
-      quotas: { maxDiskQuota: input.quotaBytes },
+      // One app-password slot more than we offer: the console → webmail handoff credential (ADR-0024).
+      quotas: { maxDiskQuota: input.quotaBytes, maxAppPasswords: CUSTOMER_APP_PASSWORD_QUOTA },
       // A customer mailbox never gets to write its own Sieve (CUSTOMER_PERMISSIONS); a suspended one is turned off
       // entirely (SUSPENDED_PERMISSIONS). `undefined` leaves permissions as they are.
       ...(input.suspended === undefined
@@ -542,6 +547,59 @@ export class StalwartManagement {
   }
 
   /**
+   * Mints the console → webmail handoff credential on `accountId` (ADR-0024): every permission but `authenticate`
+   * off, refused by Stalwart after `ttlMs` (second precision, rounded up). Needs the operations key (owner access
+   * through `impersonate` + `sysAppPasswordCreate`, no mail access). The secret is for one OAuth sign-in in this
+   * process; the caller destroys the credential right after and never stores or logs the secret.
+   */
+  async createHandoffCredential(
+    accountId: string,
+    ttlMs: number,
+    now: Date = new Date(),
+  ): Promise<{ id: string; secret: string }> {
+    const expiresAt = new Date(Math.ceil((now.getTime() + ttlMs) / 1000) * 1000).toISOString().replace(".000Z", "Z");
+    const { created } = await this.transport.set("x:AppPassword", {
+      accountId,
+      create: {
+        h: { description: HANDOFF_CREDENTIAL_DESCRIPTION, expiresAt, permissions: handoffCredentialPermissions() },
+      },
+    });
+    const id = created.h?.id;
+    const secret = created.h?.secret;
+    if (typeof id !== "string" || typeof secret !== "string") {
+      throw new StalwartError("Handoff credential was not returned", "set");
+    }
+    return { id, secret };
+  }
+
+  /**
+   * Destroys the account's handoff credentials that have expired (left behind when a destroy after a sign-in failed),
+   * so they don't hold an app-password slot. Owner access (the operations key). Returns how many went.
+   */
+  async clearExpiredHandoffCredentials(accountId: string, now: Date = new Date()): Promise<number> {
+    const all = await this.transport.getAll<{
+      id: string;
+      description?: string;
+      createdAt?: string;
+      expiresAt?: string | null;
+      permissions?: unknown;
+    }>("x:AppPassword", ["description", "createdAt", "expiresAt", "permissions"], null, accountId);
+    const stale = all
+      .filter((a) => {
+        const createdAt = a.createdAt ? new Date(a.createdAt) : null;
+        const expiresAt = a.expiresAt ? new Date(a.expiresAt) : null;
+        return (
+          isHandoffCredential({ description: a.description, permissions: a.permissions, createdAt, expiresAt }) &&
+          expiresAt !== null &&
+          expiresAt.getTime() <= now.getTime()
+        );
+      })
+      .map((a) => a.id);
+    if (stale.length > 0) await this.transport.set("x:AppPassword", { accountId, destroy: stale });
+    return stale.length;
+  }
+
+  /**
    * Every app password of an account with its `permissions` value, and how many API keys it has (for the
    * reconciler; never secrets). Read from `x:Account.credentials`, so it needs only `sysAccountGet` — no owner access
    * to the mailbox (the provisioning key; verified on v0.16.27: id, description, `createdAt` and `permissions` are
@@ -549,15 +607,19 @@ export class StalwartManagement {
    */
   async credentialInventory(accountId: string): Promise<{
     appPasswords: { id: string; createdAt: Date; permissions: unknown }[];
+    /** Console → webmail handoff credentials still there (each expires within two minutes; ADR-0024). */
+    handoffCredentials: number;
     apiKeys: number;
     /** Password credentials (the mailbox sign-in password). A mailbox has exactly one; Stalwart refuses a second. */
     passwords: { id: string }[];
   }> {
     const credentials = await this.#credentials(accountId);
     return {
+      // A handoff credential lives for a moment (ADR-0024) and is not an app password anyone holds.
       appPasswords: credentials
-        .filter((c) => c.type === "AppPassword")
+        .filter((c) => c.type === "AppPassword" && !isHandoffCredential(c))
         .map((c) => ({ id: c.id, createdAt: c.createdAt, permissions: c.permissions })),
+      handoffCredentials: credentials.filter((c) => c.type === "AppPassword" && isHandoffCredential(c)).length,
       apiKeys: credentials.filter((c) => c.type === "ApiKey").length,
       passwords: credentials.filter((c) => c.type === "Password").map((c) => ({ id: c.id })),
     };
@@ -585,7 +647,8 @@ export class StalwartManagement {
       `${c.type}:${c.id}:${String(c.createdAt.getTime())}`;
     const left = new Set(after.map(key));
     if (left.has(key(target))) throw new StalwartError("App password is still there after revocation", "set");
-    if (before.some((c) => c !== target && !left.has(key(c)))) {
+    // A handoff credential (ADR-0024) comes and goes within a second on its own; anything else missing is an error.
+    if (before.some((c) => c !== target && !isHandoffCredential(c) && !left.has(key(c)))) {
       throw new StalwartError("Another credential disappeared during the revocation", "set");
     }
     return true;
@@ -644,14 +707,29 @@ export class StalwartManagement {
     return { credentialId: now[0].id };
   }
 
-  async #credentials(
-    accountId: string,
-  ): Promise<{ index: string; type: string; id: string; createdAt: Date; permissions: unknown }[]> {
+  async #credentials(accountId: string): Promise<
+    {
+      index: string;
+      type: string;
+      id: string;
+      createdAt: Date;
+      expiresAt: Date | null;
+      description: string;
+      permissions: unknown;
+    }[]
+  > {
     const [account] = await this.transport.getAll<{
       id: string;
       credentials?: Record<
         string,
-        { "@type"?: string; credentialId?: string; createdAt?: string; permissions?: unknown }
+        {
+          "@type"?: string;
+          credentialId?: string;
+          createdAt?: string;
+          expiresAt?: string | null;
+          description?: string;
+          permissions?: unknown;
+        }
       >;
     }>("x:Account", ["credentials"], [accountId]);
     if (!account) throw new StalwartError(`Account ${accountId} not found`, "method");
@@ -660,6 +738,8 @@ export class StalwartManagement {
       type: c["@type"] ?? "",
       id: c.credentialId ?? "",
       createdAt: new Date(c.createdAt ?? 0),
+      expiresAt: c.expiresAt ? new Date(c.expiresAt) : null,
+      description: c.description ?? "",
       permissions: c.permissions,
     }));
   }

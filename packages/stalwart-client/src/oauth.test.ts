@@ -94,6 +94,32 @@ describe("StalwartOAuth", () => {
     expect(seen).toEqual([]);
   });
 
+  it("signs in with a handoff credential (ADR-0024), and only with an app-password-shaped secret", async () => {
+    const { f, seen } = fakeFetch((url) =>
+      url.endsWith("/api/auth")
+        ? Response.json({ type: "authenticated", client_code: "code-h" })
+        : Response.json({ access_token: "at-h", refresh_token: "rt-h", expires_in: 3600 }),
+    );
+    const oauth = new StalwartOAuth(opts(f));
+    const secret = `app_${"a1b2c3d4e5".repeat(3)}k9m8x7`;
+    expect(await oauth.signInWithHandoffCredential("a@x.test", secret, "198.51.100.9")).toEqual({
+      accessToken: "at-h",
+      refreshToken: "rt-h",
+      expiresAt: 1_000_000 + 3_600_000,
+    });
+    expect(JSON.parse(seen[0]?.body ?? "{}")).toMatchObject({ type: "authCode", accountName: "a@x.test" });
+    expect(seen[0]?.headers.get("x-forwarded-for")).toBe("198.51.100.9");
+    // A mailbox password never takes this path.
+    await expect(oauth.signInWithHandoffCredential("a@x.test", "a mailbox password")).rejects.toBeInstanceOf(
+      OAuthDeniedError,
+    );
+    expect(seen).toHaveLength(2);
+    const refused = fakeFetch(() => Response.json({ type: "failure" }));
+    await expect(
+      new StalwartOAuth(opts(refused.f)).signInWithHandoffCredential("a@x.test", secret),
+    ).rejects.toBeInstanceOf(OAuthDeniedError);
+  });
+
   it("maps throttling and bans (429, 403) to OAuthThrottledError, never to a wrong password", async () => {
     for (const status of [429, 403]) {
       const { f } = fakeFetch(() => new Response("", { status }));

@@ -155,6 +155,25 @@ export class StalwartOAuth {
     // An app password would get an account-wide token here, without the permissions the credential has turned off
     // (verified on v0.16.27): app passwords are for mail apps over their own protocols, never this sign-in.
     if (isAppPasswordSecret(accountSecret)) throw new OAuthDeniedError("sign-in refused");
+    return this.#authCode(accountName, accountSecret, clientIp);
+  }
+
+  /**
+   * The console → webmail handoff (ADR-0024): signs in once with the throwaway credential the control plane minted
+   * for this one sign-in (`StalwartManagement.createHandoffCredential`) and returns ordinary webmail tokens. Only an
+   * app-password-shaped secret is accepted here, so a mailbox password can never take this path; the caller destroys
+   * the credential straight after, whatever happened.
+   */
+  async signInWithHandoffCredential(
+    accountName: string,
+    credentialSecret: string,
+    clientIp?: string | null,
+  ): Promise<OAuthTokens> {
+    if (!isAppPasswordSecret(credentialSecret)) throw new OAuthDeniedError("sign-in refused");
+    return this.#authCode(accountName, credentialSecret, clientIp);
+  }
+
+  async #authCode(accountName: string, accountSecret: string, clientIp?: string | null): Promise<OAuthTokens> {
     const { verifier, challenge } = pkcePair();
     const res = await this.#post(
       "/api/auth",

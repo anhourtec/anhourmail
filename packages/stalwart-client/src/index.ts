@@ -31,7 +31,12 @@ export {
 export {
   appPasswordPermissions,
   type AppPasswordScope,
+  CUSTOMER_APP_PASSWORD_QUOTA,
+  HANDOFF_CREDENTIAL_DESCRIPTION,
+  HANDOFF_CREDENTIAL_MAX_LIFETIME_MS,
+  handoffCredentialPermissions,
   isAppPasswordSecret,
+  isHandoffCredential,
   KNOWN_PERMISSIONS,
   PRINCIPAL_READ_PERMISSIONS,
   SCOPE_ALLOW,
@@ -120,7 +125,9 @@ function baseUrl(env: Record<string, string | undefined>): string {
 function forRole(role: StalwartCredentialRole): StalwartManagement {
   const cache = (globalForStalwart.amStalwart ??= {});
   const cached = cache[role];
-  if (cached) return cached;
+  // `instanceof`: in development a reloaded module brings a new class, and an instance cached on `globalThis` by the
+  // old one would lack methods added since (production never reloads, so this is always true there).
+  if (cached instanceof StalwartManagement) return cached;
   const env = process.env;
   const c = SERVICE_CREDENTIALS[role];
   const problems = credentialEnvProblems([role], {
@@ -163,7 +170,7 @@ export function hasStalwartCredential(role: StalwartCredentialRole): boolean {
 export function stalwartDevAdmin(): StalwartManagement {
   if (process.env.NODE_ENV === "production") throw new Error("The dev admin is never used in production");
   const cache = (globalForStalwart.amStalwart ??= {});
-  if (cache.devAdmin) return cache.devAdmin;
+  if (cache.devAdmin instanceof StalwartManagement) return cache.devAdmin;
   const auth = devAdminAuth(process.env);
   if (!auth) throw new Error("Set STALWART_DEV_ADMIN_USER and STALWART_DEV_ADMIN_PASSWORD");
   cache.devAdmin = new StalwartManagement(new StalwartTransport({ baseUrl: baseUrl(process.env), auth }));

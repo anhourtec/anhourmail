@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { SELF_SERVICE_PERMISSIONS } from "./app-passwords";
+import {
+  HANDOFF_CREDENTIAL_DESCRIPTION,
+  handoffCredentialPermissions,
+  SELF_SERVICE_PERMISSIONS,
+} from "./app-passwords";
 import { StalwartError, StalwartTransport } from "./client";
 import {
   hasStalwartCredential,
@@ -160,6 +164,15 @@ describe("credentials on x:Account", () => {
     },
     "2": { "@type": "ApiKey", credentialId: "c", createdAt: "2026-10-22T10:00:01Z" },
     "3": { "@type": "AppPassword", credentialId: "d", createdAt: "2026-10-22T10:00:02Z" },
+    // A console → webmail handoff credential in flight (ADR-0024): not an app password anyone holds.
+    "4": {
+      "@type": "AppPassword",
+      credentialId: "e",
+      description: HANDOFF_CREDENTIAL_DESCRIPTION,
+      createdAt: "2026-10-22T10:00:03Z",
+      expiresAt: "2026-10-22T10:01:03Z",
+      permissions: handoffCredentialPermissions(),
+    },
   };
 
   it("lists app passwords and counts API keys without owner access", async () => {
@@ -169,6 +182,7 @@ describe("credentials on x:Account", () => {
         { id: "b", createdAt: new Date("2026-10-22T10:00:00Z"), permissions: { "@type": "Disable" } },
         { id: "d", createdAt: new Date("2026-10-22T10:00:02Z"), permissions: undefined },
       ],
+      handoffCredentials: 1,
       apiKeys: 1,
       passwords: [{ id: "a" }],
     });
@@ -176,7 +190,12 @@ describe("credentials on x:Account", () => {
     const none = fake({ "x:Account/get": () => ({ list: [] }) });
     await expect(none.mgmt.credentialInventory("gone")).rejects.toBeInstanceOf(StalwartError);
     const empty = fake({ "x:Account/get": () => ({ list: [{ id: "km" }] }) });
-    expect(await empty.mgmt.credentialInventory("km")).toEqual({ appPasswords: [], apiKeys: 0, passwords: [] });
+    expect(await empty.mgmt.credentialInventory("km")).toEqual({
+      appPasswords: [],
+      handoffCredentials: 0,
+      apiKeys: 0,
+      passwords: [],
+    });
   });
 
   it("revokes one app password by id and creation time through a patch of its position", async () => {
@@ -232,6 +251,21 @@ describe("credentials on x:Account", () => {
     await expect(lost.mgmt.revokeAppPasswordCredential("km", "b", new Date("2026-10-22T10:00:00Z"))).rejects.toThrow(
       /Another credential/,
     );
+    // A handoff credential that comes and goes meanwhile (ADR-0024) is not "another credential".
+    calls = 0;
+    const handoff = fake({
+      "x:Account/get": () => ({
+        list: [
+          {
+            id: "km",
+            credentials:
+              calls++ === 0 ? credentials : { "0": credentials["0"], "2": credentials["2"], "3": credentials["3"] },
+          },
+        ],
+      }),
+      "x:Account/set": () => ({ updated: { km: null } }),
+    });
+    expect(await handoff.mgmt.revokeAppPasswordCredential("km", "b", new Date("2026-10-22T10:00:00Z"))).toBe(true);
   });
 
   it("asks Stalwart what the credential can do", async () => {

@@ -206,3 +206,46 @@ export function scopesOf(permissions: unknown): AppPasswordScope[] | null {
  * credential's turned-off permissions (verified).
  */
 export const isAppPasswordSecret = (secret: string): boolean => /^app_/i.test(secret.trim());
+
+/**
+ * The console → webmail handoff credential (ADR-0024): an app password the web app's operations key mints for one
+ * webmail sign-in, uses once at the OAuth endpoint and destroys straight away. The token it leads to is an ordinary,
+ * account-wide webmail token (verified on v0.16.27: it keeps working after the credential is destroyed and is revoked
+ * by a password change like a password sign-in's). While it exists, every permission but `authenticate` is off, so it
+ * opens nothing over IMAP, POP3, SMTP, DAV or JMAP, and Stalwart refuses it after `expiresAt`.
+ */
+export const HANDOFF_CREDENTIAL_DESCRIPTION = "AnhourMail webmail handoff";
+
+/** The longest a handoff credential may be meant to live for the reconciler to leave it out (ms). */
+export const HANDOFF_CREDENTIAL_MAX_LIFETIME_MS = 120_000;
+
+/**
+ * Stalwart's `maxAppPasswords` on customer accounts: our per-mailbox limit (5, `APP_PASSWORDS_PER_MAILBOX`) plus the
+ * one slot a handoff credential takes for a moment, so a mailbox with all its app passwords can still be opened from
+ * the console. Set by `upsertUser`.
+ */
+export const CUSTOMER_APP_PASSWORD_QUOTA = 6;
+
+/** `Disable` of every known and self-service permission except `authenticate`. */
+export function handoffCredentialPermissions(): { "@type": "Disable"; permissions: Record<string, true> } {
+  const off = new Set<string>([...SELF_SERVICE_PERMISSIONS, ...KNOWN_PERMISSIONS.filter((p) => p !== "authenticate")]);
+  return { "@type": "Disable", permissions: Object.fromEntries([...off].sort().map((p) => [p, true] as const)) };
+}
+
+/**
+ * True only for a credential that is exactly a handoff credential: our description, exactly the handoff permissions,
+ * and a lifetime of at most two minutes. Anything else that merely carries the description is an ordinary (unknown)
+ * credential to the reconciler. Such a credential reaches nothing but the OAuth endpoint, and not after it expires.
+ */
+export function isHandoffCredential(c: {
+  description?: unknown;
+  permissions?: unknown;
+  createdAt?: Date | null;
+  expiresAt?: Date | null;
+}): boolean {
+  if (c.description !== HANDOFF_CREDENTIAL_DESCRIPTION) return false;
+  if (fingerprint(c.permissions) !== fingerprint(handoffCredentialPermissions())) return false;
+  if (!c.createdAt || !c.expiresAt) return false;
+  const life = c.expiresAt.getTime() - c.createdAt.getTime();
+  return Number.isFinite(life) && life > 0 && life <= HANDOFF_CREDENTIAL_MAX_LIFETIME_MS;
+}

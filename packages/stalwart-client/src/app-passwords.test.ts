@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   appPasswordPermissions,
+  HANDOFF_CREDENTIAL_DESCRIPTION,
+  HANDOFF_CREDENTIAL_MAX_LIFETIME_MS,
+  handoffCredentialPermissions,
   isAppPasswordSecret,
+  isHandoffCredential,
   KNOWN_PERMISSIONS,
   PRINCIPAL_READ_PERMISSIONS,
   SCOPE_ALLOW,
@@ -187,5 +191,117 @@ describe("StalwartManagement app passwords", () => {
     expect(await mgmt.appPassword("km", "c")).toMatchObject({ id: "c" });
     await mgmt.destroyAppPassword("km", "c");
     expect(seen.at(-1)).toEqual({ name: "x:AppPassword/set", args: { accountId: "km", destroy: ["c"] } });
+  });
+});
+
+describe("handoff credential (ADR-0024)", () => {
+  const at = new Date("2026-10-29T12:00:00Z");
+  const handoff = (over: Record<string, unknown> = {}) => ({
+    description: HANDOFF_CREDENTIAL_DESCRIPTION,
+    permissions: handoffCredentialPermissions(),
+    createdAt: at,
+    expiresAt: new Date(at.getTime() + 60_000),
+    ...over,
+  });
+
+  it("turns off every known and self-service permission but authenticate", () => {
+    const off = Object.keys(handoffCredentialPermissions().permissions);
+    expect(off).not.toContain("authenticate");
+    for (const p of [...KNOWN_PERMISSIONS.filter((x) => x !== "authenticate"), ...SELF_SERVICE_PERMISSIONS]) {
+      expect(off).toContain(p);
+    }
+    // Never mistaken for an app password with scopes (the reconciler would then accept it as one).
+    expect(scopesOf(handoffCredentialPermissions())).toBeNull();
+  });
+
+  it("is recognised only with our description, exactly its permissions and a lifetime of two minutes or less", () => {
+    expect(isHandoffCredential(handoff())).toBe(true);
+    expect(
+      isHandoffCredential(handoff({ expiresAt: new Date(at.getTime() + HANDOFF_CREDENTIAL_MAX_LIFETIME_MS) })),
+    ).toBe(true);
+    expect(isHandoffCredential(handoff({ description: "Phone" }))).toBe(false);
+    expect(isHandoffCredential(handoff({ permissions: appPasswordPermissions(["imap"]) }))).toBe(false);
+    expect(isHandoffCredential(handoff({ permissions: { "@type": "Inherit" } }))).toBe(false);
+    expect(isHandoffCredential(handoff({ expiresAt: null }))).toBe(false);
+    expect(isHandoffCredential(handoff({ createdAt: null }))).toBe(false);
+    expect(isHandoffCredential(handoff({ expiresAt: new Date(at.getTime() + 3_600_000) }))).toBe(false);
+    expect(isHandoffCredential(handoff({ expiresAt: at }))).toBe(false);
+  });
+
+  it("mints one expiring in whole seconds on the given account and returns its secret", async () => {
+    const { mgmt, seen } = management({
+      "x:AppPassword/set": () => ({ created: { h: { id: "f", secret: "app_secret" } } }),
+    });
+    expect(await mgmt.createHandoffCredential("km", 60_000, new Date("2026-10-29T12:00:00.250Z"))).toEqual({
+      id: "f",
+      secret: "app_secret",
+    });
+    expect(seen[0]).toEqual({
+      name: "x:AppPassword/set",
+      args: {
+        accountId: "km",
+        create: {
+          h: {
+            description: HANDOFF_CREDENTIAL_DESCRIPTION,
+            expiresAt: "2026-10-29T12:01:01Z",
+            permissions: handoffCredentialPermissions(),
+          },
+        },
+      },
+    });
+    const none = management({ "x:AppPassword/set": () => ({ created: { h: { id: "f" } } }) });
+    await expect(none.mgmt.createHandoffCredential("km", 60_000)).rejects.toBeInstanceOf(StalwartError);
+  });
+
+  it("clears only expired handoff credentials", async () => {
+    const iso = (ms: number) => new Date(at.getTime() + ms).toISOString();
+    const { mgmt, seen } = management({
+      "x:AppPassword/get": () => ({
+        list: [
+          // expired handoff credential: goes
+          {
+            id: "a",
+            description: HANDOFF_CREDENTIAL_DESCRIPTION,
+            createdAt: iso(-120_000),
+            expiresAt: iso(-60_000),
+            permissions: handoffCredentialPermissions(),
+          },
+          // one still in flight: stays
+          {
+            id: "b",
+            description: HANDOFF_CREDENTIAL_DESCRIPTION,
+            createdAt: iso(-10_000),
+            expiresAt: iso(50_000),
+            permissions: handoffCredentialPermissions(),
+          },
+          // an app password someone holds, expired: not ours to remove here
+          {
+            id: "c",
+            description: "Phone",
+            createdAt: iso(-120_000),
+            expiresAt: iso(-60_000),
+            permissions: appPasswordPermissions(["imap"]),
+          },
+          // our description but other permissions: not a handoff credential
+          {
+            id: "d",
+            description: HANDOFF_CREDENTIAL_DESCRIPTION,
+            createdAt: iso(-120_000),
+            expiresAt: iso(-60_000),
+            permissions: { "@type": "Inherit" },
+          },
+        ],
+      }),
+      "x:AppPassword/set": () => ({ destroyed: ["a"] }),
+    });
+    expect(await mgmt.clearExpiredHandoffCredentials("km", at)).toBe(1);
+    expect(seen[0]).toEqual({
+      name: "x:AppPassword/get",
+      args: { ids: null, properties: ["description", "createdAt", "expiresAt", "permissions"], accountId: "km" },
+    });
+    expect(seen[1]).toEqual({ name: "x:AppPassword/set", args: { accountId: "km", destroy: ["a"] } });
+    const empty = management({ "x:AppPassword/get": () => ({ list: [] }) });
+    expect(await empty.mgmt.clearExpiredHandoffCredentials("km", at)).toBe(0);
+    expect(empty.seen).toHaveLength(1);
   });
 });
