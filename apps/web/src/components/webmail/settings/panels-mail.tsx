@@ -11,6 +11,10 @@ const storage = (bytes: number) =>
   bytes >= 1024 ** 3
     ? `${(bytes / 1024 ** 3).toFixed(1).replace(/\.0$/, "")} GB`
     : `${(bytes / 1024 ** 2).toFixed(1).replace(/\.0$/, "")} MB`;
+import { PersonPhoto } from "../../person-photo";
+import { PhotoEditor } from "../../photo-editor";
+import { photoChanged, useOwnPhoto } from "../avatars";
+import { initials } from "../format";
 import { type Identity, type MailClient, RefusedError, type SettingsOverview } from "../mail-client";
 import { areaClass, Choice, fieldClass, Group, Note, Row, smallPrimary, smallSecondary, Toggle } from "./controls";
 import { ChangePasswordForm } from "./password-form";
@@ -652,6 +656,7 @@ export function AccountPanel({
   const [status, setStatus] = useState<Status>(null);
   const [busy, setBusy] = useState(false);
   const id = useId();
+  const photo = useOwnPhoto(data.address);
   const pct = data.quota.limit ? Math.min(100, Math.round((data.quota.used / data.quota.limit) * 100)) : null;
 
   const save = async (e: SyntheticEvent) => {
@@ -682,8 +687,49 @@ export function AccountPanel({
             <span className="text-[13px] text-muted-foreground">Mailbox address</span>
             <span className="font-mono text-[14px]">{data.address}</span>
           </div>
+          <div className="flex flex-col gap-2">
+            <span id={`${id}-p`} className="text-[13px] text-muted-foreground">
+              Photo
+            </span>
+            {photo && !photo.editable ? (
+              <div className="flex items-center gap-3">
+                <PersonPhoto
+                  src={photo.url}
+                  label={initials({ email: data.address, name: name || null })}
+                  className="flex size-14 shrink-0 items-center justify-center rounded-full bg-primary font-medium text-[18px] text-primary-foreground"
+                />
+                <a
+                  href={`${consoleHref.replace(/\/accounts\/.*$/, "")}/profile`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-[13.5px] text-primary hover:underline"
+                >
+                  Change it on your console Profile <ExternalLink className="size-3.5" aria-hidden />
+                </a>
+              </div>
+            ) : (
+              <PhotoEditor
+                url={photo?.url ?? null}
+                initials={initials({ email: data.address, name: name || null })}
+                endpoint="/api/webmail/settings/avatar"
+                subject={photo?.own === "mailbox" ? "this mailbox's photo" : "your photo"}
+                onChanged={(url) => {
+                  photoChanged(data.address, url);
+                }}
+                previewClass="flex size-14 shrink-0 items-center justify-center rounded-full bg-primary font-medium text-[18px] text-primary-foreground"
+                buttonClass={smallSecondary}
+              />
+            )}
+            <p className="text-[12.5px] text-muted-foreground">
+              {photo?.own === "mailbox"
+                ? "This mailbox's own photo, shown in the webmail and the console."
+                : photo && !photo.editable
+                  ? "Your profile photo is shown in more than one account, so you change it in the console."
+                  : "Your profile photo: the same one as in the console, shown wherever you appear in your account."}
+            </p>
+          </div>
           <label htmlFor={`${id}-n`} className="text-[13px] text-muted-foreground">
-            Your name, as people see it
+            Sender name, as people see it on your mail
           </label>
           <input
             id={`${id}-n`}
@@ -694,8 +740,13 @@ export function AccountPanel({
               setStatus(null);
             }}
             placeholder="Sam Lee"
+            aria-describedby={`${id}-nd`}
             className={fieldClass}
           />
+          <p id={`${id}-nd`} className="text-[12.5px] text-muted-foreground">
+            Shown with <span className="font-mono">{data.address}</span> on mail you send. It&apos;s set for this
+            mailbox only; your name in the console profile is separate.
+          </p>
           <div className="flex flex-wrap items-center gap-3">
             <button type="submit" disabled={busy || !primary} className={smallPrimary}>
               Save name

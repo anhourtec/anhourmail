@@ -8,6 +8,9 @@ import type { WebmailPreferences } from "@anhourmail/shared/webmail";
 
 import { Bone } from "@anhourmail/ui/skeletons";
 
+import { PersonPhoto } from "../person-photo";
+
+import { usePhoto } from "./avatars";
 import { dateGroup, displayName, initials, relativeTime, subjectOf, tone } from "./format";
 import type { ListRow } from "./mail-client";
 
@@ -23,7 +26,10 @@ export const TONES = [
   "bg-chart-5/16 text-chart-5",
 ];
 
-/** Square initial avatar (no remote images: privacy rule). */
+/**
+ * Square sender avatar: the profile photo of a mailbox in the same account (one of ours, same-origin and versioned —
+ * never a remote image: privacy rule), else initials in a tone stable per address.
+ */
 export function SenderAvatar({
   email,
   label,
@@ -33,14 +39,14 @@ export function SenderAvatar({
   label: string;
   size?: "sm" | "md" | "lg";
 }) {
+  const photo = usePhoto(email);
   const s = size === "lg" ? "size-10 text-[14px]" : size === "sm" ? "size-7 text-[11px]" : "size-9 text-[13px]";
   return (
-    <span
-      aria-hidden
+    <PersonPhoto
+      src={photo}
+      label={label}
       className={`flex shrink-0 items-center justify-center rounded-md font-medium ${TONES[tone(email)] ?? TONES[0]} ${s}`}
-    >
-      {label}
-    </span>
+    />
   );
 }
 

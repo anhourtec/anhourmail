@@ -35,6 +35,7 @@ import { Tooltip } from "@/components/tooltip";
 
 import { type ComposeSeed, Composer } from "./composer";
 import { SettingsWindow } from "./settings/settings-window";
+import { usePhotoSync } from "./avatars";
 import { ContactsView } from "./contacts-view";
 import { AddMailboxDialog, ConfirmDialog, Modal } from "./dialogs";
 import {
@@ -178,6 +179,8 @@ function Mailroom({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one client per app
   }, []);
   const [prefs, setPrefs] = useState<WebmailPreferences>(initialPreferences);
+  // Profile photos (sidebar, senders, contacts, Settings → Account), kept in step with the console (rule 61).
+  usePhotoSync(username);
   const prefsRef = useRef(prefs);
   useEffect(() => {
     prefsRef.current = prefs;

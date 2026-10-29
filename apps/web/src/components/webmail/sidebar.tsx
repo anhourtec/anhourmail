@@ -24,9 +24,11 @@ import {
 
 import { FolderTreeSkeleton } from "@anhourmail/ui/skeletons";
 
+import { PersonPhoto } from "@/components/person-photo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Tooltip } from "@/components/tooltip";
 
+import { useOwnPhoto } from "./avatars";
 import { folderLabel, folderTree } from "./format";
 import type { Folder, View } from "./mail-client";
 import { Menu } from "./menu";
@@ -47,8 +49,12 @@ const localName = (address: string) => {
   return local.charAt(0).toUpperCase() + local.slice(1);
 };
 
-/** A square mailbox tile (initial), with a check badge on the active one. */
+/**
+ * A square mailbox tile: the photo shown for that mailbox (its person's, or its own; ADR-0022) or its initial, with
+ * a check badge on the active one.
+ */
 function MailboxTile({ address, active, size = "md" }: { address: string; active: boolean; size?: "sm" | "md" }) {
+  const photo = useOwnPhoto(address)?.url ?? null;
   return (
     <span
       aria-hidden
@@ -56,7 +62,11 @@ function MailboxTile({ address, active, size = "md" }: { address: string; active
         size === "sm" ? "size-7 text-[12px]" : "size-8 text-[13px]"
       }`}
     >
-      {localName(address).charAt(0)}
+      <PersonPhoto
+        src={photo}
+        label={localName(address).charAt(0)}
+        className="flex size-full items-center justify-center rounded-md"
+      />
       {active && (
         <span className="-right-1 -bottom-1 absolute flex size-3.5 items-center justify-center rounded-full bg-[rgb(var(--am-status-success-bg))] text-primary-foreground ring-2 ring-sidebar">
           <Check className="size-2.5" strokeWidth={3} />
