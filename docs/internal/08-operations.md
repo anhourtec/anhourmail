@@ -1,6 +1,6 @@
 # 08 — Operations
 
-Last updated: 2026-10-22.
+Last updated: 2026-10-29.
 
 ## Environments
 
@@ -46,11 +46,11 @@ The public repo's `docker-compose.yml` is **dev/CI only**. Production compose fi
 | Stalwart `/healthz/ready`, queue size, delivery failures | Prometheus `/metrics/prometheus` (Basic auth; Community metrics are limited) | Queue > N for 15 min; deferrals spike   |
 | Blocklists (Spamhaus, Barracuda, Talos, …)               | Scheduler daily sweep                                                        | Any listing                             |
 | Google Postmaster spam rate, Microsoft SNDS, Yahoo CFL   | Dashboards + FBL ingestion                                                   | Spam rate ≥ 0.1%                        |
-| OVH anti-spam IP block                                   | OVH API poll                                                                 | Immediate page                          |
+| Hosting provider anti-spam IP block                      | Provider API poll                                                            | Immediate page                          |
 | TLS certificate expiry (HTTP + mail)                     | Scheduler                                                                    | < 14 days                               |
 | Backup job success, restore drill                        | Scheduler                                                                    | Any failure                             |
 | Audit hash-chain verification                            | Scheduler                                                                    | Any break                               |
-| Reconciler drift                                         | Worker                                                                       | Any drift                               |
+| Reconciler and service-account drift                     | Scheduler (`job:reconcile`, `job:service-accounts`)                          | Any drift                               |
 | Storage measurement (`job:storage-usage`)                | Scheduler log                                                                | `failedBatches` > 0 three runs in a row |
 | Worker/scheduler heartbeat                               | Container healthcheck                                                        | Unhealthy                               |
 | Disk usage (Stalwart volume, Postgres)                   | Node exporter                                                                | > 75%                                   |
@@ -62,11 +62,18 @@ Alerts go to the operator by email (via a separate provider, so a broken mail st
 The scheduler container runs every periodic job (rule 17; `apps/worker/src/scheduler.ts`), one at a time, each in its
 own process. One-off jobs run in the worker image with `npm run -w @anhourmail/worker job:<name>`.
 
-| Job                    | When             | Key          | What                                                                                                                                                                                                                             |
-| ---------------------- | ---------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `job:storage-usage`    | Every 10 minutes | Provisioning | Reads each mailbox's `usedDiskQuota` (with its name, nothing else) in batches of 100 and records it on the mailbox row for the console. Logs `failedBatches` as a warning; those mailboxes keep their last good value.           |
-| `job:quota-cap`        | Once, on deploy  | Provisioning | Brings each account's mailbox quotas within its pooled storage: scales them down in proportion, never below the mail held (rounded up); queues `mailbox.ensure`; audited. Logs `keptAbovePoolAccountIds`, `unmeasured` (re-run). |
-| `job:mailbox-backfill` | Once, on deploy  | —            | Queues `mailbox.ensure` for every active mailbox (customer Sieve lock).                                                                                                                                                          |
+| Job                    | When               | Key                            | What                                                                                                                                                                                                                                                     |
+| ---------------------- | ------------------ | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `job:audit-verify`     | Every 6 hours      | —                              | Verifies every audit hash chain; a break is logged at `fatal` and the job exits non-zero (`audit.md` "Integrity").                                                                                                                                       |
+| `job:reconcile`        | Hourly             | Provisioning + read-only audit | Desired state vs Stalwart (domains, accounts, quotas, suspension, app passwords, password credentials, managed scripts); reports drift as `platform.reconciler_drift`, re-queues non-destructive fixes, never deletes. The only job given the audit key. |
+| `job:service-accounts` | Every minute       | Provisioning                   | The management keys' owner accounts must exist and hold API keys only; drift audited. Refuses to run in production without `RECONCILE_IGNORE_DOMAINS`.                                                                                                   |
+| `job:domain-recheck`   | Every 5 minutes    | Provisioning                   | Re-checks DNS of pending domains added in the last week and activates those that pass; queues `domain.ensure` for domains whose DKIM keys were never read.                                                                                               |
+| `job:domain-expiry`    | Daily              | Provisioning                   | Releases or deletes abandoned pending domains (`PENDING_DOMAIN`); audited `domain.released` / `domain.expired` in the domain's account.                                                                                                                  |
+| `job:mailbox-purge`    | Hourly             | Provisioning                   | Removes mailboxes past their deletion grace period (Stalwart account, then rows); audited `platform.mailbox_purged`; retires platform addresses.                                                                                                         |
+| `job:storage-usage`    | Every 10 minutes   | Provisioning                   | Reads each mailbox's `usedDiskQuota` (with its name, nothing else) in batches of 100 and records it on the mailbox row for the console. Logs `failedBatches` as a warning; those mailboxes keep their last good value.                                   |
+| `job:quota-cap`        | Once, on deploy    | Provisioning                   | Brings each account's mailbox quotas within its pooled storage: scales them down in proportion, never below the mail held (rounded up); queues `mailbox.ensure`; audited. Logs `keptAbovePoolAccountIds`, `unmeasured` (re-run).                         |
+| `job:mailbox-backfill` | Once, on deploy    | —                              | Queues `mailbox.ensure` for every active mailbox (customer Sieve lock).                                                                                                                                                                                  |
+| `job:bootstrap-admin`  | Once, first deploy | —                              | Creates the first Global Administrator and emails a set-password link (deploy/README.md "First platform administrator"); audited `platform.admin_bootstrapped`.                                                                                          |
 
 **Deploy step for the 2026-10-23 storage change** (Free 1 GB, Plus and Supporter 10 GB pooled per account): after the
 release is up and the worker is running, run `job:quota-cap` once, check its log (`lowered`, `keptAbovePool`,
@@ -113,7 +120,7 @@ Security patches skip the soak but still follow steps 1–4 and 6.
 **Current policy (maintainer decision, 2026-10-23): open to everyone.** The web hosts are public (no IP allow-list)
 and self-service sign-up is on (`SIGNUP_MODE=open`): anyone can create a personal Free account after verifying their
 email. This replaces the 2026-10-21 decision below while pre-staging runs. The main open risk is outbound abuse from new
-accounts until Phase 6 (sending limits, trust tiers, phone verification, abuse queue) — staff watch new accounts and the
+accounts until the abuse-controls phase (`09-roadmap.md` "Path to production": sending limits, trust tiers, phone verification, abuse queue) — staff watch new accounts and the
 platform audit, and can close sign-up (`SIGNUP_MODE=closed`) or gate the web hosts (allow-list) at any time.
 
 Earlier decision, kept for the record:
