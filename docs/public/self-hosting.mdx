@@ -28,8 +28,8 @@ npm run dev
   `.env` are free first.
 - `npm run db:seed -- --demo` creates demo accounts and writes their sign-in details to `credentials.md` in the
   repository root. That file is for your machine only and is never committed.
-- `npm run dev` starts the site, the docs and the console. The addresses are printed in the terminal and listed
-  in the README.
+- `npm run dev` starts the site and the docs, the console and the webmail, and the background worker (and the
+  Docker services, if they aren't running yet). The addresses are printed in the terminal and listed in the README.
 
 ## How mail stays local
 
@@ -47,7 +47,7 @@ pinned in `docker-compose.yml`, and we run it unmodified, configured only throug
 Production needs more than this guide covers: a server whose provider allows outbound mail, reverse DNS, TLS
 certificates, DNS records and a warm-up period for a new IP address. A production guide will follow.
 
-Two things apply from the first day:
+Three things apply from the first day:
 
 - Set `PLATFORM_DOMAIN` in `.env` to your own domain. The console builds every server name it shows your users
   (incoming mail, sending, mail apps, the DNS records for their domains) under it, and checks their DNS against
