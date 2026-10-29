@@ -38,6 +38,7 @@ import {
   WEBMAIL_ATTACHMENTS,
   WEBMAIL_HTML,
 } from "@anhourmail/shared";
+import { AVATAR } from "@anhourmail/shared/profile";
 
 import { CopyButton } from "./copy-button";
 
@@ -62,6 +63,7 @@ const VALUES = {
   inviteDays: String(INVITE_TTL_DAYS),
   inviteEmailsPerDay: String(INVITE_EMAILS_PER_DAY),
   maxPeople: String(MAX_PEOPLE),
+  photoMaxUpload: `${String(AVATAR.maxUploadMb)} MB`,
   // Free platform addresses (packages/shared/src/addresses.ts, plans.ts; ADR-0021)
   platformAddressMin: String(PLATFORM_ADDRESS.min),
   platformAddressMax: String(PLATFORM_ADDRESS.max),

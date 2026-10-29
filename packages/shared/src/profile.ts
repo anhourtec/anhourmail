@@ -293,3 +293,21 @@ export const COUNTRIES: readonly { code: string; name: string }[] = [
 const COUNTRY_CODES = new Set(COUNTRIES.map((c) => c.code));
 export const isCountryCode = (v: string): boolean => COUNTRY_CODES.has(v);
 export const countryName = (code: string): string | null => COUNTRIES.find((c) => c.code === code)?.name ?? null;
+
+/**
+ * Profile photos (ADR-0022). The person's (or a person-less mailbox's) photo is a small image we host and re-encode
+ * ourselves: never a remote URL. Uploads are PNG, JPEG or WebP up to `maxUploadMb`; the server decodes them, refuses
+ * anything else (SVG, HTML, GIF, polyglots), crops to a centred square and stores a `size`×`size` WebP with no metadata.
+ */
+export const AVATAR = {
+  /** Largest upload accepted, in MB (the console and the webmail check it before sending; the server enforces it). */
+  maxUploadMb: 5,
+  /** Upload types accepted (by their bytes, never the declared type). */
+  types: ["image/png", "image/jpeg", "image/webp"] as const,
+  /** The stored square's side, in pixels. */
+  size: 256,
+  /** Smallest side an upload may have, in pixels. */
+  minSide: 32,
+  /** Largest side an upload may have, in pixels. */
+  maxSide: 4096,
+} as const;
