@@ -148,6 +148,13 @@
       "when": 1793195934624,
       "tag": "0020_mailbox_password_by_owner",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1793270438493,
+      "tag": "0021_avatar",
+      "breakpoints": true
     }
   ]
 }

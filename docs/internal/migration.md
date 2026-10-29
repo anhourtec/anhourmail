@@ -35,6 +35,7 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 | #    | Migration                          | Commit    | Date       | Change                                                                                                   | Rollback        |
 | ---- | ---------------------------------- | --------- | ---------- | -------------------------------------------------------------------------------------------------------- | --------------- |
+| 0021 | `0021_avatar`                      | —         | 2026-10-29 | `avatar` table: one re-encoded profile photo per person or person-less mailbox (ADR-0022)                | Safe            |
 | 0020 | `0020_mailbox_password_by_owner`   | `f48f5d4` | 2026-10-28 | `mailbox.pending_password_by_owner` (the waiting password is the person's own choice)                    | Safe            |
 | 0019 | `0019_customer_domain_dkim_keys`   | `58fca75` | 2026-10-28 | `customer_domain.dkim_keys` (DKIM public keys per domain, read from the mail server)                     | Safe            |
 | 0018 | `0018_add_user`                    | `8c1c883` | 2026-10-24 | `mailbox.display_name`, `mailbox.must_change_password`; `user_profile.must_change_password` + profile    | Safe            |
@@ -69,6 +70,17 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0021_avatar · — · 2026-10-29 · Safe
+
+- Added: table `avatar` (`id` uuid pk; `user_id` text → `auth_user.id`, unique, `ON DELETE CASCADE`; `mailbox_id`
+  uuid → `mailbox.id`, unique, `ON DELETE CASCADE`; `content_type`, `data bytea`, `byte_size`, `sha256`,
+  `updated_at`). Checks: exactly one owner (`num_nonnulls(user_id, mailbox_id) = 1`) and `0 < byte_size <= 262144 =
+octet_length(data)`. Control-plane data, never mail content; the bytes are a WebP we re-encoded (ADR-0022).
+- Changed: — (`auth_user.image` stays unused.)
+- Removed: —
+- Data: none. Everyone starts with initials.
+- Rollback: drop the table with the code that reads it (the console and webmail fall back to initials).
 
 ### 0020_mailbox_password_by_owner · `f48f5d4` · 2026-10-28 · Safe
 

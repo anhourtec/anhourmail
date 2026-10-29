@@ -7,6 +7,8 @@
 import {
   bigint,
   boolean,
+  check,
+  customType,
   index,
   integer,
   jsonb,
@@ -20,6 +22,13 @@ import {
 import { sql } from "drizzle-orm";
 
 import type { DkimKey } from "@anhourmail/shared/dns";
+
+/** Raw bytes (`bytea`), read and written as a Uint8Array. */
+const bytea = customType<{ data: Uint8Array; driverData: Buffer }>({
+  dataType: () => "bytea",
+  toDriver: (v) => Buffer.from(v.buffer, v.byteOffset, v.byteLength),
+  fromDriver: (v) => new Uint8Array(v.buffer, v.byteOffset, v.byteLength),
+});
 
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updatedAt = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
@@ -524,4 +533,38 @@ export const appPassword = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("app_password_mailbox_idx").on(t.mailboxId)],
+);
+
+// --- profile photos (ADR-0022) -------------------------------------------------------------------------------------
+
+/**
+ * One profile photo per person, or per mailbox without a person (a shared address): a 256-pixel square WebP we
+ * re-encoded ourselves (no metadata), never an upload as sent and never a remote URL. Control-plane data, not mail
+ * content; removed with its owner. `auth_user.image` stays unused.
+ */
+export const avatar = pgTable(
+  "avatar",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .unique()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    mailboxId: uuid("mailbox_id")
+      .unique()
+      .references(() => mailbox.id, { onDelete: "cascade" }),
+    /** Always image/webp today. */
+    contentType: text("content_type").notNull(),
+    data: bytea("data").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    /** sha256 of `data`, hex; its start is the version in the photo's URL. */
+    sha256: text("sha256").notNull(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    check("avatar_one_owner", sql`num_nonnulls(${t.userId}, ${t.mailboxId}) = 1`),
+    check(
+      "avatar_size",
+      sql`${t.byteSize} > 0 AND ${t.byteSize} <= 262144 AND octet_length(${t.data}) = ${t.byteSize}`,
+    ),
+  ],
 );
