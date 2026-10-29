@@ -134,6 +134,12 @@ export const PERMISSIONS = {
     scope: "account",
     description: "Create and revoke app passwords (mail apps) for own mailboxes",
   },
+  // ADR-0024: the console's "Open webmail" signs the person in to their own mailbox without its password. Never the
+  // Auditor role, which is also what staff hold while acting as someone (ADR-0023): act-as never reaches mail.
+  "webmail.open.own": {
+    scope: "account",
+    description: "Open own mailbox in the webmail from the console, without its password (never while acting as)",
+  },
   "billing.read": { scope: "account", description: "See plan and invoices" },
   "billing.manage": { scope: "account", description: "Change plan and payment method", critical: true },
   "audit.read": { scope: "account", description: "Read the account audit log" },
@@ -268,6 +274,7 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
     "alias.manage.any",
     "alias.manage.own",
     "app_password.manage.own",
+    "webmail.open.own",
     "billing.read",
     "billing.manage",
     "audit.read",
@@ -305,6 +312,7 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
     "mailbox.read",
     "alias.manage.own",
     "app_password.manage.own",
+    "webmail.open.own",
     "distribution_list.read",
     "delegation.manage.own",
     "forwarding.manage.own",
@@ -326,6 +334,7 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
     "alias.manage.any",
     "alias.manage.own",
     "app_password.manage.own",
+    "webmail.open.own",
     "audit.read",
     "shared_mailbox.read",
     "shared_mailbox.manage",
@@ -353,6 +362,7 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
     "billing.manage",
     "alias.manage.own",
     "app_password.manage.own",
+    "webmail.open.own",
     "delegation.manage.own",
     "forwarding.manage.own",
     "folder.manage.own",
@@ -361,6 +371,7 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
   member: [
     "alias.manage.own",
     "app_password.manage.own",
+    "webmail.open.own",
     "delegation.manage.own",
     "forwarding.manage.own",
     "folder.manage.own",

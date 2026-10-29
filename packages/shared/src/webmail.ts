@@ -203,3 +203,17 @@ export const MANAGED_SIEVE_SCRIPT = "anhourmail";
  * confirmed target).
  */
 export const MANAGED_SIEVE_SETTINGS_PREFIX = "# am-settings: ";
+
+/**
+ * Console → webmail handoff (ADR-0024): how long each piece lives. The code the console mints is one-time and lives
+ * `codeSec`; the verifier cookie the webmail origin sets first lives `verifierSec` (the console step happens in
+ * between); the throwaway mail-server credential the redemption uses once expires after `credentialSec`.
+ */
+export const WEBMAIL_HANDOFF = { codeSec: 60, verifierSec: 120, credentialSec: 60 } as const;
+
+/** The webmail page the console sends the code to (in the URL fragment, never the query). */
+export const WEBMAIL_HANDOFF_PAGE = "/handoff";
+/** Where the console link starts the handoff (on the webmail origin; it sets the verifier cookie). */
+export const WEBMAIL_HANDOFF_START = "/api/webmail/handoff";
+/** The console page that picks the mailbox and mints the code. */
+export const CONSOLE_HANDOFF_PAGE = "/open-webmail";

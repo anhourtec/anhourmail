@@ -39,6 +39,10 @@ export const LIMITS = {
   webmailSignIn: { limit: 10, windowSec: 300, by: "ip", failMode: "closed" },
   webmailSignInAddress: { limit: 10, windowSec: 900, by: "caller", failMode: "closed" },
   webmail: { limit: 900, windowSec: 60, by: "caller", failMode: "open" },
+  // Console → webmail handoff (ADR-0024): minting a code per console session, and starting and redeeming one per
+  // client address (each redemption mints and destroys a mail-server credential). Fail closed: it opens a mailbox.
+  webmailHandoff: { limit: 10, windowSec: 600, by: "caller", failMode: "closed" },
+  webmailHandoffIp: { limit: 30, windowSec: 300, by: "ip", failMode: "closed" },
   webmailDownload: { limit: 120, windowSec: 60, by: "caller", failMode: "open" },
   // The image proxy: each request makes an outbound fetch from our servers (a message loads at most 100 images).
   // Fail closed: without the limiter, nothing would bound what a session makes us fetch.

@@ -52,6 +52,14 @@ describe("permission matrix invariants", () => {
     expect(holders).toEqual([...ACT_AS_ROLES].sort());
   });
 
+  it("webmail handoff: every account role but Auditor (so never while acting as), and no staff role", () => {
+    const holders = ACCOUNT_ROLES.filter((r) => accountRoleCan(r, "webmail.open.own")).sort();
+    expect(holders).toEqual(["billing_admin", "domain_admin", "member", "owner", "user_admin"]);
+    expect(accountRoleCan(ACT_AS_ACCOUNT_ROLE, "webmail.open.own")).toBe(false);
+    for (const r of PLATFORM_ROLES) expect(platformRoleCan(r, "webmail.open.own")).toBe(false);
+    expect(isCritical("webmail.open.own")).toBe(false);
+  });
+
   it("act-as grants a read-only role: no critical permission, nothing that manages, sends or changes", () => {
     expect(NON_DELEGABLE_ROLES).toContain(ACT_AS_ACCOUNT_ROLE);
     const granted = ACCOUNT_GRANTS[ACT_AS_ACCOUNT_ROLE];

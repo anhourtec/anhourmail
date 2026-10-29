@@ -118,6 +118,12 @@ export const REDACT_KEYS: readonly string[] = [
   "codeverifier",
   "codechallenge",
   "clientcode",
+  // Console → webmail handoff (ADR-0024): the one-time code, the browser's verifier and its challenge
+  "handoffcode",
+  "handoffverifier",
+  "handoffchallenge",
+  "verifier",
+  "challenge",
   "secretskeyring",
   "keyring",
   // AnhourMail: mail content never reaches logs

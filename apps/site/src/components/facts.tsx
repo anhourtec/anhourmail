@@ -38,6 +38,7 @@ import {
   TRUSTED_DEVICE_DAYS,
   type TrustTier,
   WEBMAIL_ATTACHMENTS,
+  WEBMAIL_HANDOFF,
   WEBMAIL_HTML,
   WEBMAIL_SIGNATURES,
 } from "@anhourmail/shared";
@@ -128,6 +129,8 @@ const VALUES = {
   secondStepLockMinutes: String(SECOND_STEP_LIMITS.lockMinutes),
   // App passwords (packages/shared/src/security.ts)
   appPasswordsPerMailbox: String(APP_PASSWORDS_PER_MAILBOX),
+  // Console → webmail handoff (packages/shared/src/webmail.ts, ADR-0024): how long the one-time link works
+  webmailHandoffSeconds: String(WEBMAIL_HANDOFF.codeSec),
   // Breached-password check (packages/shared/src/security.ts)
   breachedPasswordMessage: BREACHED_PASSWORD.message,
   stepUpMinutes: String(STEP_UP_MINUTES),
