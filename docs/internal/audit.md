@@ -1,6 +1,6 @@
 # Audit
 
-Last updated: 2026-10-29. Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
+Last updated: 2026-10-29 (profile photo events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
 
 Every meaningful action is recorded, tamper-evident, searchable and visible to the right people. Audit is a core module, not a logging side effect.
 
@@ -17,9 +17,9 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | Area | Actions |
 | --- | --- |
 | `auth` | `auth.sign_in`, `auth.sign_in_failed`, `auth.sign_out`, `auth.password_changed`, `auth.password_reset`, `auth.password_reset_requested`, `auth.two_factor_enabled`, `auth.two_factor_disabled`, `auth.app_password_created`, `auth.app_password_revoked`, `auth.session_revoked`, `auth.locked_out`, `auth.mail_client_sign_in`, `auth.mail_client_sign_in_failed`, `auth.two_factor_reset`, `auth.backup_code_used`, `auth.sessions_revoked_all`, `auth.new_device`, `auth.passkey_added`, `auth.passkey_renamed`, `auth.passkey_removed`, `auth.recovery_codes_regenerated`, `auth.identity_confirmed`, `auth.email_verification_sent`, `auth.email_verified` |
-| `account` | `account.created`, `account.deleted`, `account.updated`, `account.invite_sent`, `account.invite_accepted`, `account.invite_resent`, `account.invite_revoked`, `account.member_added`, `account.user_added`, `account.profile_changed`, `account.member_removed`, `account.role_changed`, `account.ownership_transferred`, `account.sign_in_policy_changed`, `account.sign_in_factor_added` |
+| `account` | `account.created`, `account.deleted`, `account.updated`, `account.invite_sent`, `account.invite_accepted`, `account.invite_resent`, `account.invite_revoked`, `account.member_added`, `account.user_added`, `account.profile_changed`, `account.avatar_changed`, `account.avatar_removed`, `account.member_removed`, `account.role_changed`, `account.ownership_transferred`, `account.sign_in_policy_changed`, `account.sign_in_factor_added` |
 | `domain` | `domain.added`, `domain.verified`, `domain.verify_failed`, `domain.removed`, `domain.dns_state_changed`, `domain.released`, `domain.expired` |
-| `mailbox` | `mailbox.created`, `mailbox.renamed`, `mailbox.made_user`, `mailbox.suspended`, `mailbox.unsuspended`, `mailbox.deleted`, `mailbox.quota_changed`, `mailbox.deletion_scheduled`, `mailbox.restored`, `mailbox.password_reset`, `mailbox.password_changed` |
+| `mailbox` | `mailbox.created`, `mailbox.renamed`, `mailbox.made_user`, `mailbox.suspended`, `mailbox.unsuspended`, `mailbox.deleted`, `mailbox.quota_changed`, `mailbox.deletion_scheduled`, `mailbox.restored`, `mailbox.password_reset`, `mailbox.password_changed`, `mailbox.avatar_changed`, `mailbox.avatar_removed` |
 | `alias` | `alias.created`, `alias.toggled`, `alias.deleted` |
 | `masked_alias` | `masked_alias.created`, `masked_alias.toggled`, `masked_alias.deleted` |
 | `catch_all` | `catch_all.changed` |
@@ -146,6 +146,16 @@ of the optional profile fields that changed, never their values — and `self`).
 account's log; the person's own edit from their Profile page is written to every account they belong to (the platform
 log when they belong to none), so its admins see it. A User Administrator editing an admin's profile is `denied`
 (`forbidden`); an admin editing someone who also belongs to another account is `denied` (`other_account`).
+
+Profile photos (ADR-0022): `account.avatar_changed` / `account.avatar_removed` for a person (target = the person, label
+their sign-in email) and `mailbox.avatar_changed` / `mailbox.avatar_removed` for a mailbox without a person (target =
+the mailbox, label its address). Meta: `bytes` (the stored size), `self`, `via: "webmail"` for a change from the
+webmail, `removed` for a removal (false when there was none) — never the image, its hash or anything read from it. The
+person's own change (console Profile page, their own panel, or their mailbox's webmail, whose actor is `system` named
+after the mailbox) is copied to each account they belong to; an admin's is written to that account's log. Refusals
+follow the profile rule (`denied`: `forbidden`, `other_account`); from the webmail, a person who is also in another
+account is `denied` `other_account` and a mailbox whose person left its account `denied` `not_member`; a file that
+isn't a usable image is `failed` (`bad_request`).
 
 People: `account.invite_sent`, `account.invite_resent`, `account.invite_revoked` (target label = the invited
 address, meta = role; never the token), `account.invite_accepted` (meta: role, `newLogin`, the user id; the actor is

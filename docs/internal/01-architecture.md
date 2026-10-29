@@ -1,6 +1,6 @@
 # 01 — Architecture
 
-Last updated: 2026-10-29. Decisions: `adr/`. Code map: `codemap.md`.
+Last updated: 2026-10-29 (profile photos). Decisions: `adr/`. Code map: `codemap.md`.
 
 ## Overview
 
@@ -115,6 +115,14 @@ reset emails to the address are held (`consoleResetHeld`); a job that gives up k
 it again (07-security.md "Mailbox passwords"). Profile
 details stay editable afterwards (`people/profile-service.ts`): by the person (`self.profile.manage`) or the account's
 admins (`member.manage` for Members, Owners for anyone).
+
+Profile photos (ADR-0022) are one source for the console and the webmail: `packages/core/src/avatars` (the profile
+edit rule for people, `mailbox.manage` for person-less mailboxes, audited) stores a 256-pixel WebP per person or
+person-less mailbox in the `avatar` table, re-encoded through the `ImageNormaliser` port (sharp adapter
+`packages/adapters/src/image`; magic-byte check, pixel ceiling, one frame, no metadata). The console serves them at
+`/api/avatars/:kind/:id`, the webmail at `/api/webmail/avatars/:kind/:id` (same account only), both with the content
+hash as the URL version, `nosniff` and a sandboxing CSP. An edit refreshes the page it was made on; the console
+re-checks `/api/me/avatar` and the webmail its photos when their tab is shown again (rule 61).
 
 Every new console or mailbox password passes a breached-password check first (core port `BreachedPasswords`, Pwned
 Passwords range adapter with k-anonymity, better-auth `hooks.before` plugin for console endpoints; fail open; the web

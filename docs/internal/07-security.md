@@ -1,6 +1,6 @@
 # 07 — Security
 
-Last updated: 2026-10-29.
+Last updated: 2026-10-29 (profile photos).
 
 ## Threat model
 
@@ -448,14 +448,27 @@ data-am-quote`) becomes `blockquote type="cite"` again when a reply quotes it. T
 - **CSS:** escapes and comments decoded first; declarations split outside quotes and parentheses; a property
   allow-list; values with `<>{}@\`, unbalanced quotes, a `;` outside `url()`, `expression()`, `javascript:`,
   `vbscript:`, `behavior`, `-moz-binding`, `image-set()` or `element()` are dropped; `url()` only for https and
-  raster data images; `position` only `static`/`relative`. Style attributes over 8 KB are dropped.
+  raster data images; `position` only `static`/`relative`; `var()`, `env()` and `attr()` anywhere are dropped (they
+  would let the recipient's app style the message). Style attributes over 8 KB are dropped.
+- **Value grammars for the composer's styles (2026-10-29, `STRICT_CSS`):** the properties the toolbar writes, and
+  their close relatives in pasted mail, are kept only when the whole value matches: `color`, `background-color`,
+  `text-decoration-color` — `#hex` (3/4/6/8 digits), `rgb()`/`rgba()` of numbers or percentages, or a letters-only
+  colour word; `font-family` — up to 8 plain names (letters, digits, space, `-`, `_`, optionally quoted, 40
+  characters each); `font-size` — size keywords or a positive length ≤ 96px / 72pt / 6em / 6rem / 12ex / 600%;
+  `text-align` — left, right, center, justify, start, end; `margin`, `margin-*` (also `auto`) and `padding`,
+  `padding-*` — one to four non-negative lengths ≤ 400px / 300pt / 25em / 25rem / 50ex / 100%;
+  `text-decoration` — line and style keywords plus at most one colour; `text-decoration-line` and
+  `text-decoration-style` — keywords. The legacy attributes get the same grammar: `color`/`bgcolor` as colours,
+  `<font face>` as a family list, `<font size>` 1–7 or ±1–6. `<strike>` becomes `<s>`. So no function, unit trick or
+  negative offset (content laid over other content) gets through the toolbar's properties.
 - **Size:** input over `WEBMAIL_HTML.maxMb` is refused (the drafts schema and the composer both check).
 - **In the editor:** sanitised HTML sits in the page's own document while it is edited; the webmail CSP (nonce
   scripts only, same-origin images) is the backstop, so a sanitiser miss can't run script or fetch remote images
   there. Remote images are counted and the person is warned they may be trackers; they are sent as written.
 - Tests: `outgoing-html.test.ts` (XSS corpus: script/SVG/MathML, encoded and whitespace `javascript:` variants,
   `data:text/html`, `srcdoc`, `formaction`, CSS `url(javascript:)` and escapes, mutation-XSS nesting, comments and
-  CDATA, idempotence).
+  CDATA, idempotence; the toolbar's output kept unchanged; every grammar's accepted and rejected values, decoded
+  escapes and comments, `var()`/`env()`/`attr()`; `<font>` attributes; indents vs quotes in the text part).
 
 ## Authentication results in the webmail
 
@@ -573,6 +586,36 @@ addresses, the redirect limit, DNS rebinding, size caps, compression, SVG/HTML r
 `image-proxy.test.ts` (links: other session, other mailbox, altered, expired; route logic 401/404/410/502/429 and
 response headers; logs carry no address), `img/route.test.ts` (signed-out 401, cross-origin 403, tier),
 e2e `webmail-images.spec.ts`.
+
+## Profile photos
+
+ADR-0022. Uploads are untrusted files that we then serve to other people, so we never serve what was uploaded:
+
+- **Input:** the raw body (no multipart), capped at `AVATAR.maxUploadMb` before buffering (`readCappedBytes`);
+  rate-limited (`avatarUpload`, 20 an hour per caller, fail closed); permission and scope are checked (and audited)
+  before any decoding, so a refused or out-of-scope request never costs a decode.
+- **Type by bytes only:** PNG, JPEG or WebP magic bytes (`sniffImage`); the declared type and file name are ignored.
+  SVG, HTML, XML, GIF and polyglots that start as anything else are refused before the decoder sees them.
+- **Decoding (sharp/libvips, `@anhourmail/adapters/image`):** `failOn: "error"` (corrupt or truncated files are
+  refused, not half-decoded), a pixel ceiling (`limitInputPixels`, max side²) against decompression bombs, the decoded
+  format checked again (PNG, JPEG or WebP), one frame only, each side within `AVATAR.minSide`–`AVATAR.maxSide`; at most
+  two decodes at once per process (429 beyond).
+- **Output:** a new file — auto-oriented, centre-cropped to 256×256, WebP, no metadata (EXIF, GPS, ICC, XMP,
+  comments); anything a polyglot carried after the image data is gone. Checked again (a WebP, ≤ 256 KiB, also a
+  database `CHECK`) and stored with its sha256. The browser crops and re-encodes too, but the server never relies on it.
+- **Serving:** only from our own origins, only to viewers who may see that person or mailbox (404 otherwise), as
+  `image/webp` with `nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Cross-Origin-Resource-Policy:
+same-origin`, `Content-Disposition: inline`, cached `private` (a year under the current version, revalidated
+  otherwise). Never a remote URL; `auth_user.image` stays unused.
+- **Logging and audit:** nothing about the image is logged; audit entries carry the stored size only (rule 48).
+- **Webmail changes:** the webmail session proves only the mailbox password, which an admin of the mailbox's account
+  can reset, so it may change the mailbox's person's photo only when that person is a member of the mailbox's account
+  and of no other (`webmailRefusal`; refused `other_account` / `not_member`, audited as denied). Only current
+  memberships count for who sees a photo: a removed person's old mailboxes keep `mailbox.user_id`, but that account
+  no longer sees or changes their photo.
+- **Webmail lookups** (`POST /api/webmail/avatars/lookup`, ≤ 100 addresses) answer only for mailboxes in the accounts of
+  the session's own mailboxes, so they can't be used to learn anything about other accounts' addresses; the addresses
+  travel in the body, never the URL or access log.
 
 ## Review process
 

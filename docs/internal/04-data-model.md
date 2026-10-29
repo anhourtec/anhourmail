@@ -1,6 +1,6 @@
 # 04 — Data model (control plane)
 
-Last updated: 2026-10-29. Postgres 17. **Never mail content** (rule 24). Domain types live in `packages/core`; tables live only in `packages/adapters/src/db-postgres/schema.ts` (ADR-0008). Every migration is logged in `migration.md`.
+Last updated: 2026-10-29 (profile photos; names). Postgres 17. **Never mail content** (rule 24). Domain types live in `packages/core`; tables live only in `packages/adapters/src/db-postgres/schema.ts` (ADR-0008). Every migration is logged in `migration.md`.
 
 Conventions: `uuid` primary keys (v7, time-ordered), `created_at`/`updated_at` `timestamptz`, soft delete only where noted, citext for emails, and every account-owned row carries `account_id` for scoping.
 
@@ -86,6 +86,23 @@ name, and removed with the person (`user_profile` cascades from `auth_user`).
 
 Member profile fields used by signature placeholders (`display_name`, `job_title`, `phone`) live on
 `account_membership` (per account, editable by the member and by User Admins).
+
+**Profile photos** (migration 0021; ADR-0022; `packages/core/src/avatars`): `avatar` — id, user_id (→ `auth_user`,
+unique) **or** mailbox_id (→ `mailbox`, unique; only for a mailbox without a person), content_type (`image/webp`),
+data (`bytea`, a 256-pixel square we re-encoded, no metadata), byte_size (≤ 256 KiB), sha256 (its first 16 hex
+characters are the version in the photo's URL), updated_at. Exactly one owner per row (`CHECK`); removed with the
+person or the mailbox (`ON DELETE CASCADE`). A mailbox with a person shows the person's photo. `auth_user.image`
+(better-auth's column) stays unused: we never store a remote URL.
+
+**Names (one source each, rule 61).** A person has one **name**: `auth_user.name` (with `first_name`/`last_name`), shown
+in the console app bar, person menu, Profile and People pages and to staff; set at sign-up, invite or "Add a user". Mail
+carries a different value on purpose, the **sender name** — what recipients see in "From", chosen per address: the mail
+server's JMAP identity name for each address a mailbox sends from, edited in webmail Settings → Account ("Sender name,
+as people see it on your mail") and stored only on the mail server. `mailbox.display_name` is the name an admin gives
+the mailbox in the console (Mailboxes → Display name, "Add a user"), sent to the mail server as the account's
+description. Whether the mail server names a new identity after that description hasn't been verified against the pinned
+server (identities observed without one are named after their address), and editing either never updates the other: an
+open rule 61 item in `handoff.md`. The console Profile page and the webmail say which is which.
 
 ## Newsletters and bulk sending add-on (`11-bulk-sending.md`)
 

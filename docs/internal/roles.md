@@ -1,6 +1,6 @@
 # Roles and permissions
 
-Last updated: 2026-10-29 (first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
+Last updated: 2026-10-29 (profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
 
 **Source of truth: `packages/shared/src/rbac`.** That code is canonical: the permission list, the role → permission matrix, critical-permission flags and guard rails. The UI (what to show), the API (what to allow) and the RBAC harness (`npm run test:rbac`) all derive from it. This document explains the matrix for people. If the two disagree, the code wins, and this file is updated in the same change (rule 35).
 
@@ -139,6 +139,21 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
      belongs to another account is edited only by themself (admins get **403** "This person also belongs to another
      account, so only they can change their profile.", audited as `denied` `other_account`; the panel hides Edit), so
      one account's admins can't change what another account sees.
+   - Profile photos (ADR-0022, `avatars/service.ts`; no new permission): a person's photo follows the profile details
+     rule exactly — the person themself (`self.profile.manage`: `POST`/`DELETE /api/me/avatar`, their own panel, or
+     the webmail of one of their mailboxes), `member.manage` for a Member and an Owner for anyone else
+     (`POST`/`DELETE …/people/:userId/avatar`; **403** `forbidden` / `other_account`, audited as `denied`; **404**
+     outside the account). A mailbox without a person has its own photo: `mailbox.manage`
+     (`POST`/`DELETE …/mailboxes/:mailboxId/avatar`; a mailbox with a person is **409**, it shows the person's) or that
+     mailbox's own webmail session (`/api/webmail/settings/avatar`). The webmail of a person's mailbox changes the
+     person's photo only while they are a member of that mailbox's account and of no other (else **403**, audited as
+     `denied` `other_account`, or `not_member` once they've left it): an admin who resets the mailbox password can't use
+     it to change what another account shows. Only current memberships count anywhere (a removed person's old
+     mailboxes keep their owner link, but that account no longer sees their photo). Seeing a photo (`GET /api/avatars/:kind/:id`):
+     the person, anyone with `member.read` or `mailbox.read` in an account the person (or mailbox) is in, staff with
+     `platform.accounts.read`; a member of that account without either gets **403**, anyone else **404**. In the
+     webmail only mailboxes and people of the session's mailboxes' accounts (`/api/webmail/avatars/*`, **404**
+     otherwise).
    - `member.read` (Owner, Domain Admin, User Admin, Auditor) sees People and roles; `member.manage` (Owner, User
      Admin) invites people **as Member**, resends and revokes Member invites and removes Members;
    - every other role is Owner-only (`account.admins.manage` ★): inviting with it, resending or revoking such an

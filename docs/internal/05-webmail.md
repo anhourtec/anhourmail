@@ -1,6 +1,6 @@
 # 05 — Webmail
 
-Last updated: 2026-10-29 (remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
+Last updated: 2026-10-29 (profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
 notifications; quoted replies; compose image placeholders; first-sign-in password step; sign-in links not pre-filled).
 
 **Status (2026-10-22): slice 1 is built** — webmail sign-in (OAuth code flow + PKCE, tokens sealed server-side), the
@@ -118,9 +118,23 @@ frame-ancestors 'none'` unless the route sets its own sandboxing one). `next.con
   is released Stalwart refuses the cancel and the person sees "It has already been sent".
 - **Uploads** (`POST /api/webmail/upload`) are capped while reading the body; the content type is reduced to a plain
   MIME token pair.
-- **Rich text and HTML (2026-10-24).** The composer starts in rich text (a toggle switches to plain text). The
-  editor is a contentEditable area with a small toolbar (bold, italic, underline, link with `linkUrl` validation,
-  lists, quote, clear formatting). One allow-list sanitiser, `server/webmail/outgoing-html.ts`
+- **Rich text and HTML (2026-10-24; one composer 2026-10-29).** The composer always starts in rich text with the
+  formatting toolbar showing; there is no format switch in the footer. Plain text is a mode in the footer's
+  "More options" (⋯) menu: "Plain text mode" (asks first when the body has formatting, `hasFormatting` — any element
+  besides `div`/`p`/`br`, or a styled or aligned line), and in plain mode "Switch to rich text". Reopening a
+  plain-text draft still opens in plain text. The editor is a contentEditable area with the toolbar in
+  `components/webmail/format-toolbar.tsx` (choices in `format-options.ts`): undo, redo, font (sans-serif, serif,
+  monospace — generic families, nothing downloaded), text size (small, normal, large, huge → the editing command's
+  2/3/5/6, written as `font-size` keywords), bold, italic, underline, strikethrough, text colour and highlight (fixed
+  palettes of `#rrggbb` values — mail content, not theme tokens; the picker UI itself uses tokens), alignment
+  (left, centre, right), bulleted and numbered lists, decrease/increase indent, link (`linkUrl` validation,
+  ⌘/Ctrl+K), quote, clear formatting and Insert HTML. Every change is a browser editing command, so the editor's own
+  undo history covers it; colour, font, size, alignment, strikethrough and indent run with `styleWithCSS` on (inline
+  CSS), bold/italic/underline and lists keep semantic tags. Indent is the browser's borderless
+  `blockquote style="margin: 0 0 0 40px; border: none; padding: 0px"`; the editor shows it without the quote style and
+  the text part doesn't quote it. At 390 px the toolbar row scrolls sideways; its menus open in a fixed layer inside
+  the composer (outside the scrolling row) so they are never clipped, and Escape closes only the menu. One
+  allow-list sanitiser, `server/webmail/outgoing-html.ts`
   (`sanitizeOutgoingHtml`, isomorphic, sanitize-html engine like the reader's, lazy-loaded in the browser), runs on
   every paste and drop, on "Insert HTML" (pasted source or an `.html` file ≤ `WEBMAIL_HTML.maxMb`, previewed with the
   reader's frame document in an iframe with `sandbox=""`, listing what was removed and warning about remote images)
@@ -136,7 +150,8 @@ frame-ancestors 'none'` unless the route sets its own sandboxing one). `next.con
   CSS backgrounds kept in `data-am-style`) and put back before sanitising and saving, so nothing loads them while
   writing or previewing and they are sent as written; the outgoing sanitiser drops every `data-*`. Switching a
   formatted message to plain text asks first. Drafts reopen in the format they were
-  written in. Known limits: a reopened rich draft loses its https images (the reading view blocks them); Quote has no
+  written in, formatting included. **Text part (2026-10-29):** each editor line (`div`) is one line, not a paragraph;
+  numbered lists are numbered and nested list items indented two spaces per level (capped like quotes). Known limits: a reopened rich draft loses its https images (the reading view blocks them); Quote has no
   toggle-off (undo works).
 - **Proxy allow-list changes:** `Email/set` may now update `keywords/*` and `mailboxIds` (moves) and `destroy`, and
   the service checks every destroyed message is only in Trash or Junk before forwarding. No `create`, no
@@ -350,6 +365,22 @@ mailbox address; meta never holds message text, signatures or list entries — t
 JMAP proxy still refuses every `SieveScript/*`, `VacationResponse/*`, `Identity/set` and `Quota/*` call
 (`settings.test.ts`), so the confirmation and audit can't be skipped from the browser.
 
+### Profile photos (2026-10-29, ADR-0022)
+
+- **One source with the console.** Settings → Account → You shows the photo of the active mailbox's person — the
+  same one as their console Profile page — or, for a mailbox without a person, the mailbox's own, with Upload /
+  Change / Remove (`POST`/`DELETE /api/webmail/settings/avatar`, `avatarUpload` tier). The browser crops to a square
+  and re-encodes; the server checks and re-encodes again (07-security.md "Profile photos").
+- **Where they show:** the sidebar's mailbox tiles (the account switcher, and the collapsed rail's trigger), message
+  senders in the list and the reader, and the contacts list — for addresses that are mailboxes in the same account as
+  one of the session's mailboxes (`POST /api/webmail/avatars/lookup`, batched, ≤ 100 addresses; anything else stays
+  initials). Images come from `/api/webmail/avatars/:kind/:id` on this origin only.
+- **Kept in step (rule 61):** `components/webmail/avatars.ts` re-reads the session's photos (`GET
+/api/webmail/avatars`) on focus and when the tab is shown, every five minutes, and right after a change here; a
+  change has a new URL (content-hash version), an unchanged photo stays cached.
+- **Names:** the field below the photo is the **sender name** (the JMAP identity's name for this address, "Sender
+  name, as people see it on your mail"), not the person's console name; the copy says so (04-data-model.md "Names").
+
 ### Security notes from the slice 1 review (2026-10-22)
 
 - **Account-level suspension must gate the webmail too.** Done: a staff suspension of an account or a person suspends
@@ -537,7 +568,13 @@ Built 2026-10-29. `server/webmail/{sanitize,image-proxy,remote-image}.ts`, `app/
   placeholders and the notice says how many.
 - **Without asking:** `remoteImages` `always`; `contacts` when the From address is on a contact card (the reader's
   known-addresses set); or a remembered sender (`senderKey` in `imageSenders`). "Always load from this sender" /
-  "Stop loading from this sender" on the notice; "Forget all" in Reading settings.
+  "Stop loading from this sender" on the notice; "Forget all" in Reading settings. Both `contacts` and remembered
+  senders need a **verified From** (`senderVerified` in `image-proxy.ts`): our own trusted Authentication-Results show
+  DMARC passing for the From domain or DKIM passing for it or a parent domain. A message with no results of ours is
+  not verified: a copy forwarded by a mailbox's redirect rule arrives that way whatever its From says (security-audit
+  run-32), and so does mail sent from inside, which therefore always asks. Otherwise the server sends no sender key
+  and the reader asks, so a forged From can't learn that the message was opened. Attached messages are never
+  verified.
 - **Notice copy.** Blocked: "N remote images blocked · N trackers removed — Senders can't see when or where you
   opened this. Loading them goes through our privacy proxy, so the sender never sees your IP address." Loaded:
   "Images loaded through our privacy proxy — The sender can't see your IP address or your browser."
@@ -648,6 +685,6 @@ Budgets are checked by Playwright performance tests with seeded mailboxes (Phase
 - Folder sharing: "Share folder…" on a folder opens a dialog with people from the same account only (no directory search across accounts), presets (read, read + organise, full), optional expiry; applies per folder ("include subfolders" applies to each child).
 - Lists: sending to a list the actor can't post to shows an inline error before send.
 
-| v1 (Phase 4)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | v1.1                                                                                                                                                                                                                                                                                                                                                                           | v2                                                                                                                                   |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Shared mailboxes and folder sharing in the sidebar, send as from shared mailboxes, auto-reply; folders, threads, read/compose/reply/forward (plain + basic rich text), attachments upload/download, drafts, undo send, search (server FTS), flags, move/archive/junk with training, remote-image proxy, shortcuts, light/dark, mobile layout, identities/aliases as From, masked-alias quick create from composer, settings basics (one signature per identity, vacation responder), nested folders with favourites, archive, Archive created at provisioning, empty Trash/Junk | Multiple signatures + defaults, admin signature templates, account disclaimer, search folders, folder colours, archive by year, folder rules, Send on behalf, personal send-as delegation, mail flow rules UI (admins), filters on shared mailboxes, Sieve filter editor, snooze/send later, contacts autocomplete from CardDAV, multiple mailboxes switcher, PWA offline read | Calendar/contacts UI with delegation, resource mailboxes (rooms/equipment) booking, PGP, encrypted-at-rest settings, rules templates |
+| v1 (Phase 4)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | v1.1                                                                                                                                                                                                                                                                                                                                                                           | v2                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Shared mailboxes and folder sharing in the sidebar, send as from shared mailboxes, auto-reply; folders, threads, read/compose/reply/forward (rich text with a formatting toolbar; plain text mode), attachments upload/download, drafts, undo send, search (server FTS), flags, move/archive/junk with training, remote-image proxy, shortcuts, light/dark, mobile layout, identities/aliases as From, masked-alias quick create from composer, settings basics (one signature per identity, vacation responder), nested folders with favourites, archive, Archive created at provisioning, empty Trash/Junk | Multiple signatures + defaults, admin signature templates, account disclaimer, search folders, folder colours, archive by year, folder rules, Send on behalf, personal send-as delegation, mail flow rules UI (admins), filters on shared mailboxes, Sieve filter editor, snooze/send later, contacts autocomplete from CardDAV, multiple mailboxes switcher, PWA offline read | Calendar/contacts UI with delegation, resource mailboxes (rooms/equipment) booking, PGP, encrypted-at-rest settings, rules templates |

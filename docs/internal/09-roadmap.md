@@ -25,27 +25,31 @@ content-type checks, the sender never sees the reader's IP), with SSRF guards (p
 after every redirect and DNS answer), a rate-limit tier, "Load images" enabled, remembered per sender, then the
 Reading settings "always ask / allow for contacts", the notice copy, public docs and a changelog entry.
 
-**Next session (second):** one composer, rich text by default. The footer's "Rich text / Plain text" switch
+**Next session (second) — done 2026-10-29:** one composer, rich text by default. The footer's "Rich text / Plain text" switch
 (`components/webmail/composer.tsx`, `role="radiogroup"` "Message format") goes; the formatting toolbar is always
 there, and plain text becomes a "Plain text mode" item in a composer "More options" menu (keeping the existing
 confirmation before formatting is dropped), as conventional webmail composers do. A reply to a plain-text message
 can still start in plain text. The toolbar grows to undo/redo, font family and size, text colour, alignment and
 indent/outdent; each new style passes the outgoing allow-list sanitiser (`server/webmail/outgoing-html.ts`, only
 the properties and values it needs) with tests and a `/security-review`, then e2e, public docs and a changelog entry.
+Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts`, the More options menu in
+`composer.tsx`, value grammars (`STRICT_CSS`) in `outgoing-html.ts` (07-security.md "Outgoing HTML"), e2e
+`tests/e2e/webmail-compose.spec.ts`.
 
 **Next session, in order** (details: the two paragraphs above and the handoff's "Next phases" 0–0f):
 
 1. The remote-image proxy, so "Load images" works.
-2. One composer that starts in rich text, with plain text moved into a "More options" menu.
+2. ~~One composer that starts in rich text, with plain text moved into a "More options" menu~~ — done 2026-10-29.
 3. Folder counts that go stale, like Drafts still showing 1 after the last draft is discarded.
 4. ~~The Archive fix~~ — done 2026-10-29: Stalwart's `x:Email.defaultFolders` creates Archive for new mailboxes,
    a one-off backfill in the Stalwart bootstrap adds it to existing ones, and the webmail says so when a mailbox
    has none (ADR-0014 update).
 5. Signatures: several named ones with Add / Edit / Delete, a rich editor with embedded images, and defaults for new
    messages and for replies and forwards (pulled forward from the second wave below).
-6. Avatars: photo upload on console Profile and in webmail Account, synced everywhere (CLAUDE.md rule 61). Today all
-   avatars are initials; `user.image` exists but is unused and neither page offers a photo. Also confirm the webmail
-   "Your name" field and the console profile name come from one source.
+6. ~~Avatars: photo upload on console Profile and in webmail Account, synced everywhere~~ — done 2026-10-29
+   (ADR-0022: one re-encoded photo per person or person-less mailbox in Postgres, served same-origin). The name check
+   found the console name and the webmail sender name are separate values (now labelled so; `04-data-model.md`
+   "Names"); whether the sender name should follow the console's mailbox display name is still open.
 
 7. **Pre-staging on one VM (now, deployed 2026-10-23; live-server fixes open).** Deploy `anhourmail-ops` topology A
    on the chosen provider (`deploy.md`): real DNS, ACME certificates, rDNS, inbound and outbound mail with a real
