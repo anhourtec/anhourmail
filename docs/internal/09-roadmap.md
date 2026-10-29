@@ -36,6 +36,19 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
 `composer.tsx`, value grammars (`STRICT_CSS`) in `outgoing-html.ts` (07-security.md "Outgoing HTML"), e2e
 `tests/e2e/webmail-compose.spec.ts`.
 
+**Maintainer decisions (2026-10-29), now in the work plan:**
+
+- **Free sign-up:** no SMS/OTP provider. Keep console email confirmation; add a self-hosted proof-of-work check (no
+  third-party requests) and tighter sign-up rate limits; sending ramps for new free mailboxes stay in Phase 6.
+- **Alias limits:** free platform-domain accounts 10 aliases at a time and 10 new per rolling year (deleting doesn't
+  return a yearly slot); paid accounts up to 400 addresses per mailbox; the per-day creation cap stays as a brake — **built
+  2026-10-29** (`plans.ts` `ALIAS_CREATIONS_PER_YEAR`, `ALIASES_PER_MAILBOX`; `03-anti-spam-and-abuse.md`).
+- **Leavers and delegation:** removing a member offers to convert their mailbox to a shared mailbox and turn their
+  sign-in off; admins grant Full access, Send as or Send on behalf on any mailbox to chosen people, and delegated
+  mailboxes open in the delegate's webmail (pulls the `10-collaboration.md` delegation work forward).
+- **Names:** the mailbox display name is the one source; a person's own mailbox follows their profile name unless an
+  admin sets another; the webmail sender name shows the same value (CLAUDE.md rule 61).
+
 **Next session, in order** (details: the two paragraphs above and the handoff's "Next phases" 0–0f):
 
 1. The remote-image proxy, so "Load images" works.
@@ -64,7 +77,9 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
    free mailboxes still open); **since built:** multipart text + HTML sending (the only mail-tester deduction on the
    first pre-staging run), Add a user, shared addresses and Make this a user; console → webmail session handoff
    (**built 2026-10-29**, ADR-0024: one-time browser-bound code, throwaway mail-server credential, own mailbox only,
-   never while acting), data export and account deletion, act-as (**built 2026-10-29**, ADR-0023: read-only support
+   never while acting), data export and account deletion (**built 2026-10-29**, ADR-0025: sealed control-plane
+   archives built by the worker, mail streamed from the person's own webmail session, deletion with a 14-day grace
+   period, own-login deletion), act-as (**built 2026-10-29**, ADR-0023: read-only support
    access, audited, visible to account admins), remote-image proxy, push sync in
    the webmail (it polls every 30 s today), webmail settings part 2 (rules, templates), and the leftover open items
    in the handoff (alias admin-lock, daily alias creation cap, provisioning-queue lock token, unknown-recipient
@@ -140,7 +155,8 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
   shared addresses and Make this a user, editable profiles, aliases and masked aliases, people/invites/roles, audit
   log, staff pages and staff suspension of accounts or people, free platform addresses, sign-in security (TOTP,
   recovery codes, passkeys, breached-password check), app passwords, catch-all; refused pages answer a real 404/403.
-  staff support access (act-as, read-only, ADR-0023, 2026-10-29). Not built: data export/deletion, collaboration,
+  staff support access (act-as, read-only, ADR-0023, 2026-10-29), data export and account deletion (ADR-0025, 2026-10-29).
+  Not built: collaboration,
   SMS/OTP gating for free sign-up.
 - **Exit:** RBAC harness covers every route × role; cross-account tests return 404; audit entries asserted for every mutation; a custom domain goes from add to active in ≤ 15 min in staging; a non-member can neither post to a members-only list nor send with a shared mailbox's From (integration tests); the reconciler reports ACL/membership drift.
 

@@ -30,13 +30,29 @@ Abuse logic can be open. Thresholds come from config (`ABUSE_*` env, supplied in
 
 ## Aliases (abuse limits)
 
-- **Live counts** per account and kind (`PLANS[plan].aliases` / `maskedAliases`, the 1,000 ceiling on "unlimited").
+- **Live counts** per account and kind on Free (`PLANS.free.aliases` / `maskedAliases`, 403 `plan_limit`). Paid
+  plans have no account-wide count (the old 1,000 "unlimited" ceiling is gone, 2026-10-29); the per-mailbox cap
+  below bounds them (`ALIASES_PER_MAILBOX` × mailboxes).
+- **Per-mailbox cap** (built 2026-10-29, maintainer decision): at most `ALIASES_PER_MAILBOX` (400) aliases and masked
+  aliases together pointing at one mailbox, on every plan (it only binds paid ones). Counted from live rows under the
+  account lock; over it is 409 `alias_mailbox_limit`, audited as denied. Deleting one makes room again.
+- **Yearly creation cap** (built 2026-10-29, maintainer decision; Free only): new aliases and, separately, masked
+  aliases per account in any rolling `ALIAS_YEAR_DAYS` (365) UTC days (`PLANS.free.aliasCreationsPerYear`, numbers
+  in `ALIAS_CREATIONS_PER_YEAR`: aliases 10 as decided; masked 20, a placeholder to confirm). Masked aliases keep
+  their own limits because they are the privacy feature (one address per site), and a shared count would make
+  people reuse them. Counted from creations in `alias_creation_day` (kept 366 days), so deleting gives no slot back
+  and a free account can't churn through more than the cap of fresh platform-domain addresses a year. Same
+  transaction, same account lock, fails closed; over it is 429 `alias_yearly_limit`, audited as denied, with the
+  date a slot comes back (the day the oldest counted creations leave the window).
 - **Daily creation cap** (built 2026-10-29): creations per account per UTC day, aliases and masked aliases separately
-  (`PLANS[plan].aliasCreationsPerDay`, placeholders in `ALIAS_CREATIONS_PER_DAY`). It counts creations, not live
-  rows, so a create → use once → delete loop can't hand out an unlimited stream of fresh addresses (important before
-  free accounts get masked aliases on the platform domain). Counted in Postgres in the create's own transaction under
-  the account lock, so it holds under races and fails closed; over the cap is 429 `alias_daily_limit`, audited as
-  denied. The published number is the limit itself (`docs/public/aliases.mdx`); nothing else about detection is.
+  (`PLANS[plan].aliasCreationsPerDay`, placeholders in `ALIAS_CREATIONS_PER_DAY`), an extra brake on top of the
+  others (on Free it is no looser than the yearly cap, so it binds paid plans in practice). It counts creations, not
+  live rows, so a create → use once → delete loop can't hand out an unlimited stream of fresh addresses. Counted in
+  Postgres in the create's own transaction under the account lock, so it holds under races and fails closed; over
+  the cap is 429 `alias_daily_limit`, audited as denied.
+- Order of checks in `createAlias`: live count → per-mailbox → yearly → daily (the most informative refusal wins). A
+  refused create records nothing. The published numbers are the limits themselves (`docs/public/aliases.mdx`);
+  nothing else about detection is.
 - **Per-caller rate limit** `aliasCreate` (60/hour, fail-closed Redis; `rate-limits.md`).
 - **Admin lock** (built 2026-10-29): an alias an account administrator turns off can't be turned back on, or deleted
   and re-added, by its own person (403 `alias_admin_locked`); an administrator lifts it (`roles.md` guard rail 18).

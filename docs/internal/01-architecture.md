@@ -1,6 +1,6 @@
 # 01 — Architecture
 
-Last updated: 2026-10-29 (profile photos). Decisions: `adr/`. Code map: `codemap.md`.
+Last updated: 2026-10-29 (data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
 
 ## Overview
 
@@ -239,6 +239,12 @@ Why the host split: the origin that renders untrusted email HTML (`mail.`) is is
   entries carry `on_behalf_of` (`auditActor`). The console shell shows a banner with Extend/End
   (`components/platform/act-as.tsx`); the Owners are emailed (`server/mail/act-as-email.ts`); the scheduler's
   `act-as-expiry` job closes and audits expired, signed-out and role-removed sessions.
+- Data export and account deletion (ADR-0025; `packages/core/src/data`): an Owner's account export and anyone's
+  personal export are queued (`data_export`), built by the scheduler, sealed with the key ring and downloaded by the
+  requester only after a step-up; mail is exported from the webmail with the person's own session, streamed and never
+  stored. An account waiting out its deletion grace period is in the actor's `deletingAccountIds`: `authorize()`
+  passes only reads, `account.export` and `account.delete` there (403 `account_deleting` otherwise); its mailboxes
+  carry `deletion` holds; the console shell shows every member a notice.
 
 ## Tenancy
 
@@ -323,6 +329,12 @@ scheduler ─► job:audit-verify (every 6 h) ─► every audit hash chain; a b
 scheduler ─► job:mailbox-purge (hourly) ─► deleting mailboxes past purge_after: destroy the Stalwart account, then
              the mailbox + alias rows; audit platform.mailbox_purged (system, account scope). The only path that
              deletes mail.
+scheduler ─► job:data-export (every minute) ─► builds waiting exports (ADR-0025): control-plane data only, ZIP sealed
+             with the key ring into data_export.archive, the requester emailed; archives past 7 days deleted. Mail is
+             never in it: the webmail streams mail exports with the person's own session (GET /api/webmail/export).
+scheduler ─► job:account-deletion (every 10 min) ─► accounts past account_deletion.delete_after, one step per run:
+             mailboxes → deleting (purge date now; job:mailbox-purge removes them), then domains released
+             (domain.remove), then the account row; audited data.deletion_started / domain.removed / account.deleted.
 scheduler ─► job:domain-expiry (daily) ─► pending domains: never on Stalwart and older than 30 days → deleted; on
              Stalwart and unverified after 14 days, or ownership/MX record gone → removing + domain.remove (taken
              off Stalwart unless another row holds the name there); audit domain.expired / domain.released (system,

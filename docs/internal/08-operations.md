@@ -1,6 +1,6 @@
 # 08 — Operations
 
-Last updated: 2026-10-29.
+Last updated: 2026-10-29 (data export and account deletion jobs, ADR-0025).
 
 ## Environments
 
@@ -62,19 +62,21 @@ Alerts go to the operator by email (via a separate provider, so a broken mail st
 The scheduler container runs every periodic job (rule 17; `apps/worker/src/scheduler.ts`), one at a time, each in its
 own process. One-off jobs run in the worker image with `npm run -w @anhourmail/worker job:<name>`.
 
-| Job                    | When               | Key                            | What                                                                                                                                                                                                                                                     |
-| ---------------------- | ------------------ | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `job:audit-verify`     | Every 6 hours      | —                              | Verifies every audit hash chain; a break is logged at `fatal` and the job exits non-zero (`audit.md` "Integrity").                                                                                                                                       |
-| `job:reconcile`        | Hourly             | Provisioning + read-only audit | Desired state vs Stalwart (domains, accounts, quotas, suspension, app passwords, password credentials, managed scripts); reports drift as `platform.reconciler_drift`, re-queues non-destructive fixes, never deletes. The only job given the audit key. |
-| `job:act-as-expiry`    | Every minute       | — (database only)              | Closes staff act-as sessions (ADR-0023) that expired, whose console session ended or whose staff member lost the role, and audits each `staff.act_as_ended` in the account and platform logs. The console stops honouring them at once regardless.       |
-| `job:service-accounts` | Every minute       | Provisioning                   | The management keys' owner accounts must exist and hold API keys only; drift audited. Refuses to run in production without `RECONCILE_IGNORE_DOMAINS`.                                                                                                   |
-| `job:domain-recheck`   | Every 5 minutes    | Provisioning                   | Re-checks DNS of pending domains added in the last week and activates those that pass; queues `domain.ensure` for domains whose DKIM keys were never read.                                                                                               |
-| `job:domain-expiry`    | Daily              | Provisioning                   | Releases or deletes abandoned pending domains (`PENDING_DOMAIN`); audited `domain.released` / `domain.expired` in the domain's account.                                                                                                                  |
-| `job:mailbox-purge`    | Hourly             | Provisioning                   | Removes mailboxes past their deletion grace period (Stalwart account, then rows); audited `platform.mailbox_purged`; retires platform addresses.                                                                                                         |
-| `job:storage-usage`    | Every 10 minutes   | Provisioning                   | Reads each mailbox's `usedDiskQuota` (with its name, nothing else) in batches of 100 and records it on the mailbox row for the console. Logs `failedBatches` as a warning; those mailboxes keep their last good value.                                   |
-| `job:quota-cap`        | Once, on deploy    | Provisioning                   | Brings each account's mailbox quotas within its pooled storage: scales them down in proportion, never below the mail held (rounded up); queues `mailbox.ensure`; audited. Logs `keptAbovePoolAccountIds`, `unmeasured` (re-run).                         |
-| `job:mailbox-backfill` | Once, on deploy    | —                              | Queues `mailbox.ensure` for every active mailbox (customer Sieve lock).                                                                                                                                                                                  |
-| `job:bootstrap-admin`  | Once, first deploy | —                              | Creates the first Global Administrator and emails a set-password link (deploy/README.md "First platform administrator"); audited `platform.admin_bootstrapped`.                                                                                          |
+| Job                    | When               | Key                            | What                                                                                                                                                                                                                                                                              |
+| ---------------------- | ------------------ | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `job:audit-verify`     | Every 6 hours      | —                              | Verifies every audit hash chain; a break is logged at `fatal` and the job exits non-zero (`audit.md` "Integrity").                                                                                                                                                                |
+| `job:reconcile`        | Hourly             | Provisioning + read-only audit | Desired state vs Stalwart (domains, accounts, quotas, suspension, app passwords, password credentials, managed scripts); reports drift as `platform.reconciler_drift`, re-queues non-destructive fixes, never deletes. The only job given the audit key.                          |
+| `job:act-as-expiry`    | Every minute       | — (database only)              | Closes staff act-as sessions (ADR-0023) that expired, whose console session ended or whose staff member lost the role, and audits each `staff.act_as_ended` in the account and platform logs. The console stops honouring them at once regardless.                                |
+| `job:service-accounts` | Every minute       | Provisioning                   | The management keys' owner accounts must exist and hold API keys only; drift audited. Refuses to run in production without `RECONCILE_IGNORE_DOMAINS`.                                                                                                                            |
+| `job:domain-recheck`   | Every 5 minutes    | Provisioning                   | Re-checks DNS of pending domains added in the last week and activates those that pass; queues `domain.ensure` for domains whose DKIM keys were never read.                                                                                                                        |
+| `job:domain-expiry`    | Daily              | Provisioning                   | Releases or deletes abandoned pending domains (`PENDING_DOMAIN`); audited `domain.released` / `domain.expired` in the domain's account.                                                                                                                                           |
+| `job:mailbox-purge`    | Hourly             | Provisioning                   | Removes mailboxes past their deletion grace period (Stalwart account, then rows); audited `platform.mailbox_purged`; retires platform addresses. Skips (logs `held`) any due mailbox staff hold: its account or person suspended, or a staff hold on it.                          |
+| `job:data-export`      | Every minute       | — (database + key ring)        | Builds waiting data exports (ADR-0025: control-plane data only), seals each with `SECRETS_KEYRING`, emails the requester, deletes archives past 7 days; audited `data.export_ready` / `data.export_expired`.                                                                      |
+| `job:account-deletion` | Every 10 minutes   | — (database only)              | Accounts past their deletion grace period (ADR-0025): one idempotent step per run — mailboxes to `deleting` (the purge removes them), domains released, then the account row; emails everyone who was in it. Never before the grace period ends; a staff-suspended account waits. |
+| `job:storage-usage`    | Every 10 minutes   | Provisioning                   | Reads each mailbox's `usedDiskQuota` (with its name, nothing else) in batches of 100 and records it on the mailbox row for the console. Logs `failedBatches` as a warning; those mailboxes keep their last good value.                                                            |
+| `job:quota-cap`        | Once, on deploy    | Provisioning                   | Brings each account's mailbox quotas within its pooled storage: scales them down in proportion, never below the mail held (rounded up); queues `mailbox.ensure`; audited. Logs `keptAbovePoolAccountIds`, `unmeasured` (re-run).                                                  |
+| `job:mailbox-backfill` | Once, on deploy    | —                              | Queues `mailbox.ensure` for every active mailbox (customer Sieve lock).                                                                                                                                                                                                           |
+| `job:bootstrap-admin`  | Once, first deploy | —                              | Creates the first Global Administrator and emails a set-password link (deploy/README.md "First platform administrator"); audited `platform.admin_bootstrapped`.                                                                                                                   |
 
 **Deploy step for the 2026-10-23 storage change** (Free 1 GB, Plus and Supporter 10 GB pooled per account): after the
 release is up and the worker is running, run `job:quota-cap` once, check its log (`lowered`, `keptAbovePool`,
@@ -91,6 +93,14 @@ until `failed` is empty, and record the counts in `handoff.md`. A second run rep
 creates a folder or sets the `archive` role on an existing top-level Archive folder: no mail is moved or deleted.
 Until it has run, the webmail tells a mailbox without Archive that nothing was moved. The dev plan does both on every
 `npm run db:seed`.
+
+**Deploy step for data export and account deletion (ADR-0025, migration 0027):** the scheduler's environment needs
+`SECRETS_KEYRING` (the same ring as the web app: the worker seals export archives, the web app opens them),
+`MAIL_TRANSPORT_URL`, `MAIL_FROM` and `APP_URL` (for the "export ready" and "account deleted" emails) — set them in the
+private ops compose. Without them `job:data-export` and `job:account-deletion` fail at start (logged); nothing else
+changes. Pending deletions are listed for Global Administrators under Platform → Pending deletions; a deletion that
+should not go ahead (abuse investigation) is held by suspending the account, which stops every step until it is
+lifted.
 
 ## Suspending an account or a person
 

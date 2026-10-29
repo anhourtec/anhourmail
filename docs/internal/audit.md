@@ -1,6 +1,6 @@
 # Audit
 
-Last updated: 2026-10-29 (staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
+Last updated: 2026-10-29 (data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
 
 Every meaningful action is recorded, tamper-evident, searchable and visible to the right people. Audit is a core module, not a logging side effect.
 
@@ -16,7 +16,7 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 
 | Area | Actions |
 | --- | --- |
-| `auth` | `auth.sign_in`, `auth.sign_in_failed`, `auth.sign_out`, `auth.password_changed`, `auth.password_reset`, `auth.password_reset_requested`, `auth.two_factor_enabled`, `auth.two_factor_disabled`, `auth.app_password_created`, `auth.app_password_revoked`, `auth.session_revoked`, `auth.locked_out`, `auth.mail_client_sign_in`, `auth.mail_client_sign_in_failed`, `auth.two_factor_reset`, `auth.backup_code_used`, `auth.sessions_revoked_all`, `auth.new_device`, `auth.passkey_added`, `auth.passkey_renamed`, `auth.passkey_removed`, `auth.recovery_codes_regenerated`, `auth.identity_confirmed`, `auth.email_verification_sent`, `auth.email_verified` |
+| `auth` | `auth.sign_in`, `auth.sign_in_failed`, `auth.sign_out`, `auth.password_changed`, `auth.password_reset`, `auth.password_reset_requested`, `auth.two_factor_enabled`, `auth.two_factor_disabled`, `auth.app_password_created`, `auth.app_password_revoked`, `auth.session_revoked`, `auth.locked_out`, `auth.mail_client_sign_in`, `auth.mail_client_sign_in_failed`, `auth.two_factor_reset`, `auth.backup_code_used`, `auth.sessions_revoked_all`, `auth.new_device`, `auth.passkey_added`, `auth.passkey_renamed`, `auth.passkey_removed`, `auth.recovery_codes_regenerated`, `auth.identity_confirmed`, `auth.email_verification_sent`, `auth.email_verified`, `auth.login_deleted` |
 | `account` | `account.created`, `account.deleted`, `account.updated`, `account.invite_sent`, `account.invite_accepted`, `account.invite_resent`, `account.invite_revoked`, `account.member_added`, `account.user_added`, `account.profile_changed`, `account.avatar_changed`, `account.avatar_removed`, `account.member_removed`, `account.role_changed`, `account.ownership_transferred`, `account.sign_in_policy_changed`, `account.sign_in_factor_added` |
 | `domain` | `domain.added`, `domain.verified`, `domain.verify_failed`, `domain.removed`, `domain.dns_state_changed`, `domain.released`, `domain.expired` |
 | `mailbox` | `mailbox.created`, `mailbox.renamed`, `mailbox.made_user`, `mailbox.suspended`, `mailbox.unsuspended`, `mailbox.deleted`, `mailbox.quota_changed`, `mailbox.deletion_scheduled`, `mailbox.restored`, `mailbox.password_reset`, `mailbox.password_changed`, `mailbox.avatar_changed`, `mailbox.avatar_removed` |
@@ -33,7 +33,7 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `trust` | `trust.tier_changed`, `trust.limits_changed`, `trust.restricted`, `trust.suspended`, `trust.unsuspended` |
 | `abuse` | `abuse.report_received`, `abuse.report_resolved` |
 | `staff` | `staff.role_granted`, `staff.role_revoked`, `staff.act_as_started`, `staff.act_as_renewed`, `staff.act_as_ended`, `staff.account_viewed`, `staff.credentials_reset` |
-| `data` | `data.export_requested`, `data.export_downloaded`, `data.import_started`, `data.import_finished`, `data.deletion_requested`, `data.deleted` |
+| `data` | `data.export_requested`, `data.export_ready`, `data.export_downloaded`, `data.export_expired`, `data.mail_exported`, `data.import_started`, `data.import_finished`, `data.deletion_requested`, `data.deletion_cancelled`, `data.deletion_started`, `data.deleted` |
 | `platform` | `platform.settings_changed`, `platform.admin_bootstrapped`, `platform.secret_changed`, `platform.stalwart_upgraded`, `platform.provisioning_failed`, `platform.reconciler_drift`, `platform.mailboxes_requeued`, `platform.mailbox_purged`, `platform.audit_chain_broken` |
 | `audit` | `audit.exported` |
 | `shared_mailbox` | `shared_mailbox.created`, `shared_mailbox.deleted`, `shared_mailbox.member_added`, `shared_mailbox.member_removed` |
@@ -80,12 +80,17 @@ address): `alias.toggled` / `masked_alias.toggled` meta `enabled`, plus `adminLo
 one back on. Its own person trying to turn a locked alias on, or delete it, is `denied` `alias_admin_locked` on the
 same `*.toggled` / `*.deleted` action. A create over the plan's daily cap (`aliasCreationsPerDay`, per UTC day, counted
 from creations) is `alias.created` / `masked_alias.created` `denied` `alias_daily_limit` (meta `kind`, `perDay`);
-nothing is created. No new action names: the catalogue above is unchanged.
+over Free's rolling yearly cap (`aliasCreationsPerYear`) it is `denied` `alias_yearly_limit` (meta `kind`, `perYear`,
+`nextSlot` — the UTC day a slot comes back); onto a mailbox that already has `ALIASES_PER_MAILBOX` aliases and masked
+aliases it is `denied` `alias_mailbox_limit` (meta `kind`, `perMailbox`, `mailbox` — redacted like every address).
+Nothing is created and nothing is counted. Over the account's at-a-time limit stays `failed` `plan_limit`. No new
+action names: the catalogue above is unchanged.
 
 Mailbox lifecycle: `mailbox.suspended` and `mailbox.unsuspended` (resume), `mailbox.deletion_scheduled` (meta: the
 status it came from, `purgeAfter`, alias count) and `mailbox.restored` are written by the person in the console;
 `platform.mailbox_purged` is written by the system (`mailbox-purge`) **in the mailbox's account scope**, so the
-account's admins see when a deleted mailbox was removed for good (a failed purge is recorded as `failed` and retried).
+account's admins see when a deleted mailbox was removed for good (a failed purge is recorded as `failed` and retried). A due mailbox that Anhourtec staff hold (its account or person suspended, or a staff hold on it) is skipped
+without an entry until they lift it (ADR-0025).
 Suspending or deleting again after the worker gave up is recorded with `retry: true`. A User Administrator's attempt
 on an Owner's or admin's mailbox is recorded as `denied` (`forbidden`). The reconciler's `platform.reconciler_drift`
 meta includes `suspensionMismatches` and `requeued`.
@@ -177,6 +182,29 @@ console session is gone or no longer meets a sign-in requirement; then the actor
 `step_up_required`, or `failed` when the mail server refused or couldn't be reached. Never the code, the verifier, the
 challenge or the throwaway credential. A code nobody knows (or one already used) writes no row: it names nobody
 (rate-limited, logged).
+
+Data export and account deletion (ADR-0025; `packages/core/src/data`). Exports: `data.export_requested` (the
+requester; account exports in the account's log with the account as target, personal ones in the platform log with
+the person as target, masked; meta `exportId`, `kind`; refusals `denied` `act_as` or the matrix's `forbidden` /
+`not_found`), `data.export_ready` (system `data-export`; meta `kind`, `files`, `sizeBytes`, `attempt`; `failed`
+`export_failed` after the last attempt), `data.export_downloaded` (the requester; meta `kind`, `sizeBytes`; `denied`
+`step_up_required` / `act_as`; `failed` `not_found` for anyone else's id, `conflict` when not ready or expired) and
+`data.export_expired` (system; platform log with `count`, plus a copy in each account whose export was deleted).
+`data.mail_exported` is written as the mailbox (a `system` actor named by its address) in its account when a webmail
+mail export ends (meta `scope` all/folder, `folders`, `messages`, `skipped`, `contacts`, `complete`; never folder
+names or anything about the mail). Deletion: `data.deletion_requested` (Owner; meta `deleteAfter`, `graceDays`,
+`mailboxesSuspended`, `invitesRevoked`, `catchAllOff`; `failed` `bad_request` without the exact name; `denied`
+`step_up_required` / `act_as`), `data.deletion_cancelled` (meta `mailboxesResumed`, `mailboxesStillHeld`),
+`data.deletion_started` (system `account-deletion` at the end of the grace period; meta `mailboxes`, `requestedAt`,
+`deleteAfter`; `denied` `staff_hold` with meta `waitingFor`, at most once a day, while staff hold the account or one of
+its mailboxes), then `platform.mailbox_purged` per mailbox (system `mailbox-purge`), `domain.removed` per domain
+(system `account-deletion`, meta `reason: "account_deleted"`, `from`) and `account.deleted` (meta `people`, `plan`).
+Each deletion entry is in the account's log and copied to the platform log. The account's log stays after the account
+is gone (no foreign key; append-only), retained as the table below says. A person deleting their own console login:
+`auth.login_deleted` in the platform log (target the person, label masked; meta `accountsDeleted`, `accountsLeft`;
+`denied` `act_as`, `step_up_required`, `staff`, `mailboxes`, `sole_owner`, `deleting`; `failed` `bad_request` without
+the typed address), copied to each account they left (`left: true`) or that went with them (`accountDeleted: true`).
+`data.deleted` stays reserved.
 
 Profile photos (ADR-0022): `account.avatar_changed` / `account.avatar_removed` for a person (target = the person, label
 their sign-in email) and `mailbox.avatar_changed` / `mailbox.avatar_removed` for a mailbox without a person (target =

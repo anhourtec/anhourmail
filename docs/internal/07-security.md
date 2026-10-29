@@ -1,6 +1,6 @@
 # 07 — Security
 
-Last updated: 2026-10-29 (staff support access; profile photos).
+Last updated: 2026-10-29 (data export and account deletion; staff support access; profile photos).
 
 ## Threat model
 
@@ -706,6 +706,42 @@ customer's account without the customer knowing.
 - **Visibility.** Banner on every page; every write and refusal audited as staff with `on_behalf_of`; start, renewal
   and end in the account's log and the platform log; Owners emailed at start (system layout, no tracking).
 - **No mail.** No webmail link, handoff or session while acting; the console has no mail-content path.
+
+## Data export and deletion (ADR-0025)
+
+- **Mail never leaves the mail server to rest anywhere.** A mail export is a ZIP streamed from the person's own webmail
+  session (`server/webmail/export.ts`): their token, their per-user queue, pinned to the mailbox active at the start
+  (a switch mid-way stops it), the webmail access gate in front (`route()`), nothing written to disk, Postgres or logs
+  (rule 24; the log records an error name only). No new mail-server credential or key scope was added.
+- **Control-plane archives are sealed at rest.** `job:data-export` packs JSON/CSV into a ZIP and seals it with the key
+  ring (`KeyRing.encryptBytes`, AES-256-GCM, HKDF purpose `data-export`, AAD `data_export:<id>`, key id in the output);
+  only sealed bytes reach `data_export.archive` (a `CHECK` allows an archive only while `ready`). They expire after
+  `DATA_EXPORT.keepDays` and are deleted. Opening one for another export id fails (AAD).
+- **What an archive never holds:** mail, contacts, passwords or password hashes, app password secrets, Stalwart ids,
+  TOTP secrets, recovery codes, passkey keys, staff-only notes (`internalNote` is stripped from audit meta), full IPs in
+  an account's audit log (network part only, as the console shows). CSV cells starting with `=`, `+`, `-`, `@`, tab or
+  CR are prefixed with `'` (formula injection). A personal export holds the network part of the person's own session
+  addresses and their user agents, only mailboxes in accounts they belong to now, and only their own activity: in the platform log, entries both by and about them; in their accounts'
+  logs, entries by them.
+- **Download:** only the requester (anyone else's id, another account or kind: 404), after a fresh step-up on the
+  console session (403 `step_up_required`), `Content-Disposition: attachment`, `nosniff`, `no-store`, the API CSP.
+  Emails link to the console, never to a file.
+- **Staff holds always win:** no deletion step runs while staff hold the account or any of its mailboxes (account or
+  person suspension, or a hold), re-checked under the account lock; the purge skips any mailbox staff hold, for an
+  account deletion and an ordinary mailbox deletion alike. The webmail mail export re-asks the access gate before each
+  folder and every 50 messages; the handoff applies the deletion gate at redemption.
+- **Deletion:** Owner only, fresh step-up, typed name, never while acting as someone or while staff have the account
+  suspended; a 14-day grace period with mailboxes suspended at once (`deletion` holds) and the account frozen
+  (`allowedWhileDeleting`); removal by idempotent audited steps that never run before `delete_after`, and never while
+  staff hold the account suspended. Audit rows are never deleted (rule 47). Deleting one's own login needs a step-up
+  and the typed address, locks the login row first, and is refused while any account depends on it.
+- **Residuals:** (0) a person suspension that lands while a purge is between its check and its
+  delete isn't serialised by the account lock (an account suspension is); the window is one transaction. (1) the mail
+  export is bounded only by the `export` tier (5 per hour per webmail session) and the
+  per-user JMAP queue; a very large mailbox makes one long response. (2) The key ring is shared by the worker and the
+  web app; a leaked ring plus a database dump would open archives younger than 7 days (control-plane data only). (3)
+  Logins of people whose account was deleted are kept until they delete them (no automatic expiry of account-less
+  logins yet).
 
 ## Review process
 
