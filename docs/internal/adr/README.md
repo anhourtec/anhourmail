@@ -25,3 +25,4 @@ One decision per file, numbered, never rewritten. A later ADR supersedes an earl
 | [0019](0019-sender-identity-enforcement.md)                  | Sender identity enforcement for authenticated mail                            | Accepted                                          |
 | [0020](0020-app-passwords-issued-by-the-control-plane.md)    | App passwords issued by the control plane, limited per credential             | Accepted (amended 2026-10-23, updated 2026-10-28) |
 | [0021](0021-free-platform-domain-addresses.md)               | Free addresses on the platform domain: rules, allowance, no reuse             | Accepted (updated 2026-10-24)                     |
+| [0022](0022-profile-photos.md)                               | Profile photos stored once, re-encoded by us, served same-origin              | Accepted (updated 2026-10-29)                     |
