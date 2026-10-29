@@ -5,6 +5,7 @@ import { ArrowLeft, ChevronRight, Search, X } from "lucide-react";
 import { type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { Bone } from "@anhourmail/ui/skeletons";
+import type { SignatureSet } from "@anhourmail/shared/signatures";
 import type { WebmailPreferences } from "@anhourmail/shared/webmail";
 
 import type { Folder, Identity, MailClient, SettingsOverview } from "../mail-client";
@@ -40,6 +41,7 @@ export function SettingsWindow({
   shortcuts,
   onChange,
   onIdentitiesChanged,
+  onSignaturesChanged,
   onSignOut,
   onClose,
 }: {
@@ -50,6 +52,7 @@ export function SettingsWindow({
   shortcuts: readonly [string, string][];
   onChange: (patch: Partial<WebmailPreferences>) => void;
   onIdentitiesChanged: (list: Identity[]) => void;
+  onSignaturesChanged: (set: SignatureSet) => void;
   onSignOut: () => void;
   onClose: () => void;
 }) {
@@ -143,7 +146,13 @@ export function SettingsWindow({
     switch (shown) {
       case "writing":
         return (
-          <WritingPanel prefs={preferences} onChange={onChange} data={data} client={client} onIdentities={identities} />
+          <WritingPanel
+            prefs={preferences}
+            onChange={onChange}
+            data={data}
+            client={client}
+            onSignatures={onSignaturesChanged}
+          />
         );
       case "replies":
         return <RepliesPanel data={data} client={client} timeZone={timeZone} onSaved={setData} />;

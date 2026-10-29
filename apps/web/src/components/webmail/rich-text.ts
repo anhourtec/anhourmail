@@ -24,17 +24,21 @@ export function textToHtml(text: string): string {
   return escapeHtml(text).replace(/\r?\n/g, "<br>");
 }
 
-/** Marks the signature block inside the editor so changing the sender can swap it (removed when sanitised). */
+/**
+ * Marks the signature block inside the editor so choosing another signature replaces only it. The marker lives only
+ * while writing: the outgoing sanitiser removes it, so sent mail and saved drafts don't carry it.
+ */
 export const SIGNATURE_ATTR = "data-am-signature";
 
-/** The inside of a signature block: the conventional "-- " line, then the text. */
-export const signatureInner = (signature: string): string => `-- <br>${textToHtml(signature)}`;
+/**
+ * The inside of a signature block: the conventional "-- " line, then the signature's HTML. The HTML must already be
+ * sanitised (signatures are sanitised on save, and the composer runs the sanitiser again before inserting one).
+ */
+export const signatureInner = (html: string): string => (html.trim() === "" ? "" : `-- <br>${html}`);
 
-/** The signature block a rich message starts with (empty when there is none). */
-export function signatureHtml(signature: string | undefined): string {
-  return signature && signature.trim() !== ""
-    ? `<div><br></div><div ${SIGNATURE_ATTR}="1">${signatureInner(signature)}</div>`
-    : "";
+/** The signature block a rich message starts with: an empty line to write on, then the block (empty for none). */
+export function signatureHtml(html: string | undefined): string {
+  return html && html.trim() !== "" ? `<div><br></div><div ${SIGNATURE_ATTR}="1">${signatureInner(html)}</div>` : "";
 }
 
 /**

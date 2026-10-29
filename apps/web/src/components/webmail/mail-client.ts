@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { JmapClient, JmapError } from "@anhourmail/jmap-client";
 
+import type { SignatureDefaults, SignatureSet } from "@anhourmail/shared/signatures";
 import type { WebmailPreferences } from "@anhourmail/shared/webmail";
 
 import type { BookView, ContactInput, ContactView } from "@/server/webmail/contacts";
 import type { Junk, Vacation } from "@/server/webmail/sieve";
-import type { SettingsOverview } from "@/server/webmail/settings";
+import type { SettingsOverview, SignatureResult } from "@/server/webmail/settings";
 import type { Address, MessageView } from "@/server/webmail/view";
 
 import { isLoadedImageType } from "./remote-images";
@@ -52,7 +53,7 @@ export type ListRow = Summary & {
 /** How the list groups mail: whole conversations (one row each) or every message on its own row. */
 export type Grouping = WebmailPreferences["grouping"];
 export type Identity = { id: string; name: string; email: string; signature?: string };
-export type { SettingsOverview };
+export type { SettingsOverview, SignatureResult };
 export type Attachment = { blobId: string; name: string; type: string; size: number };
 export type DraftPayload = {
   replaces?: string;
@@ -916,11 +917,36 @@ export function createMailClient(origin = "") {
         headers: { [ACCOUNT]: await accountId() },
         body: JSON.stringify(patch),
       }),
-    updateIdentity: (account: string, id: string, change: { name?: string; signature?: string }) =>
+    updateIdentity: (account: string, id: string, change: { name: string }) =>
       bff<Identity>(`${origin}/api/webmail/settings/identities/${encodeURIComponent(id)}`, {
         method: "PATCH",
         headers: { [ACCOUNT]: account },
         body: JSON.stringify(change),
+      }),
+    /** The active mailbox's named signatures and defaults (the first read brings the old signature over). */
+    signatures: () => bff<SignatureSet>(`${origin}/api/webmail/settings/signatures`),
+    createSignature: (account: string, input: { name: string; html: string }) =>
+      bff<SignatureResult>(`${origin}/api/webmail/settings/signatures`, {
+        method: "POST",
+        headers: { [ACCOUNT]: account },
+        body: JSON.stringify(input),
+      }),
+    updateSignature: (account: string, id: string, change: { name?: string; html?: string }) =>
+      bff<SignatureResult>(`${origin}/api/webmail/settings/signatures/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { [ACCOUNT]: account },
+        body: JSON.stringify(change),
+      }),
+    deleteSignature: (account: string, id: string) =>
+      bff<SignatureResult>(`${origin}/api/webmail/settings/signatures/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        headers: { [ACCOUNT]: account },
+      }),
+    setSignatureDefaults: (account: string, defaults: SignatureDefaults) =>
+      bff<SignatureResult>(`${origin}/api/webmail/settings/signatures/defaults`, {
+        method: "PUT",
+        headers: { [ACCOUNT]: account },
+        body: JSON.stringify(defaults),
       }),
     saveVacation: (account: string, vacation: Vacation, timeZone: string) =>
       bff<Vacation>(`${origin}/api/webmail/settings/vacation`, {

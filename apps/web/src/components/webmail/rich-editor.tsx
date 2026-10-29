@@ -14,7 +14,10 @@ import {
   useState,
 } from "react";
 
+import { SIGNATURE_IMAGE_TYPES, WEBMAIL_SIGNATURES } from "@anhourmail/shared/signatures";
+
 import type * as OutgoingModule from "@/server/webmail/outgoing-html";
+import type { OutgoingOptions } from "@/server/webmail/outgoing-html";
 import { inputClass, primaryButtonClass, secondaryButtonClass } from "@/components/ui-classes";
 
 import { Modal } from "./dialogs";
@@ -52,9 +55,27 @@ export function useOutgoing(): Outgoing | null {
   return mod;
 }
 
+/** Reads an image file as a `data:` URI. */
+const readDataUri = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      resolve(typeof reader.result === "string" ? reader.result : "");
+    };
+    reader.onerror = () => {
+      reject(new Error("unreadable"));
+    };
+    reader.readAsDataURL(file);
+  });
+
+/** Settings for a signature editor: images are embedded from files (pasted, dropped or chosen), never linked. */
+export type EmbedImages = { onError: (message: string) => void };
+
 /**
  * The editing surface. `initialHtml` is set once it is available (already sanitised by the composer); after that the
- * DOM is the source of truth and every change is reported through `onChange`.
+ * DOM is the source of truth and every change is reported through `onChange`. With `embedImages` (the signature
+ * editor) pasted, dropped or chosen image files are embedded as `data:` images within the signature caps, and pasted
+ * HTML keeps embedded images only (`sanitize` options).
  */
 export function RichEditor({
   editorRef,
@@ -62,6 +83,12 @@ export function RichEditor({
   outgoing,
   onChange,
   autoFocus,
+  id = "compose-body",
+  label = "Message",
+  placeholder = "Write your message",
+  sanitize,
+  embedImages,
+  className = "min-h-32 flex-1",
 }: {
   editorRef: RefObject<HTMLDivElement | null>;
   initialHtml: string | null;
@@ -69,6 +96,14 @@ export function RichEditor({
   /** The content changed (read it from `editorRef`). */
   onChange: () => void;
   autoFocus: boolean;
+  id?: string;
+  label?: string;
+  placeholder?: string;
+  /** Sanitiser options for everything pasted or inserted (the signature editor's stricter mode). */
+  sanitize?: OutgoingOptions;
+  embedImages?: EmbedImages;
+  /** Size of the editing area. */
+  className?: string;
 }) {
   const linkId = useId();
   const [linkOpen, setLinkOpen] = useState(false);
@@ -77,6 +112,7 @@ export function RichEditor({
   const savedRange = useRef<Range | null>(null);
   const [inserting, setInserting] = useState(false);
   const initialised = useRef(false);
+  const imageInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const el = editorRef.current;
@@ -91,9 +127,52 @@ export function RichEditor({
     onChange();
   };
 
+  /** Embeds image files at the caret (signature editor only): allowed types, each within the size cap. */
+  const embedFiles = async (files: File[]) => {
+    if (!embedImages) return;
+    const maxBytes = WEBMAIL_SIGNATURES.imageKb * 1024;
+    for (const f of files) {
+      if (!(SIGNATURE_IMAGE_TYPES as readonly string[]).includes(f.type)) {
+        embedImages.onError("Use a PNG, JPEG, GIF or WebP image.");
+        continue;
+      }
+      if (f.size > maxBytes) {
+        embedImages.onError(
+          `Each image in a signature can be up to ${String(WEBMAIL_SIGNATURES.imageKb)} KB. Use a smaller image.`,
+        );
+        continue;
+      }
+      const count = editorRef.current?.querySelectorAll("img").length ?? 0;
+      if (count >= WEBMAIL_SIGNATURES.imagesPerSignature) {
+        embedImages.onError(`A signature can have up to ${String(WEBMAIL_SIGNATURES.imagesPerSignature)} images.`);
+        return;
+      }
+      let uri: string;
+      try {
+        uri = await readDataUri(f);
+      } catch {
+        embedImages.onError(`${f.name} couldn't be read.`);
+        continue;
+      }
+      // Through the same sanitiser as everything else: a file whose bytes aren't the image it claims is dropped.
+      const clean = outgoing?.sanitizeOutgoingHtml(`<img src="${escapeHtml(uri)}" alt="">`, sanitize).html ?? "";
+      if (clean === "") {
+        embedImages.onError(`${f.name} isn't an image that can be embedded.`);
+        continue;
+      }
+      if (editorRef.current) restore(editorRef.current, savedRange.current ?? rangeIn(editorRef.current));
+      exec("insertHTML", clean);
+      savedRange.current = null;
+      changed();
+    }
+  };
+
+  const imageFiles = (list: FileList | null | undefined): File[] =>
+    Array.from(list ?? []).filter((f) => f.type.startsWith("image/"));
+
   /** Inserts HTML from outside (paste, drop) after sanitising it; plain text when the sanitiser isn't loaded. */
   const insertForeign = (html: string, text: string) => {
-    const clean = html !== "" && outgoing ? outgoing.sanitizeOutgoingHtml(html) : null;
+    const clean = html !== "" && outgoing ? outgoing.sanitizeOutgoingHtml(html, sanitize) : null;
     // Remote images show as placeholders while writing (nothing loads); the composer puts them back for saving.
     if (clean && !clean.tooLarge && clean.html !== "") exec("insertHTML", parkRemoteImages(clean.html));
     else if (text !== "") exec("insertText", text);
@@ -102,11 +181,23 @@ export function RichEditor({
 
   const onPaste = (e: ClipboardEvent<HTMLDivElement>) => {
     e.preventDefault();
+    const files = imageFiles(e.clipboardData.files);
+    if (embedImages && files.length > 0 && e.clipboardData.getData("text/html") === "") {
+      savedRange.current = rangeIn(editorRef.current);
+      void embedFiles(files);
+      return;
+    }
     insertForeign(e.clipboardData.getData("text/html"), e.clipboardData.getData("text/plain"));
   };
 
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
+    const files = imageFiles(e.dataTransfer.files);
+    if (embedImages && files.length > 0) {
+      savedRange.current = rangeIn(editorRef.current);
+      void embedFiles(files);
+      return;
+    }
     const html = e.dataTransfer.getData("text/html");
     const text = e.dataTransfer.getData("text/plain");
     if (html === "" && text === "") return;
@@ -170,7 +261,30 @@ export function RichEditor({
               }
             : undefined
         }
+        onInsertImage={
+          embedImages && outgoing
+            ? () => {
+                savedRange.current = rangeIn(editorRef.current);
+                imageInput.current?.click();
+              }
+            : undefined
+        }
       />
+      {embedImages && (
+        <input
+          ref={imageInput}
+          type="file"
+          accept={SIGNATURE_IMAGE_TYPES.join(",")}
+          multiple
+          className="hidden"
+          aria-hidden
+          tabIndex={-1}
+          onChange={(e) => {
+            void embedFiles(Array.from(e.target.files ?? []));
+            e.target.value = "";
+          }}
+        />
+      )}
       {linkOpen && (
         <form
           className="flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2"
@@ -230,10 +344,10 @@ export function RichEditor({
       )}
       <div
         ref={editorRef}
-        id="compose-body"
+        id={id}
         role="textbox"
         aria-multiline="true"
-        aria-label="Message"
+        aria-label={label}
         contentEditable={initialHtml !== null}
         suppressContentEditableWarning
         spellCheck
@@ -241,12 +355,13 @@ export function RichEditor({
         onKeyDown={onKeyDown}
         onPaste={onPaste}
         onDrop={onDrop}
-        data-placeholder="Write your message"
-        className="am-rich min-h-32 flex-1 overflow-y-auto px-4 py-3 text-[14px] leading-6 outline-none"
+        data-placeholder={placeholder}
+        className={`am-rich ${className} overflow-y-auto px-4 py-3 text-[14px] leading-6 outline-none`}
       />
       {inserting && outgoing && (
         <InsertHtmlDialog
           outgoing={outgoing}
+          {...(sanitize ? { sanitize } : {})}
           onClose={() => {
             setInserting(false);
           }}
@@ -270,10 +385,12 @@ export function RichEditor({
  */
 export function InsertHtmlDialog({
   outgoing,
+  sanitize,
   onInsert,
   onClose,
 }: {
   outgoing: Outgoing;
+  sanitize?: OutgoingOptions;
   onInsert: (html: string) => void;
   onClose: () => void;
 }) {
@@ -281,7 +398,7 @@ export function InsertHtmlDialog({
   const file = useRef<HTMLInputElement>(null);
   const [source, setSource] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const result = useMemo(() => outgoing.sanitizeOutgoingHtml(source), [outgoing, source]);
+  const result = useMemo(() => outgoing.sanitizeOutgoingHtml(source, sanitize), [outgoing, source, sanitize]);
   const removed = useMemo(() => removedSummary(result), [result]);
   const maxMb = outgoing.MAX_OUTGOING_HTML / (1024 * 1024);
 

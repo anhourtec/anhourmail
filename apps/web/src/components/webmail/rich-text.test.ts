@@ -13,6 +13,7 @@ import {
   removedSummary,
   SIGNATURE_ATTR,
   signatureHtml,
+  signatureInner,
   textToHtml,
 } from "./rich-text";
 
@@ -33,13 +34,14 @@ describe("rich-text helpers", () => {
     expect(textToHtml("a\n<b>\r\nc")).toBe("a<br>&lt;b&gt;<br>c");
   });
 
-  it("builds a marked signature block from escaped text", () => {
+  it("builds a marked signature block around sanitised signature HTML, after the separator line", () => {
     expect(signatureHtml(undefined)).toBe("");
     expect(signatureHtml("  ")).toBe("");
-    const s = signatureHtml("Sam\n<img src=x onerror=alert(1)>");
-    expect(s).toContain(`${SIGNATURE_ATTR}="1"`);
-    expect(s).toContain("-- <br>Sam<br>&lt;img");
-    expect(s).not.toContain("<img");
+    const s = signatureHtml("<div><b>Sam</b></div>");
+    expect(s).toBe(`<div><br></div><div ${SIGNATURE_ATTR}="1">-- <br><div><b>Sam</b></div></div>`);
+    expect(signatureInner("")).toBe("");
+    // The marker never leaves the composer: the outgoing sanitiser drops it.
+    expect(sanitizeOutgoingHtml(s).html).toBe("<div><br /></div><div>-- <br /><div><b>Sam</b></div></div>");
   });
 
   it("quotes a reply's HTML in a blockquote under an escaped header", () => {

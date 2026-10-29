@@ -10,6 +10,7 @@ import {
   ChevronDown,
   CodeXml,
   Highlighter,
+  ImagePlus,
   Italic,
   Link,
   List,
@@ -336,6 +337,7 @@ export function FormatToolbar({
   onChange,
   onLink,
   onInsertHtml,
+  onInsertImage,
 }: {
   editorRef: RefObject<HTMLDivElement | null>;
   /** The content changed. */
@@ -344,6 +346,8 @@ export function FormatToolbar({
   onLink: () => void;
   /** Opens "Insert HTML" (absent until the sanitiser has loaded). */
   onInsertHtml?: (() => void) | undefined;
+  /** Chooses an image file to embed (the signature editor only). */
+  onInsertImage?: (() => void) | undefined;
 }) {
   const [host, setHost] = useState<HTMLDivElement | null>(null);
   const saved = useRef<Range | null>(null);
@@ -570,6 +574,9 @@ export function FormatToolbar({
         />
         <Divider />
         <ToolButton label="Link" icon={<Link className="size-4" aria-hidden />} onRun={onLink} shortcut="⌘/Ctrl + K" />
+        {onInsertImage && (
+          <ToolButton label="Insert image" icon={<ImagePlus className="size-4" aria-hidden />} onRun={onInsertImage} />
+        )}
         <ToolButton
           label="Quote"
           icon={<TextQuote className="size-4" aria-hidden />}

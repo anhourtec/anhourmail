@@ -4,6 +4,7 @@
 import { ExternalLink, HardDrive, LogOut, MailCheck, Plus, TriangleAlert, X } from "lucide-react";
 import { type SyntheticEvent, useId, useState } from "react";
 
+import type { SignatureSet } from "@anhourmail/shared/signatures";
 import { UNDO_SEND_SECONDS, type WebmailPreferences } from "@anhourmail/shared/webmail";
 
 /** Storage sizes: MB below a gigabyte, else GB with one decimal ("1.6 MB", "30 GB"). */
@@ -18,6 +19,7 @@ import { initials } from "../format";
 import { type Identity, type MailClient, RefusedError, type SettingsOverview } from "../mail-client";
 import { areaClass, Choice, fieldClass, Group, Note, Row, smallPrimary, smallSecondary, Toggle } from "./controls";
 import { ChangePasswordForm } from "./password-form";
+import { SignaturesSection } from "./signatures-panel";
 
 type Change = (patch: Partial<WebmailPreferences>) => void;
 type Status = { tone: "ok" | "error"; text: string } | null;
@@ -56,89 +58,17 @@ export function WritingPanel({
   onChange,
   data,
   client,
-  onIdentities,
+  onSignatures,
 }: {
   prefs: WebmailPreferences;
   onChange: Change;
   data: SettingsOverview;
   client: MailClient;
-  onIdentities: (list: Identity[]) => void;
+  onSignatures: (set: SignatureSet) => void;
 }) {
-  const [identityId, setIdentityId] = useState(data.identities[0]?.id ?? "");
-  const identity = data.identities.find((i) => i.id === identityId);
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const text = drafts[identityId] ?? identity?.signature ?? "";
-  const [status, setStatus] = useState<Status>(null);
-  const [busy, setBusy] = useState(false);
-  const fieldId = useId();
-
-  const save = async (e: SyntheticEvent) => {
-    e.preventDefault();
-    if (!identity) return;
-    setBusy(true);
-    setStatus(null);
-    try {
-      const updated = await client.updateIdentity(data.accountId, identity.id, { signature: text });
-      onIdentities(data.identities.map((i) => (i.id === updated.id ? updated : i)));
-      setStatus({ tone: "ok", text: "Signature saved." });
-    } catch (err) {
-      setStatus({ tone: "error", text: messageOf(err) });
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <div className="flex flex-col gap-6">
-      <section aria-labelledby={`${fieldId}-h`} className="flex flex-col gap-2">
-        <h3 id={`${fieldId}-h`} className="font-medium text-[14px]">
-          Signature
-        </h3>
-        <p className="am-small max-w-prose">
-          Added below new messages, replies and forwards. Each address has its own. Mail apps keep their own signatures.
-        </p>
-        <form onSubmit={(e) => void save(e)} className="flex flex-col gap-3 rounded-xl border p-4">
-          {data.identities.length > 1 && (
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[13px] text-muted-foreground">For</span>
-              <select
-                value={identityId}
-                onChange={(e) => {
-                  setIdentityId(e.target.value);
-                  setStatus(null);
-                }}
-                className={`${fieldClass} font-mono text-[13.5px]`}
-              >
-                {data.identities.map((i) => (
-                  <option key={i.id} value={i.id}>
-                    {i.email}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <label htmlFor={fieldId} className="sr-only">
-            Signature for {identity?.email}
-          </label>
-          <textarea
-            id={fieldId}
-            value={text}
-            maxLength={2000}
-            onChange={(e) => {
-              setDrafts((d) => ({ ...d, [identityId]: e.target.value }));
-              setStatus(null);
-            }}
-            placeholder={"Sam Lee\nAnhourtec"}
-            className={`${areaClass} font-mono text-[13.5px]`}
-          />
-          <div className="flex flex-wrap items-center gap-3">
-            <button type="submit" disabled={busy || !identity} className={smallPrimary}>
-              Save signature
-            </button>
-            <StatusText status={status} />
-          </div>
-        </form>
-      </section>
+      <SignaturesSection client={client} accountId={data.accountId} onChanged={onSignatures} />
 
       <Group title="Sending">
         <Choice
@@ -169,7 +99,6 @@ export function WritingPanel({
             onChange({ showCcBcc });
           }}
         />
-        <Note label="Messages are sent as plain text">Formatting in the composer is coming later.</Note>
       </Group>
     </div>
   );

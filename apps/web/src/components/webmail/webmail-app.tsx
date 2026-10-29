@@ -27,6 +27,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { MessageListSkeleton } from "@anhourmail/ui/skeletons";
+import type { SignatureSet } from "@anhourmail/shared/signatures";
 import { REMOTE_IMAGES, type WebmailPreferences } from "@anhourmail/shared/webmail";
 import { useTheme } from "next-themes";
 
@@ -212,6 +213,8 @@ function Mailroom({
   const [priorityCount, setPriorityCount] = useState(0);
   const [mailboxes, setMailboxes] = useState<Mailboxes>({ active: username, others: [] });
   const [identities, setIdentities] = useState<Identity[]>([]);
+  /** The mailbox's named signatures and defaults (null until loaded; the composer then adds the default). */
+  const [signatures, setSignatures] = useState<SignatureSet | null>(null);
   /** Your own addresses (lowercase): the mailbox and its sender identities. */
   const mine = useMemo(
     () => new Set([username, ...identities.map((i) => i.email)].map((e) => e.toLowerCase())),
@@ -440,6 +443,10 @@ function Mailroom({
     client
       .identities()
       .then(setIdentities)
+      .catch(() => undefined);
+    client
+      .signatures()
+      .then(setSignatures)
       .catch(() => undefined);
     client
       .contacts()
@@ -1040,7 +1047,7 @@ function Mailroom({
       text: "",
       attachments: [],
       focus: "to",
-      signature: true,
+      signature: "new",
     });
   }, [openComposer]);
 
@@ -1064,7 +1071,7 @@ function Mailroom({
           attachments: mode === "forward" ? m.attachments : [],
           ...(toMe ? { fromEmail: toMe } : {}),
           focus: mode === "forward" ? "to" : "body",
-          signature: true,
+          signature: "reply",
         },
         inline ? "inline" : "panel",
       );
@@ -1511,6 +1518,7 @@ function Mailroom({
         key={composer.key}
         client={client}
         identities={identities}
+        signatures={signatures}
         contacts={contacts}
         knownAddresses={known}
         onAddContact={addContact}
@@ -1571,7 +1579,7 @@ function Mailroom({
               text: "",
               attachments: [],
               focus: "body",
-              signature: true,
+              signature: "new",
             });
           }}
         />
@@ -1868,7 +1876,7 @@ function Mailroom({
                     text: "",
                     attachments: [],
                     focus: "body",
-                    signature: true,
+                    signature: "new",
                   });
                 }}
                 knownAddresses={known}
@@ -1898,6 +1906,7 @@ function Mailroom({
           key={composer.key}
           client={client}
           identities={identities}
+          signatures={signatures}
           contacts={contacts}
           knownAddresses={known}
           onAddContact={addContact}
@@ -1923,6 +1932,7 @@ function Mailroom({
           shortcuts={SHORTCUTS}
           onChange={updatePrefs}
           onIdentitiesChanged={setIdentities}
+          onSignaturesChanged={setSignatures}
           onSignOut={() => {
             void signOut();
           }}

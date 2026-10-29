@@ -10,6 +10,7 @@ import {
   Paperclip,
   PenLine,
   Send,
+  Signature,
   Trash2,
   UserPlus,
   X,
@@ -17,6 +18,7 @@ import {
 import { type KeyboardEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { WEBMAIL_ATTACHMENTS } from "@anhourmail/shared";
+import { defaultSignature, SIGNATURE_IMAGE_URI_MAX, type SignatureSet } from "@anhourmail/shared/signatures";
 
 import type { Address } from "@/server/webmail/view";
 import { Tooltip } from "@/components/tooltip";
@@ -53,8 +55,11 @@ export type ComposeSeed = {
   fromEmail?: string;
   /** Where the caret starts: the top of the body (replies) or the To field. */
   focus: "to" | "body";
-  /** Add the sender's signature (new messages, replies and forwards; not when reopening a draft). */
-  signature?: boolean;
+  /**
+   * Start with the default signature for this kind of message: "new", or "reply" (replies and forwards). Absent when
+   * reopening a draft (it has its signature already); the signature can still be switched.
+   */
+  signature?: SignatureKind;
   /** The body as HTML for rich text (a quoted original, or a draft's HTML); sanitised before the editor shows it. */
   html?: string;
   /** Rich text (the default) or plain text (e.g. reopening a plain-text draft). */
@@ -62,6 +67,10 @@ export type ComposeSeed = {
 };
 
 export type ComposeFormat = "rich" | "plain";
+export type SignatureKind = "new" | "reply";
+
+/** How signatures are sanitised before the composer inserts one (they were sanitised on save too). */
+const SIGNATURE_SANITIZE = { embeddedImagesOnly: true, maxDataImage: SIGNATURE_IMAGE_URI_MAX } as const;
 
 /** The block a signature adds to a plain-text message: the conventional "-- " separator line, then the text. */
 export const signatureBlock = (signature: string | undefined): string =>
@@ -72,16 +81,28 @@ export function initialBody(seed: ComposeSeed, signature: string | undefined): s
   return seed.signature ? `${signatureBlock(signature)}${seed.text}` : seed.text;
 }
 
-/** Swaps one signature block for another when the sender changes (only if the old one is still there unchanged). */
-export function swapSignature(text: string, from: string | undefined, to: string | undefined): string {
-  const old = signatureBlock(from);
-  const next = signatureBlock(to);
-  if (old === "") return next === "" ? text : `${next}${text}`;
-  const at = text.indexOf(old);
-  const end = at + old.length;
-  // Only the unchanged block: it ends the text or is followed by a line break (the quoted message).
-  if (at === -1 || (end < text.length && text[end] !== "\n")) return text;
-  return `${text.slice(0, at)}${next}${text.slice(end)}`;
+/**
+ * Replaces the signature of a plain-text message with `to` (removes it for none). The signature is what follows the
+ * last "-- " line of the part you wrote, which ends where the quoted message (`quoted`, the text a reply or forward
+ * started with) begins, so the quoted message (which may have a "-- " line of its own) is never touched. Without a
+ * signature yet, the new one goes at the end of what you wrote.
+ */
+export function swapSignature(text: string, to: string | undefined, quoted = ""): string {
+  let split = text.length;
+  if (quoted.trim() !== "") {
+    if (text.endsWith(quoted)) split = text.length - quoted.length;
+    else {
+      const first = quoted.trim().split("\n")[0] ?? "";
+      const at = first === "" ? -1 : text.indexOf(first);
+      if (at >= 0) split = at;
+    }
+  }
+  const mine = text.slice(0, split);
+  let rest = text.slice(split);
+  if (rest !== "" && !rest.startsWith("\n")) rest = `\n\n${rest}`;
+  const sep = mine.startsWith("-- \n") ? 0 : mine.lastIndexOf("\n-- \n");
+  const head = (sep >= 0 ? mine.slice(0, sep) : mine).replace(/\s+$/u, "");
+  return `${head}${signatureBlock(to)}${rest}`;
 }
 
 const EMAIL = /^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/;
@@ -275,6 +296,7 @@ type SaveState = "idle" | "saving" | "saved" | "error";
 export function Composer({
   client,
   identities,
+  signatures,
   contacts,
   knownAddresses,
   onAddContact,
@@ -288,6 +310,8 @@ export function Composer({
 }: {
   client: MailClient;
   identities: Identity[];
+  /** The mailbox's signatures and defaults; null while they load. */
+  signatures: SignatureSet | null;
   contacts: Address[];
   /** Addresses already in an address book (lowercase); other chips offer "Add to contacts". */
   knownAddresses: ReadonlySet<string>;
@@ -310,25 +334,39 @@ export function Composer({
   const [identityId, setIdentityId] = useState(
     () => identities.find((i) => i.email === seed.fromEmail)?.id ?? identities[0]?.id ?? "",
   );
-  const [text, setText] = useState(() => initialBody(seed, identities.find((i) => i.id === identityId)?.signature));
+  const kind = seed.signature;
+  const [format, setFormat] = useState<ComposeFormat>(seed.mode ?? "rich");
+  /** The chosen signature's id; null for none; undefined until the signatures have loaded (new messages and replies). */
+  const [sigChoice, setSigChoice] = useState<string | null | undefined>(() =>
+    kind === undefined ? null : signatures ? (defaultSignature(signatures, kind)?.id ?? null) : undefined,
+  );
+  const chosen = signatures?.signatures.find((x) => x.id === sigChoice) ?? null;
+  const [text, setText] = useState(() => initialBody(seed, chosen?.text));
   const [attachments, setAttachments] = useState<Attachment[]>(seed.attachments);
   const [uploading, setUploading] = useState(0);
-  // Identities can arrive after the composer opened: pick the sender then, with its signature.
+  // Identities can arrive after the composer opened: pick the sender then.
   const [seenIdentities, setSeenIdentities] = useState(identities);
   if (seenIdentities !== identities) {
     setSeenIdentities(identities);
     const pick = identities.find((i) => i.email === seed.fromEmail) ?? identities[0];
-    if (identityId === "" && pick) {
-      setIdentityId(pick.id);
-      if (seed.signature) setText((t) => swapSignature(t, undefined, pick.signature));
+    if (identityId === "" && pick) setIdentityId(pick.id);
+  }
+  // Signatures can arrive after the composer opened too: the default for this kind of message goes in then.
+  const [seenSignatures, setSeenSignatures] = useState(signatures);
+  if (seenSignatures !== signatures) {
+    setSeenSignatures(signatures);
+    if (kind !== undefined && sigChoice === undefined && signatures) {
+      const d = defaultSignature(signatures, kind);
+      setSigChoice(d?.id ?? null);
+      if (format === "plain" && d) setText((t) => swapSignature(t, d.text, seed.text));
     }
   }
-  const chooseIdentity = (next: string) => {
-    if (seed.signature) {
-      const sig = (id: string) => identities.find((i) => i.id === id)?.signature;
-      setText((t) => swapSignature(t, sig(identityId), sig(next)));
-    }
-    setIdentityId(next);
+  /** Switches the message's signature (or removes it); only the signature block changes. */
+  const chooseSignature = (id: string | null) => {
+    const next = signatures?.signatures.find((x) => x.id === id) ?? null;
+    // A reopened draft's text is all its own: only a new message's or a reply's seed text is the quoted part.
+    if (format === "plain") setText((t) => swapSignature(t, next?.text, kind === undefined ? "" : seed.text));
+    setSigChoice(next?.id ?? null);
   };
   const [save, setSave] = useState<SaveState>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -344,11 +382,10 @@ export function Composer({
   // Rich text: the editor's DOM is the working copy; `richVersion` counts edits (for autosave). Every save sends it
   // through the outgoing sanitiser, and the server sanitises it again.
   const outgoing = useOutgoing();
-  const [format, setFormat] = useState<ComposeFormat>(seed.mode ?? "rich");
   const editor = useRef<HTMLDivElement>(null);
   const [richSource, setRichSource] = useState(() => ({
     body: seed.html ?? textToHtml(seed.text),
-    signature: seed.signature === true,
+    signature: seed.signature !== undefined,
     key: 0,
   }));
   const [richVersion, setRichVersion] = useState(0);
@@ -361,28 +398,34 @@ export function Composer({
   const editorHtml = () => unparkRemoteImages(editor.current?.innerHTML ?? "");
   /** Asking before rich text becomes plain text (its formatting is dropped). */
   const [confirmPlain, setConfirmPlain] = useState(false);
-  /** The signature text the editor holds; null until the editor has been filled. */
-  const appliedSig = useRef<string | undefined | null>(null);
+  /** The signature HTML the editor holds; null until the editor has been filled. */
+  const appliedSig = useRef<string | null>(null);
   const richReady = format === "rich" && initialHtml !== null;
+  /** The chosen signature as it goes into the editor (sanitised again; "" for none). */
+  const sigHtml = useMemo(
+    () => (chosen && outgoing ? outgoing.sanitizeOutgoingHtml(chosen.html, SIGNATURE_SANITIZE).html : ""),
+    [chosen, outgoing],
+  );
   useEffect(() => {
     const el = editor.current;
     if (!richReady || !el) return;
-    const raw = identities.find((i) => i.id === identityId)?.signature;
-    const want = raw && raw.trim() !== "" ? raw : undefined;
     if (appliedSig.current === null) {
       // First fill: the signature goes above the quoted text, as in plain text.
-      if (richSource.signature && want) el.insertAdjacentHTML("afterbegin", signatureHtml(want));
-      appliedSig.current = want;
+      if (richSource.signature && sigHtml !== "") el.insertAdjacentHTML("afterbegin", signatureHtml(sigHtml));
+      appliedSig.current = sigHtml;
       return;
     }
-    if (appliedSig.current === want) return;
+    if (appliedSig.current === sigHtml) return;
+    // Only the marked block changes (it stays, empty, for "no signature", so another can take its place).
     const block = el.querySelector(`[${SIGNATURE_ATTR}]`);
-    if (block && want) block.innerHTML = signatureInner(want);
-    else if (block) block.remove();
-    else if (want && richSource.signature) el.insertAdjacentHTML("afterbegin", signatureHtml(want));
-    appliedSig.current = want;
+    if (block) block.innerHTML = signatureInner(sigHtml);
+    else if (sigHtml !== "") {
+      // No block (e.g. after plain text mode): new messages get it at the end, replies above the quoted message.
+      el.insertAdjacentHTML(kind === "reply" ? "afterbegin" : "beforeend", signatureHtml(sigHtml));
+    }
+    appliedSig.current = sigHtml;
     setRichVersion((v) => v + 1);
-  }, [richReady, identityId, identities, richSource]);
+  }, [richReady, sigHtml, kind, richSource]);
 
   const switchFormat = (next: ComposeFormat, confirmed = false) => {
     if (next === format) return;
@@ -398,8 +441,7 @@ export function Composer({
       );
     } else {
       // The signature is already in the text: the editor starts from it as is.
-      const raw = identities.find((i) => i.id === identityId)?.signature;
-      appliedSig.current = raw && raw.trim() !== "" ? raw : undefined;
+      appliedSig.current = sigHtml;
       setRichSource((r) => ({ body: textToHtml(text), signature: false, key: r.key + 1 }));
     }
     setFormat(next);
@@ -637,7 +679,7 @@ export function Composer({
             id="compose-from"
             value={identityId}
             onChange={(e) => {
-              chooseIdentity(e.target.value);
+              setIdentityId(e.target.value);
             }}
             className="h-8 min-w-0 flex-1 rounded-md bg-transparent font-mono text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
@@ -811,6 +853,34 @@ export function Composer({
             <Paperclip className="size-4" aria-hidden />
           </button>
         </Tooltip>
+        {signatures && (
+          <Menu
+            label="Signature"
+            icon={Signature}
+            side="top"
+            className="[&_[aria-haspopup=menu]]:size-9"
+            items={[
+              { heading: "Signature" },
+              {
+                label: "(No signature)",
+                checked: chosen === null,
+                onSelect: () => {
+                  chooseSignature(null);
+                },
+              },
+              ...signatures.signatures.map((x) => ({
+                label: x.name,
+                checked: chosen?.id === x.id,
+                onSelect: () => {
+                  chooseSignature(x.id);
+                },
+              })),
+              ...(signatures.signatures.length === 0
+                ? [{ label: "Add signatures in Settings → Writing", disabled: true, onSelect: () => undefined }]
+                : []),
+            ]}
+          />
+        )}
         <Menu
           label="More options"
           icon={Ellipsis}
