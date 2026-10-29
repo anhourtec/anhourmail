@@ -12,6 +12,12 @@ live-server fixes still open (Stalwart's own certificate, the mail-only submissi
 drill). The order below is the shortest route to a public launch; each step keeps the phase exit criteria further
 down.
 
+**Current work plan (maintainer, 2026-10-29):** finish everything up to Phase 6, not Phase 6 itself — the
+next-session items below, then the product gaps a beta needs (step 2), then Phase 5 billing and migration (step 3).
+Abuse controls, monitoring and backups (Phase 6, step 4) come after. Billing code in this public repo holds only what
+is fine to publish: the Stripe integration behind a port with a fake, webhook signature checks, plan facts already on
+the pricing page. Keys, Stripe product and price ids and account settings live in `.env` or the private ops repo.
+
 **Next session (first):** the remote-image proxy. The webmail blocks remote images and says "Loading images through
 our privacy proxy is coming soon", with "Load images" disabled (`components/webmail/message-body.tsx`
 `BlockedImages`). Build `/img/<signed-url>` as `05-webmail.md` describes (no cookies or referrer, size cap,
