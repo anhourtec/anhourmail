@@ -7,6 +7,7 @@ import { avatarPath, ownAvatar } from "@anhourmail/core/avatars";
 import { listDomains } from "@anhourmail/core/domains";
 import { listMailboxes } from "@anhourmail/core/mailboxes";
 import { listPeople } from "@anhourmail/core/people";
+import { accountDeletionStatus } from "@anhourmail/core/data";
 import { accountSuspensionNotice } from "@anhourmail/core/platform";
 import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 import { WEBMAIL_HANDOFF_START } from "@anhourmail/shared/webmail";
@@ -18,6 +19,7 @@ import { peopleActions } from "@/server/people-actions";
 
 import type { MenuAccount } from "./account-menu";
 import { ConsoleChrome } from "./console-chrome";
+import { AccountDeletingNotice } from "./console/account-deleting-notice";
 import { AccountSuspendedNotice } from "./console/account-suspended-notice";
 import type { NavCounts, PrimaryAction } from "./console/left-nav";
 import { SIDEBAR_COOKIE } from "./sidebar-cookies";
@@ -105,6 +107,11 @@ export async function ConsoleShell({
     current && actor.suspendedAccountIds?.includes(current)
       ? await accountSuspensionNotice(container().deps, actor, current)
       : null;
+  // An account waiting to be deleted (ADR-0025): everyone in it sees when, above its pages.
+  const deleting =
+    current && actor.deletingAccountIds?.includes(current)
+      ? await accountDeletionStatus(container().deps, actor, current)
+      : null;
   return (
     <ConsoleChrome
       tree={navTree(actor, current)}
@@ -151,7 +158,17 @@ export async function ConsoleShell({
           {accountId === current ? null : children}
         </>
       ) : (
-        children
+        <>
+          {current && deleting ? (
+            <AccountDeletingNotice
+              accountName={names[current] ?? "Account"}
+              deleteAfter={deleting.deleteAfter}
+              started={deleting.started}
+              settingsHref={deleting.canCancel ? `/accounts/${current}/settings` : null}
+            />
+          ) : null}
+          {children}
+        </>
       )}
     </ConsoleChrome>
   );

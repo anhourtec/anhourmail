@@ -1,7 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 "use client";
 
-import { BookOpen, Building2, Check, CircleUser, CreditCard, LogOut, Mail, ShieldCheck } from "lucide-react";
+import {
+  BookOpen,
+  Building2,
+  Check,
+  CircleUser,
+  CreditCard,
+  FileArchive,
+  LogOut,
+  Mail,
+  ShieldCheck,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
@@ -163,6 +173,10 @@ export function AccountMenu({
       <Link role="menuitem" href="/profile" onClick={onNavigate} className={itemClass}>
         <CircleUser className="size-4" aria-hidden />
         Profile
+      </Link>
+      <Link role="menuitem" href="/your-data" onClick={onNavigate} className={itemClass}>
+        <FileArchive className="size-4" aria-hidden />
+        Your data
       </Link>
       {/* Billing belongs to an account: staff without one (roles.md) don't get the entry. */}
       {accounts.length > 0 && soon("Billing", CreditCard)}

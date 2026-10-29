@@ -3,6 +3,7 @@ import {
   BookOpenText,
   CalendarClock,
   CircleUser,
+  Download,
   Forward,
   Globe,
   type LucideIcon,
@@ -15,7 +16,8 @@ import {
  * The settings window's groups (docs/internal/05-webmail.md "Settings"): a few clear groups rather than many tabs,
  * each with the words people search for. Search matches the label or any keyword.
  */
-export type SectionId = "appearance" | "reading" | "writing" | "replies" | "forwarding" | "junk" | "account" | "region";
+export type SectionId =
+  "appearance" | "reading" | "writing" | "replies" | "forwarding" | "junk" | "account" | "export" | "region";
 
 export type Section = { id: SectionId; label: string; icon: LucideIcon; summary: string; keywords: string[] };
 
@@ -129,6 +131,13 @@ export const SECTIONS: readonly Section[] = [
       "log out",
       "empty trash",
     ],
+  },
+  {
+    id: "export",
+    label: "Export",
+    icon: Download,
+    summary: "Download your mail and contacts",
+    keywords: ["export", "download", "backup", "mbox", "eml", "archive", "zip", "vcard", "take out", "leave", "copy"],
   },
   {
     id: "region",

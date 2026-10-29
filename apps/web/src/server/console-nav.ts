@@ -21,9 +21,11 @@ export type NavIcon =
   | "receipt"
   | "file-clock"
   | "user-cog"
-  | "key-round";
+  | "key-round"
+  | "settings"
+  | "trash";
 
-export type NavSection = "mail" | "people" | "billing" | "audit" | "platform";
+export type NavSection = "mail" | "people" | "billing" | "audit" | "settings" | "platform";
 
 export type NavItem = {
   label: string;
@@ -101,6 +103,16 @@ export const NAV: readonly NavItem[] = [
     href: (accountId) => `/accounts/${accountId}/audit`,
   },
   {
+    // ADR-0025: export the account's data and delete the account (Owners).
+    label: "Account settings",
+    icon: "settings",
+    permission: "account.export",
+    scope: "account",
+    section: "settings",
+    phase: 3,
+    href: (accountId) => `/accounts/${accountId}/settings`,
+  },
+  {
     label: "Customer accounts",
     icon: "building",
     permission: "platform.accounts.read",
@@ -108,6 +120,15 @@ export const NAV: readonly NavItem[] = [
     section: "platform",
     phase: 3,
     href: () => "/platform/accounts",
+  },
+  {
+    label: "Pending deletions",
+    icon: "trash",
+    permission: "platform.deletions.read",
+    scope: "platform",
+    section: "platform",
+    phase: 3,
+    href: () => "/platform/deletions",
   },
   {
     label: "Abuse queue",
@@ -153,6 +174,7 @@ export const SECTIONS: readonly { id: NavSection; label: string; icon: NavIcon; 
   { id: "people", label: "People", icon: "users", group: true },
   { id: "billing", label: "Billing", icon: "credit-card", group: false },
   { id: "audit", label: "Audit log", icon: "scroll-text", group: false },
+  { id: "settings", label: "Account settings", icon: "settings", group: false },
   { id: "platform", label: "Platform", icon: "shield", group: true },
 ];
 

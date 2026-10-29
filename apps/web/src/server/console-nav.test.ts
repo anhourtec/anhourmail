@@ -49,6 +49,8 @@ describe("console navigation follows the matrix", () => {
     expect(href("Audit log")).toBe("/accounts/acc/audit");
     expect(href("Customer accounts")).toBe("/platform/accounts");
     expect(href("Platform audit")).toBe("/platform/audit");
+    expect(href("Account settings")).toBe("/accounts/acc/settings");
+    expect(href("Pending deletions")).toBe("/platform/deletions");
   });
 });
 
@@ -62,6 +64,7 @@ describe("left navigation sections", () => {
       ["People", ["People and roles"]],
       ["Billing", ["Billing"]],
       ["Audit log", ["Audit log"]],
+      ["Account settings", ["Account settings"]],
     ]);
   });
 
@@ -96,6 +99,7 @@ describe("left navigation sections", () => {
       ["people", true],
       ["billing", false],
       ["audit", false],
+      ["settings", false],
       ["platform", true],
     ]);
   });

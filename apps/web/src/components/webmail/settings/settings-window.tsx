@@ -9,6 +9,7 @@ import type { SignatureSet } from "@anhourmail/shared/signatures";
 import type { WebmailPreferences } from "@anhourmail/shared/webmail";
 
 import type { Folder, Identity, MailClient, SettingsOverview } from "../mail-client";
+import { ExportPanel } from "./export-panel";
 import { AccountPanel, ForwardingPanel, JunkPanel, RepliesPanel, WritingPanel } from "./panels-mail";
 import { AppearancePanel, ReadingPanel, RegionPanel } from "./panels-view";
 import { matchSections, SECTIONS, type SectionId } from "./sections";
@@ -139,6 +140,8 @@ export function SettingsWindow({
         return <ReadingPanel prefs={preferences} onChange={onChange} />;
       case "region":
         return <RegionPanel prefs={preferences} onChange={onChange} folders={folders} shortcuts={shortcuts} />;
+      case "export":
+        return <ExportPanel folders={folders} />;
       default:
         break;
     }

@@ -11,8 +11,10 @@ import {
   Mail,
   Receipt,
   ScrollText,
+  Settings,
   Shield,
   ShieldAlert,
+  Trash2,
   UserCog,
   Users,
 } from "lucide-react";
@@ -35,4 +37,6 @@ export const NAV_ICONS: Record<NavIcon, LucideIcon> = {
   "file-clock": FileClock,
   "user-cog": UserCog,
   "key-round": KeyRound,
+  settings: Settings,
+  trash: Trash2,
 };
