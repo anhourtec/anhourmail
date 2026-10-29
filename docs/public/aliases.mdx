@@ -49,12 +49,21 @@ to one mailbox. It's off unless you turn it on, because it also catches spam sen
 
 ## How many can I have?
 
-Limits count across your whole account.
-
 <PlanTable />
 
-There's also a limit on how many you can create in one day (from midnight to midnight UTC), counted across your
-account. Deleting an alias doesn't give one back.
+**On Free**, your account can have <Value of="aliasesFree" /> aliases and <Value of="maskedAliasesFree" /> masked
+aliases at a time. In any <Value of="aliasYearDays" /> days it can also create
+up to <Value of="aliasCreationsPerYearFree" /> new aliases and <Value of="maskedCreationsPerYearFree" /> new masked
+aliases. Deleting one frees a place in your account but doesn't give back a new one for the year: each creation
+counts for <Value of="aliasYearDays" /> days from the day you made it. **Aliases** in the console shows how many you
+have left this year, and when the limit is reached it gives the date you can add more.
+
+**On paid plans**, each mailbox can have up to <Value of="aliasesPerMailbox" /> addresses: its aliases and masked
+aliases together. There's no yearly limit. **Aliases** shows how many each mailbox has; when one is full, delete an
+address or point the new one at another mailbox.
+
+On every plan there's also a limit on how many you can create in one day (from midnight to midnight UTC), counted
+across your account. Deleting an alias doesn't give one back.
 
 | Plan       | Aliases per day                         | Masked aliases per day                   |
 | ---------- | --------------------------------------- | ---------------------------------------- |

@@ -1,0 +1,77 @@
+---
+title: Export your data and delete your account
+description: Download your mail, contacts and account data; delete an account with a grace period you can cancel; delete your own sign-in.
+---
+
+Your data is yours. You can take a copy of everything at any time, and when you leave, we delete it.
+
+## Export your mail and contacts
+
+Mail and contacts are exported from the [webmail](/docs/webmail), mailbox by mailbox:
+
+1. Sign in to the webmail with the mailbox you want to export.
+2. Open **Settings**, then **Export**.
+3. Choose **Download all mail and contacts**.
+
+You get a ZIP file with one `.mbox` file per folder (most mail apps, and many archiving tools, can import these) and
+your contacts as a `contacts.vcf` vCard file. Very large folders are split into parts (`Inbox.mbox`, `Inbox-2.mbox`, …).
+
+The file is made as it downloads, straight from your mailbox: we never store a copy. A large mailbox can take a while;
+keep the tab open until the download finishes. If it stops, download the remaining folders one at a time from the same
+page. You can also use any mail app over [IMAP](/docs/clients/imap-smtp-settings) to copy your mail.
+
+## Export your account's data
+
+Owners can export an account's settings from the console: open **Account settings** and choose **Request an export**.
+It's prepared in the background and you get an email when it's ready, usually within a few minutes. The ZIP holds, as
+JSON and CSV files:
+
+- the account's settings and plan;
+- the people in it, their roles and pending invites;
+- your domains with the DNS records they need;
+- mailboxes and aliases (their settings, not their mail);
+- the names of app passwords (never the passwords);
+- the account's audit log, newest first. Each entry keeps its hash, so you can check the log wasn't altered.
+
+Anyone can export their own details the same way from **Your data** (in the menu under your name): your profile, the
+accounts you belong to and your role in each, your mailboxes' settings and aliases, your sign-in methods and sessions,
+and what you did in the console.
+
+To download an export you confirm it's you (your password or a code). Only the person who asked can download it. It's
+kept for <Value of="dataExportKeepDays" /> days, then deleted. Exports can't be requested or downloaded while
+Anhourtec support has your account open.
+
+## Delete an account
+
+Only an Owner can delete an account. Before you do, export what you want to keep: once deletion starts, the account's
+mailboxes are suspended and their mail can't be exported.
+
+1. Open **Account settings** and find **Delete account**.
+2. Type the account's name exactly as shown, then choose **Delete this account**.
+3. Confirm it's you if asked.
+
+What happens next:
+
+- **Straight away**, every mailbox in the account is suspended: nobody can sign in, send or receive, and mail sent to
+  it is returned to the sender. Its mail is kept. Pending invites are cancelled, and everyone in the account gets an
+  email. Nothing in the account can be changed while it waits.
+- **For <Value of="accountDeletionGraceDays" /> days**, any Owner can cancel in **Account settings**. Cancelling turns
+  the mailboxes back on; a catch-all address that was on stays off until you turn it on again.
+- **After that**, the account, its mailboxes and all their mail, its aliases and masked aliases, and its domains are
+  removed for good. Free addresses at <Value of="productDomain" /> are never given to anyone else. Everyone who was in
+  the account gets an email when it's done.
+
+People keep their console sign-in and any other accounts they belong to. The account's activity log is kept for the
+period our [privacy policy](/legal/privacy) gives, then deleted.
+
+## Delete your sign-in
+
+You can delete your own console sign-in from **Your data**, by typing your sign-in email address. Your sessions,
+sign-in methods, profile details and photo are deleted at once, and you leave every account you belong to.
+
+You can only do this when no account depends on you:
+
+- **A mailbox in someone else's account is yours.** Ask that account's admins to remove you first; the mailbox stays
+  with the account.
+- **You're the only Owner of an account** that still has mailboxes, domains or other people. Delete the account first,
+  or make someone else an Owner. An empty account where you're the only person is deleted together with your sign-in.
