@@ -20,6 +20,41 @@ describe("key ring", () => {
     expect(ring.encrypt("webmail", "x", "a")).not.toBe(ring.encrypt("webmail", "x", "a"));
   });
 
+  it("binary values: round-trip, key id travels with them, bound to AAD and purpose, tamper-evident", () => {
+    const k1 = key();
+    const ring = createKeyRing([{ id: "k1", key: k1 }]);
+    const data = randomBytes(5000);
+    const sealed = ring.encryptBytes("data-export", data, "data_export:1");
+    expect(Buffer.from(sealed).includes(data.subarray(0, 64))).toBe(false);
+    expect(Buffer.from(ring.decryptBytes("data-export", sealed, "data_export:1")).equals(data)).toBe(true);
+    expect(() => ring.decryptBytes("data-export", sealed, "data_export:2")).toThrow(/Decryption failed/);
+    expect(() => ring.decryptBytes("other", sealed, "data_export:1")).toThrow(/Decryption failed/);
+    const tampered = Buffer.from(sealed);
+    tampered[tampered.length - 20] = (tampered[tampered.length - 20] ?? 0) ^ 1;
+    expect(() => ring.decryptBytes("data-export", tampered, "data_export:1")).toThrow(/Decryption failed/);
+    expect(() => ring.decryptBytes("data-export", Buffer.from("xx"), "a")).toThrow(/Not a sealed value/);
+    expect(() => ring.decryptBytes("data-export", Buffer.from("v1\u0000"), "a")).toThrow(/Malformed/);
+    // Rotation: a newer active key still opens what the old one sealed; a ring without it can't.
+    const rotated = createKeyRing([
+      { id: "k2", key: key() },
+      { id: "k1", key: k1 },
+    ]);
+    expect(Buffer.from(rotated.decryptBytes("data-export", sealed, "data_export:1")).equals(data)).toBe(true);
+    expect(() =>
+      createKeyRing([{ id: "k3", key: key() }]).decryptBytes("data-export", sealed, "data_export:1"),
+    ).toThrow(/Unknown key id/);
+  });
+
+  it("binary values: the longest key id fits the one-byte header; longer ids are refused, never truncated", () => {
+    const id = "k".repeat(32);
+    const ring = createKeyRing([{ id, key: key() }]);
+    const sealed = ring.encryptBytes("p", Buffer.from("x"), "a");
+    expect(sealed[2]).toBe(32);
+    expect(Buffer.from(sealed.subarray(3, 35)).toString()).toBe(id);
+    expect(Buffer.from(ring.decryptBytes("p", sealed, "a")).toString()).toBe("x");
+    expect(() => createKeyRing([{ id: "k".repeat(256), key: key() }])).toThrow(KeyRingError);
+  });
+
   it("binds ciphertext to its AAD and purpose", () => {
     const ring = createKeyRing([{ id: "k1", key: key() }]);
     const sealed = ring.encrypt("webmail", "v", "session:a");

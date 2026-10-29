@@ -32,6 +32,13 @@ export type KeyRing = {
   decrypt(purpose: string, sealed: string, aad: string): string;
   /** The key id a sealed value was written with (for re-encryption), or null when it is not ours. */
   keyIdOf(sealed: string): string | null;
+  /**
+   * Binary form for larger values (e.g. a data export archive): `"v1" ‖ keyIdLength ‖ keyId ‖ iv ‖ ciphertext ‖ tag`.
+   * Same key derivation and AAD binding as `encrypt`.
+   */
+  encryptBytes(purpose: string, plaintext: Uint8Array, aad: string): Uint8Array;
+  /** Decrypts `encryptBytes` output; throws `KeyRingError` on an unknown key, a wrong AAD or tampering. */
+  decryptBytes(purpose: string, sealed: Uint8Array, aad: string): Uint8Array;
 };
 
 export function createKeyRing(keys: readonly { id: string; key: Buffer }[]): KeyRing {
@@ -80,6 +87,45 @@ export function createKeyRing(keys: readonly { id: string; key: Buffer }[]): Key
     keyIdOf(sealed) {
       const [version, keyId] = sealed.split(".");
       return version === VERSION && keyId && byId.has(keyId) ? keyId : null;
+    },
+    encryptBytes(purpose, plaintext, aad) {
+      const iv = randomBytes(IV_BYTES);
+      const cipher = createCipheriv("aes-256-gcm", derive(first.key, purpose), iv);
+      cipher.setAAD(Buffer.from(aad, "utf8"));
+      const id = Buffer.from(first.id, "utf8");
+      // The header stores the id's length in one byte (ids are at most 32 characters, checked above; never wrap).
+      if (id.length === 0 || id.length > 255) throw new KeyRingError("Key id too long for a binary value");
+      return Buffer.concat([
+        Buffer.from(VERSION, "utf8"),
+        Buffer.from([id.length]),
+        id,
+        iv,
+        cipher.update(plaintext),
+        cipher.final(),
+        cipher.getAuthTag(),
+      ]);
+    },
+    decryptBytes(purpose, sealed, aad) {
+      const buf = Buffer.from(sealed.buffer, sealed.byteOffset, sealed.byteLength);
+      if (buf.length < 3 || buf.subarray(0, 2).toString("utf8") !== VERSION)
+        throw new KeyRingError("Not a sealed value");
+      const idLength = buf[2] ?? 0;
+      const ivStart = 3 + idLength;
+      if (idLength === 0 || buf.length < ivStart + IV_BYTES + TAG_BYTES)
+        throw new KeyRingError("Malformed sealed value");
+      const keyId = buf.subarray(3, ivStart).toString("utf8");
+      const master = byId.get(keyId);
+      if (!master) throw new KeyRingError(`Unknown key id "${keyId}"`);
+      const iv = buf.subarray(ivStart, ivStart + IV_BYTES);
+      const body = buf.subarray(ivStart + IV_BYTES);
+      try {
+        const decipher = createDecipheriv("aes-256-gcm", derive(master, purpose), iv);
+        decipher.setAAD(Buffer.from(aad, "utf8"));
+        decipher.setAuthTag(body.subarray(body.length - TAG_BYTES));
+        return Buffer.concat([decipher.update(body.subarray(0, body.length - TAG_BYTES)), decipher.final()]);
+      } catch {
+        throw new KeyRingError("Decryption failed");
+      }
     },
   };
 }

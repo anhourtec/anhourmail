@@ -12,7 +12,8 @@
     "./client-ip": "./src/client-ip.ts",
     "./rate-limit": "./src/rate-limit.ts",
     "./keyring": "./src/keyring.ts",
-    "./one-time": "./src/one-time.ts"
+    "./one-time": "./src/one-time.ts",
+    "./zip": "./src/zip.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
