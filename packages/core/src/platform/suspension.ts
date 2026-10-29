@@ -62,7 +62,7 @@ export function parseSuspendInput(input: SuspendInput): { reason: SuspensionReas
 export const reasonLabel = (reason: SuspensionReason): string => SUSPENSION_REASONS[reason];
 
 /** Suspends the usable mailboxes among `list` (or adds this hold to one another suspension already holds). */
-async function holdMailboxes(deps: Deps, repos: Repositories, list: readonly Mailbox[], kind: MailboxHoldKind) {
+export async function holdMailboxes(deps: Deps, repos: Repositories, list: readonly Mailbox[], kind: MailboxHoldKind) {
   const holds = await repos.suspensions.holds(list.map((m) => m.id));
   let suspended = 0;
   const catchAllOff: string[] = [];
@@ -84,7 +84,12 @@ async function holdMailboxes(deps: Deps, repos: Repositories, list: readonly Mai
 }
 
 /** Removes this hold from `list`; mailboxes with no hold left are resumed (the worker restores access). */
-async function releaseMailboxes(deps: Deps, repos: Repositories, list: readonly Mailbox[], kind: MailboxHoldKind) {
+export async function releaseMailboxes(
+  deps: Deps,
+  repos: Repositories,
+  list: readonly Mailbox[],
+  kind: MailboxHoldKind,
+) {
   const holds = await repos.suspensions.holds(list.map((m) => m.id));
   let resumed = 0;
   let stillHeld = 0;

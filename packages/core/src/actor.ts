@@ -2,6 +2,7 @@
 import {
   type AccountRole,
   accountRoleCan,
+  allowedWhileDeleting,
   PERMISSIONS,
   type Permission,
   type PlatformRole,
@@ -10,6 +11,7 @@ import {
 import type { SignInMethod } from "@anhourmail/shared/security";
 
 import {
+  AccountDeletingError,
   AccountSuspendedError,
   EnrolmentRequiredError,
   ForbiddenError,
@@ -68,6 +70,11 @@ export type UserActor = {
    * `AccountSuspendedError` (403 `account_suspended`) until it is lifted. Platform and `self` permissions are unaffected.
    */
   suspendedAccountIds?: readonly string[];
+  /**
+   * Their accounts an Owner asked to delete (ADR-0025), during the grace period: only reads and the Owner's export and
+   * cancel work there; every other account permission answers `AccountDeletingError` (403 `account_deleting`).
+   */
+  deletingAccountIds?: readonly string[];
 };
 
 export type Actor = { kind: "anonymous" } | UserActor | { kind: "system"; name: string };
@@ -103,6 +110,14 @@ const accountSuspended = (actor: Actor, permission: Permission, accountId?: stri
   PERMISSIONS[permission].scope === "account" &&
   (actor.suspendedAccountIds?.includes(accountId) ?? false);
 
+/** True when the permission changes something in an account that is waiting to be deleted. */
+const accountDeleting = (actor: Actor, permission: Permission, accountId?: string): boolean =>
+  actor.kind === "user" &&
+  accountId !== undefined &&
+  PERMISSIONS[permission].scope === "account" &&
+  !allowedWhileDeleting(permission) &&
+  (actor.deletingAccountIds?.includes(accountId) ?? false);
+
 /** True while the person must choose their own password first (everything but `self`). */
 const passwordGated = (actor: Actor, permission: Permission): boolean =>
   actor.kind === "user" && actor.mustChangePassword === true && PERMISSIONS[permission].scope !== "self";
@@ -112,7 +127,8 @@ export function can(actor: Actor, permission: Permission, accountId?: string): b
     granted(actor, permission, accountId) &&
     !gated(actor, permission) &&
     !passwordGated(actor, permission) &&
-    !accountSuspended(actor, permission, accountId)
+    !accountSuspended(actor, permission, accountId) &&
+    !accountDeleting(actor, permission, accountId)
   );
 }
 
@@ -120,11 +136,12 @@ export function can(actor: Actor, permission: Permission, accountId?: string): b
  * The service-layer gate (CLAUDE.md rules 5, 25): 401 when signed out, 404 when the account isn't the
  * actor's (never confirm it exists), 403 when the role lacks the permission, and 403 `enrolment_required` when the
  * role allows it but one of their accounts requires a sign-in factor they haven't set up; 403 `account_suspended` when
- * the account is suspended by staff.
+ * the account is suspended by staff; 403 `account_deleting` for a change in an account waiting to be deleted.
  */
 export function authorize(actor: Actor, permission: Permission, accountId?: string): void {
   if (granted(actor, permission, accountId)) {
     if (accountSuspended(actor, permission, accountId)) throw new AccountSuspendedError();
+    if (accountDeleting(actor, permission, accountId)) throw new AccountDeletingError();
     if (passwordGated(actor, permission)) throw new PasswordChangeRequiredError();
     if (gated(actor, permission)) throw new EnrolmentRequiredError(actor.mustEnrol);
     return;

@@ -264,7 +264,7 @@ describe("scheduled purge", () => {
     const audits = d.uow.state.audit.length;
     clock.set(new Date(clock.now().getTime() + MAILBOX_DELETE_GRACE_DAYS * DAY - 1));
     const mail = fakeMail();
-    expect(await purgeDueMailboxes(d, mail)).toEqual({ purged: 0, failed: 0 });
+    expect(await purgeDueMailboxes(d, mail)).toEqual({ purged: 0, failed: 0, held: 0 });
     expect(mail.destroyed).toEqual([]);
     expect(box(d)?.status).toBe("deleting");
     expect(d.uow.state.audit).toHaveLength(audits);
@@ -275,7 +275,7 @@ describe("scheduled purge", () => {
     await deleteMailbox(d, owner, ACCOUNT_A, MBX, req);
     clock.set(new Date(clock.now().getTime() + MAILBOX_DELETE_GRACE_DAYS * DAY));
     const mail = fakeMail();
-    expect(await purgeDueMailboxes(d, mail)).toEqual({ purged: 1, failed: 0 });
+    expect(await purgeDueMailboxes(d, mail)).toEqual({ purged: 1, failed: 0, held: 0 });
     expect(mail.destroyed).toEqual([{ externalId: `s-${MBX}`, address: "kid@family.ca" }]);
     expect(box(d)).toBeUndefined();
     expect(d.uow.state.aliases).toEqual([]);
@@ -291,7 +291,7 @@ describe("scheduled purge", () => {
     });
     // Gone for good: restoring is now "not found", and another run has nothing to do.
     await expect(restoreMailbox(d, owner, ACCOUNT_A, MBX, req)).rejects.toThrow(NotFoundError);
-    expect(await purgeDueMailboxes(d, mail)).toEqual({ purged: 0, failed: 0 });
+    expect(await purgeDueMailboxes(d, mail)).toEqual({ purged: 0, failed: 0, held: 0 });
     expect(box(d, MBX_B)).toBeDefined(); // other mailboxes untouched
     expect(box(d, MBX_OWNER)).toBeDefined();
   });
@@ -300,11 +300,11 @@ describe("scheduled purge", () => {
     const { d, clock } = setup();
     await deleteMailbox(d, owner, ACCOUNT_A, MBX, req);
     clock.set(new Date(clock.now().getTime() + MAILBOX_DELETE_GRACE_DAYS * DAY + 1));
-    expect(await purgeDueMailboxes(d, fakeMail(true))).toEqual({ purged: 0, failed: 1 });
+    expect(await purgeDueMailboxes(d, fakeMail(true))).toEqual({ purged: 0, failed: 1, held: 0 });
     expect(box(d)?.status).toBe("deleting");
     expect(d.uow.state.aliases).toHaveLength(1);
     expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "platform.mailbox_purged", result: "failed" });
-    expect(await purgeDueMailboxes(d, fakeMail())).toEqual({ purged: 1, failed: 0 });
+    expect(await purgeDueMailboxes(d, fakeMail())).toEqual({ purged: 1, failed: 0, held: 0 });
   });
 
   it("skips a mailbox restored between listing and purging, and one whose row changed underneath", async () => {
@@ -334,12 +334,12 @@ describe("scheduled purge", () => {
           ),
       },
     };
-    expect(await purgeDueMailboxes(listed, mail)).toEqual({ purged: 0, failed: 1 });
+    expect(await purgeDueMailboxes(listed, mail)).toEqual({ purged: 0, failed: 1, held: 0 });
     expect(mail.destroyed).toEqual([]);
     expect(box(d)?.status).toBe("provisioning");
 
     Object.assign(box(d)!, { status: "deleting", purgeAfter: clock.now() });
-    expect(await purgeDueMailboxes(racing(d), mail)).toEqual({ purged: 0, failed: 1 });
+    expect(await purgeDueMailboxes(racing(d), mail)).toEqual({ purged: 0, failed: 1, held: 0 });
     expect(box(d)).toBeDefined();
   });
 });
@@ -440,7 +440,7 @@ describe("purge ordering", () => {
         seen.push(box(d)?.status); // inside the purge's unit of work: the row is already gone
       },
     };
-    expect(await purgeDueMailboxes(d, mail)).toEqual({ purged: 1, failed: 0 });
+    expect(await purgeDueMailboxes(d, mail)).toEqual({ purged: 1, failed: 0, held: 0 });
     expect(seen).toEqual([undefined]);
   });
 });

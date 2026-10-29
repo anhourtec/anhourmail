@@ -79,7 +79,7 @@ export function actingActor(
 ): UserActor | null {
   if (session.staffUserId !== staff.userId) return null;
   if (!staff.platformRoles.some((r) => ACT_AS_ROLES.includes(r))) return null;
-  const { suspendedAccountIds: _own, ...rest } = staff;
+  const { suspendedAccountIds: _own, deletingAccountIds: _deleting, ...rest } = staff;
   return {
     ...rest,
     platformRoles: [],

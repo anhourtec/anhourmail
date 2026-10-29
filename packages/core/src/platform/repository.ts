@@ -64,8 +64,11 @@ export type SuspensionRecord = {
   byUserId: string | null;
 };
 
-/** Why a mailbox is held suspended by staff: its account is suspended, or the person it belongs to is. */
-export type MailboxHoldKind = "account" | "person";
+/**
+ * Why a mailbox is held suspended: staff suspended its account (`account`) or its person (`person`), or its account is
+ * waiting to be deleted (`deletion`, ADR-0025). It resumes only once no hold is left.
+ */
+export type MailboxHoldKind = "account" | "person" | "deletion";
 
 /**
  * Staff suspensions of customer accounts and people, and the mailboxes they hold suspended. A hold marks a mailbox

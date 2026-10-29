@@ -232,6 +232,9 @@ async function personFor(r: Repositories, grant: HandoffGrant, now: Date): Promi
   const mustEnrol = await requiredEnrolment(r, grant.userId);
   const suspendedAccountIds = await r.suspensions.suspendedAccountsOf(grant.userId);
   const mustChangePassword = await r.people.passwordChangeRequired(grant.userId);
+  // Accounts waiting to be deleted (ADR-0025): the same gate as the console actor, so the handoff can't open a
+  // mailbox there even if its suspension hasn't reached the mail server yet.
+  const deletingAccountIds = await r.dataLifecycle.deletingAccountsOf(grant.userId);
   return {
     kind: "user",
     userId: grant.userId,
@@ -243,6 +246,7 @@ async function personFor(r: Repositories, grant: HandoffGrant, now: Date): Promi
     ...(mustChangePassword ? { mustChangePassword: true as const } : {}),
     ...(grant.signInMethod && isSignInMethod(grant.signInMethod) ? { signInMethod: grant.signInMethod } : {}),
     ...(suspendedAccountIds.length > 0 ? { suspendedAccountIds } : {}),
+    ...(deletingAccountIds.length > 0 ? { deletingAccountIds } : {}),
   };
 }
 

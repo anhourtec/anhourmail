@@ -30,6 +30,7 @@ export const AUDIT_ACTIONS = [
   "auth.identity_confirmed",
   "auth.email_verification_sent",
   "auth.email_verified",
+  "auth.login_deleted",
   // account and people
   "account.created",
   "account.deleted",
@@ -116,10 +117,15 @@ export const AUDIT_ACTIONS = [
   "staff.credentials_reset",
   // data
   "data.export_requested",
+  "data.export_ready",
   "data.export_downloaded",
+  "data.export_expired",
+  "data.mail_exported",
   "data.import_started",
   "data.import_finished",
   "data.deletion_requested",
+  "data.deletion_cancelled",
+  "data.deletion_started",
   "data.deleted",
   // platform
   "platform.settings_changed",

@@ -102,7 +102,7 @@ async function purge(
 ) {
   await deleteMailbox(d, actor, accountId, id, req);
   clock.set(new Date(clock.now().getTime() + 31 * DAY));
-  expect(await purgeDueMailboxes(d, fakeMail())).toEqual({ purged: 1, failed: 0 });
+  expect(await purgeDueMailboxes(d, fakeMail())).toEqual({ purged: 1, failed: 0, held: 0 });
 }
 
 describe("platform-domain local parts", () => {

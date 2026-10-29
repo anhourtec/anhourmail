@@ -320,6 +320,24 @@ describe("console → webmail handoff (ADR-0024)", () => {
       expect(JSON.stringify(s.audit)).not.toContain(verifier);
     });
 
+    it("is refused once the account is waiting to be deleted, even before its mailbox's suspension lands", async () => {
+      const { s, code, opened, redeem } = await minted();
+      s.accountDeletions.push({
+        accountId: ACCOUNT_A,
+        requestedBy: "owner",
+        requestedAt: new Date(0),
+        deleteAfter: new Date("2099-01-01T00:00:00Z"),
+        startedAt: null,
+      });
+      await expect(redeem({ code, verifier })).rejects.toThrow();
+      expect(opened).toEqual([]);
+      expect(s.audit.at(-1)).toMatchObject({
+        action: "webmail.handoff_redeemed",
+        result: "denied",
+        errorCode: "account_deleting",
+      });
+    });
+
     it("is useless from another browser (no matching verifier) and burns the code", async () => {
       const { s, code, opened, redeem } = await minted();
       await expect(redeem({ code, verifier: newHandoffVerifier() })).rejects.toMatchObject({ reason: "wrong_browser" });

@@ -437,6 +437,10 @@ export async function staffCreatePlatformMailbox(
       if (actor.kind === "user" && actor.actingAs) return { result: "act_as", denied: { code: "act_as" } };
       assertCustomerPlatform(deps.platform);
       await repos.accounts.lock(accountId);
+      // Nothing new lands in an account on its way out (ADR-0025); its Owner can cancel the deletion first.
+      if (await repos.dataLifecycle.getDeletion(accountId)) {
+        throw new ConflictError("This account is waiting to be deleted, so it can't get new mailboxes.");
+      }
       const local = normalisePlatformLocalPart(input.localPart);
       let userId: string | null = null;
       if (input.ownerUserId !== undefined && input.ownerUserId !== null && input.ownerUserId !== "") {
@@ -759,6 +763,20 @@ async function assertNotHeld(
   }
 }
 
+/**
+ * Anhourtec staff hold this mailbox (an investigation's evidence): its account or its person is suspended, or a staff
+ * hold (`account`, `person`) is on it. Such a mailbox is never purged — not by its own deletion, not by an account
+ * deletion (ADR-0025) — until staff lift it. An account deletion's own `deletion` hold doesn't count.
+ */
+export async function staffHeld(
+  repos: Repositories,
+  m: Pick<Mailbox, "id" | "accountId" | "userId">,
+): Promise<boolean> {
+  if ((await repos.suspensions.account(m.accountId)) !== null) return true;
+  if (m.userId !== null && (await repos.suspensions.person(m.userId)) !== null) return true;
+  return (await repos.suspensions.holds([m.id])).some((h) => h.kind !== "deletion");
+}
+
 const PURGE = { kind: "system", name: "mailbox-purge" } as const;
 
 /** Per scheduler run: at most this many mailboxes (the rest wait for the next run). */
@@ -767,16 +785,21 @@ export const PURGE_BATCH = 25;
 /**
  * Scheduler: permanently removes mailboxes whose grace period has ended — the mail-server account (and its mail)
  * first, then the mailbox and alias rows, which frees their addresses. Each one is audited in its account's log as
- * `platform.mailbox_purged` by the system; a failure is audited as `failed` and retried on the next run.
+ * `platform.mailbox_purged` by the system; a failure is audited as `failed` and retried on the next run. A mailbox
+ * staff hold (`staffHeld`) is skipped (`held`, not audited: nothing changed) until they lift it.
  */
 export async function purgeDueMailboxes(
   deps: Deps,
   mail: MailServer,
   limit = PURGE_BATCH,
-): Promise<{ purged: number; failed: number }> {
+): Promise<{ purged: number; failed: number; held: number }> {
   const due = await deps.uow.run((r) => r.mailboxes.dueForPurge(deps.clock.now(), limit));
-  const out = { purged: 0, failed: 0 };
+  const out = { purged: 0, failed: 0, held: 0 };
   for (const m of due) {
+    if (await deps.uow.run((r) => staffHeld(r, m))) {
+      out.held += 1;
+      continue;
+    }
     try {
       await mutation(
         deps,
@@ -794,6 +817,10 @@ export async function purgeDueMailboxes(
           if (current?.status !== "deleting" || current.purgeAfter === null || current.purgeAfter > now) {
             throw new ConflictError("The mailbox changed before it could be removed."); // e.g. restored meanwhile
           }
+          // Staff suspended its account or person since the check above: keep it. The account lock serialises this with
+          // an account suspension (which takes it too).
+          await repos.accounts.lock(m.accountId);
+          if (await staffHeld(repos, current)) throw new ConflictError("Anhourtec holds this mailbox.");
           const own = (await repos.aliases.listByAccount(m.accountId)).filter((a) => a.mailboxId === m.id);
           const aliases = own.length;
           // Delete the row first (conditional: still deleting and due), which also locks it until this unit of work

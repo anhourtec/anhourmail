@@ -110,6 +110,17 @@ export class AccountSuspendedError extends ForbiddenError {
 }
 
 /**
+ * The account is waiting to be deleted (ADR-0025): its people can still read it and its Owner can export or cancel, but
+ * nothing else changes until the deletion is cancelled (HTTP 403 with its own code, so the console can say why).
+ */
+export class AccountDeletingError extends ForbiddenError {
+  override readonly code = "account_deleting";
+  constructor() {
+    super("This account is being deleted. An Owner can cancel the deletion in Account settings to make changes again.");
+  }
+}
+
+/**
  * An administrator set a new password for this mailbox that hasn't reached the mail server yet (or never did: the
  * console then asks them to set it again). Until it has, the mailbox's own password change is refused, so someone who
  * only knows the password being replaced can't override the administrator's (HTTP 409 with its own code).
@@ -148,6 +159,27 @@ export class AliasAdminLockedError extends ForbiddenError {
 export class AliasDailyLimitError extends DomainError {
   constructor(message: string) {
     super(message, "alias_daily_limit");
+  }
+}
+
+/**
+ * The account has created as many new aliases (or masked aliases) in the rolling year as its plan allows
+ * (`PLANS[plan].aliasCreationsPerYear`, Free only): HTTP 429 with its own code; the message says the date a slot
+ * comes back. Deleting an alias never gives one back.
+ */
+export class AliasYearlyLimitError extends DomainError {
+  constructor(message: string) {
+    super(message, "alias_yearly_limit");
+  }
+}
+
+/**
+ * The mailbox already has `ALIASES_PER_MAILBOX` aliases and masked aliases pointing at it: HTTP 409 with its own
+ * code (deleting one makes room again).
+ */
+export class AliasMailboxLimitError extends DomainError {
+  constructor(message: string) {
+    super(message, "alias_mailbox_limit");
   }
 }
 
