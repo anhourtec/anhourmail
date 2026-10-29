@@ -29,8 +29,11 @@ test("a Global Administrator finds an account, opens it, and its owner sees the 
   // The owner sees it labelled as Anhourtec staff, and the drawer shows the entry.
   await signIn(page, u.users.owner, u.password);
   await (await openNav(page)).getByRole("link", { name: "Audit log" }).click();
+  await expect(page.getByRole("heading", { name: "Audit log", level: 1 })).toBeVisible();
   await page.getByLabel("Who").selectOption({ label: "Anhourtec staff" });
   await page.getByRole("button", { name: "Apply filters" }).click();
+  // The unfiltered list already shows the row: wait for the filtered page so Details isn't clicked on the old one.
+  await expect(page).toHaveURL(/actor=staff/);
   const row = page.getByRole("row", { name: /Staff viewed the account/ }).first();
   await expect(row).toBeVisible();
   await row.getByRole("button", { name: /^Details/ }).click();
