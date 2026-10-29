@@ -1,6 +1,6 @@
 # 01 — Architecture
 
-Last updated: 2026-10-21. Decisions: `adr/`. Code map: `codemap.md`.
+Last updated: 2026-10-29. Decisions: `adr/`. Code map: `codemap.md`.
 
 ## Overview
 
@@ -51,19 +51,19 @@ mail clients ─► Stalwart 465/587/993/995 (TLS by Stalwart itself)    MX traf
 
 ## Components
 
-| Component                   | Owns                                                                                                                                                                                       | Never does                                                                                                                      |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/site` (Next.js 16)    | Marketing pages, public docs at `/docs` (Fumadocs, ADR-0007), `/changelog`, `/credits`                                                                                                     | Store data or call Stalwart. "Get started" and "Sign in" link to the console (`APP_URL`); the site has no forms that post data. |
-| `apps/web` (Next.js 16)     | Console (sign-up, invites, plans, billing, domains, mailboxes, aliases, audit, staff tools) and webmail UI; BFF and JMAP proxy; public API routes                                          | Expose Stalwart to the browser, put mail content in Postgres or logs, or hold a Stalwart key that can create or change accounts |
-| `apps/worker`               | Event-driven jobs (provisioning, transactional mail, Stalwart WebHook ingestion, imports) and periodic jobs (DNS checks, quota sync, reconciler, audit-chain verify, secret re-encryption) | Run anything from a host crontab, or hold a Stalwart key that can write inside a mailbox                                        |
-| `packages/core`             | Domain types, business rules, services, repository and port interfaces, audit module                                                                                                       | Import an ORM, driver or SDK (ADR-0008, enforced by ESLint)                                                                     |
-| `packages/adapters`         | Postgres (drizzle) and in-memory implementations of every repository, plus contract tests                                                                                                  | Contain business rules                                                                                                          |
-| `packages/stalwart-client`  | The only Stalwart management client (JMAP `x:*` objects)                                                                                                                                   | Touch mailbox content                                                                                                           |
-| `packages/jmap-client`      | The only JMAP mail client                                                                                                                                                                  | Log or persist content                                                                                                          |
-| `packages/shared`           | Public facts (hostnames, ports, plans, sending limits, DNS templates), RBAC matrix, shared zod schemas                                                                                     | Hold secrets or internal thresholds                                                                                             |
-| Stalwart (unmodified, AGPL) | Mail storage, SMTP/IMAP/JMAP, spam filtering, DKIM signing, mail credentials                                                                                                               | Decide tenancy or plan limits                                                                                                   |
-| Postgres                    | Control-plane data                                                                                                                                                                         | Mail content                                                                                                                    |
-| Redis                       | Sessions, queues, rate limits, cache                                                                                                                                                       | Anything that can't be rebuilt, except rate-limit counters that fail closed                                                     |
+| Component                   | Owns                                                                                                                                                                                                                                                                                               | Never does                                                                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/site` (Next.js 16)    | Marketing pages, public docs at `/docs` (Fumadocs, ADR-0007), `/changelog`, `/credits`                                                                                                                                                                                                             | Store data or call Stalwart. "Get started" and "Sign in" link to the console (`APP_URL`); the site has no forms that post data. |
+| `apps/web` (Next.js 16)     | Console (sign-up, invites, plans, billing, domains, mailboxes, aliases, audit, staff tools) and webmail UI; BFF and JMAP proxy; public API routes                                                                                                                                                  | Expose Stalwart to the browser, put mail content in Postgres or logs, or hold a Stalwart key that can create or change accounts |
+| `apps/worker`               | Event-driven provisioning jobs (queue worker) and periodic jobs (scheduler: audit-chain verify, reconciler, service-account check, pending-domain re-check and expiry, mailbox purge, storage measurement); planned: transactional mail, Stalwart WebHook ingestion, imports, secret re-encryption | Run anything from a host crontab, or hold a Stalwart key that can write inside a mailbox                                        |
+| `packages/core`             | Domain types, business rules, services, repository and port interfaces, audit module                                                                                                                                                                                                               | Import an ORM, driver or SDK (ADR-0008, enforced by ESLint)                                                                     |
+| `packages/adapters`         | Postgres (drizzle) and in-memory implementations of every repository, plus contract tests                                                                                                                                                                                                          | Contain business rules                                                                                                          |
+| `packages/stalwart-client`  | The only Stalwart management client (JMAP `x:*` objects)                                                                                                                                                                                                                                           | Touch mailbox content                                                                                                           |
+| `packages/jmap-client`      | The only JMAP mail client                                                                                                                                                                                                                                                                          | Log or persist content                                                                                                          |
+| `packages/shared`           | Public facts (hostnames, ports, plans, sending limits, DNS templates), RBAC matrix, shared zod schemas                                                                                                                                                                                             | Hold secrets or internal thresholds                                                                                             |
+| Stalwart (unmodified, AGPL) | Mail storage, SMTP/IMAP/JMAP, spam filtering, DKIM signing, mail credentials                                                                                                                                                                                                                       | Decide tenancy or plan limits                                                                                                   |
+| Postgres                    | Control-plane data                                                                                                                                                                                                                                                                                 | Mail content                                                                                                                    |
+| Redis                       | Sessions, queues, rate limits, cache                                                                                                                                                                                                                                                               | Anything that can't be rebuilt, except rate-limit counters that fail closed                                                     |
 
 ## Source of truth and reconciliation
 
@@ -80,8 +80,8 @@ mail clients ─► Stalwart 465/587/993/995 (TLS by Stalwart itself)    MX traf
   it is mailbox data, like folders); sender names and signatures on their JMAP identities. Only the forwarding
   target's confirmation lives in the control plane (`forwarding_target`), and the BFF writes a redirect only to a
   confirmed target. Mail-flow changes are audited.
-- Provisioning is a **job**, never an inline request (CLAUDE.md rule 26): write intent (`status = pending`), enqueue, the worker applies it through `stalwart-client` (idempotent upserts by natural key), then set `active` or `failed` with an error code.
-- The **reconciler** (scheduler, every 15 min) compares Postgres intent with Stalwart (`x:Domain`, `x:Account` lists). It **reports** drift (audit `platform.reconciler.drift` + alert) and re-applies missing non-destructive state. It **never deletes** a Stalwart account or mail automatically. Deletions are explicit jobs with a grace period.
+- Provisioning is a **job**, never an inline request (CLAUDE.md rule 26): write intent (e.g. mailbox `status = provisioning`), enqueue, the worker applies it through `stalwart-client` (idempotent upserts by natural key), then set `active` or `failed` with an error code.
+- The **reconciler** (scheduler `job:reconcile`, hourly; plus the every-minute `job:service-accounts` check of the management keys' owners) compares Postgres intent with Stalwart (`x:Domain`, `x:Account` lists). It **reports** drift (audit `platform.reconciler_drift`; the alert channel comes with monitoring) and re-queues missing non-destructive state. It **never deletes** a Stalwart account or mail automatically. Deletions are explicit jobs with a grace period.
 
 ## Identity and auth model
 
@@ -190,7 +190,14 @@ Why the host split: the origin that renders untrusted email HTML (`mail.`) is is
 - One permission matrix in `packages/shared/src/rbac` (the code is canonical; `roles.md` describes it). UI, API and the RBAC harness all derive from it.
 - Services check **permission + ownership scope**. Out-of-scope ids → **404**, missing permission → **403**, unauthenticated → **401**.
 - Enrolment gate: a person missing a sign-in factor one of their accounts requires (`UserActor.mustEnrol`) passes only
-  `self` permissions; everything else is 403 `enrolment_required` (other accounts' ids are still 404).
+  `self` permissions; everything else is 403 `enrolment_required` (other accounts' ids are still 404). The
+  first-sign-in password gate (`UserActor.mustChangePassword`) works the same way with 403 `password_change_required`.
+- Console pages get real statuses from layout guards (`apps/web/src/server/route-guard.ts`): another account's pages
+  404, an account section the role lacks 403 (`forbidden.tsx`), staff pages 404 without the permission. A layout runs
+  before its segment's `loading.tsx` boundary, so the status is set before streaming starts; services check again.
+- What the console offers ("Add a user", "Invite someone") is decided once per request by
+  `packages/core/src/people/availability.ts` (loaded through `apps/web/src/server/people-actions.ts`), so an action is
+  never shown and then refused.
 - Staff "act as" is Global/Support Administrator only, time-limited, banner-visible, audited, and never exposes mail content.
 - People and invites (`packages/core/src/people`): an invite stores only the token hash; the route emails the link
   after the unit of work commits (a failed send is reported, never rolled back: resend). Accepting runs in one unit
@@ -213,7 +220,7 @@ The Stalwart Community edition has no tenants (Enterprise-only, `research/stalwa
 
 ## Request pipeline (apps/web)
 
-`route(handler, { limit, auth, permission })` wraps every API handler: request id → access log → rate limit (tiered, fail-closed where marked) → same-origin check for unsafe methods → actor resolution → handler → error mapping (`{ error: { code, message } }`). Handlers parse and call one service. Services enforce permission and scope and write audit entries in the same unit of work (ADR-0010).
+`route(handler, { limit, session, passwordChange })` (`apps/web/src/server/http/route.ts`) wraps every API handler: request id → rate limit (tiered, per method + route pattern, fail-closed where marked) → same-origin check for unsafe methods → for `session: "webmail"` routes, the first-sign-in password gate (403 `password_change_required` unless `passwordChange: "allowed"`) → handler (resolves the actor, calls the service) → error mapping (`{ error: { code, message } }`) → access log. Handlers parse and call one service. Services enforce permission and scope and write audit entries in the same unit of work (ADR-0010).
 
 ## Health
 
@@ -276,10 +283,16 @@ console mutation ──(same transaction)──► provisioning_job (queued)
                                               │  claimNext: FOR UPDATE SKIP LOCKED; stale "running" (10 min) reclaimed
 worker (apps/worker/src/worker.ts) ───────────┘
    └─ runNextJob ─► MailServer port ─► Stalwart adapter (packages/adapters/src/stalwart) ─► JMAP x:Domain / x:Account
+        (domain.ensure takes the per-name lock, MailDirectoryRepository.lockDomainName, and caches the DKIM public keys)
         success → subject status active + stalwart_id; failure → retry 10/20/40/80 s; 5th failure → failed +
         audit platform.provisioning_failed
 scheduler ─► job:reconcile (hourly) ─► desired vs Stalwart ─► drift report + audit platform.reconciler_drift
              (missing / unknown / quota mismatch). Never deletes.
+scheduler ─► job:service-accounts (every minute) ─► management-key owners hold API keys only; drift audited as
+             platform.reconciler_drift. Never removes anything.
+scheduler ─► job:domain-recheck (every 5 min) ─► pending domains added in the last week whose records now pass →
+             active + domain.ensure; also queues domain.ensure for domains whose DKIM keys were never read.
+scheduler ─► job:audit-verify (every 6 h) ─► every audit hash chain; a break is logged at fatal (audit.md "Integrity").
 scheduler ─► job:mailbox-purge (hourly) ─► deleting mailboxes past purge_after: destroy the Stalwart account, then
              the mailbox + alias rows; audit platform.mailbox_purged (system, account scope). The only path that
              deletes mail.
