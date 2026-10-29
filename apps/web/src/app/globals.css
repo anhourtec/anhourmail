@@ -625,6 +625,10 @@ html[data-motion="reduced"] *::after {
   border-left: 2px solid var(--border);
   color: var(--muted-foreground);
 }
+/* An indent (the toolbar's "Increase indent" writes a borderless blockquote) is not a quote: normal text colour. */
+.am-rich blockquote[style*="border: none"] {
+  color: inherit;
+}
 .am-rich a {
   color: var(--primary);
   text-decoration: underline;
