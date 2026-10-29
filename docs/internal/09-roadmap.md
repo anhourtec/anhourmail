@@ -33,20 +33,27 @@ can still start in plain text. The toolbar grows to undo/redo, font family and s
 indent/outdent; each new style passes the outgoing allow-list sanitiser (`server/webmail/outgoing-html.ts`, only
 the properties and values it needs) with tests and a `/security-review`, then e2e, public docs and a changelog entry.
 
-**Next session (then):** stale sidebar folder counts after discarding a draft; Archive does nothing because no
-mailbox has an Archive folder (create at provisioning + backfill); several named rich signatures with Add / Edit /
-Delete and defaults for new messages and for replies and forwards (pulled forward from the second wave below).
-Then avatars: photo upload on console Profile and webmail Account, one source for the person, shown and synced
-everywhere (CLAUDE.md rule 61). Details in the handoff's "Next phases" 0c–0f.
+**Next session, in order** (details: the two paragraphs above and the handoff's "Next phases" 0–0f):
 
-1. **Pre-staging on one VM (now, deployed 2026-10-23; live-server fixes open).** Deploy `anhourmail-ops` topology A
+1. The remote-image proxy, so "Load images" works.
+2. One composer that starts in rich text, with plain text moved into a "More options" menu.
+3. Folder counts that go stale, like Drafts still showing 1 after the last draft is discarded.
+4. The Archive fix: no mailbox ever gets an Archive folder, so the Archive button and the `e` shortcut do nothing,
+   although the docs say one is created; create it at setup and add it to existing mailboxes.
+5. Signatures: several named ones with Add / Edit / Delete, a rich editor with embedded images, and defaults for new
+   messages and for replies and forwards (pulled forward from the second wave below).
+6. Avatars: photo upload on console Profile and in webmail Account, synced everywhere (CLAUDE.md rule 61). Today all
+   avatars are initials; `user.image` exists but is unused and neither page offers a photo. Also confirm the webmail
+   "Your name" field and the console profile name come from one source.
+
+7. **Pre-staging on one VM (now, deployed 2026-10-23; live-server fixes open).** Deploy `anhourmail-ops` topology A
    on the chosen provider (`deploy.md`): real DNS, ACME certificates, rDNS, inbound and outbound mail with a real
    external mailbox, mail-tester score, DMARC/TLS-RPT reports arriving, first encrypted off-box backup and a restore
    drill. Things only a real host can prove: certificates, DNS/PTR, port 25, DOCKER-USER firewall rules, backup
    upload.
    **Exit:** smoke 100% on the real host; a customer domain verified and mailboxes sending and receiving externally;
    mail-tester ≥ 9/10; restore drill passes; `security-reviewer` pass on the deployed config.
-2. **Close the product gaps a beta needs** (Phases 3–4 remainder): free `@anhourmail.com` sign-up with SMS/OTP
+8. **Close the product gaps a beta needs** (Phases 3–4 remainder): free `@anhourmail.com` sign-up with SMS/OTP
    verification (provider to choose) — **free addresses built 2026-10-23** (ADR-0021: claim from the console with a
    confirmed email, one per Free account, name rules, no reuse, staff create; SMS/OTP and Phase 6 sending limits for
    free mailboxes still open); **since built:** multipart text + HTML sending (the only mail-tester deduction on the
@@ -55,18 +62,18 @@ everywhere (CLAUDE.md rule 61). Details in the handoff's "Next phases" 0c–0f.
    the webmail (it polls every 30 s today), webmail settings part 2 (rules, templates), and the leftover open items
    in the handoff (alias admin-lock, daily alias creation cap, provisioning-queue lock token, unknown-recipient
    rejection at SMTP time).
-3. **Billing and migration** (Phase 5): Stripe Checkout/Portal/Tax, webhooks, plan changes and the account
+9. **Billing and migration** (Phase 5): Stripe Checkout/Portal/Tax, webhooks, plan changes and the account
    lifecycle, paid-user invite codes; pricing decision (open item 3) and Supporter minimum confirmed; mail import
    over IMAP (and OAuth from the largest providers) and contacts import, so paying customers can switch with their
    history.
-4. **Abuse controls, monitoring, backups** (Phase 6): trust tiers stored and enforced, fail-closed outbound counters,
-   Stalwart throttles pushed from the control plane, `x:WebHook` event ingestion (sign-ins, bounces), abuse queue and
-   `abuse@` workflow, metrics and alerting, scheduled backups with a monthly restore drill, LUKS on the mail volume,
-   DNSSEC + DANE, MTA-STS `enforce` after clean TLS-RPT. Free-tier launch posture decided.
-5. **Production host and dogfood** (Phase 7): topology B (app VM + mail VM), IP and /24 screening, postmaster and
-   feedback-loop registration, 4-week warm-up, staff mail on AnhourMail.
-6. **Closed beta, then launch** (Phases 8–9): independent penetration test, full `standard` security audit, counsel
-   review of legal pages and the AGPL image question, DMARC `quarantine` → `reject`.
+10. **Abuse controls, monitoring, backups** (Phase 6): trust tiers stored and enforced, fail-closed outbound counters,
+    Stalwart throttles pushed from the control plane, `x:WebHook` event ingestion (sign-ins, bounces), abuse queue and
+    `abuse@` workflow, metrics and alerting, scheduled backups with a monthly restore drill, LUKS on the mail volume,
+    DNSSEC + DANE, MTA-STS `enforce` after clean TLS-RPT. Free-tier launch posture decided.
+11. **Production host and dogfood** (Phase 7): topology B (app VM + mail VM), IP and /24 screening, postmaster and
+    feedback-loop registration, 4-week warm-up, staff mail on AnhourMail.
+12. **Closed beta, then launch** (Phases 8–9): independent penetration test, full `standard` security audit, counsel
+    review of legal pages and the AGPL image question, DMARC `quarantine` → `reject`.
 
 **Security residuals carried forward** (accepted for pre-staging, revisit before beta): the operations key in the web
 container can still do its own job through the proxy (app passwords on customers, managed Sieve) — detected by the
