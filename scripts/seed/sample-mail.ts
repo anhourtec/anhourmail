@@ -736,7 +736,8 @@ type Box = { id: string; name: string; role: string | null; parentId: string | n
 
 /**
  * Imports the samples into `owner`'s mailbox (signing in as the owner, never as an admin). Creates Archive (role
- * `archive`, which new Stalwart accounts lack) and a nested Receipts › Home folder when missing.
+ * `archive`; the dev plan's default folders and backfill normally have already) and a nested Receipts › Home folder
+ * when missing.
  * Imports only samples that aren't there yet (so new samples reach existing dev mailboxes). Returns how many.
  */
 export async function importSampleMail(

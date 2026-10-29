@@ -5,7 +5,9 @@ import path from "node:path";
 
 import { hashPassword } from "@anhourmail/adapters/auth";
 import {
+  applyDefaultFolders,
   applySenderIdentityPolicy,
+  backfillArchiveFolders,
   type StalwartManagement,
   upsertOAuthClient,
   WEBMAIL_OAUTH_CLIENT_ID,
@@ -93,6 +95,9 @@ export async function applyDevMailPlan(
   // reachable from the app's network alone (production: internal network; dev: 127.0.0.1 by default). Also a
   // production setting.
   await mgmt.updateSingleton("x:Http", { useXForwarded: true });
+  // Every account opened from now on gets Archive (role `archive`) from Stalwart; the built-in default doesn't create
+  // one. Also a production setting (applied by the deploy's bootstrap with its administrator credential).
+  await applyDefaultFolders(mgmt);
   await mgmt.reloadSettings();
 
   await upsertOAuthClient(mgmt, {
@@ -113,5 +118,7 @@ export async function applyDevMailPlan(
         name === "alice" ? [{ name: "hello", domain: DEV_DOMAIN, enabled: true, description: "Seeded alias" }] : [],
     });
   }
+  // Accounts whose mail store was opened before the setting above have no Archive: add it (never touches mail).
+  await backfillArchiveFolders(mgmt);
   return { domainId, restartNeeded };
 }
