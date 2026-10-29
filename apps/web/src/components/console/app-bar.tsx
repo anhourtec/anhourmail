@@ -3,8 +3,9 @@
 
 import { CircleHelp, Menu, Monitor, Moon, Search, Sun, X } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
-import { type Ref, useState, useSyncExternalStore } from "react";
+import { type Ref, useEffect, useState, useSyncExternalStore } from "react";
 
 import { Wordmark } from "@anhourmail/ui/wordmark";
 
@@ -45,10 +46,36 @@ function ThemeCycle() {
 }
 
 /**
+ * One source, shown the same everywhere (CLAUDE.md rule 61): when the person comes back to this tab, ask whether their
+ * photo changed elsewhere (the webmail, another tab) and re-render the page's server parts if it did. Edits made on
+ * this page refresh it themselves.
+ */
+function usePhotoFreshness(current: string | null) {
+  const router = useRouter();
+  useEffect(() => {
+    const check = () => {
+      if (document.visibilityState !== "visible") return;
+      void fetch("/api/me/avatar")
+        .then((r) => (r.ok ? (r.json() as Promise<{ data?: { url?: string | null } }>) : null))
+        .then((json) => {
+          if (json?.data && (json.data.url ?? null) !== current) router.refresh();
+        })
+        .catch(() => undefined);
+    };
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, [current, router]);
+}
+
+/**
  * The console's app bar (48 px, navy brand surface in both themes): the navigation button (drawer on small screens,
  * collapse to an icon rail on wide ones), the
- * wordmark with "Console", a wide centred search, then theme, help, the account's name and the person's initials,
- * which open their menu.
+ * wordmark with "Console", a wide centred search, then theme, help, the account's name and the person's photo (or
+ * initials), which open their menu.
  */
 export function AppBar({
   user,
@@ -75,6 +102,7 @@ export function AppBar({
 }) {
   const { open: menuOpen, toggle: menuToggle, close: menuClose, trigger: menuTrigger, panel: menuPanel } = usePopover();
   const [searching, setSearching] = useState(false);
+  usePhotoFreshness(user.photoUrl ?? null);
 
   return (
     <header className="sticky top-0 z-40 border-b border-appbar-border bg-appbar text-appbar-foreground">
@@ -174,7 +202,7 @@ export function AppBar({
                 aria-label="Your account"
                 className="rounded-full focus-visible:ring-2 focus-visible:ring-appbar-foreground/70 focus-visible:outline-none"
               >
-                <Avatar name={user.name} email={user.email} size="md" tone="inverse" />
+                <Avatar name={user.name} email={user.email} photoUrl={user.photoUrl ?? null} size="md" tone="inverse" />
               </button>
               {menuOpen && (
                 <div ref={menuPanel} className="absolute top-11 right-0 text-popover-foreground">

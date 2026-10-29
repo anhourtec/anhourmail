@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { can, NotFoundError } from "@anhourmail/core";
+import { accountAvatars, avatarPath } from "@anhourmail/core/avatars";
 import { listMailboxes } from "@anhourmail/core/mailboxes";
 import { getPersonProfile, listPeople } from "@anhourmail/core/people";
 import { INVITE_TTL_DAYS } from "@anhourmail/shared/plans";
@@ -43,6 +44,7 @@ export default async function PeoplePage({
   const openId = param(sp, "person");
   const data = await forPage(async () => ({
     overview: await listPeople(deps, actor, accountId),
+    photos: await accountAvatars(deps, actor, accountId),
     mailboxes: openId && can(actor, "mailbox.read", accountId) ? await listMailboxes(deps, actor, accountId) : null,
     // Someone outside the account: no profile here, and the page answers 404 below.
     profile: openId
@@ -69,6 +71,10 @@ export default async function PeoplePage({
   const canInvite = can(actor, "member.manage", accountId);
   const room = limits.addPeople && limits.used < limits.max;
   const path = `/accounts/${accountId}/people`;
+  const photoOf = (userId: string) => {
+    const version = data.photos.people[userId];
+    return version ? avatarPath("/api/avatars", { kind: "person", id: userId, version }) : null;
+  };
 
   return (
     <>
@@ -99,6 +105,7 @@ export default async function PeoplePage({
           userId: m.userId,
           name: m.name,
           email: m.email,
+          photoUrl: photoOf(m.userId),
           role: m.role,
           roleLabel: ROLE_LABELS[`account:${m.role}`],
           active: m.status === "active",
@@ -141,6 +148,7 @@ export default async function PeoplePage({
             mailboxesHref={`/accounts/${accountId}/mailboxes`}
             closeHref={path}
             profile={data.profile}
+            photoUrl={photoOf(open.userId)}
             tab={param(sp, "tab")}
           />
         </UrlFlyout>

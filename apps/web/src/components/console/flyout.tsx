@@ -15,6 +15,8 @@ import {
   useState,
 } from "react";
 
+import { PersonPhoto } from "../person-photo";
+
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -227,17 +229,19 @@ export function ConfirmDialog({
 }
 
 /**
- * Top of a details panel: a large initials circle, the name, a coloured status line and inline action links. The
- * name is the panel's heading.
+ * Top of a details panel: a large circle with the photo (a person's or a shared mailbox's, ADR-0022) or initials, the
+ * name, a coloured status line and inline action links. The name is the panel's heading.
  */
 export function DetailHeader({
   initials,
+  photoUrl = null,
   name,
   mono = false,
   status,
   actions,
 }: {
   initials: string;
+  photoUrl?: string | null;
   name: string;
   mono?: boolean;
   status?: ReactNode;
@@ -245,12 +249,11 @@ export function DetailHeader({
 }) {
   return (
     <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6">
-      <span
-        aria-hidden
+      <PersonPhoto
+        src={photoUrl}
+        label={initials}
         className="flex size-16 shrink-0 items-center justify-center rounded-full bg-primary font-display text-[22px] font-medium text-primary-foreground sm:size-24 sm:text-[30px]"
-      >
-        {initials}
-      </span>
+      />
       <div className="flex min-w-0 flex-col gap-1.5">
         <h2 className={`am-h2 min-w-0 break-all ${mono ? "font-mono text-[1.25rem] tracking-normal" : ""}`}>{name}</h2>
         {status && <div className="flex flex-wrap items-center gap-x-3 gap-y-1">{status}</div>}

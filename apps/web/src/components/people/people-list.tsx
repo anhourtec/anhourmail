@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 
+import { Avatar } from "../account-menu";
 import { callApi } from "../api";
 import { bulkMessage, runBulk } from "../console/bulk";
 import { CommandBar, CommandButton, CommandLink, ListSearch, OverflowMenu } from "../console/command-bar";
@@ -28,6 +29,8 @@ export type PersonRow = {
   userId: string;
   name: string;
   email: string;
+  /** Their profile photo on this origin (versioned), or null for initials. */
+  photoUrl: string | null;
   role: string;
   roleLabel: string;
   active: boolean;
@@ -237,7 +240,8 @@ export function PeopleList({
                     )}
                     <td className={listClass.td}>
                       <div className="flex items-center justify-between gap-2">
-                        <div className="flex min-w-0 flex-col">
+                        <Avatar name={p.name} email={p.email} photoUrl={p.photoUrl} size="sm" />
+                        <div className="flex min-w-0 flex-1 flex-col">
                           <span className="flex flex-wrap items-center gap-2">
                             <Link
                               href={open}

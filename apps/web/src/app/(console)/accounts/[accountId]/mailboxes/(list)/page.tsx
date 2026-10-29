@@ -4,6 +4,7 @@ import Link from "next/link";
 
 import { can } from "@anhourmail/core";
 import { listMailboxAppPasswords } from "@anhourmail/core/app-passwords";
+import { accountAvatars, avatarPath } from "@anhourmail/core/avatars";
 import { getMailbox, listMailboxes, mailboxOptions, mailboxStoragePool } from "@anhourmail/core/mailboxes";
 import { addUserAvailability, grantableRoles, listPeople } from "@anhourmail/core/people";
 import { MAILBOX_DELETE_GRACE_DAYS, MAX_MAILBOXES } from "@anhourmail/shared/plans";
@@ -54,6 +55,7 @@ export default async function MailboxesPage({
     people: canManage && can(actor, "member.read", accountId) ? await listPeople(deps, actor, accountId) : null,
     open: openId ? await getMailbox(deps, actor, accountId, openId) : null,
     appPasswords: openId ? await listMailboxAppPasswords(deps, actor, accountId, openId) : null,
+    photos: openId ? await accountAvatars(deps, actor, accountId) : null,
     // When the page was read, for "Updated 5 minutes ago" (storage is measured every ~10 minutes).
     now: new Date(),
   }));
@@ -66,7 +68,18 @@ export default async function MailboxesPage({
       </>
     );
   }
-  const { mailboxes, pool, options, open, appPasswords } = data;
+  const { mailboxes, pool, options, open, appPasswords, photos } = data;
+  // The open mailbox's photo: its person's when it has one, else its own (ADR-0022).
+  const openPhoto = (() => {
+    if (!open || !photos) return null;
+    const owner = open.owner;
+    const version = owner ? photos.people[owner.userId] : photos.mailboxes[open.id];
+    if (!version) return null;
+    return avatarPath(
+      "/api/avatars",
+      owner ? { kind: "person", id: owner.userId, version } : { kind: "mailbox", id: open.id, version },
+    );
+  })();
   const path = `/accounts/${accountId}/mailboxes`;
   const canAdd = options !== null && options.remaining > 0 && (options.domains.length > 0 || options.platform.allowed);
   // The "Add a shared address" panel stays open (with what it just created) once the account is full; it then says so.
@@ -180,6 +193,7 @@ export default async function MailboxesPage({
             graceDays={MAILBOX_DELETE_GRACE_DAYS}
             appPasswords={appPasswords}
             storageCheckedAgo={storageCheckedAgo(open.storageCheckedAt, data.now)}
+            photoUrl={openPhoto}
             tab={param(sp, "tab")}
           />
         </UrlFlyout>

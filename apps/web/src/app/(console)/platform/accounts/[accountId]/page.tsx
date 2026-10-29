@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 
 import { can, NotFoundError } from "@anhourmail/core";
+import { accountAvatars, avatarPath } from "@anhourmail/core/avatars";
 import { GB } from "@anhourmail/core/mailboxes";
 import { staffSuspensionView, viewAccount } from "@anhourmail/core/platform";
 import { PLANS } from "@anhourmail/shared/plans";
@@ -11,6 +12,7 @@ import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 import { requestIdFrom } from "@anhourmail/server/request-context";
 import { PageHeader } from "@anhourmail/ui/page-header";
 
+import { Avatar } from "@/components/account-menu";
 import { ListEmpty } from "@/components/console/data-list";
 import { listClass } from "@/components/console/list-classes";
 import { DetailTabs, Field, FieldGrid } from "@/components/console/flyout";
@@ -52,6 +54,11 @@ export default async function CustomerAccountPage({ params }: { params: Promise<
   }
   const { summary, people, domains, mailboxes, pendingInvites } = detail;
   const suspension = await staffSuspensionView(container().deps, actor, accountId);
+  const photos = await accountAvatars(container().deps, actor, accountId);
+  const photoOf = (userId: string) => {
+    const version = photos.people[userId];
+    return version ? avatarPath("/api/avatars", { kind: "person", id: userId, version }) : null;
+  };
   // Suspending and lifting: Global Administrator only, never while acting as someone (the server checks again).
   const canSuspend = can(actor, "platform.account.suspend") && actor.actingAs === undefined;
 
@@ -92,9 +99,12 @@ export default async function CustomerAccountPage({ params }: { params: Promise<
               {people.map((p) => (
                 <tr key={p.userId} className={listClass.row}>
                   <td className={listClass.td}>
-                    <div className="flex flex-col">
-                      <span className="font-medium text-[14px]">{p.name}</span>
-                      <span className="font-mono text-[12.5px] break-all text-muted-foreground">{p.email}</span>
+                    <div className="flex items-center gap-3">
+                      <Avatar name={p.name} email={p.email} photoUrl={photoOf(p.userId)} size="sm" />
+                      <div className="flex min-w-0 flex-col">
+                        <span className="font-medium text-[14px]">{p.name}</span>
+                        <span className="font-mono text-[12.5px] break-all text-muted-foreground">{p.email}</span>
+                      </div>
                     </div>
                   </td>
                   <td className={listClass.td}>{ROLE_LABELS[`account:${p.role}`]}</td>

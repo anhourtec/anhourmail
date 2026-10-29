@@ -9,6 +9,7 @@ import { AppPasswordList } from "../app-passwords/app-password-list";
 import { CopyValue } from "../copy-value";
 import { ActionLink, DetailHeader, DetailTabs, Field, FieldGrid, PanelSection, TabLink } from "../console/flyout";
 import { initialsOf } from "../console/initials";
+import { ProfilePhoto } from "../people/profile-photo";
 import { EditMailboxName } from "./edit-mailbox-name";
 import { DeleteMailbox, RestoreMailbox, SuspendMailbox } from "./mailbox-lifecycle";
 import { MailboxStatus } from "./mailbox-status";
@@ -39,7 +40,7 @@ type Detail = MailboxView & {
 };
 
 /**
- * The mailbox details panel: header (initials, address, status, inline actions) and tabs — Overview (label / value
+ * The mailbox details panel: header (photo or initials, address, status, inline actions) and tabs — Overview (label / value
  * / manage grid), Storage (used and quota as lined rows; the quota form for people who manage mailboxes) and Access for
  * people who manage mailboxes. What's offered follows the same rules the
  * server enforces (an admin's or owner's mailbox needs an owner to suspend, delete or restore).
@@ -53,6 +54,7 @@ export function MailboxPanel({
   graceDays,
   appPasswords,
   storageCheckedAgo,
+  photoUrl = null,
   tab,
 }: {
   m: Detail;
@@ -67,6 +69,8 @@ export function MailboxPanel({
   appPasswords: MailboxAppPasswords | null;
   /** "Updated 5 minutes ago" for the last storage measurement, or null if it was never measured. */
   storageCheckedAgo: string | null;
+  /** The photo shown for it (its person's, or its own when it has none), on this origin; null for initials. */
+  photoUrl?: string | null;
   tab?: string | null;
 }) {
   const deleting = m.status === "deleting";
@@ -130,6 +134,22 @@ export function MailboxPanel({
               }
             >
               {m.owner ? <span className="break-all">{m.owner.email}</span> : "Nobody yet"}
+            </Field>
+            <Field label="Photo">
+              {m.owner ? (
+                <span className="text-muted-foreground">Their own profile photo, if they have one</span>
+              ) : canManage && !deleting ? (
+                <ProfilePhoto
+                  url={photoUrl}
+                  initials={initialsOf(m.address)}
+                  endpoint={`/api/accounts/${encodeURIComponent(accountId)}/mailboxes/${encodeURIComponent(m.id)}/avatar`}
+                  subject={`the photo of ${m.address}`}
+                />
+              ) : photoUrl ? (
+                "Set"
+              ) : (
+                "None"
+              )}
             </Field>
             <Field
               label="Storage"
@@ -325,6 +345,7 @@ export function MailboxPanel({
     <div className="flex flex-col gap-8">
       <DetailHeader
         initials={initialsOf(m.address)}
+        photoUrl={photoUrl}
         name={m.address}
         mono
         status={

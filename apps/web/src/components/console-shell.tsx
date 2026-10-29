@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 
 import { can, type UserActor } from "@anhourmail/core";
 import { listAliases } from "@anhourmail/core/aliases";
+import { avatarPath, ownAvatar } from "@anhourmail/core/avatars";
 import { listDomains } from "@anhourmail/core/domains";
 import { listMailboxes } from "@anhourmail/core/mailboxes";
 import { listPeople } from "@anhourmail/core/people";
@@ -96,6 +97,7 @@ export async function ConsoleShell({
         .find((i) => i.href)?.href ?? "/",
   }));
   const staffRole = actor.platformRoles[0];
+  const photo = await ownAvatar(container().deps, actor);
   // A suspended account (staff, `platform.account.suspend`): its people see the notice instead of its pages.
   const suspendedNotice =
     current && actor.suspendedAccountIds?.includes(current)
@@ -110,6 +112,7 @@ export async function ConsoleShell({
       user={{
         name: actor.name ?? "",
         email: actor.email,
+        photoUrl: photo ? avatarPath("/api/avatars", photo) : null,
         staffRole: staffRole ? ROLE_LABELS[`platform:${staffRole}`] : null,
         // Customers only (roles.md "Mail (webmail link)": staff ✗), with an account that isn't suspended (its
         // mailboxes can't sign in). Never a credential.

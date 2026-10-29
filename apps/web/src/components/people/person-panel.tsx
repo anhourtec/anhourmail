@@ -8,15 +8,16 @@ import { initialsOf } from "../console/initials";
 import { StatusText } from "../console/status-text";
 import { CopyValue } from "../copy-value";
 import { EditProfile } from "./edit-profile";
+import { ProfilePhoto } from "./profile-photo";
 import { RemovePerson, RoleForm } from "./person-actions";
 import { ROLE_HELP, RoleHelp } from "./role-help";
 
 const dateFmt = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium", timeZone: "UTC" });
 
 /**
- * A person's details panel: header (initials, name, status and role, inline actions), then Account (fields, their
- * mailboxes), Profile (the optional details, with "Edit profile" for the person and the admins who may) and Role
- * (Owners only). What's offered follows the service's answer for this viewer.
+ * A person's details panel: header (photo or initials, name, status and role, inline actions), then Account (fields,
+ * their mailboxes), Profile (their photo and the optional details, changeable by the person and the admins who may —
+ * the same rule for both) and Role (Owners only). What's offered follows the service's answer for this viewer.
  */
 export function PersonPanel({
   accountId,
@@ -25,6 +26,7 @@ export function PersonPanel({
   mailboxesHref,
   closeHref,
   profile = null,
+  photoUrl = null,
   tab,
 }: {
   accountId: string;
@@ -35,10 +37,13 @@ export function PersonPanel({
   closeHref: string;
   /** Their optional profile details and whether this viewer may edit them. */
   profile?: ProfileView | null;
+  /** Their profile photo on this origin (versioned), or null. */
+  photoUrl?: string | null;
   tab?: string | null;
 }) {
   const roleLabel = ROLE_LABELS[`account:${person.role}`];
   const name = person.name || person.email;
+  const personUrl = `/api/accounts/${encodeURIComponent(accountId)}/people/${encodeURIComponent(person.userId)}`;
   const tabs = [
     {
       id: "account",
@@ -95,12 +100,24 @@ export function PersonPanel({
             id: "profile",
             label: "Profile",
             content: (
-              <EditProfile
-                url={`/api/accounts/${encodeURIComponent(accountId)}/people/${encodeURIComponent(person.userId)}/profile`}
-                details={profile.details}
-                canEdit={profile.canEdit}
-                readOnlyReason={profile.readOnlyReason}
-              />
+              <div className="flex flex-col gap-8">
+                {profile.canEdit && (
+                  <PanelSection title="Photo">
+                    <ProfilePhoto
+                      url={photoUrl}
+                      initials={initialsOf(name)}
+                      endpoint={`${personUrl}/avatar`}
+                      subject={person.isYou ? "your photo" : `${name}'s photo`}
+                    />
+                  </PanelSection>
+                )}
+                <EditProfile
+                  url={`${personUrl}/profile`}
+                  details={profile.details}
+                  canEdit={profile.canEdit}
+                  readOnlyReason={profile.readOnlyReason}
+                />
+              </div>
             ),
           },
         ]
@@ -127,6 +144,7 @@ export function PersonPanel({
     <div className="flex flex-col gap-8">
       <DetailHeader
         initials={initialsOf(name)}
+        photoUrl={photoUrl}
         name={name}
         status={
           <>

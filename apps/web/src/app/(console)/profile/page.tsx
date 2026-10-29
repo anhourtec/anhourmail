@@ -1,24 +1,31 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { Metadata } from "next";
 
+import { avatarPath, ownAvatar } from "@anhourmail/core/avatars";
 import { getOwnProfile } from "@anhourmail/core/people";
 import { PageHeader } from "@anhourmail/ui/page-header";
 
+import { initialsOf } from "@/components/console/initials";
 import { CopyValue } from "@/components/copy-value";
 import { EditProfile } from "@/components/people/edit-profile";
+import { ProfilePhoto } from "@/components/people/profile-photo";
 import { requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
 
 export const metadata: Metadata = { title: "Profile" };
 
 /**
- * The signed-in person's Profile: their name and console sign-in, and the optional profile details (job title …
+ * The signed-in person's Profile: their name, photo and console sign-in, and the optional profile details (job title …
  * country) they can edit themselves (`self.profile.manage`). Admins of their accounts see the same details on the
- * People page.
+ * People page. The photo is the one the console app bar, the People page and the webmail of their mailboxes show
+ * (ADR-0022); the sender name on mail is each mailbox's own (set in the webmail), which this page says.
  */
 export default async function ProfilePage() {
   const actor = await requireUser();
-  const profile = await getOwnProfile(container().deps, actor);
+  const [profile, photo] = await Promise.all([
+    getOwnProfile(container().deps, actor),
+    ownAvatar(container().deps, actor),
+  ]);
   return (
     <>
       <PageHeader
@@ -30,6 +37,18 @@ export default async function ProfilePage() {
         <h2 id="profile-who" className="am-h3">
           {actor.name ?? actor.email}
         </h2>
+        {profile.canEdit ? (
+          <ProfilePhoto
+            url={photo ? avatarPath("/api/avatars", photo) : null}
+            initials={initialsOf(actor.name !== undefined && actor.name !== "" ? actor.name : actor.email)}
+            endpoint="/api/me/avatar"
+            subject="your photo"
+          />
+        ) : null}
+        <p className="am-small max-w-prose">
+          Your name and photo are what the people in your accounts see, here and in the webmail of your mailboxes. The
+          name on mail you send is each mailbox&apos;s sender name, which you set in the webmail (Settings, Account).
+        </p>
         <div className="flex flex-col gap-1">
           <span className="am-small">Email (console sign-in)</span>
           <CopyValue value={actor.email} label="email" />

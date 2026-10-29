@@ -6,12 +6,15 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { PersonPhoto } from "./person-photo";
 import { menuKeys } from "./popover";
 import { clearSidebarCookies } from "./sidebar-cookies";
 
 export type MenuUser = {
   name: string;
   email: string;
+  /** Their profile photo on this origin (versioned), or null for initials (ADR-0022). */
+  photoUrl?: string | null;
   staffRole: string | null;
   /** The webmail sign-in on its own origin, with the address pre-filled (never a credential; ADR-0018). */
   webmailHref?: string;
@@ -24,15 +27,20 @@ export function initials(name: string, email: string): string {
   return ((words[0]?.[0] ?? "") + (words[1]?.[0] ?? words[0]?.[1] ?? "")).toUpperCase() || "?";
 }
 
-/** Initials avatar, round (no remote images: privacy rule, branding.md). `inverse` sits on the navy app bar. */
+/**
+ * The person's round avatar: their profile photo when they have one (our own same-origin, versioned URL; never a
+ * remote image — privacy rule, branding.md), else their initials. `inverse` sits on the navy app bar.
+ */
 export function Avatar({
   name,
   email,
+  photoUrl = null,
   size = "md",
   tone = "default",
 }: {
   name: string;
   email: string;
+  photoUrl?: string | null;
   size?: "sm" | "md" | "lg" | "xl";
   tone?: "default" | "inverse";
 }) {
@@ -49,12 +57,11 @@ export function Avatar({
       ? "bg-appbar-accent text-appbar-foreground ring-1 ring-appbar-foreground/45"
       : "bg-primary/12 text-primary";
   return (
-    <span
-      aria-hidden
+    <PersonPhoto
+      src={photoUrl}
+      label={initials(name, email)}
       className={`flex shrink-0 items-center justify-center rounded-full font-display font-medium ${t} ${s}`}
-    >
-      {initials(name, email)}
-    </span>
+    />
   );
 }
 
@@ -114,7 +121,7 @@ export function AccountMenu({
   return (
     <div role="menu" aria-label="Your account" onKeyDown={menuKeys} className="flex w-72 flex-col">
       <div className="flex items-center gap-3 px-2.5 py-2">
-        <Avatar name={user.name} email={user.email} size="lg" />
+        <Avatar name={user.name} email={user.email} photoUrl={user.photoUrl ?? null} size="lg" />
         <div className="flex min-w-0 flex-col">
           <span className="truncate font-medium text-[14px]">{user.name || user.email}</span>
           <span className="am-micro truncate">{user.email}</span>
