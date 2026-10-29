@@ -36,10 +36,13 @@ We email them a link. It works once, only for that address, for <Value of="invit
 - if they already have one, they sign in with that address and join.
 
 Pending invites are listed under **Pending invites**; their ⋮ menu has **Resend invite** and **Revoke invite…**.
-Resending sends a new link with a fresh
+Resending sends a new link that works for another <Value of="inviteDays" /> days (the old link stops working).
+Revoking an invite stops its link at once. An account can send up to <Value of="inviteEmailsPerDay" /> invite emails
+a day, resends included.
 
-<Value of="inviteDays" /> days (the old link stops working). Revoking an invite stops its link at once. An account can
-send up to <Value of="inviteEmailsPerDay" /> invite emails a day, resends included.
+When the account already has <Value of="maxPeople" /> people, counting pending invites, the **People and roles**
+page says so instead of offering **Invite someone**, and the new-invite and **Add a user** buttons in the navigation
+are greyed out with the reason. Remove someone or revoke an invite to make room.
 
 ## Profile details
 
