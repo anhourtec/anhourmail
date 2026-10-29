@@ -22,6 +22,10 @@ const usage = (l: { used: number; max: number | null }, one: string, many: strin
     ? `${String(l.used)} ${l.used === 1 ? one : many}`
     : `${String(l.used)} of ${String(l.max)} ${l.max === 1 ? one : many}`;
 
+const dayFmt = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium", timeZone: "UTC" });
+/** A UTC day (`YYYY-MM-DD`) as the console shows dates. */
+const showDay = (day: string) => dayFmt.format(new Date(`${day}T00:00:00Z`));
+
 /** Aliases (console page template). `?new=1` opens the "Add an alias" panel; `?q=` pre-fills the list's search. */
 export default async function AliasesPage({
   params,
@@ -43,23 +47,40 @@ export default async function AliasesPage({
       </>
     );
   }
-  const { aliases, mailboxes, domains, limits } = data;
+  const { aliases, mailboxes, domains, limits, perMailbox } = data;
+  // The server enforces every limit below; the page only explains them and hides what can't work.
   const planRoom = {
     alias: limits.alias.max === null || limits.alias.used < limits.alias.max,
     masked: limits.masked.max === null || limits.masked.used < limits.masked.max,
   };
-  // The plan's daily creation caps (UTC day; deleting gives none back). The server enforces them; this only explains.
+  // Free's yearly creation caps (rolling 365 days; deleting gives none back).
+  const yearRoom = { alias: limits.alias.nextSlot === null, masked: limits.masked.nextSlot === null };
+  // The plan's daily creation caps (UTC day; deleting gives none back).
   const todayRoom = {
     alias: limits.alias.createdToday < limits.alias.perDay,
     masked: limits.masked.createdToday < limits.masked.perDay,
   };
-  const room = { alias: planRoom.alias && todayRoom.alias, masked: planRoom.masked && todayRoom.masked };
+  // Mailboxes that can take another address (aliases and masked aliases together, `perMailbox` each).
+  const openMailboxes = mailboxes.filter((m) => m.addresses < perMailbox);
+  const room = {
+    alias: planRoom.alias && yearRoom.alias && todayRoom.alias,
+    masked: planRoom.masked && yearRoom.masked && todayRoom.masked,
+  };
   const path = `/accounts/${accountId}/aliases`;
-  const canAdd = mailboxes.length > 0 && (room.alias || room.masked);
-  const todayFull = [
-    planRoom.alias && !todayRoom.alias ? `${String(limits.alias.perDay)} aliases` : null,
-    planRoom.masked && !todayRoom.masked ? `${String(limits.masked.perDay)} masked aliases` : null,
-  ].filter((x) => x !== null);
+  const canAdd = openMailboxes.length > 0 && (room.alias || room.masked);
+  const label = { alias: "aliases", masked: "masked aliases" } as const;
+  const kinds = ["alias", "masked"] as const;
+  const yearFull = kinds.flatMap((k) => {
+    const next = limits[k].nextSlot;
+    return planRoom[k] && next !== null
+      ? [`${String(limits[k].perYear ?? 0)} new ${label[k]} this year (more on ${showDay(next)})`]
+      : [];
+  });
+  const todayFull = kinds.flatMap((k) =>
+    planRoom[k] && yearRoom[k] && !todayRoom[k] ? [`${String(limits[k].perDay)} ${label[k]}`] : [],
+  );
+  const mailboxesFull = mailboxes.length > 0 && openMailboxes.length === 0;
+  const perYearShown = limits.alias.perYear !== null || limits.masked.perYear !== null;
 
   return (
     <>
@@ -72,6 +93,31 @@ export default async function AliasesPage({
         In this account: {usage(limits.alias, "alias", "aliases")} ·{" "}
         {usage(limits.masked, "masked alias", "masked aliases")}
       </p>
+      {perYearShown && (
+        <p className="am-small am-num" data-testid="alias-year-remaining">
+          Left to create this year:{" "}
+          {kinds
+            .flatMap((k) => {
+              const perYear = limits[k].perYear;
+              if (perYear === null) return [];
+              const left = Math.max(0, perYear - limits[k].createdThisYear);
+              return [`${String(left)} of ${String(perYear)} ${label[k]}`];
+            })
+            .join(" · ")}{" "}
+          (deleting one doesn&apos;t give it back)
+        </p>
+      )}
+      {!perYearShown && mailboxes.length > 0 && (
+        <p className="am-small" data-testid="alias-mailbox-counts">
+          Addresses per mailbox (up to <span className="am-num">{perMailbox}</span> each):{" "}
+          {mailboxes.map((m, i) => (
+            <span key={m.id}>
+              {i > 0 && " · "}
+              <span className="font-mono">{m.address}</span> <span className="am-num">{m.addresses}</span>
+            </span>
+          ))}
+        </p>
+      )}
       {mailboxes.length === 0 ? (
         <p className="am-body rounded-lg border px-4 py-3">
           Aliases deliver to a mailbox, and you don&apos;t have one to use yet.{" "}
@@ -88,7 +134,21 @@ export default async function AliasesPage({
         </p>
       ) : (
         !canAdd &&
+        !mailboxesFull &&
+        yearFull.length === 0 &&
         todayFull.length === 0 && <p className="am-small">This account has all the aliases its plan includes.</p>
+      )}
+      {mailboxesFull && (
+        <p className="am-small" role="status">
+          {mailboxes.length === 1 ? "Your mailbox has" : "Each of your mailboxes has"}{" "}
+          <span className="am-num">{perMailbox}</span> addresses, the most a mailbox can have. Delete one to add
+          another.
+        </p>
+      )}
+      {mailboxes.length > 0 && yearFull.length > 0 && (
+        <p className="am-small" role="status">
+          This account has created {yearFull.join(" and ")}, the most its plan allows in a year.
+        </p>
       )}
       {mailboxes.length > 0 && todayFull.length > 0 && (
         <p className="am-small" role="status">
@@ -124,7 +184,10 @@ export default async function AliasesPage({
                 Another address for one of your mailboxes: one you choose, or a random masked one.
               </p>
             </div>
-            <CreateAliasForm accountId={accountId} options={{ mailboxes, domains, room }} />
+            <CreateAliasForm
+              accountId={accountId}
+              options={{ mailboxes: openMailboxes.map((m) => ({ id: m.id, address: m.address })), domains, room }}
+            />
           </div>
         </UrlFlyout>
       )}
