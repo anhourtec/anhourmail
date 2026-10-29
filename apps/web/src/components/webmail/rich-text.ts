@@ -39,10 +39,11 @@ export function signatureHtml(signature: string | undefined): string {
 
 /**
  * Whether sanitised HTML has anything plain text can't keep: any element besides paragraphs, line breaks and the
- * `div`s the editor makes for lines (a signature block is a `div` too).
+ * `div`s the editor makes for lines (a signature block is a `div` too), or a line or paragraph with its own style
+ * or alignment (a centred line).
  */
 export function hasFormatting(html: string): boolean {
-  return /<(?!\/?(?:div|p|br)\b)[a-z]/i.test(html);
+  return /<(?!\/?(?:div|p|br)\b)[a-z]/i.test(html) || /<(?:div|p)\b[^>]*\s(?:style|align)=/i.test(html);
 }
 
 /** The largest original carried into a reply as HTML; longer ones are quoted as text. */

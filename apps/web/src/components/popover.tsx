@@ -48,9 +48,13 @@ export function usePopover() {
   };
 }
 
-/** Arrow keys, Home and End move between a menu's items (WAI-ARIA menu pattern). */
+/** Arrow keys, Home and End move between a menu's items, checkable ones too (WAI-ARIA menu pattern). */
 export function menuKeys(e: KeyboardEvent<HTMLElement>) {
-  const items = [...e.currentTarget.querySelectorAll<HTMLElement>("[role=menuitem]:not([aria-disabled=true])")];
+  const items = [
+    ...e.currentTarget.querySelectorAll<HTMLElement>(
+      ":is([role=menuitem], [role=menuitemradio], [role=menuitemcheckbox]):not([aria-disabled=true])",
+    ),
+  ];
   if (items.length === 0) return;
   const i = items.indexOf(document.activeElement as HTMLElement);
   const go = (n: number) => {

@@ -1,7 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 "use client";
 
-import { Loader2, Maximize2, Minimize2, Paperclip, Send, Trash2, UserPlus, X } from "lucide-react";
+import {
+  Ellipsis,
+  FileText,
+  Loader2,
+  Maximize2,
+  Minimize2,
+  Paperclip,
+  PenLine,
+  Send,
+  Trash2,
+  UserPlus,
+  X,
+} from "lucide-react";
 import { type KeyboardEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { WEBMAIL_ATTACHMENTS } from "@anhourmail/shared";
@@ -11,6 +23,7 @@ import { Tooltip } from "@/components/tooltip";
 
 import { displayName, fileSize } from "./format";
 import { ConfirmDialog } from "./dialogs";
+import { Menu } from "./menu";
 import { parkRemoteImages, unparkRemoteImages } from "./remote-images";
 import { loadOutgoing, type Outgoing, RichEditor, useOutgoing } from "./rich-editor";
 import { hasFormatting, SIGNATURE_ATTR, signatureHtml, signatureInner, textToHtml } from "./rich-text";
@@ -253,9 +266,9 @@ type SaveState = "idle" | "saving" | "saved" | "error";
 
 /**
  * Writing mail: To/Cc/Bcc with suggestions, From (own identities only — the BFF re-checks), subject, a rich-text
- * (default) or plain-text body, attachments (uploaded through the BFF, 20 MB each). Drafts autosave two seconds after you stop typing
- * (one draft per message, replaced each time). Send saves the draft and hands it to the BFF, which holds it for a
- * few seconds so "Undo" can cancel it.
+ * body (plain text is a mode in "More options"), attachments (uploaded through the BFF, 20 MB each). Drafts autosave
+ * two seconds after you stop typing (one draft per message, replaced each time). Send saves the draft and hands it to
+ * the BFF, which holds it for a few seconds so "Undo" can cancel it.
  *
  * Variants: a floating panel on wide screens (expandable), full screen on phones, and inline under a message.
  */
@@ -560,6 +573,8 @@ export function Composer({
       e.preventDefault();
       void send();
     } else if (e.key === "Escape") {
+      // An open menu (More options) closes itself; the composer stays.
+      if (e.target instanceof Element && e.target.closest("[role=menu]")) return;
       e.preventDefault();
       e.stopPropagation();
       void close();
@@ -774,27 +789,6 @@ export function Composer({
         </button>
         <span className="am-micro ml-2 hidden lg:inline">⌘/Ctrl + Enter</span>
         <span className="flex-1" />
-        <div role="radiogroup" aria-label="Message format" className="mr-1 inline-flex rounded-lg border p-0.5">
-          {(
-            [
-              ["rich", "Rich text"],
-              ["plain", "Plain text"],
-            ] as const
-          ).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              role="radio"
-              aria-checked={format === value}
-              onClick={() => {
-                switchFormat(value);
-              }}
-              className={`h-7 rounded-md px-2 text-[12.5px] whitespace-nowrap ${format === value ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
         <input
           ref={file}
           type="file"
@@ -817,6 +811,29 @@ export function Composer({
             <Paperclip className="size-4" aria-hidden />
           </button>
         </Tooltip>
+        <Menu
+          label="More options"
+          icon={Ellipsis}
+          side="top"
+          className="[&_[aria-haspopup=menu]]:size-9"
+          items={[
+            format === "rich"
+              ? {
+                  label: "Plain text mode",
+                  icon: FileText,
+                  onSelect: () => {
+                    switchFormat("plain");
+                  },
+                }
+              : {
+                  label: "Switch to rich text",
+                  icon: PenLine,
+                  onSelect: () => {
+                    switchFormat("rich");
+                  },
+                },
+          ]}
+        />
         <Tooltip label="Discard draft">
           <button
             type="button"

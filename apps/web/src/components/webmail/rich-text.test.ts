@@ -121,4 +121,15 @@ describe("rich-text helpers", () => {
     expect(hasFormatting('<blockquote type="cite">q</blockquote>')).toBe(true);
     expect(hasFormatting("<ul><li>a</li></ul>")).toBe(true);
   });
+
+  it("counts the toolbar's styles as formatting, a styled line included", () => {
+    expect(hasFormatting('<div style="text-align: center">Hi</div>')).toBe(true);
+    expect(hasFormatting('<p align="right">Hi</p>')).toBe(true);
+    expect(hasFormatting('<div><span style="color: rgb(220, 38, 38)">red</span></div>')).toBe(true);
+    expect(hasFormatting('<blockquote style="margin: 0 0 0 40px; border: none; padding: 0px">in</blockquote>')).toBe(
+      true,
+    );
+    expect(hasFormatting("<div><s>old</s></div>")).toBe(true);
+    expect(hasFormatting('<div title="style=x">Hi</div>')).toBe(false);
+  });
 });

@@ -1,24 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 "use client";
 
-import {
-  Bold,
-  CodeXml,
-  Italic,
-  Link,
-  List,
-  ListOrdered,
-  RemoveFormatting,
-  TextQuote,
-  TriangleAlert,
-  Underline,
-  Upload,
-  X,
-} from "lucide-react";
+import { TriangleAlert, Upload, X } from "lucide-react";
 import {
   type ClipboardEvent,
   type DragEvent,
-  type ReactNode,
+  type KeyboardEvent,
   type RefObject,
   useEffect,
   useId,
@@ -28,19 +15,19 @@ import {
 } from "react";
 
 import type * as OutgoingModule from "@/server/webmail/outgoing-html";
-import { Tooltip } from "@/components/tooltip";
 import { inputClass, primaryButtonClass, secondaryButtonClass } from "@/components/ui-classes";
 
 import { Modal } from "./dialogs";
+import { exec, FormatToolbar, rangeIn, restore } from "./format-toolbar";
 import { frameDocument } from "./message-frame";
 import { parkRemoteImages } from "./remote-images";
 import { escapeHtml, linkUrl, removedSummary } from "./rich-text";
 
 /**
- * The rich-text editor (docs/internal/05-webmail.md "Compose"): a contentEditable area, a small formatting toolbar,
- * a link form and "Insert HTML". Whatever it holds is only a working copy: every paste, drop and inserted HTML goes
- * through the outgoing sanitiser before it reaches the editor, and the composer sanitises the whole body again
- * before saving (the server does a third pass). The page's CSP (no inline script, same-origin images only) backs
+ * The rich-text editor (docs/internal/05-webmail.md "Compose"): a contentEditable area, the formatting toolbar
+ * (`format-toolbar.tsx`), a link form and "Insert HTML". Whatever it holds is only a working copy: every paste, drop
+ * and inserted HTML goes through the outgoing sanitiser before it reaches the editor, and the composer sanitises the
+ * whole body again before saving (the server does a third pass). The page's CSP (no inline script, same-origin images only) backs
  * this up while the HTML sits in the editor.
  */
 
@@ -63,68 +50,6 @@ export function useOutgoing(): Outgoing | null {
     };
   }, []);
   return mod;
-}
-
-/** Runs an editing command on the focused editor. */
-function exec(command: string, value?: string): void {
-  // eslint-disable-next-line @typescript-eslint/no-deprecated -- contentEditable has no standard replacement; this keeps the undo stack
-  document.execCommand(command, false, value);
-}
-
-/** The selection, if it is inside `root`. */
-function rangeIn(root: HTMLElement | null): Range | null {
-  const sel = window.getSelection();
-  if (!root || !sel || sel.rangeCount === 0) return null;
-  const range = sel.getRangeAt(0);
-  return root.contains(range.commonAncestorContainer) ? range.cloneRange() : null;
-}
-
-/** Focuses `root` and puts back a saved selection (or the caret at the start). */
-function restore(root: HTMLElement, range: Range | null): void {
-  root.focus();
-  const sel = window.getSelection();
-  if (!sel) return;
-  sel.removeAllRanges();
-  if (range) {
-    sel.addRange(range);
-  } else {
-    const start = document.createRange();
-    start.setStart(root, 0);
-    start.collapse(true);
-    sel.addRange(start);
-  }
-}
-
-const toolButton =
-  "inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50";
-
-/** A toolbar button that keeps the editor's selection: it never takes focus on mouse down. */
-function ToolButton({
-  label,
-  icon,
-  onRun,
-  shortcut,
-}: {
-  label: string;
-  icon: ReactNode;
-  onRun: () => void;
-  shortcut?: string;
-}) {
-  return (
-    <Tooltip label={label} shortcut={shortcut}>
-      <button
-        type="button"
-        aria-label={label}
-        onMouseDown={(e) => {
-          e.preventDefault();
-        }}
-        onClick={onRun}
-        className={toolButton}
-      >
-        {icon}
-      </button>
-    </Tooltip>
-  );
 }
 
 /**
@@ -166,12 +91,6 @@ export function RichEditor({
     onChange();
   };
 
-  const command = (name: string, value?: string) => {
-    editorRef.current?.focus();
-    exec(name, value);
-    changed();
-  };
-
   /** Inserts HTML from outside (paste, drop) after sanitising it; plain text when the sanitiser isn't loaded. */
   const insertForeign = (html: string, text: string) => {
     const clean = html !== "" && outgoing ? outgoing.sanitizeOutgoingHtml(html) : null;
@@ -203,6 +122,14 @@ export function RichEditor({
     insertForeign(html, text);
   };
 
+  // ⌘/Ctrl + K adds a link (bold, italic, underline, undo and redo are the browser's own shortcuts).
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      openLink();
+    }
+  };
+
   const openLink = () => {
     savedRange.current = rangeIn(editorRef.current);
     setLink("");
@@ -231,78 +158,19 @@ export function RichEditor({
 
   return (
     <>
-      <div
-        role="toolbar"
-        aria-label="Formatting"
-        className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b px-2 py-1"
-      >
-        <ToolButton
-          label="Bold"
-          icon={<Bold className="size-4" aria-hidden />}
-          onRun={() => {
-            command("bold");
-          }}
-          shortcut="⌘/Ctrl + B"
-        />
-        <ToolButton
-          label="Italic"
-          icon={<Italic className="size-4" aria-hidden />}
-          onRun={() => {
-            command("italic");
-          }}
-          shortcut="⌘/Ctrl + I"
-        />
-        <ToolButton
-          label="Underline"
-          icon={<Underline className="size-4" aria-hidden />}
-          onRun={() => {
-            command("underline");
-          }}
-          shortcut="⌘/Ctrl + U"
-        />
-        <span className="mx-1 h-5 w-px shrink-0 bg-border" aria-hidden />
-        <ToolButton label="Link" icon={<Link className="size-4" aria-hidden />} onRun={openLink} />
-        <ToolButton
-          label="Bulleted list"
-          icon={<List className="size-4" aria-hidden />}
-          onRun={() => {
-            command("insertUnorderedList");
-          }}
-        />
-        <ToolButton
-          label="Numbered list"
-          icon={<ListOrdered className="size-4" aria-hidden />}
-          onRun={() => {
-            command("insertOrderedList");
-          }}
-        />
-        <ToolButton
-          label="Quote"
-          icon={<TextQuote className="size-4" aria-hidden />}
-          onRun={() => {
-            command("formatBlock", "blockquote");
-          }}
-        />
-        <ToolButton
-          label="Clear formatting"
-          icon={<RemoveFormatting className="size-4" aria-hidden />}
-          onRun={() => {
-            command("removeFormat");
-            command("unlink");
-          }}
-        />
-        <span className="flex-1" />
-        {outgoing && (
-          <ToolButton
-            label="Insert HTML"
-            icon={<CodeXml className="size-4" aria-hidden />}
-            onRun={() => {
-              savedRange.current = rangeIn(editorRef.current);
-              setInserting(true);
-            }}
-          />
-        )}
-      </div>
+      <FormatToolbar
+        editorRef={editorRef}
+        onChange={changed}
+        onLink={openLink}
+        onInsertHtml={
+          outgoing
+            ? () => {
+                savedRange.current = rangeIn(editorRef.current);
+                setInserting(true);
+              }
+            : undefined
+        }
+      />
       {linkOpen && (
         <form
           className="flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2"
@@ -370,6 +238,7 @@ export function RichEditor({
         suppressContentEditableWarning
         spellCheck
         onInput={changed}
+        onKeyDown={onKeyDown}
         onPaste={onPaste}
         onDrop={onDrop}
         data-placeholder="Write your message"
