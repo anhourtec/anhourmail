@@ -6,6 +6,7 @@ import type { AccountRepository } from "./account/repository";
 import type { AliasRepository } from "./aliases/repository";
 import type { AppPasswordRepository } from "./app-passwords/repository";
 import type { AuditRepository } from "./audit/repository";
+import type { AvatarRepository } from "./avatars/repository";
 import type { CatchAllRepository, DomainRepository } from "./domains/repository";
 import type { MailboxPasswordRepository, MailboxRepository, PlatformAddressRepository } from "./mailboxes/repository";
 import type { MailboxStorageRepository } from "./mailboxes/storage";
@@ -37,6 +38,7 @@ export type Repositories = {
   webmailSettings: WebmailSettingsRepository;
   appPasswords: AppPasswordRepository;
   catchAll: CatchAllRepository;
+  avatars: AvatarRepository;
 };
 
 /**

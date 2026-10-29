@@ -37,10 +37,13 @@ export function changedFields(before: ProfileDetails, after: ProfileDetails): Pr
 const selfId = (actor: Actor): string | null => (actor.kind === "user" ? actor.userId : null);
 
 /** Someone else's details are refused for their role here, or because they also belong to another account. */
-type EditRefusal = "role" | "other_account";
+export type EditRefusal = "role" | "other_account";
 
-/** Why this actor may not edit the profile of `target` in the account (already known to be a member there), or null. */
-async function editRefusal(
+/**
+ * Why this actor may not edit the profile of `target` in the account (already known to be a member there), or null.
+ * The same rule covers their profile photo (`avatars/service.ts`).
+ */
+export async function editRefusal(
   repos: Repositories,
   actor: Actor,
   accountId: string,
@@ -61,7 +64,8 @@ export const OTHER_ACCOUNT_PROFILE =
 
 export const ROLE_PROFILE = "Only an owner can edit the profile of an owner or an admin.";
 
-async function memberOf(repos: Repositories, accountId: string, userId: string) {
+/** The member of the account with this id; a 404 for anyone else (never confirms another account's people). */
+export async function memberOf(repos: Repositories, accountId: string, userId: string) {
   const target =
     userId.length <= 200 ? (await repos.people.list(accountId)).find((m) => m.userId === userId) : undefined;
   if (!target) throw new NotFoundError();

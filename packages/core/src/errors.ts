@@ -122,3 +122,10 @@ export class PasswordChangePendingError extends ConflictError {
     );
   }
 }
+
+/** Too much work in progress right now (e.g. image decoding): try again in a moment (HTTP 429). */
+export class BusyError extends DomainError {
+  constructor(message = "Busy right now. Try again in a moment.") {
+    super(message, "rate_limited");
+  }
+}
