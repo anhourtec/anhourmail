@@ -385,6 +385,26 @@ Throwaway `twokey-probe.test` and per-run `svc-*.test`/`keys-*.test` domains and
 address → `550 5.1.2 Mailbox does not exist.` Set: the message is accepted and delivered to the catch-all mailbox (its
 `To` keeps the original address). The target may be an account on another local domain. `null` clears it.
 
+### Default folders and Archive (verified on the pinned v0.16.27, 2026-10-29)
+
+Throwaway `archive-probe.test` accounts, destroyed afterwards (repeated by
+`packages/adapters/src/stalwart/archive-folder.int.test.ts`):
+
+- `x:Email.defaultFolders` (schema: map of `SpecialUse` → `x:EmailFolder` `{ name, create, subscribe, aliases }`,
+  defaults `create: true, subscribe: true`) is `{}` out of the box, and a new account opens with Inbox, Drafts, Sent
+  Items, Junk Mail and Deleted Items — the built-in Archive has `create: false` (its folder id is skipped).
+- Setting only `defaultFolders/archive` (a patch path works on the singleton) merges over the built-ins: the next new
+  account got all five plus Archive (role `archive`). It needs `ReloadSettings`: without one a new account still got
+  five. Folders are made when the account's store is **first opened** (any `Mailbox/get`, sign-in, delivery), not at
+  `x:Account/set`; an account already opened never gains a folder from the setting, reload or not.
+- No `x:Action` or account maintenance task re-creates default folders. Adding one to an existing account takes
+  `Mailbox/set` with owner access (the administrator by `accountId` works; all three scoped keys → `forbidden`).
+- `Mailbox/set` `update { role: "archive" }` / `{ role: null }` works on an existing folder. Top-level names are
+  unique regardless of case: creating "Archive" or "archive" next to an existing "Archive" → `alreadyExists` with
+  `existingId`.
+- IMAP shows the folder as `(\Archive) "Archive"` in `LIST … RETURN (SPECIAL-USE)`; the server also advertises
+  `CREATE-SPECIAL-USE`.
+
 ## 5. JMAP
 
 ### Supported specs

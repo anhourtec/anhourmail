@@ -234,6 +234,19 @@ and 175 more`. Without `impersonate` these permissions apply to its own account 
   may point at a mailbox on another of the account's domains (verified 2026-10-22). Suspending or deleting the
   mailbox clears it in the control plane and re-queues the domain (`turnOffCatchAllFor`); the platform domains never
   get one.
+- **Archive folder** (ADR-0014 update 2026-10-29; verified on v0.16.27): Stalwart creates an account's special folders
+  the first time its store is opened, from `x:Email.defaultFolders` merged over built-in defaults whose Archive has
+  `create: false` (new accounts got Inbox, Drafts, Sent Items, Junk Mail and Deleted Items only). We patch
+  `defaultFolders/archive` to `{ name: "Archive", create: true, subscribe: true }` (`applyDefaultFolders`,
+  `packages/stalwart-client/src/folders.ts`; needs `ReloadSettings`), so every mailbox opened afterwards gets Archive
+  (role `archive`) from Stalwart, whatever created it; no worker step is involved. An account already opened never
+  gains a folder from the setting, so older mailboxes are backfilled once by `backfillArchiveFolders` with the
+  bootstrap's administrator credential: none of the three keys can act inside a mailbox (`Mailbox/get`/`set` →
+  `forbidden`, asserted in `archive-folder.int.test.ts`). It only creates a folder or sets the role on a top-level
+  folder already named Archive (names are unique at a level regardless of case); never moves, reads or deletes
+  mail, and is safe to re-run. Both are applied by the dev plan and, in production, by the Stalwart bootstrap
+  (`08-operations.md` "One-off steps"). Neither is checked by the reconciler yet (open: the scheduler's keys can't
+  read folders or `x:Email`).
 - ARC: verification only (sealing was removed in 0.16). SRS for forwarding.
 - Masked email (`x:MaskedEmail`) and undelete are Enterprise. We implement masked aliases as account aliases plus our own metadata (ADR-0009).
 

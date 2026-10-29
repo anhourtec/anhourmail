@@ -52,6 +52,12 @@ version. CI builds all three on every push (`.cicd/build.sh`).
   audited as `platform.mailboxes_requeued`. From then on the hourly reconciler reports and re-queues any
   mailbox whose lock drifted (`sieveLockMismatch`).
 
+- **Archive folder (2026-10-29, ADR-0014):** in the Stalwart bootstrap (administrator credential, not a worker job:
+  none of the three keys can act inside a mailbox), apply `applyDefaultFolders` before the settings reload, then run
+  `backfillArchiveFolders` once with the service-account domains in `skipDomains` (both from
+  `@anhourmail/stalwart-client`). New mailboxes then get Archive from the mail server; existing ones get it from the
+  backfill, which never moves or deletes mail and is safe to re-run (`docs/internal/08-operations.md`).
+
 - **Credential split (2026-10-23, ADR-0020):** replace `STALWART_API_KEY` with the three keys above (web: operations;
   worker: provisioning; scheduler: provisioning + audit), each from its own service account, then destroy the old key
   and its account. The apps refuse to start while `STALWART_API_KEY` is set.

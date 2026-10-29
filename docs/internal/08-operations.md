@@ -80,6 +80,17 @@ release is up and the worker is running, run `job:quota-cap` once, check its log
 `unmeasured: 0`; re-run if any were unmeasured), and record the counts in `handoff.md`. Accounts kept above their pool
 show it on the Mailboxes page and in their audit log (`mailbox.quota_changed`, reason `storage_pooled`).
 
+**Deploy step for the Archive folder (2026-10-29, ADR-0014 update):** not a worker job — no management key can act
+inside a mailbox — but part of the Stalwart bootstrap, which holds the administrator credential. In the ops repo's
+bootstrap, after the other server settings and before its `ReloadSettings`, call `applyDefaultFolders(mgmt)` (every
+mailbox opened from then on gets Archive from Stalwart); after the reload, call
+`backfillArchiveFolders(mgmt, { skipDomains: [<service-account domains>] })` once (both from
+`@anhourmail/stalwart-client`). It returns `{ checked, created, roleSet, failed }` (failed = Stalwart ids only); re-run
+until `failed` is empty, and record the counts in `handoff.md`. A second run reports `created: 0, roleSet: 0`. It only
+creates a folder or sets the `archive` role on an existing top-level Archive folder: no mail is moved or deleted.
+Until it has run, the webmail tells a mailbox without Archive that nothing was moved. The dev plan does both on every
+`npm run db:seed`.
+
 ## Suspending an account or a person
 
 Staff do it from the console (Global Administrator, Platform → Customer accounts → the account): **Suspend account**

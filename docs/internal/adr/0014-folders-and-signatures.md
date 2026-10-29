@@ -94,3 +94,29 @@ plain-text signature per identity, stored as `Identity.textSignature` with an es
 and swaps it when From changes. Several signatures, defaults per message type, images, templates and disclaimers are
 still ahead. Whether provisioning creates the Archive folder (decision 2) should be re-checked against the worker
 before folder management ships.
+
+## Update (2026-10-29, later) — how Archive is created
+
+Re-checked, and decision 2 wasn't true: nothing created Archive, so the webmail's Archive button and `e` did nothing
+for every mailbox except the demo ones the seed fills with sample mail. It is now met without a provisioning step of
+our own, because the worker can't do it: its provisioning key has no `impersonate`, and none of the three management
+keys can act inside a mailbox (`Mailbox/get`/`set` on a customer → `forbidden`, verified with the real keys in
+`archive-folder.int.test.ts`); customers can't create folders over JMAP either (`CUSTOMER_PERMISSIONS`).
+
+- **New mailboxes:** Stalwart's server-wide `x:Email.defaultFolders` gets an `archive` entry named Archive with
+  `create` and `subscribe` on (`applyDefaultFolders` in `packages/stalwart-client/src/folders.ts`, then a settings
+  reload). Stalwart creates its special folders the first time an account's store is opened, so every account opened after
+  that gets Archive (role `archive`, IMAP `\Archive`) from the mail server itself, whichever path created it.
+  Verified on v0.16.27: the built-in Archive default has `create: false`; patching only the `archive` entry keeps the
+  other defaults; without a reload nothing changes; an account already opened never gains a folder from the setting.
+- **Existing mailboxes:** a one-off backfill (`backfillArchiveFolders`) with the administrator credential the
+  deployment's Stalwart bootstrap already uses: for each user account (service-account domains skipped), nothing if
+  a folder has role `archive`; the role on a top-level folder already named Archive in any case (Stalwart refuses a
+  second one that differs only in case); otherwise a new top-level Archive. Only creates a folder or sets a role,
+  never moves or deletes mail; safe to re-run. The dev plan applies both on every `npm run db:seed`.
+- **Webmail:** if a mailbox still has no Archive, the Archive action shows an error toast saying nothing was moved
+  instead of doing nothing. The proxy's `Mailbox/set` refusal is unchanged.
+- **Not done (open):** no drift check for a mailbox without Archive or for the setting itself (both need a read the
+  scheduler's keys don't have). Letting the web app create a missing Archive on first use would mean adding
+  `jmapMailbox{Get,Create,Update}` to the operations key: a key-scope change that needs a security review and new
+  keys in production.
