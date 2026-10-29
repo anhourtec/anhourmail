@@ -10,8 +10,9 @@ import { log } from "@anhourmail/server/log";
 import { runtime } from "../runtime";
 
 const { deps, mail, close } = runtime();
-const { purged, failed } = await purgeDueMailboxes(deps, mail);
+const { purged, failed, held } = await purgeDueMailboxes(deps, mail);
+// `held`: due mailboxes kept because Anhourtec staff hold them (a suspension); purged once it is lifted.
 log
   .child({ component: "mailbox-purge" })
-  .at(failed > 0 ? "warn" : "info", "mailbox purge finished", { purged, failed });
+  .at(failed > 0 ? "warn" : "info", "mailbox purge finished", { purged, failed, held });
 await close();

@@ -47,6 +47,16 @@ export const JOBS: readonly Job[] = [
   { name: "domain-expiry", script: "job:domain-expiry", everyMs: 24 * 3600_000, timeoutMs: 15 * 60_000, enabled: true },
   // Deleted mailboxes past their grace period: remove the Stalwart account, then the rows (audited).
   { name: "mailbox-purge", script: "job:mailbox-purge", everyMs: 3600_000, timeoutMs: 10 * 60_000, enabled: true },
+  // ADR-0025: build waiting data exports (sealed, control-plane data only), email the requester, delete expired ones.
+  { name: "data-export", script: "job:data-export", everyMs: 60_000, timeoutMs: 5 * 60_000, enabled: true },
+  // ADR-0025: accounts past their deletion grace period, one idempotent step per run (never before it ends).
+  {
+    name: "account-deletion",
+    script: "job:account-deletion",
+    everyMs: 10 * 60_000,
+    timeoutMs: 5 * 60_000,
+    enabled: true,
+  },
   // Storage used per mailbox for the console (sizes only, read with the provisioning key; keeps the last good value).
   { name: "storage-usage", script: "job:storage-usage", everyMs: 10 * 60_000, timeoutMs: 5 * 60_000, enabled: true },
 ];

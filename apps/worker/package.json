@@ -19,6 +19,8 @@
     "job:mailbox-purge": "tsx src/jobs/mailbox-purge.ts",
     "job:mailbox-backfill": "tsx src/jobs/mailbox-backfill.ts",
     "job:storage-usage": "tsx src/jobs/storage-usage.ts",
+    "job:data-export": "tsx src/jobs/data-export.ts",
+    "job:account-deletion": "tsx src/jobs/account-deletion.ts",
     "job:quota-cap": "tsx src/jobs/quota-cap.ts",
     "job:bootstrap-admin": "tsx --env-file-if-exists=../../.env src/jobs/bootstrap-admin.ts"
   },
