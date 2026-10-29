@@ -1,30 +1,57 @@
 # 09 — Roadmap
 
-Last updated: 2026-10-23. Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
+Last updated: 2026-10-29. Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
 
-## Path to production (as of 2026-10-23)
+## Path to production (as of 2026-10-29)
 
 Where we are: Phases 0–2 done; Phase 3 control plane and Phase 4 webmail built for local dev (see the phase status
-lines below and the handoff's "Current state"); the private staging setup (`anhourmail-ops`) is rehearsed end to
-end locally — three scoped Stalwart keys behind an internal management proxy, NGINX path/host guards, backups,
-key rotation, smoke checks. The order below is the shortest route to a public launch; each step keeps the phase exit
-criteria further down.
+lines below and the handoff's "Current state"); the private staging setup (`anhourmail-ops`) is rehearsed end to end
+locally — three scoped Stalwart keys behind an internal management proxy, NGINX path/host guards, backups, key
+rotation, smoke checks. Pre-staging has run on one VM since 2026-10-23; the handoff lists what it proved and the
+live-server fixes still open (Stalwart's own certificate, the mail-only submission network, backups and the restore
+drill). The order below is the shortest route to a public launch; each step keeps the phase exit criteria further
+down.
 
-1. **Pre-staging on one VM (now).** Deploy `anhourmail-ops` topology A on the chosen provider (`deploy.md`):
-   real DNS, ACME certificates, rDNS, inbound and outbound mail with a real external mailbox, mail-tester score,
-   DMARC/TLS-RPT reports arriving, first encrypted off-box backup and a restore drill. Things only a real host can
-   prove: certificates, DNS/PTR, port 25, DOCKER-USER firewall rules, backup upload.
+**Next session (first):** the remote-image proxy. The webmail blocks remote images and says "Loading images through
+our privacy proxy is coming soon", with "Load images" disabled (`components/webmail/message-body.tsx`
+`BlockedImages`). Build `/img/<signed-url>` as `05-webmail.md` describes (no cookies or referrer, size cap,
+content-type checks, the sender never sees the reader's IP), with SSRF guards (public addresses only, checked again
+after every redirect and DNS answer), a rate-limit tier, "Load images" enabled, remembered per sender, then the
+Reading settings "always ask / allow for contacts", the notice copy, public docs and a changelog entry.
+
+**Next session (second):** one composer, rich text by default. The footer's "Rich text / Plain text" switch
+(`components/webmail/composer.tsx`, `role="radiogroup"` "Message format") goes; the formatting toolbar is always
+there, and plain text becomes a "Plain text mode" item in a composer "More options" menu (keeping the existing
+confirmation before formatting is dropped), as conventional webmail composers do. A reply to a plain-text message
+can still start in plain text. The toolbar grows to undo/redo, font family and size, text colour, alignment and
+indent/outdent; each new style passes the outgoing allow-list sanitiser (`server/webmail/outgoing-html.ts`, only
+the properties and values it needs) with tests and a `/security-review`, then e2e, public docs and a changelog entry.
+
+**Next session (then):** stale sidebar folder counts after discarding a draft; Archive does nothing because no
+mailbox has an Archive folder (create at provisioning + backfill); several named rich signatures with Add / Edit /
+Delete and defaults for new messages and for replies and forwards (pulled forward from the second wave below).
+Details in the handoff's "Next phases" 0c–0e.
+
+1. **Pre-staging on one VM (now, deployed 2026-10-23; live-server fixes open).** Deploy `anhourmail-ops` topology A
+   on the chosen provider (`deploy.md`): real DNS, ACME certificates, rDNS, inbound and outbound mail with a real
+   external mailbox, mail-tester score, DMARC/TLS-RPT reports arriving, first encrypted off-box backup and a restore
+   drill. Things only a real host can prove: certificates, DNS/PTR, port 25, DOCKER-USER firewall rules, backup
+   upload.
    **Exit:** smoke 100% on the real host; a customer domain verified and mailboxes sending and receiving externally;
    mail-tester ≥ 9/10; restore drill passes; `security-reviewer` pass on the deployed config.
 2. **Close the product gaps a beta needs** (Phases 3–4 remainder): free `@anhourmail.com` sign-up with SMS/OTP
    verification (provider to choose) — **free addresses built 2026-10-23** (ADR-0021: claim from the console with a
    confirmed email, one per Free account, name rules, no reuse, staff create; SMS/OTP and Phase 6 sending limits for
-   free mailboxes still open), console → webmail session handoff, data export and account deletion,
-   act-as (staff, audited, visible to account admins), remote-image proxy, push sync in the webmail, webmail
-   settings part 2 (rules, templates), and the leftover open items in the handoff (alias admin-lock, daily alias
-   creation cap, provisioning-queue lock token, unknown-recipient rejection at SMTP time).
-3. **Billing** (Phase 5): Stripe Checkout/Portal/Tax, webhooks, plan changes and the account lifecycle, paid-user
-   invite codes; pricing decision (open item 3) and Supporter minimum confirmed.
+   free mailboxes still open); **since built:** multipart text + HTML sending (the only mail-tester deduction on the
+   first pre-staging run), Add a user, shared addresses and Make this a user; console → webmail session handoff, data
+   export and account deletion, act-as (staff, audited, visible to account admins), remote-image proxy, push sync in
+   the webmail (it polls every 30 s today), webmail settings part 2 (rules, templates), and the leftover open items
+   in the handoff (alias admin-lock, daily alias creation cap, provisioning-queue lock token, unknown-recipient
+   rejection at SMTP time).
+3. **Billing and migration** (Phase 5): Stripe Checkout/Portal/Tax, webhooks, plan changes and the account
+   lifecycle, paid-user invite codes; pricing decision (open item 3) and Supporter minimum confirmed; mail import
+   over IMAP (and OAuth from the largest providers) and contacts import, so paying customers can switch with their
+   history.
 4. **Abuse controls, monitoring, backups** (Phase 6): trust tiers stored and enforced, fail-closed outbound counters,
    Stalwart throttles pushed from the control plane, `x:WebHook` event ingestion (sign-ins, bounces), abuse queue and
    `abuse@` workflow, metrics and alerting, scheduled backups with a monthly restore drill, LUKS on the mail volume,
@@ -49,7 +76,7 @@ control — keep it in front of every management caller; address-book sharing is
 
 Prototypes (each ends in a short ADR or a doc update):
 
-1. **DKIM `selectorTemplate`** with fixed `am1`/`am2` selectors behind customer CNAMEs, plus our rotation flow (`02-mail-infrastructure.md`). — **Answered 2026-10-21 (ADR-0017):** a fixed template creates `am1` but never rotates without automatic DNS; the worker rotates with manual `x:DkimSignature` keys through `pending → active → retiring → retired` (verified signing selector in Mailpit). Manual keys must list signed `headers`.
+1. **DKIM `selectorTemplate`** with fixed `am1`/`am2` selectors behind customer CNAMEs, plus our rotation flow (`02-mail-infrastructure.md`). — **Answered 2026-10-21 (ADR-0017):** a fixed template creates `am1` but never rotates without automatic DNS; the worker rotates with manual `x:DkimSignature` keys through `pending → active → retiring → retired` (verified signing selector in Mailpit). Manual keys must list signed `headers`. **Changed 2026-10-28:** customer domains publish their own Stalwart DKIM public keys as TXT records (read from `x:Domain/get` `dnsZoneFile`), and a domain verifies only when each selector's key is published; the am1/am2 CNAMEs are gone (`02-mail-infrastructure.md`).
 2. **API key as Bearer on `/jmap`** for management only. Confirm that it cannot read mail data, and use it instead of the dev admin outside dev. — **Answered (ADR-0017):** key owned by an admin service account, `Replace` permissions `authenticate` + `sys*` domain/account/DKIM; manages domains/accounts; `Mailbox/get`/`Email/query` on users → `forbidden`.
 3. **Stalwart `x:WebHook`** delivering auth and delivery events to the worker (IMAP/SMTP/JMAP sign-ins for audit, bounces for abuse).
 4. **Push vs `maxConcurrentRequests`:** does a long-lived WebSocket/EventSource count? Size the BFF accordingly. — **Answered (ADR-0018):** channels don't count; the limit of 4 is enforced on requests (`jmap:error:limit`), so the BFF queues ≤ 4 in flight per user + one upstream WebSocket.
@@ -86,31 +113,68 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
 ## Phase 3 — Control plane
 
 - better-auth (email + password, TOTP, WebAuthn security keys/passkeys, recovery codes; admins can require a passkey), accounts, memberships and roles, act-as, domains with guided DNS and live per-record verification, mailboxes, aliases, catch-all, masked aliases (ADR-0009), app passwords (issued by the control plane, scoped per protocol; ADR-0020), quotas, audit UI, Security activity page, data export and account deletion. Collaboration (Plus/Supporter): shared mailboxes/groups, static distribution lists with members-only posting, full-access delegation, forwarding (`10-collaboration.md`).
-- **Status (2026-10-23):** built for local dev — domains, mailboxes (lifecycle, passwords), aliases and masked
-  aliases, people/invites/roles, audit log, staff pages, sign-in security (TOTP, recovery codes, passkeys), app
-  passwords, catch-all. Not built: act-as, data export/deletion, collaboration, free sign-up flow, quotas UI.
+- **Status (2026-10-29):** built (pre-staging runs 73f401d until the next deploy) — domains (DKIM TXT keys, unverified
+  domains expire and release their name), mailboxes (lifecycle, passwords, display names, quotas inside the account's
+  storage pool with measured usage), Add a user (mailbox, person and role in one step, first-sign-in password change),
+  shared addresses and Make this a user, editable profiles, aliases and masked aliases, people/invites/roles, audit
+  log, staff pages and staff suspension of accounts or people, free platform addresses, sign-in security (TOTP,
+  recovery codes, passkeys, breached-password check), app passwords, catch-all; refused pages answer a real 404/403.
+  Not built: act-as, data export/deletion, collaboration, SMS/OTP gating for free sign-up.
 - **Exit:** RBAC harness covers every route × role; cross-account tests return 404; audit entries asserted for every mutation; a custom domain goes from add to active in ≤ 15 min in staging; a non-member can neither post to a members-only list nor send with a shared mailbox's From (integration tests); the reconciler reports ACL/membership drift.
 
 ## Phase 4 — Webmail v1 on JMAP
 
 - `05-webmail.md` v1 scope, BFF proxy and push fan-out, sanitiser + sandbox, image proxy. Folders: nested, favourites, archive (Archive folder created at provisioning), empty Trash/Junk, BFF-enforced depth/count limits; one signature per identity (sanitised, mirrored to JMAP Identity).
-- **Status (2026-10-23):** built for local dev — sign in, read (all body types, sandboxed), compose/send/undo,
-  actions, search, several mailboxes, contacts, settings part 1 (incl. automatic replies, confirmed forwarding, junk,
-  managed Sieve). Not built: image proxy, push sync, session handoff, settings part 2, calendar.
+- **Status (2026-10-29):** built (pre-staging runs 73f401d until the next deploy) — sign in (blocked and suspended
+  mailboxes told why, first-sign-in password change), read (all body types, sandboxed; whole conversations; original
+  message with authentication results), compose/send/undo in rich text or plain text (sanitised HTML sent as
+  multipart/alternative, quoted replies), actions, restore from Trash, search, several mailboxes, contacts, automatic
+  refresh with a new-mail chime and desktop notifications, settings part 1 (incl. automatic replies, confirmed
+  forwarding, junk, managed Sieve). Not built: image proxy, push sync (polling today), session handoff, settings part
+  2, calendar.
 - **Exit:** performance budgets met in Playwright perf tests; XSS corpus (HTML email test suite) passes; Playwright MCP pass light/dark at 1440/390 as every role that can open webmail.
 
-## Phase 5 — Billing
+## Phase 5 — Billing and migration
 
 - Stripe Checkout, Portal, Tax, Supporter flow, webhooks, account lifecycle, refunds, invoices (`06-pricing-and-billing.md`). Pricing decision made.
-- **Exit:** every lifecycle transition tested with Stripe test clocks; BC PST/GST position confirmed by an accountant.
+- Migration (import mail and contacts) ships with billing, not after launch: paying customers switching a domain
+  need their old mail and contacts on day one (moved here from Phase 8.1 on 2026-10-29). Scope below.
+- **Exit:** every lifecycle transition tested with Stripe test clocks; BC PST/GST position confirmed by an accountant;
+  an IMAP import of a seeded source mailbox (folders, flags, dates, duplicates) and a vCard/CSV contacts import pass
+  integration tests against the compose stack, resume after a worker restart, and leave no source credentials behind.
+
+### Migration: import mail and contacts
+
+Make switching painless for whole accounts, not just one mailbox. Runs as worker jobs (rule 26), one job per
+mailbox, resumable, with progress in the console and a summary email when done.
+
+- **Mail import over IMAP from any provider:** source host, port, username and an app password; folders mapped onto
+  ours (Inbox, Sent, Drafts, Junk, Trash, custom folders kept), flags and dates preserved, duplicates skipped by
+  Message-ID, attachments and size limits respected against the account's storage pool. Source credentials are
+  encrypted at rest and wiped when the job ends (rule 23).
+- **One-click import from the largest hosted mail providers (OAuth):** sign in with the old provider instead of an
+  app password; uses their sign-in and mail APIs (or IMAP with an OAuth token) with read-only scopes. Tokens are
+  held encrypted, never logged, revoked and deleted when the job ends.
+- **Contacts import:** from the same providers over OAuth (their contacts APIs) and from CardDAV, plus vCard and CSV
+  upload; merged into the mailbox's address book with duplicate detection by email address.
+- **Calendar import (later):** CalDAV and `.ics` upload.
+- **Account-wide migration for admins:** a CSV of mailboxes (old address → new mailbox, source credentials or OAuth
+  per user) run as a batch with per-mailbox status, retries and a report.
+- **Ongoing sync during cut-over:** repeat the import incrementally (new mail only) until the domain's MX points at
+  us, then stop.
+- **Forwarding helper:** step-by-step instructions to set forwarding on the old account during the switch.
+- Not SMTP: SMTP only delivers new mail; existing mail moves over IMAP or the provider's API.
+- Safety: per-account rate limits and concurrency caps so imports never slow the mail server; imports never count
+  toward sending limits; no mail content in logs or audit (only counts, sizes and status).
+- Public docs: a migration guide per source (these may name the source provider, as user-facing setup text).
 
 ## Phase 6 — Abuse controls, monitoring, backups
 
 - Encryption at rest for the provider layer: LUKS on the mail volume (key off-disk), client-side encrypted off-server backups, DNSSEC + DANE on `mx1`, MTA-STS `enforce` after clean TLS-RPT (ADR-0016).
 - Trust tiers enforced end to end, outbound counters fail-closed, Stalwart throttles pushed from the control plane, detection signals, abuse queue, `abuse@` workflow, FBL ingestion, monitoring and alerts, backups + first restore drill.
 - Staff spam/abuse metrics per account on Platform → account (outbound volume, bounces, complaints, blocklist hits),
-  feeding the manual staff suspension that exists today (`03-anti-spam-and-abuse.md` "Staff suspension"); later the
-  Trust & Safety Administrator gets suspension once the abuse queue exists.
+  feeding the manual staff suspension that exists today (built 2026-10-23; `03-anti-spam-and-abuse.md` "Staff
+  suspension"); later the Trust & Safety Administrator gets suspension once the abuse queue exists.
 - **Decision required:** the free-tier launch posture (`03-anti-spam-and-abuse.md` "Free-tier risk").
 - **Exit:** a red-team run (scripted spam attempts from new free and paid accounts) is stopped within the published limits; restore drill passes; `security-reviewer` pass on all abuse logic.
 
@@ -144,31 +208,6 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
 
 - Only after personal-mail deliverability is proven (≥ 8 weeks post-launch with complaints < 0.1 %). Separate bulk IP pool + warm-up, bulk subdomain onboarding, lists/consent/imports, campaign sender in the worker, RFC 8058 one-click unsubscribe, bounce/complaint processing and suppression, Trust & Safety review queue, pricing tiers (`11-bulk-sending.md`, ADR-0015).
 - **Exit:** a reviewed test sender reaches the big free mailbox providers' inboxes from the bulk pool with DMARC alignment; one-click unsubscribe suppresses within seconds; automatic pause triggers in staging at the configured thresholds; zero tracking pixels or rewritten links in sent mail (tested).
-
-## Phase 8.1 — Migration: import mail and contacts (future)
-
-Make switching painless for whole accounts, not just one mailbox. Runs as worker jobs (rule 26), one job per
-mailbox, resumable, with progress in the console and a summary email when done.
-
-- **Mail import over IMAP from any provider:** source host, port, username and an app password; folders mapped onto
-  ours (Inbox, Sent, Drafts, Junk, Trash, custom folders kept), flags and dates preserved, duplicates skipped by
-  Message-ID, attachments and size limits respected against the account's storage pool. Source credentials are
-  encrypted at rest and wiped when the job ends (rule 23).
-- **One-click import from the largest hosted mail providers (OAuth):** sign in with the old provider instead of an
-  app password; uses their sign-in and mail APIs (or IMAP with an OAuth token) with read-only scopes. Tokens are
-  held encrypted, never logged, revoked and deleted when the job ends.
-- **Contacts import:** from the same providers over OAuth (their contacts APIs) and from CardDAV, plus vCard and CSV
-  upload; merged into the mailbox's address book with duplicate detection by email address.
-- **Calendar import (later):** CalDAV and `.ics` upload.
-- **Account-wide migration for admins:** a CSV of mailboxes (old address → new mailbox, source credentials or OAuth
-  per user) run as a batch with per-mailbox status, retries and a report.
-- **Ongoing sync during cut-over:** repeat the import incrementally (new mail only) until the domain's MX points at
-  us, then stop.
-- **Forwarding helper:** step-by-step instructions to set forwarding on the old account during the switch.
-- Not SMTP: SMTP only delivers new mail; existing mail moves over IMAP or the provider's API.
-- Safety: per-account rate limits and concurrency caps so imports never slow the mail server; imports never count
-  toward sending limits; no mail content in logs or audit (only counts, sizes and status).
-- Public docs: a migration guide per source (these may name the source provider, as user-facing setup text).
 
 ## Later
 
