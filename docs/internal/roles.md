@@ -1,6 +1,6 @@
 # Roles and permissions
 
-Last updated: 2026-10-23 (staff suspension)
+Last updated: 2026-10-29 (first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
 
 **Source of truth: `packages/shared/src/rbac`.** That code is canonical: the permission list, the role → permission matrix, critical-permission flags and guard rails. The UI (what to show), the API (what to allow) and the RBAC harness (`npm run test:rbac`) all derive from it. This document explains the matrix for people. If the two disagree, the code wins, and this file is updated in the same change (rule 35).
 
@@ -16,6 +16,12 @@ The model follows a familiar admin-centre shape: a few platform (staff) roles, a
 | Guard rail violated (last Owner, escalation)                                 | **409** with a plain message                 |
 
 Checks live in the **service layer** (permission + ownership scope). Route handlers and UI checks are conveniences; the server is the gate.
+
+Console pages answer with the same statuses. Layout guards (`apps/web/src/server/route-guard.ts`) run before a
+segment's loading boundary, so the HTTP status is real: an account page for someone outside the account is **404**
+(`requireAccountMember`), an account section whose permission the role lacks is **403** with the account's
+`forbidden.tsx` page (`requireAccountSection`; a suspended account still renders its notice), and a staff page
+without the permission is **404** (`requirePlatformPermission`). The services check everything again.
 
 ## States before an account
 
@@ -117,7 +123,10 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
    (`mailboxes/add-user.ts`) needs `mailbox.manage` and grants only `grantableRoles` (Owner: any; User Admin: Member;
    anything else **403**, audited as `denied`); no new permission, so the matrix and harness keep their shape (the
    route is in `routes.ts` with guard `mailbox.manage`). A user added this way with the Member role sees only their own
-   pages in the console (Aliases, App passwords, Security): no domains, people, billing or audit.
+   pages in the console (Aliases, App passwords, Security): no domains, people, billing or audit. Whether "Add a user"
+   and "Invite someone" are offered at all (sidebar, Home, Mailboxes, the Add a user page) is decided once per request
+   by `people/availability.ts` (`ready`, `full` with a reason, or `unavailable` — role, plan, no domain, email
+   unverified) from what the services already return; the services still check everything again.
    "Make this a user" (`mailboxes/make-user.ts`, `POST …/mailboxes/:mailboxId/user`) has the same gate on an
    unassigned mailbox, **plus a fresh step-up** (it replaces the password of a mailbox already in use, like
    `mailbox.password.reset`), asked before anything is looked up about the address; another account's mailbox is
@@ -149,6 +158,10 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
     `enrolment_required` (another account's ids stay **404**), and console pages send them to their Security page.
     Removing a factor a requirement depends on is refused (409). Their own Security page (`self.security.manage`) lists
     and signs out their sessions and renames/removes their passkeys; another person's session or passkey id is **404**.
+    **First-sign-in password change** (console): a person whose console password an admin set with "Require password
+    change at first sign-in" (`user_profile.must_change_password`, `UserActor.mustChangePassword`) passes only `self`
+    permissions until they choose their own: every other permission answers **403** `password_change_required`
+    (`packages/core/src/actor.ts`) and console pages send them to `/change-password`. Changing it clears the flag.
 11. **Staff account look-up** (`platform.accounts.read`) is metadata only; opening an account writes
     `staff.account_viewed` in that account's own log (rule 49). Platform pages are a 404 for anyone without the
     permission (the API answers 403, per the matrix).
@@ -167,6 +180,10 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
     **refused during act-as** (403 `act_as`, audited) — staff never choose a customer's mailbox password; creating a
     mailbox during act-as is refused for the same reason. The mailbox's person (if it has one) is emailed. The person's
     own change happens in the webmail (mailbox sign-in, current password proved to Stalwart), outside this matrix.
+    While an administrator's new password is waiting for the worker (or its job gave up), that own change is refused
+    (**409** `password_change_pending`, audited as denied), so someone who knows only the old password can't override
+    the handover; a console password reset for a login whose address is such a mailbox is held the same way (`audit.md`
+    "Mailbox handovers").
 14. **Catch-all** is part of `domain.manage` (Owner, Domain Administrator) on a plan with `catchAll`, a verified
     domain and an active mailbox of the same account; it turns itself off when that mailbox is suspended or deleted.
 15. **Free platform addresses** (`packages/core/src/mailboxes/platform.ts`, ADR-0021): creating a mailbox on the
@@ -203,7 +220,10 @@ The webmail is not a console area and is not in the permission matrix: it is rea
 (address + mailbox password) on the webmail origin, and a console session never grants it (RBAC harness: every
 `webmail`-guarded route answers 401 to every console persona). What a webmail session can do is bounded by the BFF's
 JMAP allow-list and its own mailbox (`accountId` must match). A mailbox that is `suspended` or `deleting` in the
-control plane, or unknown to it, can't sign in, and an open session ends within 30 s (`MailboxAccessGate`). The
+control plane, or unknown to it, can't sign in, and an open session ends within 30 s (`MailboxAccessGate`). A
+mailbox with `must_change_password` set may only change its password or sign out: every other webmail route answers
+**403** `password_change_required` (`PasswordChangeGate`, `apps/web/src/server/webmail/password-gate.ts`, applied by
+`route()` to every `session: "webmail"` route unless it opts in). The
 console's **Open webmail** link (person menu, customers only) pre-fills the address and nothing else.
 
 Webmail **settings** (`/api/webmail/settings/*`) act on the session's own mailbox only — its preferences, its own
