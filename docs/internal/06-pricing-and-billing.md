@@ -1,14 +1,15 @@
 # 06 — Pricing and billing
 
-Last updated: 2026-10-23. Research: `research/market-and-legal.md` (not legal or tax advice; confirm with an accountant).
+Last updated: 2026-10-29. Research: `research/market-and-legal.md` (not legal or tax advice; confirm with an accountant).
 
 ## Plans
 
 Plans, prices, storage and limits are defined once in `packages/shared/src/plans.ts` (`PLANS`, `BILLING`). The console, marketing pricing table and docs import them. **This document does not restate the numbers.** In outline:
 
-- **Free:** `@anhourmail.com`, invite-only, limited sending (`sending.ts` tier `new`).
-- **Plus:** custom domains, unlimited aliases, catch-all, masked aliases, ten mailboxes with more storage each, fair
-  use per account, annual price in USD and CAD.
+- **Free:** one `@anhourmail.com` address (claimed once the sign-in email is confirmed; ADR-0021), self-service sign-up
+  while `SIGNUP_MODE=open` (`08-operations.md` "Access control"), limited sending (`sending.ts` tier `new`).
+- **Plus:** custom domains, unlimited aliases, catch-all, masked aliases, ten mailboxes sharing one storage pool per
+  account (below), annual price in USD and CAD.
 - **Supporter:** Plus plus a badge and early features, pay-what-you-want above a minimum, annual.
 - Annual only. No lifetime deals. No trial on paid plans (Free is the trial). 14-day refund window. Prices are **tax-exclusive**.
 
