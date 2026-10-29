@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./addresses": "./src/addresses.ts",
+    "./data-lifecycle": "./src/data-lifecycle.ts",
     "./names": "./src/names.ts",
     "./platform": "./src/platform.ts",
     "./plans": "./src/plans.ts",

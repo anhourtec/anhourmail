@@ -64,6 +64,16 @@ export const PERMISSIONS = {
     description: "Edit own optional profile details (job title, department, phones, postal address)",
   },
   "self.security.manage": { scope: "self", description: "Own sign-ins, sessions, 2FA, app passwords" },
+  // ADR-0025: a person's own data (profile, memberships, own mailboxes' settings, own activity) as an archive.
+  "self.data.export": {
+    scope: "self",
+    description: "Request and download an export of own data (fresh step-up to download; never while acting as)",
+  },
+  "self.login.delete": {
+    scope: "self",
+    description:
+      "Delete own console login when no account depends on it (step-up, typed confirmation; never while acting as)",
+  },
 
   // --- platform (Anhourtec staff)
   "platform.staff.manage": { scope: "platform", description: "Grant and revoke staff roles", critical: true },
@@ -100,10 +110,25 @@ export const PERMISSIONS = {
     critical: true,
   },
   "platform.reports.read": { scope: "platform", description: "Read dashboards and reports" },
+  "platform.deletions.read": {
+    scope: "platform",
+    description: "See customer accounts waiting to be deleted (account deletion grace period)",
+  },
 
   // --- account (inside one customer account)
   "account.read": { scope: "account", description: "See account settings, people, domains" },
-  "account.delete": { scope: "account", description: "Delete the account", critical: true },
+  "account.delete": {
+    scope: "account",
+    description:
+      "Delete the account after a grace period, or cancel it (step-up, typed account name; never while acting as)",
+    critical: true,
+  },
+  "account.export": {
+    scope: "account",
+    description:
+      "Request and download an export of the account's control-plane data and audit log (step-up to download)",
+    critical: true,
+  },
   "account.admins.manage": {
     scope: "account",
     description: "Invite people with any role, change roles and remove anyone (never the last Owner)",
@@ -240,6 +265,7 @@ export const PLATFORM_GRANTS: Readonly<Record<PlatformRole, readonly PlatformPer
     "platform.audit.read",
     "platform.audit.full_ip",
     "platform.reports.read",
+    "platform.deletions.read",
   ],
   support_admin: [
     "platform.accounts.read",
@@ -262,6 +288,7 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
   owner: [
     "account.read",
     "account.delete",
+    "account.export",
     "account.admins.manage",
     "member.read",
     "member.manage",
@@ -409,6 +436,15 @@ export const ACT_AS_ROLES: readonly PlatformRole[] = ["global_admin", "support_a
 export const ACT_AS_ACCOUNT_ROLE: AccountRole = "auditor";
 
 export const isCritical = (p: Permission): boolean => "critical" in PERMISSIONS[p];
+
+/**
+ * While an account waits to be deleted (ADR-0025) only these account permissions still work in it: reading, and the
+ * Owner's export and cancel. Everything else answers 403 `account_deleting`, so nothing new lands in an account on its
+ * way out (no mailbox restored, no domain or person added).
+ */
+export function allowedWhileDeleting(p: Permission): boolean {
+  return p.endsWith(".read") || p === "account.delete" || p === "account.export";
+}
 
 export function platformRoleCan(role: PlatformRole, p: Permission): boolean {
   return (PLATFORM_GRANTS[role] as readonly Permission[]).includes(p);

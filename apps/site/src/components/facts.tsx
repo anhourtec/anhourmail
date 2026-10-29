@@ -1,15 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import {
+  ACCOUNT_DELETION_GRACE_DAYS,
   ACCOUNT_POLICY,
   ACT_AS,
   ADDONS,
   ALIAS_CREATIONS_PER_DAY,
+  ALIAS_CREATIONS_PER_YEAR,
+  ALIAS_YEAR_DAYS,
+  aliasAllowance,
+  ALIASES_PER_MAILBOX,
   APP_PASSWORDS_PER_MAILBOX,
   BREACHED_PASSWORD,
   BILLING,
   CARDDAV,
   BULK_MAIL,
   CLIENT_ENDPOINTS,
+  DATA_EXPORT,
   CLIENT_USERNAME_HINT,
   customerDomainRecords,
   formatPrice,
@@ -65,6 +71,9 @@ const VALUES = {
   usernameHint: CLIENT_USERNAME_HINT,
   refundWindowDays: String(BILLING.refundWindowDays),
   mailboxDeleteGraceDays: String(MAILBOX_DELETE_GRACE_DAYS),
+  // Data export and account deletion (packages/shared/src/data-lifecycle.ts, ADR-0025).
+  accountDeletionGraceDays: String(ACCOUNT_DELETION_GRACE_DAYS),
+  dataExportKeepDays: String(DATA_EXPORT.keepDays),
   pendingDomainSetupDays: String(PENDING_DOMAIN.onMailServerDays),
   pendingDomainDays: String(PENDING_DOMAIN.unverifiedDays),
   inviteDays: String(INVITE_TTL_DAYS),
@@ -74,6 +83,13 @@ const VALUES = {
   maskedCreationsPerDayFree: String(ALIAS_CREATIONS_PER_DAY.free.masked),
   aliasCreationsPerDayPaid: String(ALIAS_CREATIONS_PER_DAY.paid.alias),
   maskedCreationsPerDayPaid: String(ALIAS_CREATIONS_PER_DAY.paid.masked),
+  // Free's yearly creation caps (rolling days) and the per-mailbox cap on every plan (plans.ts).
+  aliasCreationsPerYearFree: String(ALIAS_CREATIONS_PER_YEAR.free.alias),
+  maskedCreationsPerYearFree: String(ALIAS_CREATIONS_PER_YEAR.free.masked),
+  aliasYearDays: String(ALIAS_YEAR_DAYS),
+  aliasesPerMailbox: String(ALIASES_PER_MAILBOX),
+  aliasesFree: String(PLANS.free.aliases ?? ALIASES_PER_MAILBOX),
+  maskedAliasesFree: String(PLANS.free.maskedAliases ?? ALIASES_PER_MAILBOX),
   maxPeople: String(MAX_PEOPLE),
   photoMaxUpload: `${String(AVATAR.maxUploadMb)} MB`,
   // Free platform addresses (packages/shared/src/addresses.ts, plans.ts; ADR-0021)
@@ -236,7 +252,6 @@ export function DnsRecordTable({ domain = "example.com" }: { domain?: string }) 
 
 /** Plans with prices and limits. */
 export function PlanTable() {
-  const unlimited = (n: number | null) => (n === null ? "Unlimited" : String(n));
   return (
     <div className="not-prose overflow-x-auto">
       <table className="w-full text-sm">
@@ -266,8 +281,8 @@ export function PlanTable() {
                 <td className="py-2 pr-4">{p.includedMailboxes}</td>
                 <td className="py-2 pr-4">{p.platformMailboxes ?? `Up to ${String(MAX_MAILBOXES)}`}</td>
                 <td className="py-2 pr-4">{p.customDomains ? "Yes" : "No"}</td>
-                <td className="py-2 pr-4">{unlimited(p.aliases)}</td>
-                <td className="py-2 pr-4">{unlimited(p.maskedAliases)}</td>
+                <td className="py-2 pr-4">{aliasAllowance(p).aliases}</td>
+                <td className="py-2 pr-4">{aliasAllowance(p).maskedAliases}</td>
               </tr>
             );
           })}

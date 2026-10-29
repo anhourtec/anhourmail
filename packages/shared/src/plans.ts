@@ -41,7 +41,10 @@ export type Plan = {
   platformMailboxes: number | null;
   /** Other people can be invited into the account (family, a small group). Free accounts have one person. */
   addPeople: boolean;
-  /** `null` = unlimited. */
+  /**
+   * Aliases, and separately masked aliases, one account may have at a time. `null` = no account-wide count: each
+   * mailbox can have up to `ALIASES_PER_MAILBOX` addresses (both kinds together), which applies on every plan.
+   */
   aliases: number | null;
   maskedAliases: number | null;
   /**
@@ -49,6 +52,12 @@ export type Plan = {
    * from creations, not from the aliases that exist, so deleting one gives none back.
    */
   aliasCreationsPerDay: AliasCreationsPerDay;
+  /**
+   * New aliases and, separately, masked aliases one account may create in any rolling `ALIAS_YEAR_DAYS` days
+   * (`ALIAS_CREATIONS_PER_YEAR`); `null` = no yearly cap (paid plans). Counted from creations like the daily cap, so
+   * deleting one gives no slot back.
+   */
+  aliasCreationsPerYear: AliasCreationsPerDay | null;
   catchAll: boolean;
   supporterBadge: boolean;
 };
@@ -67,6 +76,39 @@ export const ALIAS_CREATIONS_PER_DAY: Readonly<Record<"free" | "paid", AliasCrea
   free: { alias: 10, masked: 20 },
   paid: { alias: 50, masked: 100 },
 };
+
+/**
+ * Free accounts' yearly creation caps (maintainer decision 2026-10-29): 10 new aliases in any rolling
+ * `ALIAS_YEAR_DAYS` days, alongside 10 at a time. Masked aliases are the privacy feature (one per site), so they keep
+ * their own at-a-time limit and their own yearly cap of the same shape (placeholder, to confirm). Paid plans have
+ * none: `ALIASES_PER_MAILBOX` and the daily cap bound them. Fails closed, counted in Postgres in the create's own
+ * transaction. The docs render them (`<Value of="aliasCreationsPerYearFree" />`).
+ */
+export const ALIAS_CREATIONS_PER_YEAR: Readonly<{ free: AliasCreationsPerDay }> = {
+  free: { alias: 10, masked: 20 },
+};
+
+/** The rolling window of the yearly caps, in days (today and the 364 before it). */
+export const ALIAS_YEAR_DAYS = 365;
+
+/**
+ * Aliases and masked aliases together that can point at one mailbox, on every plan (maintainer decision 2026-10-29:
+ * "up to 400 addresses per mailbox" on paid plans). With `MAX_MAILBOXES` it also bounds a paid account's total.
+ * The docs render it (`<Value of="aliasesPerMailbox" />`).
+ */
+export const ALIASES_PER_MAILBOX = 400;
+
+/**
+ * A plan's alias allowance as the site and docs show it: the number at a time, or (no account-wide count) the
+ * per-mailbox cap, which aliases and masked aliases share.
+ */
+export function aliasAllowance(p: Pick<Plan, "aliases" | "maskedAliases">): { aliases: string; maskedAliases: string } {
+  const perMailbox = `${String(ALIASES_PER_MAILBOX)} per mailbox`;
+  return {
+    aliases: p.aliases === null ? perMailbox : String(p.aliases),
+    maskedAliases: p.maskedAliases === null ? `Within the ${perMailbox}` : String(p.maskedAliases),
+  };
+}
 
 /** Paid plans (2026-10-23): an extra mailbox beyond the ten included, per year. */
 const EXTRA_MAILBOX_PRICE: Price = { USD: 100, CAD: 140 };
@@ -90,16 +132,17 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     customDomains: false,
     platformMailboxes: 1,
     addPeople: false,
-    aliases: 5,
+    aliases: 10,
     maskedAliases: 10,
     aliasCreationsPerDay: ALIAS_CREATIONS_PER_DAY.free,
+    aliasCreationsPerYear: ALIAS_CREATIONS_PER_YEAR.free,
     catchAll: false,
     supporterBadge: false,
   },
   plus: {
     id: "plus",
     name: "Plus",
-    tagline: "Bring your own domains, unlimited aliases and more room.",
+    tagline: `Bring your own domains, up to ${String(ALIASES_PER_MAILBOX)} aliases per mailbox and more room.`,
     price: { USD: 900, CAD: 1200 },
     payWhatYouWant: false,
     storagePoolGb: 10 * GB,
@@ -113,6 +156,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     aliases: null,
     maskedAliases: null,
     aliasCreationsPerDay: ALIAS_CREATIONS_PER_DAY.paid,
+    aliasCreationsPerYear: null,
     catchAll: true,
     supporterBadge: false,
   },
@@ -133,6 +177,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     aliases: null,
     maskedAliases: null,
     aliasCreationsPerDay: ALIAS_CREATIONS_PER_DAY.paid,
+    aliasCreationsPerYear: null,
     catchAll: true,
     supporterBadge: true,
   },
@@ -177,12 +222,6 @@ export const INVITE_TTL_DAYS = 7;
  * invites, so revoking and re-inviting doesn't reset it (anti-abuse ceiling; fails closed).
  */
 export const INVITE_EMAILS_PER_DAY = 50;
-
-/**
- * Aliases (and, separately, masked aliases) per account on plans listed as unlimited: an abuse ceiling, not a
- * selling point. Plans with a number use that number.
- */
-export const ALIAS_CEILING = 1000;
 
 export const PLAN_ORDER: readonly PlanId[] = ["free", "plus", "supporter"];
 
