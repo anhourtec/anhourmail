@@ -7,8 +7,10 @@ import { FirstPasswordStep } from "@/components/webmail/first-password";
 import { SIDEBAR_COOKIE, WebmailApp } from "@/components/webmail/webmail-app";
 import { container } from "@/server/container";
 import { env } from "@/server/env";
+import { signedNoticeReason } from "@/server/webmail/http";
 import { settingsService, webmail, webmailCookieName } from "@/server/webmail/instance";
 import { lastPasswordChangeFailed } from "@anhourmail/core/mailboxes";
+import type { WebmailRefusal } from "@anhourmail/core/webmail";
 import { DEFAULT_PREFERENCES } from "@anhourmail/shared/webmail";
 import { trustedAuthservIds } from "@/server/webmail/original";
 import { webmailBasePath } from "@/server/webmail/paths";
@@ -30,7 +32,7 @@ export default async function WebmailPage() {
   const jar = await cookies();
   const id = jar.get(webmailCookieName())?.value;
   let session = null;
-  let blocked: string | null = null;
+  let blocked: WebmailRefusal | null = null;
   try {
     session = id ? await webmail().session(id) : null;
   } catch (err) {
@@ -38,7 +40,10 @@ export default async function WebmailPage() {
     // outage: sign in again later.
     if (err instanceof WebmailBlockedError) blocked = err.reason;
   }
-  if (!session) redirect(`${base}/sign-in${blocked ? `?reason=${blocked}` : ""}`);
+  if (!session) {
+    const reason = blocked ? `?reason=${signedNoticeReason(env().BETTER_AUTH_SECRET, blocked)}` : "";
+    redirect(`${base}/sign-in${reason}`);
+  }
   // Display preferences only (no mail): read here so the first paint already has the chosen layout.
   const [preferences, mailbox] = await Promise.all([
     settingsService()

@@ -7,7 +7,7 @@ import { AuthSplit, LegalConsent } from "@/components/auth-split";
 import { WebmailSignInForm } from "@/components/webmail/sign-in-form";
 import { env } from "@/server/env";
 import { platform } from "@/server/platform";
-import { blockedNoticeFor, NOTICE_COOKIE } from "@/server/webmail/http";
+import { blockedNoticeFor, blockedNoticeForLink, NOTICE_COOKIE } from "@/server/webmail/http";
 import { webmail, webmailCookieName } from "@/server/webmail/instance";
 import { webmailBasePath } from "@/server/webmail/paths";
 
@@ -33,8 +33,9 @@ export default async function WebmailSignInPage({
   const id = jar.get(webmailCookieName())?.value;
   if (id && (await webmail().store.read(id))) redirect(base === "" ? "/" : base);
   const params = await searchParams;
+  // Only a link our own pages signed, or the notice cookie, names a block (a crafted link shows nothing).
   const notice =
-    blockedNoticeFor(typeof params.reason === "string" ? params.reason : undefined) ??
+    blockedNoticeForLink(e.BETTER_AUTH_SECRET, typeof params.reason === "string" ? params.reason : undefined) ??
     blockedNoticeFor(jar.get(NOTICE_COOKIE)?.value);
   return (
     <AuthSplit area="Webmail">

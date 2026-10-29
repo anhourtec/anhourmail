@@ -20,6 +20,7 @@ import {
   parseHeaderBlock,
   trustedAuthservIds,
 } from "@/server/webmail/original";
+import { signedNoticeReason } from "@/server/webmail/http";
 import { webmailBasePath } from "@/server/webmail/paths";
 import { WebmailBlockedError } from "@/server/webmail/service";
 import type { Address } from "@/server/webmail/view";
@@ -61,7 +62,9 @@ export default async function OriginalMessagePage({ params }: { params: Promise<
           throw err;
         })
     : null;
-  if (session instanceof WebmailBlockedError) redirect(`${base}/sign-in?reason=${session.reason}`);
+  if (session instanceof WebmailBlockedError) {
+    redirect(`${base}/sign-in?reason=${signedNoticeReason(env().BETTER_AUTH_SECRET, session.reason)}`);
+  }
   if (!session || !sessionId) redirect(`${base}/sign-in`);
   // The first-sign-in password change comes before any mail (the webmail page shows that step).
   if (await passwordChangeGate().required(session.username)) redirect(base === "" ? "/" : base);
