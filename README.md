@@ -54,7 +54,7 @@ built in the open; billing, abuse controls and the production deployment come ne
   DNS); "Add a user" in four steps, creating the mailbox, the person's sign-in and their role together, with a
   password change at first sign-in; shared addresses (such as support@) that can later be made a user; mailboxes
   with a password set at creation (or generated), owner resets with step-up, storage, suspend, resume and delete
-  with a 30-day restore window; aliases and masked aliases; people, invites, roles and editable profile details; an
+  with a 30-day restore window; aliases and masked aliases; people, invites, roles, editable profile details and profile photos; an
   audit log; global search; staff pages for customer accounts, including suspending an account or a person; app
   passwords for mail apps (scoped to IMAP, SMTP, contacts or mail over HTTPS, shown once); catch-all addresses on
   custom domains.
