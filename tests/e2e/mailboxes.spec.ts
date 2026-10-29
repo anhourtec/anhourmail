@@ -9,7 +9,9 @@ test("an owner creates a mailbox, changes its storage, suspends, resumes, delete
   const u = e2eUsers();
   // A retry gets its own domain: the first attempt's is still there (removed with the run's other fixtures).
   const domain = `${u.run}-mbx-${testInfo.project.name}-${testInfo.retry}.test`;
-  await signIn(page, u.users.owner, u.password);
+  // Its own account per project: the storage it assigns isn't taken from the shared account's pool.
+  const people = u.mailboxes[testInfo.project.name] ?? { owner: "", member: "" };
+  await signIn(page, people.owner, u.password);
 
   // A verified domain first.
   await (await openNav(page)).getByRole("link", { name: "Domains" }).click();
@@ -26,9 +28,9 @@ test("an owner creates a mailbox, changes its storage, suspends, resumes, delete
   await page.getByRole("menuitem", { name: "Add a shared address" }).click();
   const adding = panel(page, "Add a shared address");
   await expect(adding).toBeVisible();
-  await page.getByLabel("Address").fill("Jane");
+  await page.getByLabel("Address", { exact: true }).fill("Jane");
   await page.getByLabel("Domain").selectOption({ label: domain });
-  await page.getByLabel("Belongs to").selectOption({ label: u.users.member });
+  await page.getByLabel("Belongs to").selectOption({ label: people.member });
   await page.getByLabel("Storage (GB)").fill("5");
   await page.getByLabel("Password", { exact: true }).fill("e2e mailbox password");
   await page.getByRole("button", { name: "Create shared address" }).click();
@@ -38,7 +40,7 @@ test("an owner creates a mailbox, changes its storage, suspends, resumes, delete
   await expect(row).toBeVisible();
 
   // The same address can't be taken twice (the panel stays open for the next one).
-  await page.getByLabel("Address").fill("jane");
+  await page.getByLabel("Address", { exact: true }).fill("jane");
   await page.getByLabel("Domain").selectOption({ label: domain });
   await page.getByLabel("Password", { exact: true }).fill("e2e mailbox password");
   await page.getByRole("button", { name: "Create shared address" }).click();
@@ -56,7 +58,7 @@ test("an owner creates a mailbox, changes its storage, suspends, resumes, delete
   await row.getByRole("link").click();
   const details = panel(page, `jane@${domain}`);
   await expect(details.getByRole("heading", { name: `jane@${domain}`, level: 2 })).toBeVisible();
-  await expect(details.getByText(u.users.member, { exact: true }).first()).toBeVisible();
+  await expect(details.getByText(people.member, { exact: true }).first()).toBeVisible();
   await details.getByRole("tab", { name: "Storage" }).click();
   await details.getByLabel("Storage (GB)").fill("3");
   await details.getByRole("button", { name: "Save" }).click();

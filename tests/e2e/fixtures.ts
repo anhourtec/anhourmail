@@ -13,6 +13,8 @@ export type E2eUsers = {
   /** Per browser project: logins for the sign-in security journeys (their own account for the requirement). */
   /** Per browser project: the mailbox passwords journey's own account (owner and member). */
   passwords: Record<string, { owner: string; member: string }>;
+  /** Per browser project: the mailboxes journey's own account (owner and member), with a pool of its own. */
+  mailboxes: Record<string, { owner: string; member: string }>;
   /** Per browser project: the staff suspension journey's own account (its name, owner and member). */
   suspension: Record<string, { accountName: string; owner: string; member: string }>;
   /** Per browser project: the first-sign-in password change journey's account (its Owner and verified domain). */

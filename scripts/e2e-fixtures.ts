@@ -62,6 +62,7 @@ if (mode === "create") {
     { totp: string; passkey: string; owner: string; member: string; pkOwner: string; pkMember: string }
   > = {};
   const passwords: Record<string, { owner: string; member: string }> = {};
+  const mailboxes: Record<string, { owner: string; member: string }> = {};
   const suspension: Record<string, { accountName: string; owner: string; member: string }> = {};
   const firstSignIn: Record<string, { owner: string; domain: string }> = {};
   const mgmt = stalwartDevAdmin();
@@ -107,6 +108,20 @@ if (mode === "create") {
       { accountId: pwAccount.id, userId: pwMember.id, role: "member" },
     ]);
     passwords[project] = { owner: pwOwner.email, member: pwMember.email };
+    // Mailboxes journey: its own account per project, so the storage it gives its mailbox comes from a pool the other
+    // journeys (both projects' shared addresses) haven't already assigned.
+    const [mbxAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} Mailboxes ${project}`, plan: "plus" })
+      .returning();
+    if (!mbxAccount) throw new Error("mailboxes account not created");
+    const mbxOwner = await addLogin(`mbx-${project}-owner`);
+    const mbxMember = await addLogin(`mbx-${project}-member`);
+    await db.insert(schema.accountMembership).values([
+      { accountId: mbxAccount.id, userId: mbxOwner.id, role: "owner" },
+      { accountId: mbxAccount.id, userId: mbxMember.id, role: "member" },
+    ]);
+    mailboxes[project] = { owner: mbxOwner.email, member: mbxMember.email };
     // Staff suspension journey: an account per project that staff suspend and restore (nobody else's sign-in changes).
     const [suspAccount] = await db
       .insert(schema.customerAccount)
@@ -178,7 +193,18 @@ if (mode === "create") {
   writeFileSync(
     FILE,
     JSON.stringify(
-      { run, password, accountName: account.name, users, recipient, security, passwords, suspension, firstSignIn },
+      {
+        run,
+        password,
+        accountName: account.name,
+        users,
+        recipient,
+        security,
+        passwords,
+        mailboxes,
+        suspension,
+        firstSignIn,
+      },
       null,
       2,
     ),
