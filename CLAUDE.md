@@ -334,6 +334,15 @@ an app container direct access to Stalwart's management listener.
     jobs, migrations, routes), fix what's wrong, and bump a doc's `Last updated:` line whenever its content changes.
     Record in the handoff that the sweep ran and what it changed; if nothing was stale, say so.
 
+61. **Profile data has one source and shows the same everywhere.** A person's name, avatar, sender name and other
+    profile details are stored once (the person's record, mirrored to the mail server where it needs them, e.g. the
+    JMAP identity), and every place that shows or edits them reads and writes that one source: the console app bar,
+    person menu, Profile and People pages, the webmail sidebar, Account settings, sender identities and contacts.
+    Every change that adds code showing or editing such a field checks all the other places, keeps them in sync
+    (an edit in one shows in the others without a manual refresh where the page is open), and adds an e2e step that
+    edits it in one place and sees it in another. Avatars are images we host (never remote URLs), size-capped and
+    re-encoded server-side.
+
 ## Project conventions
 
 - **Services hold the logic; route handlers only parse, call and map errors.** Services take the actor and check
@@ -366,3 +375,4 @@ an app container direct access to Stalwart's management listener.
 | 2026-10-23 | Nishchayjeet Singh (Nish) | "Where we are and what's next": development pauses for pre-staging; next phases to production                                      |
 | 2026-10-29 | Nishchayjeet Singh (Nish) | "Where we are and what's next": pre-staging running; the work since waits for the next deploy                                      |
 | 2026-10-29 | Nishchayjeet Singh (Nish) | Rule 60: sweep every Markdown doc against the code every session; bump `Last updated` on change                                    |
+| 2026-10-29 | Nishchayjeet Singh (Nish) | Rule 61: profile data (name, avatar, sender name) has one source and stays in sync across console and webmail                      |
