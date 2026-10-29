@@ -1,6 +1,6 @@
 # Roles and permissions
 
-Last updated: 2026-10-29 (profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
+Last updated: 2026-10-29 (staff support access / act-as, ADR-0023; profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
 
 **Source of truth: `packages/shared/src/rbac`.** That code is canonical: the permission list, the role → permission matrix, critical-permission flags and guard rails. The UI (what to show), the API (what to allow) and the RBAC harness (`npm run test:rbac`) all derive from it. This document explains the matrix for people. If the two disagree, the code wins, and this file is updated in the same change (rule 35).
 
@@ -35,7 +35,7 @@ without the permission is **404** (`requirePlatformPermission`). The services ch
 | Role                                 | Can                                                                                                                                                                                                                                                                                       | Cannot                                                                     |
 | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | **Global Administrator**             | Everything: platform settings, integrations (secrets are write-only), staff role management, all platform-role abilities below, act-as, create a free platform address in a customer account (no password), suspend and restore customer accounts and people (`platform.account.suspend`) | Read mail content (no such path exists); set a customer's mailbox password |
-| **Support Administrator**            | View accounts and members; reset a user's password/2FA (forces re-enrolment, notifies the user); resend invites; view mail-flow logs (metadata only); act-as (time-limited)                                                                                                               | Billing changes, trust-tier changes, staff role changes, mail content      |
+| **Support Administrator**            | View accounts and members; reset a user's password/2FA (forces re-enrolment, notifies the user); resend invites; view mail-flow logs (metadata only); act-as (read-only support access, time-limited; ADR-0023)                                                                           | Billing changes, trust-tier changes, staff role changes, mail content      |
 | **Trust & Safety Administrator**     | Abuse queue; restrict accounts; change trust tiers and sending limits; view abuse signals (suspending accounts and people is Global Administrator only for now: `platform.account.suspend`)                                                                                               | Billing, staff roles, act-as, mail content                                 |
 | **Billing Administrator** (platform) | Plans, refunds, invoices, subscription state, credits                                                                                                                                                                                                                                     | Trust tiers, staff roles, act-as                                           |
 | **Reports Reader**                   | Read-only dashboards, platform audit log, aggregate metrics                                                                                                                                                                                                                               | Any change                                                                 |
@@ -102,13 +102,30 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
 1. **At least one Owner** always exists per account. The last Owner cannot leave, be removed or be demoted (409). Ownership transfer is a two-step accept.
 2. **No escalation:** nobody can grant a role or permission they don't hold themselves. Only Owners manage admin roles. Members and Auditors can never receive critical permissions.
 3. **Platform roles are granted only by a Global Administrator.** At least one Global Administrator always exists.
-4. **Act-as** is for Global and Support Administrators only:
-   - requires a written reason;
-   - expires after 30 minutes (renewable with a new reason);
-   - shows a banner on every page;
-   - every action is audited with `on_behalf_of` and the act-as session id;
-   - it is visible to the account's admins as "Anhourtec staff" (`audit.md`);
-   - it **never exposes mail content**: no webmail handoff while acting as.
+4. **Act-as (support access, ADR-0023)** is for Global and Support Administrators only (`platform.accounts.actAs` ★,
+   `ACT_AS_ROLES`):
+   - started from Platform → account → "Open with support access", with a written reason (10–500 characters; the
+     account's admins see it, so never secrets) and a **fresh step-up** (403 `step_up_required`);
+   - **read-only only**: staff hold `ACT_AS_ACCOUNT_ROLE` (= `auditor`) in that one account and nothing else — their
+     platform roles are set aside (staff pages 404, staff APIs 403) and their own customer accounts are 404 while
+     acting. Every service runs its normal checks: changes and owner-only actions answer **403**, other accounts
+     **404**. There is no "with changes" mode;
+   - **never into a staff account**: an account where anyone holds a platform role or signs in at `anhourtec.com`
+     or a subdomain of it answers 403 `staff_account` (rule 28), checked again on every request while acting;
+     suspended accounts 409;
+   - no profile or photo changes while acting, their own included (403);
+   - 30 minutes, renewable from the banner with a new reason and a fresh step-up, at most 4 hours from the start; bound
+     to the console session that started it (other sessions stay in the staff view; signing out ends it); one open
+     session per staff member, several staff may act in the same account at once;
+   - shows a banner on every console page with Extend and End; ending or expiry drops back to the staff view;
+   - every action, including refused attempts, is audited as staff with `on_behalf_of` (staff member, account, act-as
+     session id); start, renewal and end are in the account's log and the platform log;
+   - visible to the account's admins as "Anhourtec staff · Support access" (`audit.md`), and the Owners are emailed when
+     it starts;
+   - it **never exposes mail content**: no webmail link, handoff or session while acting;
+   - RBAC harness: three acting personas started through the real flow (Support and Global Administrator in account
+     A, Support Administrator in account B) run every route from the matrix; renew and end use the `act_as` guard
+     (404 for everyone else signed in); starting into a staff account is checked as 403.
 5. **Mail content is never visible to staff** through any console path.
 6. **Suspended** users and accounts (staff suspension, guard rail 17): a suspended person can't sign in at all; the
    people of a suspended account sign in but see only the suspension notice and their own Security page (every
@@ -228,6 +245,14 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
     itself — and the account's admins can't resume a held mailbox (409). Recorded as `trust.suspended` /
     `trust.unsuspended` by staff in the affected accounts' logs (rule 49) and in the platform log (which alone keeps
     the internal note). The account's Owners and administrators, or the person, are emailed.
+18. **Admin-locked aliases** (`packages/core/src/aliases/service.ts`): an alias that someone with
+    `alias.manage.any` (Owner, User Administrator) turns off on a mailbox that isn't their own is locked off
+    (`mail_alias.admin_locked`). Its own person (`alias.manage.own` only) can see it ("Turned off by an administrator")
+    but turning it on or deleting it answers **403** `alias_admin_locked`, audited as `denied` (deleting would free the
+    address to be added again). Turning it off again is allowed and keeps the lock. Anyone with `alias.manage.any`
+    lifts it by turning it on (meta `adminLockLifted`), and may delete it. Out-of-scope aliases stay **404**. No new
+    permission, so the matrix keeps its shape; the RBAC harness probes the refusals (Member 403, another account's
+    Owner 404, alias unchanged) and `tests/e2e/aliases.spec.ts` walks owner lock → member view → owner lift.
 
 ## Webmail
 
@@ -249,21 +274,21 @@ is the authorisation, and an unknown, used or expired token is a 404.
 
 ## What each role sees (navigation)
 
-| Area                     | Owner | Domain Adm | User Adm | Billing Adm | Member | Auditor | Staff                  |
-| ------------------------ | ----- | ---------- | -------- | ----------- | ------ | ------- | ---------------------- |
-| Overview                 | ✓     | ✓          | ✓        | ✓           | ✓      | ✓       | via act-as             |
-| Mail (webmail link)      | own   | own        | own      | own         | own    | own     | ✗                      |
-| Domains                  | ✓     | ✓          | read     | ✗           | ✗      | read    | via act-as             |
-| People and roles         | ✓     | read       | Members  | ✗           | ✗      | read    | via act-as             |
-| Mailboxes                | ✓     | read       | ✓        | ✗           | ✗      | read    | via act-as             |
-| Aliases                  | all   | own        | all      | own         | own    | ✗       | via act-as             |
-| App passwords            | own   | own        | own      | own         | own    | ✗       | ✗ (never via act-as)   |
-| Billing                  | ✓     | ✗          | ✗        | ✓           | ✗      | read    | Billing Adm (platform) |
-| Audit log                | ✓     | ✗          | ✓        | ✗           | ✗      | ✓       | Reports Reader, Global |
-| Security activity (self) | ✓     | ✓          | ✓        | ✓           | ✓      | ✓       | —                      |
-| Profile (self)           | ✓     | ✓          | ✓        | ✓           | ✓      | ✓       | —                      |
-| Customer accounts        | ✗     | ✗          | ✗        | ✗           | ✗      | ✗       | all but Reports Reader |
-| Staff console            | ✗     | ✗          | ✗        | ✗           | ✗      | ✗       | per platform role      |
+| Area                     | Owner | Domain Adm | User Adm | Billing Adm | Member | Auditor | Staff                                   |
+| ------------------------ | ----- | ---------- | -------- | ----------- | ------ | ------- | --------------------------------------- |
+| Overview                 | ✓     | ✓          | ✓        | ✓           | ✓      | ✓       | read via act-as                         |
+| Mail (webmail link)      | own   | own        | own      | own         | own    | own     | ✗                                       |
+| Domains                  | ✓     | ✓          | read     | ✗           | ✗      | read    | read via act-as                         |
+| People and roles         | ✓     | read       | Members  | ✗           | ✗      | read    | read via act-as                         |
+| Mailboxes                | ✓     | read       | ✓        | ✗           | ✗      | read    | read via act-as                         |
+| Aliases                  | all   | own        | all      | own         | own    | ✗       | ✗ (not via act-as)                      |
+| App passwords            | own   | own        | own      | own         | own    | ✗       | ✗ (never via act-as)                    |
+| Billing                  | ✓     | ✗          | ✗        | ✓           | ✗      | read    | Billing Adm; read via act-as            |
+| Audit log                | ✓     | ✗          | ✓        | ✗           | ✗      | ✓       | Reports Reader, Global; read via act-as |
+| Security activity (self) | ✓     | ✓          | ✓        | ✓           | ✓      | ✓       | —                                       |
+| Profile (self)           | ✓     | ✓          | ✓        | ✓           | ✓      | ✓       | —                                       |
+| Customer accounts        | ✗     | ✗          | ✗        | ✗           | ✗      | ✗       | all but Reports Reader                  |
+| Staff console            | ✗     | ✗          | ✗        | ✗           | ✗      | ✗       | per platform role                       |
 
 The console groups these under section labels (Mail: Mailboxes, Aliases, Domains · People · Account: Billing, Audit
 log · Platform for staff; `navTree` in `console-nav.ts`). Counts beside rows come from the same services with the

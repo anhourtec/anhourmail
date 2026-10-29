@@ -63,7 +63,8 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
    confirmed email, one per Free account, name rules, no reuse, staff create; SMS/OTP and Phase 6 sending limits for
    free mailboxes still open); **since built:** multipart text + HTML sending (the only mail-tester deduction on the
    first pre-staging run), Add a user, shared addresses and Make this a user; console → webmail session handoff, data
-   export and account deletion, act-as (staff, audited, visible to account admins), remote-image proxy, push sync in
+   export and account deletion, act-as (**built 2026-10-29**, ADR-0023: read-only support access, audited, visible to
+   account admins), remote-image proxy, push sync in
    the webmail (it polls every 30 s today), webmail settings part 2 (rules, templates), and the leftover open items
    in the handoff (alias admin-lock, daily alias creation cap, provisioning-queue lock token, unknown-recipient
    rejection at SMTP time).
@@ -138,7 +139,8 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
   shared addresses and Make this a user, editable profiles, aliases and masked aliases, people/invites/roles, audit
   log, staff pages and staff suspension of accounts or people, free platform addresses, sign-in security (TOTP,
   recovery codes, passkeys, breached-password check), app passwords, catch-all; refused pages answer a real 404/403.
-  Not built: act-as, data export/deletion, collaboration, SMS/OTP gating for free sign-up.
+  staff support access (act-as, read-only, ADR-0023, 2026-10-29). Not built: data export/deletion, collaboration,
+  SMS/OTP gating for free sign-up.
 - **Exit:** RBAC harness covers every route × role; cross-account tests return 404; audit entries asserted for every mutation; a custom domain goes from add to active in ≤ 15 min in staging; a non-member can neither post to a members-only list nor send with a shared mailbox's From (integration tests); the reconciler reports ACL/membership drift.
 
 ## Phase 4 — Webmail v1 on JMAP

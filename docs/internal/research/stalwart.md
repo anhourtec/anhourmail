@@ -516,6 +516,10 @@ Probed with throwaway `dev.test` accounts; the webmail settings (05-webmail.md "
   `hardLimit` (the account's `maxDiskQuota`).
 - **Identity/set** updates `name`, `textSignature` and `htmlSignature` on the account's own identities (aliases
   have their own identity each; the default `name` is the address).
+- **Identity signatures are capped at 2,047 bytes** each (`htmlSignature`, `textSignature`; measured 2026-10-29 on
+  v0.16.27 with the integration test: 2,047 ASCII characters or 1,023 two-byte characters are stored, 2,048 is
+  refused in `notUpdated` with `invalidProperties`, "Field could not be set."). Signatures with embedded images don't
+  fit; the webmail copies a shortened version (05-webmail.md "Signatures").
 
 #### User Sieve is an open-relay vector; we block it (security review run-20, 2026-10-22)
 - **Reproduced:** a mailbox token can upload `require ["variables"]; if header :matches "X-T" "*" { redirect

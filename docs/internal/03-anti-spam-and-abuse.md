@@ -20,6 +20,27 @@ Abuse logic can be open. Thresholds come from config (`ABUSE_*` env, supplied in
 - **Per-user training:** the webmail Junk/Not junk buttons set `$junk`/`$notjunk` via `Email/set`, which creates training samples in Stalwart (`research/stalwart.md` §3).
 - Lookalike and phishing warnings in the webmail (display-name spoofing, punycode, first-time sender for a known contact name), with a banner and links disabled until confirmed.
 - Remote images are blocked by default (privacy and tracking protection).
+- **Unknown recipients are refused, never accepted and dropped** (verified 2026-10-29 on v0.16.27, `stack:verify`):
+  on a local domain without a catch-all, Stalwart's directory lookup answers `550 5.1.2 Mailbox does not exist` at
+  `RCPT`, inbound on 25 and on authenticated submission (465/587), so there is no backscatter and the sending server
+  bounces it. A catch-all domain accepts them on purpose (paid plans, off by default). Disabled aliases are refused the
+  same way. Nothing in our configuration is needed for this: `x:MtaStageRcpt` stays at its defaults (no `rewrite`, no
+  RCPT `script`) and `upsertDomain` clears the catch-all on the plans' own domains. See `02-mail-infrastructure.md`
+  "Unknown recipients" for the JMAP case.
+
+## Aliases (abuse limits)
+
+- **Live counts** per account and kind (`PLANS[plan].aliases` / `maskedAliases`, the 1,000 ceiling on "unlimited").
+- **Daily creation cap** (built 2026-10-29): creations per account per UTC day, aliases and masked aliases separately
+  (`PLANS[plan].aliasCreationsPerDay`, placeholders in `ALIAS_CREATIONS_PER_DAY`). It counts creations, not live
+  rows, so a create → use once → delete loop can't hand out an unlimited stream of fresh addresses (important before
+  free accounts get masked aliases on the platform domain). Counted in Postgres in the create's own transaction under
+  the account lock, so it holds under races and fails closed; over the cap is 429 `alias_daily_limit`, audited as
+  denied. The published number is the limit itself (`docs/public/aliases.mdx`); nothing else about detection is.
+- **Per-caller rate limit** `aliasCreate` (60/hour, fail-closed Redis; `rate-limits.md`).
+- **Admin lock** (built 2026-10-29): an alias an account administrator turns off can't be turned back on, or deleted
+  and re-added, by its own person (403 `alias_admin_locked`); an administrator lifts it (`roles.md` guard rail 18).
+  It gives an account's admins a way to stop one person's abused address without taking the mailbox away.
 
 ## Outbound
 
@@ -106,8 +127,12 @@ Lists multiply one message into many deliveries, so they are an abuse amplifier 
   pin the rules bundle locally like the admin UI (hash-checked `file://` URL), then re-test outbound with
   `scoreReject` for submissions only (reject, never silently drop, so the user sees it) and our own outbound
   checks in front (rate limits, recipient caps, trust tiers). Until then outbound scanning stays at the default.
-- **Mail to a non-existent local address** submitted over JMAP was accepted and silently dropped (no DSN, no
-  error) in dev. Phase 3 must surface this to the sender (BFF pre-check of local recipients or DSN on).
+- **Mail to a non-existent local address** submitted over JMAP: re-checked 2026-10-29 (handoff item 14). Stalwart
+  creates the `EmailSubmission` and refuses the local recipient inside it: `deliveryStatus[<address>]` is
+  `delivered: "no"`, `smtpReply: "550 5.1.2 Mailbox does not exist."`, and **no DSN** is sent (there is no setting for
+  one; `x:DsnReportSettings` only shapes DSNs). SMTP clients see the 550 at `RCPT`. Nothing is accepted and lost on the
+  server, but a JMAP client that ignores `deliveryStatus` shows the mail as sent: the webmail must read it after
+  sending (or pre-check local recipients) and tell the sender. `stack:verify` pins this behaviour.
 
 ## Events from Stalwart (Phase 1 prototype)
 

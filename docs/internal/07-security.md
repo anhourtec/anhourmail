@@ -1,6 +1,6 @@
 # 07 — Security
 
-Last updated: 2026-10-29 (profile photos).
+Last updated: 2026-10-29 (staff support access; profile photos).
 
 ## Threat model
 
@@ -11,7 +11,7 @@ Last updated: 2026-10-29 (profile photos).
 | T3  | Account takeover (credential stuffing, phishing)        | Accounts, sending reputation            | Rate limits on auth (`rate-limits.md`), lockout, TOTP/passkeys, new-device alerts, app passwords for clients, compromised-account detection                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | T4  | Cross-account data access (IDOR)                        | All account data                        | Permission + scope checks in services; 404 for out-of-scope ids; RBAC harness with cross-account tests on every route (rule 25)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | T5  | Privilege escalation (member → admin, customer → staff) | Account control                         | One RBAC matrix; critical permissions non-delegable; last-owner guard; harness tests escalation attempts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| T6  | Staff abuse                                             | Customer trust                          | Act-as Global/Support only, time-limited, reason required, banner, audited, visible to the customer; no mail-content access path in the console                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| T6  | Staff abuse                                             | Customer trust                          | Act-as (ADR-0023) Global/Support only, read-only (Auditor role in one account, platform roles set aside), fresh step-up, written reason, 30 min (4 h cap), bound to one console session, never into staff accounts, banner, every action audited with `on_behalf_of`, visible to the account's admins and emailed to its Owners; no mail-content access path in the console and no webmail while acting                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | T7  | Spam/abuse from our platform                            | IP and domain reputation, CASL exposure | Sign-up gating, phone verification, trust tiers, fail-closed send counters, Stalwart throttles, outbound scanning (`03-anti-spam-and-abuse.md`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | T8  | Stalwart management API exposure                        | Every mailbox                           | Internal network only; three scoped API keys, one per job (web: app passwords + managed Sieve; worker: directory, no mailbox access; scheduler: + read-only script audit — ADR-0020 "Credential split"), IP allow-lists, start-up scope checks. The provisioning key's `sysAccountUpdate` can still set a password on any account (→ read mail, or master-user via `svc-ops`/`svc-audit`), so in production an internal **management proxy** refuses credential writes (except a mailbox password replacement on a User-role customer account carrying the web app's HMAC grant — residual: web and worker compromised together can set a customer password) and app-password writes on service accounts, the per-minute service-account check and the app-password reconciler report any that slip through, and NGINX refuses `svc-*`/`%`/Bearer logins publicly. Never the recovery admin in prod; NGINX blocks `/api`, `/admin`, raw `/jmap` publicly |
 | T9  | Token or secret leakage                                 | Stalwart tokens, Stripe keys, DKIM keys | Key ring encryption with AAD; write-only secrets; redaction list in logs and audit; no tokens in the browser                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -470,6 +470,34 @@ data-am-quote`) becomes `blockquote type="cite"` again when a reply quotes it. T
   CDATA, idempotence; the toolbar's output kept unchanged; every grammar's accepted and rejected values, decoded
   escapes and comments, `var()`/`env()`/`attr()`; `<font>` attributes; indents vs quotes in the text part).
 
+## Signatures
+
+Decision 2026-10-29 (05-webmail.md "Signatures", ADR-0014): signatures are untrusted HTML that is stored, shown in the
+editor, inserted into every message and copied to the mail server's identities, so they get the strictest mode of the
+outgoing sanitiser (`cleanSignature` in `apps/web/src/server/webmail/signature-html.ts`, `embeddedImagesOnly`):
+
+- **Sanitised on the server on every save** (the editor runs the same code only to show what is kept), and again by
+  the composer before it inserts one (with the same options), and again with the whole message when the draft is
+  saved. Everything the outgoing sanitiser removes from messages is removed.
+- **No remote anything:** https and `cid:` images are removed, and so is every CSS declaration with a `url()`
+  (backgrounds too). A signature never makes the reader's app fetch from a server, so it can't carry a tracking
+  pixel, and the editor never fetches either.
+- **Embedded images only:** `data:` PNG, JPEG, GIF or WebP whose decoded first bytes match the declared type
+  (`dataImageMatchesType`; an HTML or SVG payload labelled `image/png` is removed), each at most 64 KB as a file, at
+  most 3, the whole signature at most 300 KB of HTML and a mailbox's signatures at most 1 MB together
+  (`WEBMAIL_SIGNATURES`). The request body is read with a cap
+  before it is parsed; the core service re-checks the size and the name (1–32 characters, control and format
+  characters removed); Postgres `CHECK`s back both.
+- **Scope:** every route is the session's own active mailbox (account pinned with `X-Webmail-Account`); another
+  mailbox's signature id is not found (404), the same as an unknown one. Writing the identity copy uses the person's
+  own session through the BFF; the browser's JMAP proxy still refuses `Identity/set`.
+- **Logs and audit:** never the name or content — ids, sizes, image counts and which fields changed only. A refused
+  identity copy is logged with the mail server's error type only.
+- Tests: `signature-html.test.ts` (remote, `cid:`, `http:` and mislabelled images removed, CSS `url()` removed,
+  scripts, styles and handlers removed, caps), `signatures.test.ts` (names, count, defaults, other mailboxes 404,
+  audit without content), `settings.test.ts` (server-side sanitising, identity copy), the routes' 401/403 test and
+  the integration test against Stalwart.
+
 ## Authentication results in the webmail
 
 Decision 2026-10-28: "Show original" (SPF, DKIM, DMARC) and the reader's "mailed-by" / "signed-by" show only the
@@ -616,6 +644,33 @@ same-origin`, `Content-Disposition: inline`, cached `private` (a year under the 
 - **Webmail lookups** (`POST /api/webmail/avatars/lookup`, ≤ 100 addresses) answer only for mailboxes in the accounts of
   the session's own mailboxes, so they can't be used to learn anything about other accounts' addresses; the addresses
   travel in the body, never the URL or access log.
+
+## Staff support access (act-as)
+
+ADR-0023; roles.md guard rail 4. The threat is a staff member (or a stolen staff session) reading or changing a
+customer's account without the customer knowing.
+
+- **No second authorisation path.** The acting actor is built in one place (`getActorAndSession` → core
+  `actingActor`): the staff member's own identity, platform roles set aside, one membership (the target account,
+  `ACT_AS_ACCOUNT_ROLE` = `auditor`). Every service checks permission and scope as for anyone else, so writes and
+  owner-only actions are 403 and other accounts 404 by construction. Services that must never run during act-as
+  (mailbox passwords, app passwords, making users, staff tools) also refuse on `actor.actingAs` as defence in depth.
+- **Step-up and reason.** Start and renew need a fresh step-up of that console session (the strongest factor the staff
+  member holds) and a reason (10–500 characters, control characters collapsed) that the account's admins see and the
+  Owners are emailed — staff are told never to paste secrets. Rate limit `sensitive` (fail closed).
+- **Scope in time.** 30 minutes per start or renewal, 4 hours at most from the start, bound to the console session
+  (`auth_session_id`); expired rows are never honoured (checked on every request); the scheduler closes and audits
+  expired, signed-out and role-removed sessions.
+- **Rule 28.** Never into an account where anyone holds a platform role or a company address, subdomains included
+  (403 `staff_account`), so staff can't read colleagues' accounts this way. Re-checked on every request while acting:
+  staff joining meanwhile drops the session at once (closed by the scheduler as `staff_account`).
+- **Races.** One unclosed session per staff member is a partial unique index, not just a read-then-insert check.
+- **Nothing of theirs in the customer's log.** Profile and photo writes, their own included, are refused while acting.
+- **Step-up reuse.** A step-up from the last 5 minutes of the same console session counts (accepted, ADR-0023).
+- **Future read endpoints** an Auditor can reach (message trace and similar) must stay metadata-only.
+- **Visibility.** Banner on every page; every write and refusal audited as staff with `on_behalf_of`; start, renewal
+  and end in the account's log and the platform log; Owners emailed at start (system layout, no tracking).
+- **No mail.** No webmail link, handoff or session while acting; the console has no mail-content path.
 
 ## Review process
 

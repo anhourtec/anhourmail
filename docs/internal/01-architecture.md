@@ -77,7 +77,9 @@ mail clients ─► Stalwart 465/587/993/995 (TLS by Stalwart itself)    MX traf
 - **Webmail settings are split by what they control** (05-webmail.md "Settings"): display preferences per mailbox in
   Postgres (`webmail_preference`); a person's own mail flow (automatic replies, forwarding, junk lists) in one
   managed Sieve script in their Stalwart account, written by the BFF with their own token (not a provisioning job:
-  it is mailbox data, like folders); sender names and signatures on their JMAP identities. Only the forwarding
+  it is mailbox data, like folders); sender names on their JMAP identities. Named signatures and their two defaults
+  are control-plane data per mailbox (`webmail_signature`), sanitised on save; the default for new messages is copied
+  to the mailbox's identities (within the mail server's 2 KB limit) for other JMAP apps. Only the forwarding
   target's confirmation lives in the control plane (`forwarding_target`), and the BFF writes a redirect only to a
   confirmed target. Mail-flow changes are audited.
 - Provisioning is a **job**, never an inline request (CLAUDE.md rule 26): write intent (e.g. mailbox `status = provisioning`), enqueue, the worker applies it through `stalwart-client` (idempotent upserts by natural key), then set `active` or `failed` with an error code.
@@ -227,6 +229,14 @@ Why the host split: the origin that renders untrusted email HTML (`mail.`) is is
 .suspendedAccountIds`, checked in `authorize()`); a person's sign-in is refused through the same session-refusal
   path as sign-in requirements (`sessionRefusalFor`). Mailboxes are suspended through the provisioning job like any
   suspension, each with a hold (`mailbox_staff_hold`) so lifting resumes only those.
+- Staff support access (act-as, ADR-0023; `packages/core/src/platform/act-as.ts`, Global and Support Administrators,
+  reason + fresh step-up): an `act_as_session` row bound to the console session. On every request
+  `getActorAndSession` (`apps/web/src/server/auth/actor.ts`) looks it up for act-as role holders only and builds the
+  actor with `actingActor`: same person, platform roles set aside, one membership (the account as
+  `ACT_AS_ACCOUNT_ROLE`, read-only) and `actingAs`. Services check permission and scope as usual (no bypass); audit
+  entries carry `on_behalf_of` (`auditActor`). The console shell shows a banner with Extend/End
+  (`components/platform/act-as.tsx`); the Owners are emailed (`server/mail/act-as-email.ts`); the scheduler's
+  `act-as-expiry` job closes and audits expired, signed-out and role-removed sessions.
 
 ## Tenancy
 
@@ -294,7 +304,8 @@ never inline in a request (CLAUDE.md rule 26).
 
 ```
 console mutation ──(same transaction)──► provisioning_job (queued)
-                                              │  claimNext: FOR UPDATE SKIP LOCKED; stale "running" (10 min) reclaimed
+                                              │  claimNext: FOR UPDATE SKIP LOCKED; stale "running" (10 min) reclaimed;
+                                              │  each claim sets a fresh lock_token
 worker (apps/worker/src/worker.ts) ───────────┘
    └─ runNextJob ─► MailServer port ─► Stalwart adapter (packages/adapters/src/stalwart) ─► JMAP x:Domain / x:Account
         (domain.ensure takes the per-name lock, MailDirectoryRepository.lockDomainName, and caches the DKIM public keys)
@@ -350,6 +361,16 @@ provisioning ──worker──► active ──suspend──► suspended ─�
 - One subject at a time: `claimNext` never claims a job whose subject has another non-stale job running (claims
   are serialised by a transaction advisory lock), and `apply()` re-reads the mailbox right before calling Stalwart,
   so an older job can't land after a newer one.
+- Claim ownership: every claim (a stale one taken over included) gets a new `lock_token`, and `complete` / `retry` /
+  `giveUp` only change a job that is still `running` under that token. Inside `apply()`, every call to Stalwart is
+  preceded by one unit of work that renews the claim (`renew`: still running under this token → `locked_at = now`) and
+  re-reads the subject's current state (pending password hash, status and suspension, aliases, catch-all), and every
+  directory write after a call renews it in the same transaction. A worker that stalled past 10 minutes and was taken
+  over therefore stops before pushing anything it read earlier (an old password hash, a lifted suspension): its run
+  ends with `lockLost`, nothing of it is recorded, the worker logs `job lock lost` (warn), and a late last failure
+  writes `platform.provisioning_failed` as `denied` `lock_lost` without marking the subject failed. The only remaining
+  window is between that check and the call itself, which the Stalwart client's request timeout (10 s) keeps far below
+  the stale limit; a worker that is still working renews its lease before each call and is never taken over.
 - The purge deletes the row (conditional on `deleting` + due, which also locks it) **before** destroying the Stalwart
   account in the same transaction: a concurrent restore waits and then gets 409; a Stalwart failure rolls back.
 - Suspend / resume / delete / restore of a mailbox assigned to an Owner or admin takes an Owner (403 for a User

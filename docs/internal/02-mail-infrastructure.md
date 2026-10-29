@@ -250,6 +250,28 @@ and 175 more`. Without `impersonate` these permissions apply to its own account 
 - ARC: verification only (sealing was removed in 0.16). SRS for forwarding.
 - Masked email (`x:MaskedEmail`) and undelete are Enterprise. We implement masked aliases as account aliases plus our own metadata (ADR-0009).
 
+### Unknown recipients
+
+Verified 2026-10-29 on v0.16.27 (handoff item 14; `stack:verify` checks every case below):
+
+- **SMTP, any listener:** mail for an address that isn't a mailbox or an enabled alias at a local domain without a
+  catch-all is refused at `RCPT` with `550 5.1.2 Mailbox does not exist.`, inbound on 25 and on authenticated
+  submission (465/587). The message is never accepted, so it can't be dropped and no backscatter is generated; the
+  sending server bounces it. This is Stalwart's directory lookup for local domains, not a setting of ours:
+  `x:MtaStageRcpt` stays at its defaults (`rewrite` and `script` false; `allowRelaying` only for signed-in senders),
+  and `upsertDomain` writes `catchAllAddress: null` for the plans' own domains (dev `dev.test`; production the system
+  domain), so nothing configures them to accept unknown names.
+- **Catch-all domains** accept any local part at `RCPT` (`x:Domain.catchAllAddress`, paid plans only, off by default;
+  "Stalwart configuration principles" above).
+- **JMAP `EmailSubmission`:** the submission is created, and Stalwart refuses the local recipient inside it:
+  `deliveryStatus[<address>]` becomes `{ delivered: "no", smtpReply: "550 5.1.2 Mailbox does not exist." }` with
+  **no DSN** to the sender (`x:DsnReportSettings` has no switch for it). This is what looked like a silent drop. The
+  webmail has to read `deliveryStatus` after sending, or pre-check local recipients, and show the sender that the
+  address doesn't exist (open item for the webmail).
+- **Production** needs no change: the ops staging plan sets nothing on the RCPT stage and creates the system domain
+  through the same `upsertDomain`. After a deploy, an `RCPT TO:<random>@<system domain>` from outside must get 550
+  (a probe that stops at `RCPT`, never sending content).
+
 ## Dev mail flow
 
 `docker compose --profile dev up` (ADR-0011):
@@ -258,5 +280,5 @@ and 175 more`. Without `impersonate` these permissions apply to its own account 
 - The dev plan (`infra/stalwart/dev-plan.ts`, applied by the seed) sets the outbound strategy so every non-local recipient routes to the **`mailpit` Relay route**. Local domains (`dev.test`, demo domains) deliver locally.
 - **Pyzor is disabled in dev only.** It is a network lookup, and Stalwart refuses to reload while it can't resolve. Production keeps it on.
 - The Stalwart admin WebUI bundle is pinned (v1.0.11, sha256-checked), served via `file://` `resourceUrl` from a read-only mount, because Stalwart has no egress. Stalwart needs one restart after the bundle changes.
-- `npm run stack:verify` proves it: alice → bob over JMAP; external recipient → Mailpit; `curl` from the Stalwart container to the internet fails.
+- `npm run stack:verify` proves it: alice → bob over JMAP; external recipient → Mailpit; `curl` from the Stalwart container to the internet fails; unknown local recipients get 550 at `RCPT` (25 and 465) while a throwaway catch-all domain accepts them, and a JMAP submission to one reports the 550 in `deliveryStatus`.
 - Tests that need "external" delivery use a second local domain or Mailpit. Nothing leaves the machine (rule 19).

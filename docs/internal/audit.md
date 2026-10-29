@@ -1,6 +1,6 @@
 # Audit
 
-Last updated: 2026-10-29 (profile photo events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
+Last updated: 2026-10-29 (staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
 
 Every meaningful action is recorded, tamper-evident, searchable and visible to the right people. Audit is a core module, not a logging side effect.
 
@@ -28,11 +28,11 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `vacation` | `vacation.changed` |
 | `junk_rules` | `junk_rules.changed` |
 | `identity` | `identity.changed` |
-| `webmail` | `webmail.preferences_changed` |
+| `webmail` | `webmail.preferences_changed`, `webmail.signature_added`, `webmail.signature_changed`, `webmail.signature_removed`, `webmail.signature_defaults_changed` |
 | `billing` | `billing.plan_changed`, `billing.payment_succeeded`, `billing.payment_failed`, `billing.refunded`, `billing.suspended`, `billing.reactivated` |
 | `trust` | `trust.tier_changed`, `trust.limits_changed`, `trust.restricted`, `trust.suspended`, `trust.unsuspended` |
 | `abuse` | `abuse.report_received`, `abuse.report_resolved` |
-| `staff` | `staff.role_granted`, `staff.role_revoked`, `staff.act_as_started`, `staff.act_as_ended`, `staff.account_viewed`, `staff.credentials_reset` |
+| `staff` | `staff.role_granted`, `staff.role_revoked`, `staff.act_as_started`, `staff.act_as_renewed`, `staff.act_as_ended`, `staff.account_viewed`, `staff.credentials_reset` |
 | `data` | `data.export_requested`, `data.export_downloaded`, `data.import_started`, `data.import_finished`, `data.deletion_requested`, `data.deleted` |
 | `platform` | `platform.settings_changed`, `platform.admin_bootstrapped`, `platform.secret_changed`, `platform.stalwart_upgraded`, `platform.provisioning_failed`, `platform.reconciler_drift`, `platform.mailboxes_requeued`, `platform.mailbox_purged`, `platform.audit_chain_broken` |
 | `audit` | `audit.exported` |
@@ -73,6 +73,14 @@ with "sign out everywhere else" or a reset shows as `passkeysRemoved` in that en
 other sessions and forgetting trusted browsers (meta `otherSessionsRevoked`, `sessions`, `trustedDevices`).
 `account.sign_in_policy_changed` is written in the account's scope (meta `previousPolicy`, `newPolicy`); an attempt by
 someone else is `denied`. The Security page shows each entry's network part and a browser/system summary only.
+
+Aliases (`packages/core/src/aliases/service.ts`), in the account scope with the alias as the target (label = its
+address): `alias.toggled` / `masked_alias.toggled` meta `enabled`, plus `adminLocked: true` when an administrator
+(`alias.manage.any`) turned off someone else's alias and `adminLockLifted: true` when an administrator turned a locked
+one back on. Its own person trying to turn a locked alias on, or delete it, is `denied` `alias_admin_locked` on the
+same `*.toggled` / `*.deleted` action. A create over the plan's daily cap (`aliasCreationsPerDay`, per UTC day, counted
+from creations) is `alias.created` / `masked_alias.created` `denied` `alias_daily_limit` (meta `kind`, `perDay`);
+nothing is created. No new action names: the catalogue above is unchanged.
 
 Mailbox lifecycle: `mailbox.suspended` and `mailbox.unsuspended` (resume), `mailbox.deletion_scheduled` (meta: the
 status it came from, `purgeAfter`, alias count) and `mailbox.restored` are written by the person in the console;
@@ -133,7 +141,9 @@ meta `by: "self"`). A console reset held because the login's address is a mailbo
 `auth.password_reset_requested` `denied` `mailbox_password_pending` in the platform log, with the user id as target
 and **no address** (meta `reason`: `held`, or `check_failed` when the check itself failed). A `mailbox.password` job
 that gives up on an administrator's password writes `platform.provisioning_failed` with meta `adminPasswordKept: true`
-(the hash stays so the console can ask for it again).
+(the hash stays so the console can ask for it again). A worker whose claim on a job went stale and was taken over by
+another worker records nothing of its own outcome; if that outcome was the last failure it writes
+`platform.provisioning_failed` `denied` `lock_lost` (meta `jobId`, `attempts`) and leaves the subject as it is.
 
 "Make this a user" (a person-less mailbox): `mailbox.made_user` (target = the mailbox, label its address; meta:
 `userId`, `role`, `profileFields` — names only — and `appPasswordsRevoked`, how many of the mailbox's app passwords
@@ -146,6 +156,14 @@ of the optional profile fields that changed, never their values — and `self`).
 account's log; the person's own edit from their Profile page is written to every account they belong to (the platform
 log when they belong to none), so its admins see it. A User Administrator editing an admin's profile is `denied`
 (`forbidden`); an admin editing someone who also belongs to another account is `denied` (`other_account`).
+
+Webmail signatures (05-webmail.md "Signatures"), in the mailbox's account as a `system` actor named by the mailbox
+address, target = the mailbox: `webmail.signature_added` (meta `signature` id, `bytes` of HTML, `images`, `signatures`
+after the change, `madeDefault` for the mailbox's first one, `broughtOver` when the old single signature was brought
+over), `webmail.signature_changed` (`signature`, `fields`: `name` and/or `content`, `bytes`/`images` for content),
+`webmail.signature_removed` (`signature`, `wasDefaultNew`, `wasDefaultReply`), `webmail.signature_defaults_changed`
+(`newMessage`, `reply`: whether each is set). Never a signature's name or content. A refusal (a taken name, too many,
+another mailbox's id) is `failed` with its code. The `signature.changed` area stays reserved for admin templates.
 
 Profile photos (ADR-0022): `account.avatar_changed` / `account.avatar_removed` for a person (target = the person, label
 their sign-in email) and `mailbox.avatar_changed` / `mailbox.avatar_removed` for a mailbox without a person (target =
@@ -178,6 +196,23 @@ newest first with a `before` cursor.
 Signed-out and identity events carry the request's client address (TRUST_PROXY rules, the same one the rate limiter
 uses): `account.created` (sign-up), `auth.password_reset_requested`, `auth.email_verification_sent` and
 `auth.email_verified`, like every sign-in event. The IP is the only request detail they keep (no user agent).
+
+Staff support access (act-as, ADR-0023; roles.md guard rail 4): `staff.act_as_started` (meta `reason` — the staff
+member's own words, shown to the account's admins —, `minutes`, `access: "read_only"`, `actAsSessionId`),
+`staff.act_as_renewed` (`reason`, `until`, `actAsSessionId`) and `staff.act_as_ended` (`ended`: `staff`, `expired`,
+`signed_out`, `role_removed` or `staff_account` — someone in the account became staff meanwhile; `minutes`; for the scheduler's entries also `staff` — the staff email — and
+`staffRole`), each in the **account's log** with a copy in the **platform** log (target `account`, label the account
+name). Start is a staff path; renew and end are by the acting staff member; expiry, sign-out and a removed role are
+closed by the `act-as-expiry` job as a `system` actor. Refusals are `denied`: `not_found` and `forbidden` before the
+account is known (platform log only), `step_up_required`, `staff_account` (someone in the account holds a staff role
+or a company address, rule 28) and `act_as` (already acting); a suspended account or a second open session is
+`failed` `conflict`. A reason that fails validation is refused before anything is recorded. Profile and photo changes
+while acting, the staff member's own included, are `denied` `act_as` (`account.profile_changed`,
+`account.avatar_changed`, `account.avatar_removed`), so no edit of theirs lands in the customer's log. The staff
+member's email is shown to the account's admins on these entries (ADR-0023, rule 49). **Everything done while
+acting** — every service call that writes, and every refusal — carries `on_behalf_of` and actor type `staff`, so the
+"Anhourtec staff" filter and `describeActor` ("Anhourtec staff · Support access · <role> · <email>") show it to the
+account's admins (rule 49). Reads aren't audited one by one, like every other read.
 
 Staff suspension (`platform.account.suspend`, roles.md guard rail 17): `trust.suspended` and `trust.unsuspended`, always
 by staff (`staffPath`), written through `mutation()` with `copies` so one unit of work records every scope. An
@@ -218,7 +253,7 @@ Columns as in `packages/adapters/src/db-postgres/schema.ts` (`audit_log`):
 | `at`                                                          | UTC                                                                                                     |
 | `actor_type`                                                  | `user` / `staff` / `system` / `anonymous` (`api_token` reserved for API tokens, not built)              |
 | `actor_user_id`, `actor_email`, `actor_role`, `actor_account_id` | Snapshots keep entries readable after deletion; a system actor's name is in `actor_email`            |
-| `on_behalf_of`                                                | JSON `{ userId, email }` of the staff member during act-as (`auditActor`, `packages/core/src/audit/record.ts`) |
+| `on_behalf_of`                                                | JSON `{ userId, email, accountId, sessionId }` during staff act-as: the staff member, the account they act in and the act-as session id; the actor is then `staff` with the platform role (`auditActor`, `packages/core/src/audit/record.ts`; ADR-0023) |
 | `action`                                                      | From the catalogue                                                                                      |
 | `target_type`, `target_id`, `target_label`                    | e.g. `domain`, id, `example.com`                                                                        |
 | `result`, `error_code`                                        | `success` / `denied` / `failed`                                                                         |
