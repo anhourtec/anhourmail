@@ -622,6 +622,26 @@ There is no OAuth token-exchange (RFC 8693) grant and no admin-mints-user-token 
 
 ---
 
+### Console handoff without the password (verified on the pinned v0.16.27, 2026-10-29)
+
+For ADR-0024, with a throwaway domain and account and the real service keys (`issueTestKeys`), destroyed afterwards;
+pinned in `packages/adapters/src/stalwart/handoff.int.test.ts`:
+
+- **No grant to mint a user token without a credential.** Discovery lists `authorization_code`, `refresh_token` and
+  `urn:ietf:params:oauth:grant-type:device_code` only (no RFC 8693 token exchange). `POST /api/auth` with the
+  operations API key as `accountSecret`, or as `Authorization: Bearer`, for a customer account → `{"type":"failure"}`.
+- **A throwaway app password works:** `x:AppPassword/set { accountId }` with the operations key, `expiresAt` 60 s and
+  `Disable` of every known and self-service permission except `authenticate` → `/api/auth` accepts it; the token has
+  the account's 186 customer permissions; `Mailbox/get` works. HTTP Basic with it on `/jmap/session` answers 200 (the
+  session document), methods are `forbidden`.
+- **Destroying it keeps the token and the refresh grant working** (the token key comes from the account's Password,
+  not the credential used). A later password change revokes them (401, refresh `invalid_grant`).
+- A destroyed credential, or one past `expiresAt`, is refused at `/api/auth` (`failure`); an expired one stays listed
+  (`x:AppPassword/get`, `x:Account.credentials` with `description`, `createdAt`, `expiresAt`, `permissions`) until it
+  is destroyed. `expiresAt` takes whole seconds (`2026-10-29T12:01:01Z`).
+- `maxAppPasswords` (default 5) counts it; `quotas.maxAppPasswords: 6` on the account (set by `mailbox.ensure` with the
+  provisioning key) leaves room for it next to five app passwords.
+
 ## 7. Outbound controls
 
 - **Strategy model** [S32]: the `MtaOutboundStrategy` singleton has four expressions (`route`, `schedule`, `connection`, `tls`). Each returns the name of an `MtaRoute`, `MtaDeliverySchedule`, `MtaConnectionStrategy` or `MtaTlsStrategy` object. A missing name falls back silently to built-ins and logs `smtp.id-not-found`.

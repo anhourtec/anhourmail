@@ -28,7 +28,7 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `vacation` | `vacation.changed` |
 | `junk_rules` | `junk_rules.changed` |
 | `identity` | `identity.changed` |
-| `webmail` | `webmail.preferences_changed`, `webmail.signature_added`, `webmail.signature_changed`, `webmail.signature_removed`, `webmail.signature_defaults_changed` |
+| `webmail` | `webmail.preferences_changed`, `webmail.signature_added`, `webmail.signature_changed`, `webmail.signature_removed`, `webmail.signature_defaults_changed`, `webmail.handoff_started`, `webmail.handoff_redeemed` |
 | `billing` | `billing.plan_changed`, `billing.payment_succeeded`, `billing.payment_failed`, `billing.refunded`, `billing.suspended`, `billing.reactivated` |
 | `trust` | `trust.tier_changed`, `trust.limits_changed`, `trust.restricted`, `trust.suspended`, `trust.unsuspended` |
 | `abuse` | `abuse.report_received`, `abuse.report_resolved` |
@@ -164,6 +164,19 @@ over), `webmail.signature_changed` (`signature`, `fields`: `name` and/or `conten
 `webmail.signature_removed` (`signature`, `wasDefaultNew`, `wasDefaultReply`), `webmail.signature_defaults_changed`
 (`newMessage`, `reply`: whether each is set). Never a signature's name or content. A refusal (a taken name, too many,
 another mailbox's id) is `failed` with its code. The `signature.changed` area stays reserved for admin templates.
+
+Console → webmail handoff (ADR-0024; 05-webmail.md "Console handoff"), in the mailbox's account, target = the
+mailbox (label its address once it is known to be the person's own): `webmail.handoff_started` when the console mints
+the one-time code — `success`, or `denied` with `act_as`, `not_found` (someone else's, a shared, unassigned or unknown
+mailbox; no label), `mailbox_unavailable` (meta `state` when the webmail access gate said so),
+`password_change_required` or `step_up_required`, or the matrix's own refusal (Auditors and staff acting as someone:
+`forbidden`, with `on_behalf_of`); and `webmail.handoff_redeemed` when the webmail origin redeems it — `success`,
+`denied` with `wrong_browser` (no verifier or the wrong one; the code is used up), `expired`, `session_ended` (the
+console session is gone or no longer meets a sign-in requirement; then the actor is `system` "webmail handoff" and meta
+`userId` names the person), `act_as`, `not_found`, `mailbox_unavailable`, `password_change_required`,
+`step_up_required`, or `failed` when the mail server refused or couldn't be reached. Never the code, the verifier, the
+challenge or the throwaway credential. A code nobody knows (or one already used) writes no row: it names nobody
+(rate-limited, logged).
 
 Profile photos (ADR-0022): `account.avatar_changed` / `account.avatar_removed` for a person (target = the person, label
 their sign-in email) and `mailbox.avatar_changed` / `mailbox.avatar_removed` for a mailbox without a person (target =

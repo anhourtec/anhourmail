@@ -155,9 +155,11 @@ form and Security page post to `/api/auth/*` directly and do the WebAuthn ceremo
 
 Built in Phase 4 slice 1 (2026-10-22; ADR-0018):
 
-1. The webmail has its own sign-in form on `mail.anhourmail.com` (mailbox address + mailbox password). The console's
-   **Open webmail** link only pre-fills the address (`/sign-in?address=…`); no console cookie or handoff code reaches
-   the webmail. The webmail API (`/api/webmail/*`) is served on the webmail origin only, and the console API never is
+1. The webmail has its own sign-in form on `mail.anhourmail.com` (mailbox address + mailbox password); nothing in a URL
+   pre-fills it. The console's **Open webmail** starts the handoff instead (ADR-0024, 05-webmail.md "Console handoff"):
+   a verifier cookie set by the webmail origin, a one-time code minted by the console for the person's own mailbox and
+   passed in a URL fragment, and a throwaway mail-server credential the BFF uses once and destroys. No console cookie
+   reaches the webmail. The webmail API (`/api/webmail/*`) is served on the webmail origin only, and the console API never is
    (`server/host-routing.ts`).
 2. `POST /api/webmail/auth` runs Stalwart's **headless OAuth code flow with PKCE** (`packages/stalwart-client`
    `oauth.ts`, behind `server/adapters/stalwart-oauth.ts`, client `anhourmail-webmail`): `POST /api/auth` → client

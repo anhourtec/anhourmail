@@ -62,9 +62,10 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
    verification (provider to choose) — **free addresses built 2026-10-23** (ADR-0021: claim from the console with a
    confirmed email, one per Free account, name rules, no reuse, staff create; SMS/OTP and Phase 6 sending limits for
    free mailboxes still open); **since built:** multipart text + HTML sending (the only mail-tester deduction on the
-   first pre-staging run), Add a user, shared addresses and Make this a user; console → webmail session handoff, data
-   export and account deletion, act-as (**built 2026-10-29**, ADR-0023: read-only support access, audited, visible to
-   account admins), remote-image proxy, push sync in
+   first pre-staging run), Add a user, shared addresses and Make this a user; console → webmail session handoff
+   (**built 2026-10-29**, ADR-0024: one-time browser-bound code, throwaway mail-server credential, own mailbox only,
+   never while acting), data export and account deletion, act-as (**built 2026-10-29**, ADR-0023: read-only support
+   access, audited, visible to account admins), remote-image proxy, push sync in
    the webmail (it polls every 30 s today), webmail settings part 2 (rules, templates), and the leftover open items
    in the handoff (alias admin-lock, daily alias creation cap, provisioning-queue lock token, unknown-recipient
    rejection at SMTP time).
@@ -151,8 +152,8 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
   message with authentication results), compose/send/undo in rich text or plain text (sanitised HTML sent as
   multipart/alternative, quoted replies), actions, restore from Trash, search, several mailboxes, contacts, automatic
   refresh with a new-mail chime and desktop notifications, settings part 1 (incl. automatic replies, confirmed
-  forwarding, junk, managed Sieve). Not built: image proxy, push sync (polling today), session handoff, settings part
-  2, calendar.
+  forwarding, junk, managed Sieve). Not built: push sync (polling today), settings part 2, calendar. Console → webmail
+  handoff built 2026-10-29 (ADR-0024).
 - **Exit:** performance budgets met in Playwright perf tests; XSS corpus (HTML email test suite) passes; Playwright MCP pass light/dark at 1440/390 as every role that can open webmail.
 
 ## Phase 5 — Billing and migration

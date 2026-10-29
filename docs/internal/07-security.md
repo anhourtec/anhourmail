@@ -302,6 +302,41 @@ Built 2026-10-28. Code: `apps/web/src/server/webmail/known-mailboxes.ts`, `apps/
   signed link forwarded within its minute shows the same fixed text elsewhere (accepted: it needs one's own blocked
   session and grants nothing).
 
+## Webmail handoff (ADR-0024)
+
+The console's **Open webmail** signs the person in to their own mailbox without its password (flow: 05-webmail.md
+"Console handoff").
+
+- **No mailbox password anywhere.** The web app's operations key mints a throwaway app password on the mailbox
+  (description `AnhourMail webmail handoff`, `Disable` of every known and self-service permission except
+  `authenticate`, `expiresAt` 60 s), the BFF exchanges it once at Stalwart's OAuth endpoint and destroys it in a
+  `finally`; the token it leads to is an ordinary webmail token (verified on v0.16.27: it survives the destroy, a
+  password change revokes it). The secret lives only in that function; it isn't logged (`secret` is redacted) or
+  audited. A destroy that fails leaves a credential Stalwart refuses after 60 s; the next handoff clears it; the
+  reconciler leaves out only credentials matching description, exact permissions and a lifetime ≤ 120 s.
+- **Bound to the browser.** The code (32 random bytes, 60 s, one use via `GETDEL`, stored under its SHA-256) is bound
+  to the SHA-256 of a verifier that only this browser's webmail-origin cookie holds (HttpOnly, `SameSite=Strict`,
+  `__Host-`). The code travels only in a URL fragment, never in a query string, a log line or a `Referer`; the page
+  drops it from history at once. A copied code is useless elsewhere, even to script on the console origin (the cookie
+  belongs to the webmail origin).
+- **Bound to the console session and the person.** Minting needs `webmail.open.own` (every account role but Auditor —
+  which is also what staff hold while acting, so act-as never reaches mail; also refused explicitly) and a mailbox
+  whose `userId` is the person (404 otherwise). Redemption rebuilds the person from the database and needs the same
+  console session to still exist, without support access open and still meeting the account's sign-in requirements.
+- **Respects every gate:** the webmail access gate (suspended person or mailbox, staff suspension, deleting, gone; read
+  uncached), the first-sign-in password change (refused: the person signs in with the given password), the
+  console's own gates (console password change, required factors, account suspension) through the matrix.
+- **Step-up and the console session (security review, 2026-10-29):** minting needs a recent step-up on the console
+  session, as app passwords do (a fresh sign-in counts; the console page asks "Confirm it's you" in place), and the
+  redemption checks it is still fresh. The console page continues by itself only for a navigation the browser marks
+  same-site (`Sec-Fetch-Site`), so a link from another site can't make it mint. A code presented without the right
+  verifier is used up. The webmail session it opens ends with its console session (sign-out, sign out everywhere,
+  revoke, password reset; ≤ 30 s), and is deleted again if the audit entry can't be written. Mail-server writes scale
+  with webmail opens (one create + destroy each), bounded by the rate limits; each runs under the mailbox's credential
+  lock, so it can't shift the list position a revocation patches.
+- **No new key scope, no management proxy change:** `x:AppPassword/set` on customer accounts, `/api/auth` and
+  `/auth/token` were already allowed for the web app; the proxy still refuses service accounts and `%`.
+
 ## App passwords
 
 Built 2026-10-22 (ADR-0020). Code: `packages/core/src/app-passwords`, `packages/stalwart-client/src/app-passwords.ts`

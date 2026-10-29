@@ -466,11 +466,48 @@ on v0.16.27 (2026-10-21):
    as "signed out" and shows the sign-in form.
 
 The mailbox secret therefore comes from the user at webmail sign-in; it is used once and never stored (mailbox
-passwords are argon2id PHC strings in Stalwart, so we cannot derive tokens without the user). The console → webmail
-link (ADR-0003) used to pre-fill the address with `?address=`; since 2026-10-23 nothing in the URL pre-fills the
-sign-in form, because a sign-in link carrying an email address is the shape of a phishing link (browsers' phishing
-checks flag it) and anyone could craft one (`app/webmail/sign-in/page.tsx`). The console's **Open webmail** links to
-the bare sign-in page, and only for people with an account that isn't suspended.
+passwords are argon2id PHC strings in Stalwart, so we cannot derive tokens without the user) — or, from the console,
+from a throwaway credential the control plane mints for one sign-in ("Console handoff" below). Nothing in a URL ever
+pre-fills the sign-in form: a sign-in link carrying an email address is the shape of a phishing link (browsers'
+phishing checks flag it) and anyone could craft one (`app/webmail/sign-in/page.tsx`).
+
+### Console handoff (ADR-0024, 2026-10-29)
+
+The console's **Open webmail** (person menu, sidebar, home quick actions; customers with an account that isn't
+suspended, never while acting as someone) opens the person's **own** mailbox without its password. Three top-level
+navigations, nothing secret in any URL a server sees:
+
+1. `GET <webmail>/api/webmail/handoff[?mailbox=<id>]` (webmail origin): a fresh 32-byte verifier goes into an
+   HttpOnly, `SameSite=Strict`, two-minute cookie (`__Host-am.handoff`; `am.handoff` in dev) and the browser is sent
+   (303) to `<console>/open-webmail?challenge=<SHA-256 of it>` (plus the mailbox id, never an address).
+2. The console page (`app/(console)/open-webmail`) lists the person's own mailboxes (`handoffMailboxes`: their
+   `userId`, in accounts where they hold `webmail.open.own`; shared and unassigned mailboxes never) and, with exactly
+   one that can be opened and a navigation the browser marks `Sec-Fetch-Site: same-site`/`same-origin` (the 303 from
+   the webmail origin), continues by itself; otherwise it waits for **Open**. Minting needs a recent step-up on the
+   console session (403 `step_up_required` → the page shows "Confirm it's you" in place, then continues): `POST /api/accounts/:accountId/mailboxes/:mailboxId/webmail-handoff`
+   `{ challenge }` → `startWebmailHandoff` (core) checks and audits, stores a 60-second code in Redis (key = its
+   SHA-256) bound to the person, the console session id and sign-in method, the account, the mailbox and the challenge,
+   and answers `<webmail>/handoff#<code>`. The page moves there: the code is in the **fragment**.
+3. The webmail page (`app/webmail/handoff`, `components/webmail/handoff.tsx`) removes the fragment from the address bar
+   and history, then `POST /api/webmail/handoff { code }` (same origin; the verifier cookie goes with it).
+   `redeemWebmailHandoff` takes the code once (`GETDEL`), compares the verifier's SHA-256 with the challenge, rebuilds
+   the person from the database and re-checks the console session (still there, no support access open, still meeting
+   the account's sign-in requirements), the matrix, the mailbox (still theirs, active, no password change owed) and the
+   access gate (uncached). Then `WebmailService.openHandoff`: the operations key mints an app password on the mailbox
+   (every permission but `authenticate` off, `expiresAt` 60 s; expired leftovers cleared first), the BFF exchanges it
+   once at `/api/auth` (the person's address forwarded), destroys it, checks the JMAP session names exactly that
+   mailbox, and stores an ordinary webmail session that records its console session: it ends when that console session
+   ends (sign-out, "sign out everywhere", a revoke, a password reset; checked on every webmail request, "alive" cached
+   ≤ 30 s). The verifier cookie is cleared on every answer; a webmail session the browser already had is ended; if the
+   audit entry can't be written the new session is deleted again. Credential changes on the mailbox run under its
+   credential lock (`lockCredentials`), shared with the revocation job.
+
+Refusals land on a page that says why and links to the sign-in page: a code nobody knows or already used (400
+`handoff_invalid`), another browser (409 `handoff_refused`, reason `wrong_browser`; the code is used up),
+the mailbox not usable or owing its first-sign-in password change (409 `handoff_refused` — the person signs in with
+the password they were given), act-as (403). Customer accounts have `maxAppPasswords` 6 (our 5 + one handoff slot,
+set by `mailbox.ensure`). Rate limits `webmailHandoff` and `webmailHandoffIp` (rate-limits.md); audit
+`webmail.handoff_started` / `webmail.handoff_redeemed` (audit.md). Security notes: 07-security.md "Webmail handoff".
 
 ### First-sign-in password step (2026-10-24, hardened 2026-10-28)
 
