@@ -91,9 +91,10 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 ## Where we are and what's next
 
 Pre-staging has run on one VM since 2026-10-23 from the private ops repository (`anhourmail-ops`, following the
-local-only `deploy.md`); as of 2026-10-29 the work since then (Add a user, shared addresses, DKIM TXT keys, rich-text
-compose, unverified-domain expiry) waits for the next pre-staging deploy. The next phases, in order, with exit
-criteria, are in `docs/internal/09-roadmap.md` "Path to production":
+local-only `deploy.md`); as of 2026-10-29 the work since then (Add a user, DKIM TXT keys, the image proxy, rich-text
+compose and signatures, profile photos, staff support access, the console → webmail handoff, data export and
+account deletion, alias limits) waits for the next pre-staging deploy. The work plan stops before Phase 6. The next
+phases, in order, with exit criteria, are in `docs/internal/09-roadmap.md` "Path to production":
 
 1. pre-staging on one VM (real DNS, certificates, rDNS, external mail, backups and a restore drill);
 2. product gaps a beta needs (free sign-up with SMS/OTP, webmail session handoff, data export and deletion, act-as,

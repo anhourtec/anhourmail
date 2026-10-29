@@ -51,14 +51,16 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
 
 **Next session, in order** (details: the two paragraphs above and the handoff's "Next phases" 0–0f):
 
-1. The remote-image proxy, so "Load images" works.
+1. ~~The remote-image proxy~~ — done 2026-10-29 (signed links per session and mailbox, SSRF-guarded fetch; auto-load
+   only for a verified From).
 2. ~~One composer that starts in rich text, with plain text moved into a "More options" menu~~ — done 2026-10-29.
-3. Folder counts that go stale, like Drafts still showing 1 after the last draft is discarded.
+3. ~~Folder counts that go stale~~ — done 2026-10-29 (one coalesced reload after every change; the poll includes
+   `Mailbox/changes`).
 4. ~~The Archive fix~~ — done 2026-10-29: Stalwart's `x:Email.defaultFolders` creates Archive for new mailboxes,
    a one-off backfill in the Stalwart bootstrap adds it to existing ones, and the webmail says so when a mailbox
    has none (ADR-0014 update).
-5. Signatures: several named ones with Add / Edit / Delete, a rich editor with embedded images, and defaults for new
-   messages and for replies and forwards (pulled forward from the second wave below).
+5. ~~Signatures~~ — done 2026-10-29 (named, rich, embedded images only, defaults for new and for replies; mirrored to
+   the mail server's identity within its 2 KB limit).
 6. ~~Avatars: photo upload on console Profile and in webmail Account, synced everywhere~~ — done 2026-10-29
    (ADR-0022: one re-encoded photo per person or person-less mailbox in Postgres, served same-origin). The name check
    found the console name and the webmail sender name are separate values (now labelled so; `04-data-model.md`
@@ -156,8 +158,9 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
   log, staff pages and staff suspension of accounts or people, free platform addresses, sign-in security (TOTP,
   recovery codes, passkeys, breached-password check), app passwords, catch-all; refused pages answer a real 404/403.
   staff support access (act-as, read-only, ADR-0023, 2026-10-29), data export and account deletion (ADR-0025, 2026-10-29).
-  Not built: collaboration,
-  SMS/OTP gating for free sign-up.
+  Also built 2026-10-29: alias admin lock, free-tier alias limits (10 at a time, 10 new a year; paid 400 per
+  mailbox), provisioning claim tokens. Not built: collaboration and delegation (next: leavers' mailboxes to shared,
+  Full access / Send as / Send on behalf), free sign-up proof-of-work check (no SMS, maintainer decision).
 - **Exit:** RBAC harness covers every route × role; cross-account tests return 404; audit entries asserted for every mutation; a custom domain goes from add to active in ≤ 15 min in staging; a non-member can neither post to a members-only list nor send with a shared mailbox's From (integration tests); the reconciler reports ACL/membership drift.
 
 ## Phase 4 — Webmail v1 on JMAP
@@ -168,8 +171,9 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
   message with authentication results), compose/send/undo in rich text or plain text (sanitised HTML sent as
   multipart/alternative, quoted replies), actions, restore from Trash, search, several mailboxes, contacts, automatic
   refresh with a new-mail chime and desktop notifications, settings part 1 (incl. automatic replies, confirmed
-  forwarding, junk, managed Sieve). Not built: push sync (polling today), settings part 2, calendar. Console → webmail
-  handoff built 2026-10-29 (ADR-0024).
+  forwarding, junk, managed Sieve), remote images through the privacy proxy, the rich-text composer, named
+  signatures, profile photos, Archive. Console → webmail handoff built 2026-10-29 (ADR-0024). Not built: push sync
+  (polling today), settings part 2, calendar.
 - **Exit:** performance budgets met in Playwright perf tests; XSS corpus (HTML email test suite) passes; Playwright MCP pass light/dark at 1440/390 as every role that can open webmail.
 
 ## Phase 5 — Billing and migration
