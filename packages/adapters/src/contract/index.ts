@@ -1566,6 +1566,12 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         ]);
         expect(await uow.run((r) => r.appPasswords.markRevoking(mailboxId, phone.id))).toEqual([]);
         expect(await uow.run((r) => r.appPasswords.markRevoking(other.mailboxId, laptop.id))).toEqual([]);
+        // The credential-list lock (ADR-0024) can be taken, twice in one unit of work, and is gone after it.
+        await uow.run(async (r) => {
+          await r.appPasswords.lockCredentials(mailboxId);
+          await r.appPasswords.lockCredentials(mailboxId);
+        });
+        await uow.run((r) => r.appPasswords.lockCredentials(mailboxId));
         // Revoke all: the rest.
         const all = await uow.run((r) => r.appPasswords.markRevoking(mailboxId, null));
         expect(all.map((p) => p.name).sort()).toEqual(["Laptop", "Printer"]);

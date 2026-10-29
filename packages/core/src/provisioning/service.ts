@@ -45,14 +45,19 @@ async function apply(deps: Deps, mail: MailServer, job: ClaimedJob): Promise<voi
     // Subject: a mailbox. Each `revoking` app password comes off the mail server, then its row goes.
     const pending = await held((r) => r.appPasswords.revoking(job.subjectId));
     for (const p of pending) {
-      const mailbox = await held((r) => r.directory.getMailbox(job.subjectId));
-      if (mailbox?.stalwartId) {
-        await mail.revokeAppPassword({
-          externalId: mailbox.stalwartId,
-          credentialId: p.credentialId,
-          createdAt: p.credentialCreatedAt,
-        });
-      }
+      // Under the mailbox's credential lock: Stalwart removes by list position, and a console → webmail handoff
+      // credential made or cleared meanwhile would move the positions (ADR-0024).
+      await held(async (r) => {
+        await r.appPasswords.lockCredentials(job.subjectId);
+        const mailbox = await r.directory.getMailbox(job.subjectId);
+        if (mailbox?.stalwartId) {
+          await mail.revokeAppPassword({
+            externalId: mailbox.stalwartId,
+            credentialId: p.credentialId,
+            createdAt: p.credentialCreatedAt,
+          });
+        }
+      });
       await held((r) => r.appPasswords.deleteRevoked(p.id));
     }
     return;

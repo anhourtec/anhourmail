@@ -161,6 +161,7 @@ export async function createAppPassword(
         // Serialised with removing people (which revokes their app passwords) and with other creates (the limit), then
         // read again: someone removed from the account or no longer holding the mailbox gets nothing.
         await repos.accounts.lock(accountId);
+        await repos.appPasswords.lockCredentials(m.id);
         const role = (await repos.access.members(accountId)).find((x) => x.userId === actor.userId)?.role;
         const fresh = await repos.mailboxes.get(accountId, m.id);
         if (!role || !accountRoleCan(role, "app_password.manage.own") || !fresh || !ownedBy(actor, fresh)) {

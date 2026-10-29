@@ -407,6 +407,8 @@ describe("catch-all and app password jobs", () => {
     ]);
     expect(d.uow.state.appPasswords.map((p) => p.id)).toEqual(["p2"]);
     expect(d.uow.state.jobs[0]?.status).toBe("succeeded");
+    // Each removal ran under the mailbox's credential lock (ADR-0024: removals go by list position).
+    expect(d.uow.state.credentialLocks).toEqual(["m1", "m1"]);
   });
 
   it("deletes revoking rows of a mailbox that never reached the mail server, and gives up without touching domains", async () => {

@@ -98,6 +98,8 @@ export type MemoryState = {
   /** Mailboxes whose named signatures were started, and when. */
   signaturesStarted: { mailboxId: string; at: Date }[];
   appPasswords: AppPassword[];
+  /** Mailboxes whose credential-list lock a unit of work took (`AppPasswordRepository.lockCredentials`), in order. */
+  credentialLocks: string[];
   /** Mailbox password tracking (Postgres: `mailbox.pending_password_hash`, `mailbox.password_credential_id`). */
   mailboxPasswords: {
     mailboxId: string;
@@ -158,6 +160,7 @@ export const emptyState = (): MemoryState => ({
   webmailSignatures: [],
   signaturesStarted: [],
   appPasswords: [],
+  credentialLocks: [],
   mailboxPasswords: [],
   catchAll: [],
   mailboxStorage: [],
@@ -882,6 +885,10 @@ function repositories(s: MemoryState): Repositories {
   };
 
   const appPasswords: AppPasswordRepository = {
+    // Units of work run one at a time here, so the lock is only recorded (tests check who takes it).
+    lockCredentials: async (mailboxId) => {
+      s.credentialLocks.push(mailboxId);
+    },
     listByMailbox: async (mailboxId) =>
       clone(
         s.appPasswords

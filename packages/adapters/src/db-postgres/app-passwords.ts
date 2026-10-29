@@ -77,6 +77,11 @@ export class PgAppPasswordRepository implements AppPasswordRepository {
     return rows.map(toAppPassword);
   }
 
+  async lockCredentials(mailboxId: string): Promise<void> {
+    // Transaction-scoped: released at commit or rollback, so a crash can't leave it held.
+    await this.x.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`am:credentials:${mailboxId}`}, 0))`);
+  }
+
   async revoking(mailboxId: string): Promise<AppPassword[]> {
     if (!isId(mailboxId)) return [];
     const rows = await this.x

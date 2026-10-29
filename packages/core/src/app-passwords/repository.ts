@@ -11,6 +11,13 @@ export type AppPasswordRepository = {
   markRevoking(mailboxId: string, id: string | null): Promise<AppPassword[]>;
   /** The mailbox's app passwords waiting for the worker to revoke them. */
   revoking(mailboxId: string): Promise<AppPassword[]>;
+  /**
+   * Serialises every change to this mailbox's credential list on the mail server for the rest of this unit of work
+   * (a transaction-scoped lock; Postgres `pg_advisory_xact_lock`). Stalwart removes a credential by its list position,
+   * so a removal racing another add or removal on the same account (a revocation job, a console → webmail handoff
+   * credential made, destroyed or cleared) could take the wrong one. Every caller that changes that list holds it.
+   */
+  lockCredentials(mailboxId: string): Promise<void>;
   /** Deletes a row once the mail server no longer has the credential (`revoking` rows only). */
   deleteRevoked(id: string): Promise<void>;
   /**
