@@ -27,3 +27,4 @@ One decision per file, numbered, never rewritten. A later ADR supersedes an earl
 | [0021](0021-free-platform-domain-addresses.md)               | Free addresses on the platform domain: rules, allowance, no reuse             | Accepted (updated 2026-10-24)                     |
 | [0022](0022-profile-photos.md)                               | Profile photos stored once, re-encoded by us, served same-origin              | Accepted (updated 2026-10-29)                     |
 | [0023](0023-staff-support-access-act-as.md)                  | Staff support access ("act as"): read-only, time-boxed, normal checks         | Accepted                                          |
+| [0024](0024-console-to-webmail-session-handoff.md)           | Console → webmail handoff: browser-bound code, throwaway mail credential      | Accepted                                          |

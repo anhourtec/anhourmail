@@ -64,3 +64,11 @@ redirectUri, codeChallenge, codeChallengeMethod:"S256"}` returns `client_code`; 
   and is signed out everywhere else; an administrator's new password signs the webmail out everywhere. A mailbox
   whose password an administrator set with "change at first sign-in" sees a password step before any mail
   (05-webmail.md "First-sign-in password step").
+
+## Update (2026-10-29, later): console handoff
+
+- **The console now hands off.** ADR-0024: **Open webmail** opens the person's own mailbox without its password, with
+  a one-time code bound to the browser (a verifier cookie on the webmail origin) and to the console session, redeemed
+  for a throwaway app password the operations key mints, the BFF uses once at `/api/auth` and destroys. The session it
+  makes is the one decision 1 describes; the password sign-in form stays for everyone else. Still nothing in a URL
+  pre-fills the address.
