@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * Webmail settings (docs/internal/05-webmail.md "Settings"): open the window from the sidebar and with `,`, find a
- * group by searching, change the list density and see the list change, set a signature and see it in the composer,
- * and turn automatic replies on and off. Changes that touch mail flow use this run's own mailbox; the density check
+ * group by searching, change the list density and see the list change, and turn automatic replies on and off
+ * (signatures have their own journey, webmail-signatures.spec.ts). Changes that touch mail flow use this run's own mailbox; the density check
  * uses the demo owner (it has mail) and puts the setting back. Demo passwords are read from credentials.md, never
  * printed.
  */
@@ -93,36 +93,6 @@ test("density changes the message list at once and is kept", async ({ page }) =>
 
   await page.addStyleTag({ content: "nextjs-portal { display: none !important; }" });
   await choose("Comfortable");
-});
-
-test("a signature set in settings is added to new messages", async ({ page }) => {
-  const { recipient } = e2eUsers();
-  const signature = `Sam from run ${e2eUsers().run}`;
-  await signInWebmail(page, recipient.address, recipient.password);
-  await openSettings(page);
-  await group(page, "Writing");
-  const box = settings(page).getByRole("textbox", { name: /^Signature for/ });
-  await box.fill(signature);
-  await settings(page).getByRole("button", { name: "Save signature" }).click();
-  await expect(settings(page).getByText("Signature saved.")).toBeVisible();
-  await closeSettings(page);
-
-  await page.keyboard.press("c");
-  const composer = page.getByRole("dialog", { name: "New message" });
-  // New messages start in rich text: the signature block sits under an empty line, after the "-- " separator.
-  const message = composer.getByRole("textbox", { name: "Message", exact: true });
-  await expect(message).toHaveAttribute("contenteditable", "true");
-  await expect(message.locator("[data-am-signature]")).toHaveText(`-- ${signature}`);
-  await composer.getByRole("button", { name: "Discard draft" }).click();
-
-  // Clear it again.
-  await openSettings(page);
-  await group(page, "Writing");
-  await settings(page)
-    .getByRole("textbox", { name: /^Signature for/ })
-    .fill("");
-  await settings(page).getByRole("button", { name: "Save signature" }).click();
-  await expect(settings(page).getByText("Signature saved.")).toBeVisible();
 });
 
 test("automatic replies can be turned on and off", async ({ page }) => {

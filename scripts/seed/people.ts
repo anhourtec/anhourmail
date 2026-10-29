@@ -60,7 +60,12 @@ function accountPeople(key: "family" | "group"): SeedPerson[] {
 
 export function demoPeople(platformAdminEmail: string): SeedPerson[] {
   const staff: [PlatformRole, string, string, string][] = [
-    ["support_admin", "support", "Support Admin", "Customer lookup and credential resets; no billing or trust tiers"],
+    [
+      "support_admin",
+      "support",
+      "Support Admin",
+      "Customer lookup, credential resets, read-only support access (Platform → account → Open with support access)",
+    ],
     ["trust_safety_admin", "trust", "Trust & Safety Admin", "Abuse queue and trust tiers"],
     ["billing_admin", "billing", "Billing Admin (staff)", "Platform billing only"],
     ["reports_reader", "reports", "Reports Reader", "Platform audit log; read-only"],

@@ -30,6 +30,7 @@ if (mode === "create") {
   const people: [string, { platform?: string; account?: string }][] = [
     ["globalAdmin", { platform: "global_admin" }],
     ["reportsReader", { platform: "reports_reader" }],
+    ["supportAdmin", { platform: "support_admin" }],
     ["owner", { account: "owner" }],
     ["member", { account: "member" }],
     ["userAdmin", { account: "user_admin" }],
@@ -66,6 +67,7 @@ if (mode === "create") {
   const suspension: Record<string, { accountName: string; owner: string; member: string }> = {};
   const firstSignIn: Record<string, { owner: string; domain: string }> = {};
   const avatars: Record<string, { person: string; mailbox: string; mailboxPassword: string }> = {};
+  const actAs: Record<string, { accountName: string; accountId: string; owner: string; member: string }> = {};
   const mgmt = stalwartDevAdmin();
   for (const project of ["desktop", "mobile"]) {
     const [secAccount] = await db
@@ -136,6 +138,24 @@ if (mode === "create") {
       { accountId: suspAccount.id, userId: suspMember.id, role: "member" },
     ]);
     suspension[project] = { accountName: suspAccount.name, owner: suspOwner.email, member: suspMember.email };
+    // Staff support access journey (ADR-0023): an account per project that a Support Administrator opens read-only.
+    const [actAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} Support ${project}`, plan: "plus" })
+      .returning();
+    if (!actAccount) throw new Error("support access account not created");
+    const actOwner = await addLogin(`act-${project}-owner`);
+    const actMember = await addLogin(`act-${project}-member`);
+    await db.insert(schema.accountMembership).values([
+      { accountId: actAccount.id, userId: actOwner.id, role: "owner" },
+      { accountId: actAccount.id, userId: actMember.id, role: "member" },
+    ]);
+    actAs[project] = {
+      accountName: actAccount.name,
+      accountId: actAccount.id,
+      owner: actOwner.email,
+      member: actMember.email,
+    };
     // First-sign-in password change journey: an account per project with a domain already verified (on the mail
     // server and active here), where its Owner adds a user who must choose their own password.
     const [fsAccount] = await db
@@ -236,6 +256,7 @@ if (mode === "create") {
         passwords,
         mailboxes,
         suspension,
+        actAs,
         firstSignIn,
         avatars,
       },

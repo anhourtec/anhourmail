@@ -2,7 +2,9 @@
 /** Aliases and masked aliases (Phase 3) on a mailbox of a domain verified through the development DNS. */
 import { e2eUsers, expect, openNav, panel, signIn, signOut, test, verifyDomain } from "./fixtures";
 
-test("an owner adds, turns off and deletes aliases; the member sees only their own", async ({ page }, testInfo) => {
+test("an owner adds, turns off and deletes aliases; the member sees only their own and can't undo an admin's off", async ({
+  page,
+}, testInfo) => {
   const u = e2eUsers();
   const domain = `${u.run}-als-${testInfo.project.name}.test`;
   await signIn(page, u.users.owner, u.password);
@@ -78,14 +80,35 @@ test("an owner adds, turns off and deletes aliases; the member sees only their o
   await confirm.getByRole("button", { name: "Delete alias" }).click();
   await expect(maskedRow).toHaveCount(0);
 
-  // The member sees the Aliases section with only their mailbox's alias.
+  // The owner turns off the member's alias: it's locked off for the member.
+  await hello.getByRole("switch", { name: `Receive mail at hello@${domain}` }).click();
+  await expect(hello.getByRole("switch")).toHaveAttribute("aria-checked", "false");
+  await expect(hello.getByText("Turned off by an administrator")).toBeVisible();
+
+  // The member sees the Aliases section with only their mailbox's alias, and can't turn that one back on or delete it.
   await signOut(page);
   await signIn(page, u.users.member, u.password);
   await (await openNav(page)).getByRole("link", { name: "Aliases" }).click();
-  await expect(page.getByRole("row", { name: new RegExp(`hello@${domain}`) })).toBeVisible();
+  const memberHello = page.getByRole("row", { name: new RegExp(`hello@${domain}`) });
+  await expect(memberHello).toBeVisible();
+  await expect(memberHello.getByText("Turned off by an administrator")).toBeVisible();
+  await expect(memberHello.getByRole("switch", { name: `Receive mail at hello@${domain}` })).toBeDisabled();
+  await memberHello.getByRole("button", { name: `Actions for hello@${domain}` }).click();
+  await expect(page.getByRole("menuitem", { name: "Turn on" })).toBeDisabled();
+  await expect(page.getByRole("menuitem", { name: "Delete…" })).toBeDisabled();
+  await page.keyboard.press("Escape");
   await page.getByRole("link", { name: "Add an alias" }).click();
   // Other tests in the run give the member mailboxes too, so check only this test's two.
   const options = page.getByLabel("Delivers to").locator("option");
   await expect(options.filter({ hasText: `kid@${domain}` })).toHaveCount(1);
   await expect(options.filter({ hasText: `boss@${domain}` })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  // The owner lifts it by turning it back on; the member manages it again.
+  await signOut(page);
+  await signIn(page, u.users.owner, u.password);
+  await (await openNav(page)).getByRole("link", { name: "Aliases" }).click();
+  await hello.getByRole("switch", { name: `Receive mail at hello@${domain}` }).click();
+  await expect(hello.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+  await expect(hello.getByText("Turned off by an administrator")).toHaveCount(0);
 });

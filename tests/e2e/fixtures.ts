@@ -7,7 +7,7 @@ export type E2eUsers = {
   run: string;
   password: string;
   accountName: string;
-  users: Record<"globalAdmin" | "reportsReader" | "owner" | "member" | "userAdmin", string>;
+  users: Record<"globalAdmin" | "reportsReader" | "supportAdmin" | "owner" | "member" | "userAdmin", string>;
   /** A mailbox of this run's own (fresh mail-server allowance per run) for webmail send/receive journeys. */
   recipient: { address: string; password: string };
   /** Per browser project: logins for the sign-in security journeys (their own account for the requirement). */
@@ -17,6 +17,8 @@ export type E2eUsers = {
   mailboxes: Record<string, { owner: string; member: string }>;
   /** Per browser project: the staff suspension journey's own account (its name, owner and member). */
   suspension: Record<string, { accountName: string; owner: string; member: string }>;
+  /** Per browser project: the staff support access journey's account (ADR-0023): its name, id, owner and member. */
+  actAs: Record<string, { accountName: string; accountId: string; owner: string; member: string }>;
   /** Per browser project: the first-sign-in password change journey's account (its Owner and verified domain). */
   firstSignIn: Record<string, { owner: string; domain: string }>;
   /** Per browser project: the profile photos journey's person and their own mailbox (on the mail server). */
