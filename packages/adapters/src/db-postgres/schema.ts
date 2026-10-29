@@ -679,3 +679,69 @@ export const actAsSession = pgTable(
     check("act_as_session_window", sql`${t.expiresAt} > ${t.startedAt}`),
   ],
 );
+
+// --- data export and account deletion (ADR-0025) ------------------------------------------------------------------
+
+/**
+ * A data export: control-plane data only, never mail (rule 24; mail is exported from the webmail and never stored).
+ * `archive` is the ZIP sealed with the key ring (AES-256-GCM, AAD `data_export:<id>`), set while `ready` and deleted at
+ * `expires_at`. Only `requested_by` can download it. Goes with its account or its person.
+ */
+export const dataExport = pgTable(
+  "data_export",
+  {
+    id: uuid("id").primaryKey(),
+    /** account | personal */
+    kind: text("kind").notNull(),
+    accountId: uuid("account_id").references(() => customerAccount.id, { onDelete: "cascade" }),
+    requestedBy: text("requested_by")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    /** queued | building | ready | failed | expired */
+    status: text("status").notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    /** The last build's error name (never data). */
+    error: text("error"),
+    archive: bytea("archive"),
+    sizeBytes: bigint("size_bytes", { mode: "number" }),
+    createdAt: createdAt(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    readyAt: timestamp("ready_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    downloadedAt: timestamp("downloaded_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("data_export_requester_idx").on(t.requestedBy, t.kind, t.createdAt),
+    index("data_export_waiting_idx")
+      .on(t.createdAt)
+      .where(sql`${t.status} in ('queued', 'building')`),
+    index("data_export_expiry_idx")
+      .on(t.expiresAt)
+      .where(sql`${t.status} = 'ready'`),
+    check("data_export_kind", sql`${t.kind} in ('account', 'personal')`),
+    check("data_export_account", sql`(${t.kind} = 'account') = (${t.accountId} is not null)`),
+    check("data_export_archive", sql`${t.archive} is null or ${t.status} = 'ready'`),
+  ],
+);
+
+/**
+ * An account an Owner asked to delete: removed by the scheduler after `delete_after` (grace period), unless cancelled
+ * before (the row is deleted). `started_at` once removal began (no cancelling after). Goes with the account row.
+ */
+export const accountDeletion = pgTable(
+  "account_deletion",
+  {
+    accountId: uuid("account_id")
+      .primaryKey()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    /** The Owner who asked (no foreign key: kept as recorded). */
+    requestedBy: text("requested_by").notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull(),
+    deleteAfter: timestamp("delete_after", { withTimezone: true }).notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("account_deletion_due_idx").on(t.deleteAfter),
+    check("account_deletion_window", sql`${t.deleteAfter} > ${t.requestedAt}`),
+  ],
+);
