@@ -9,6 +9,7 @@ import { listMailboxes } from "@anhourmail/core/mailboxes";
 import { listPeople } from "@anhourmail/core/people";
 import { accountSuspensionNotice } from "@anhourmail/core/platform";
 import { ROLE_LABELS } from "@anhourmail/shared/rbac";
+import { WEBMAIL_HANDOFF_START } from "@anhourmail/shared/webmail";
 
 import { navTree } from "@/server/console-nav";
 import { container } from "@/server/container";
@@ -116,10 +117,11 @@ export async function ConsoleShell({
         photoUrl: photo ? avatarPath("/api/avatars", photo) : null,
         staffRole: staffRole ? ROLE_LABELS[`platform:${staffRole}`] : null,
         // Customers only (roles.md "Mail (webmail link)": staff ✗, never during act-as), with an account that isn't
-        // suspended (its mailboxes can't sign in). Never a credential.
+        // suspended (its mailboxes can't sign in). It starts the handoff on the webmail origin (ADR-0024), which opens
+        // their own mailbox without its password; the link itself carries nothing.
         ...(!actor.actingAs && actor.memberships.some((m) => !actor.suspendedAccountIds?.includes(m.accountId))
           ? {
-              webmailHref: `${env().WEBMAIL_URL.replace(/\/$/, "")}/sign-in`,
+              webmailHref: `${env().WEBMAIL_URL.replace(/\/$/, "")}${WEBMAIL_HANDOFF_START}`,
             }
           : {}),
       }}

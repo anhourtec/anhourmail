@@ -30,6 +30,7 @@ import { type Availability, listPeople } from "@anhourmail/core/people";
 import { MAX_MAILBOXES } from "@anhourmail/shared/plans";
 import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 import { formatBytes, poolSummary, type StoragePool } from "@anhourmail/shared/storage";
+import { WEBMAIL_HANDOFF_START } from "@anhourmail/shared/webmail";
 
 import { CommandBar, CommandLink, CommandUnavailable } from "@/components/console/command-bar";
 import { DetailTabs } from "@/components/console/flyout";
@@ -540,10 +541,10 @@ export default async function ConsoleHome() {
   const base = current ? `/accounts/${current}` : "";
   const staff = actor.platformRoles.length > 0;
   // Webmail only when one of the person's accounts is open (a suspended account's mailboxes can't sign in), and never
-  // while staff act in an account (ADR-0023).
+  // while staff act in an account (ADR-0023). The link starts the handoff (ADR-0024): their own mailbox, no password.
   const webmail =
     !actor.actingAs && actor.memberships.some((m) => !actor.suspendedAccountIds?.includes(m.accountId))
-      ? `${env().WEBMAIL_URL.replace(/\/$/, "")}/sign-in`
+      ? `${env().WEBMAIL_URL.replace(/\/$/, "")}${WEBMAIL_HANDOFF_START}`
       : null;
 
   const quick: {
