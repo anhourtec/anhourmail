@@ -1,7 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MAX_POLL_MS, newMailToAnnounce, notificationHelp, POLL_MS, pollDelay, shouldPoll, tabTitle } from "./sync";
+import type { Folder } from "./mail-client";
+import {
+  adjustUnread,
+  coalescer,
+  MAX_POLL_MS,
+  newMailToAnnounce,
+  notificationHelp,
+  POLL_MS,
+  pollDelay,
+  shouldPoll,
+  tabTitle,
+} from "./sync";
 
 describe("polling", () => {
   it("checks every 30 seconds and backs off after failures, up to 5 minutes", () => {
@@ -63,5 +74,119 @@ describe("desktop notification help", () => {
     expect(notificationHelp("denied")).toMatch(/site settings.*Allow/);
     expect(notificationHelp("default")).toMatch(/choose Allow/);
     expect(notificationHelp("unsupported")).toMatch(/can't show/);
+  });
+});
+
+describe("coalescer", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("runs once for changes close together, after the delay", async () => {
+    const run = vi.fn(() => Promise.resolve());
+    const c = coalescer(run, 300);
+    c.schedule();
+    c.schedule();
+    await vi.advanceTimersByTimeAsync(200);
+    c.schedule();
+    expect(run).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(run).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs once more after a run in flight when a change arrives meanwhile, never two at a time", async () => {
+    let finish: () => void = () => undefined;
+    let inFlight = 0;
+    let most = 0;
+    const run = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          inFlight += 1;
+          most = Math.max(most, inFlight);
+          finish = () => {
+            inFlight -= 1;
+            resolve();
+          };
+        }),
+    );
+    const c = coalescer(run, 300);
+    c.schedule();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(run).toHaveBeenCalledTimes(1);
+    c.schedule();
+    c.schedule();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(run).toHaveBeenCalledTimes(1);
+    finish();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(run).toHaveBeenCalledTimes(2);
+    finish();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(most).toBe(1);
+  });
+
+  it("keeps working after a failed run", async () => {
+    const run = vi.fn(() => Promise.reject(new Error("offline")));
+    const c = coalescer(run, 10);
+    c.schedule();
+    await vi.advanceTimersByTimeAsync(10);
+    c.schedule();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("runs nothing once cancelled", async () => {
+    const run = vi.fn(() => Promise.resolve());
+    const c = coalescer(run, 300);
+    c.schedule();
+    c.cancel();
+    c.schedule();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("adjustUnread", () => {
+  const folder = (id: string, unreadEmails: number): Folder => ({
+    id,
+    name: id,
+    role: null,
+    parentId: null,
+    sortOrder: 0,
+    totalEmails: 10,
+    unreadEmails,
+    totalThreads: 10,
+    unreadThreads: unreadEmails,
+  });
+  const folders = [folder("inbox", 2), folder("work", 1), folder("sent", 0)];
+
+  it("takes one off each folder of a message that becomes read", () => {
+    const next = adjustUnread(folders, [{ mailboxIds: { inbox: true, work: true }, keywords: {} }], true);
+    expect(next.map((f) => f.unreadEmails)).toEqual([1, 0, 0]);
+    expect(next[2]).toBe(folders[2]);
+  });
+
+  it("adds one for a message marked unread, and ignores messages already in that state", () => {
+    const next = adjustUnread(
+      folders,
+      [
+        { mailboxIds: { inbox: true }, keywords: { $seen: true } },
+        { mailboxIds: { work: true }, keywords: {} },
+      ],
+      false,
+    );
+    expect(next.map((f) => f.unreadEmails)).toEqual([3, 1, 0]);
+  });
+
+  it("never goes below zero and leaves the list alone when nothing flips", () => {
+    expect(adjustUnread(folders, [{ mailboxIds: { sent: true }, keywords: {} }], true)[2]?.unreadEmails).toBe(0);
+    expect(adjustUnread(folders, [{ mailboxIds: { inbox: true }, keywords: { $seen: true } }], true)).toBe(folders);
+    expect(adjustUnread(folders, [{ mailboxIds: { inbox: false }, keywords: {} }], true)).toBe(folders);
   });
 });

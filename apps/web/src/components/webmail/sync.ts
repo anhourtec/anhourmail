@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { Address } from "@/server/webmail/view";
 
-/** How often the open, visible webmail asks the mail server what changed (one cheap `Email/changes` call). */
+import type { Folder } from "./mail-client";
+
+/**
+ * How often the open, visible webmail asks the mail server what changed (one cheap JMAP request carrying
+ * `Email/changes` and `Mailbox/changes`).
+ */
 export const POLL_MS = 30_000;
 /** The longest wait after repeated failures. */
 export const MAX_POLL_MS = 5 * 60_000;
@@ -15,6 +20,77 @@ export function pollDelay(failures: number, base = POLL_MS, max = MAX_POLL_MS): 
 /** Whether to check now: only while the tab is visible and the browser is online. */
 export function shouldPoll(visibility: DocumentVisibilityState, online: boolean): boolean {
   return visibility === "visible" && online;
+}
+
+/** How long after a change the folder counts reload: changes made close together share one reload. */
+export const FOLDER_RELOAD_MS = 300;
+
+/**
+ * Runs `run` once, `delayMs` after the first `schedule()` call; every further call before then shares that run.
+ * A call while the run is in flight runs it once more when it finishes (its answer may predate that change), so
+ * there is never more than one run in flight and the last change is always followed by a run. `cancel()` stops
+ * anything waiting (the page is closing).
+ */
+export function coalescer(run: () => Promise<unknown>, delayMs: number): { schedule: () => void; cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let running = false;
+  let again = false;
+  let cancelled = false;
+  const fire = async () => {
+    timer = undefined;
+    running = true;
+    try {
+      await run();
+    } catch {
+      // The run reports its own errors; the next change schedules another.
+    } finally {
+      running = false;
+    }
+    if (again && !cancelled) {
+      again = false;
+      schedule();
+    }
+  };
+  function schedule() {
+    if (cancelled) return;
+    if (running) {
+      again = true;
+      return;
+    }
+    timer ??= setTimeout(() => void fire(), delayMs);
+  }
+  return {
+    schedule,
+    cancel() {
+      cancelled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
+    },
+  };
+}
+
+/**
+ * The folder counts right after marking messages read (`seen` true) or unread, before the server's own counts
+ * arrive: each message whose read state flips moves its folders' unread count by one. Messages not in `emails`
+ * (not loaded in the list) are left to the reload that follows.
+ */
+export function adjustUnread(
+  folders: Folder[],
+  emails: { mailboxIds: Record<string, boolean>; keywords: Record<string, boolean> }[],
+  seen: boolean,
+): Folder[] {
+  const delta = new Map<string, number>();
+  for (const e of emails) {
+    if ((e.keywords.$seen === true) === seen) continue;
+    for (const [id, inIt] of Object.entries(e.mailboxIds)) {
+      if (inIt) delta.set(id, (delta.get(id) ?? 0) + (seen ? -1 : 1));
+    }
+  }
+  if (delta.size === 0) return folders;
+  return folders.map((f) => {
+    const d = delta.get(f.id);
+    return d === undefined ? f : { ...f, unreadEmails: Math.max(0, f.unreadEmails + d) };
+  });
 }
 
 type Created = {
