@@ -26,6 +26,10 @@ Each alias has a switch in the list. While it's off, mail sent to it is refused 
 stays yours, so you can switch it back on later. Deleting an alias (⋮ menu beside it, then **Delete…**) frees the address. Tick several aliases to turn them on or
 off, or delete them, together.
 
+If an owner or someone who manages users turns off an alias of your mailbox, it shows **Turned off by an
+administrator**. You can still see it, but you can't turn it back on or delete it yourself. Ask them: when they turn
+it back on, you can manage it again as usual.
+
 When its mailbox is [suspended or deleted](/docs/mailboxes), an alias stops receiving mail too, and new aliases can't
 point at a deleted mailbox. A deleted mailbox's aliases stay reserved while it can be restored, and are permanently
 deleted with it.
@@ -48,3 +52,13 @@ to one mailbox. It's off unless you turn it on, because it also catches spam sen
 Limits count across your whole account.
 
 <PlanTable />
+
+There's also a limit on how many you can create in one day (from midnight to midnight UTC), counted across your
+account. Deleting an alias doesn't give one back.
+
+| Plan       | Aliases per day                         | Masked aliases per day                   |
+| ---------- | --------------------------------------- | ---------------------------------------- |
+| Free       | <Value of="aliasCreationsPerDayFree" /> | <Value of="maskedCreationsPerDayFree" /> |
+| Paid plans | <Value of="aliasCreationsPerDayPaid" /> | <Value of="maskedCreationsPerDayPaid" /> |
+
+If you reach it, the console says so and you can create more after midnight UTC.

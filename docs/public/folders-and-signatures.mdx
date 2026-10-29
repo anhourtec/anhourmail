@@ -5,8 +5,8 @@ description: Organise mail into folders, pin favourites, archive, and choose a s
 
 <Callout title="Partly here">
   The [webmail](/docs/webmail) shows your folders with their unread counts, archives with one key and moves mail between
-  folders. Creating, renaming and sharing folders, favourites, archive by year, search folders and rules are on their
-  way; until then, folders you create in a mail app show in the webmail too.
+  folders, and [signatures](#signatures) are here. Creating, renaming and sharing folders, favourites, archive by year,
+  search folders and rules are on their way; until then, folders you create in a mail app show in the webmail too.
 </Callout>
 
 ## Folders
@@ -32,18 +32,36 @@ desktop. Server settings are on the [mail app settings](/docs/clients/imap-smtp-
 
 ## Signatures
 
-Today each of your addresses has one plain-text signature, set in the webmail under
-[Settings → Writing](/docs/webmail-settings#writing). The rest of this section is on its way:
+Create signatures in the webmail under [Settings → Writing](/docs/webmail-settings#writing) and choose which one each
+kind of message starts with.
 
-- Create as many signatures as you like, with formatting and small images.
-- Choose one for **new messages** and one for **replies and forwards**, per address, alias and shared mailbox.
-- Images in a signature are attached to the message. Links to images on other websites are not allowed, because
-  they would let the other site see when your mail is read.
+- **Add signature** opens the editor: give it a name (up to <Value of="signatureNameChars" /> characters, different
+  from your other signatures) and write it with the same toolbar as your messages — fonts, sizes, bold, italic,
+  underline, strikethrough, colours, alignment, lists, indents and links.
+- **Images:** choose **Insert image**, or paste or drop a picture into the editor. Images are kept inside the
+  signature itself: PNG, JPEG, GIF or WebP, up to <Value of="signatureImageSize" /> each and{" "}
+  <Value of="signatureImages" /> per signature (a whole signature can be up to <Value of="signatureMaxSize" />
+  ). Links to images on other websites are removed, because they would let that website see when and where your mail is
+  read.
+- Each signature in the list has **Edit**, **Delete** and, under **More options**, **Duplicate**. You can keep up to{" "}
+  <Value of="signaturesPerMailbox" /> signatures in a mailbox, up to <Value of="signaturesMaxSize" /> together.
+- **Default for new messages** and **Default for replies and forwards** choose the signature each kind of message
+  starts with; either can be **(No signature)**. The first signature you add becomes both defaults. Deleting a
+  default leaves that kind of message without a signature until you choose another.
+- Signatures belong to the mailbox, so they work with every address you send from — your own, aliases and masked
+  aliases. Changing **From** while you write keeps the signature you chose.
+- **While you write:** the **Signature** button at the bottom of the message lists your signatures and **(No
+  signature)**; choosing one replaces only the signature, not the rest of your message. In plain text mode the
+  signature is added as text after a `-- ` line.
 
-On paid plans, an account owner can set **signature templates** that fill in each person's name and job title, and
-a **disclaimer** added to outgoing mail.
+If you used the webmail before named signatures, your signature is kept: it appears in the list as **Signature**, the
+default for new messages and for replies.
+
+On paid plans, an account owner will be able to set **signature templates** that fill in each person's name and job
+title, and a **disclaimer** added to outgoing mail. Both are on their way.
 
 ### Signatures in mail apps
 
-Desktop and phone mail apps keep their own signatures. Set your signature in the app as well. The account
-disclaimer is added to mail sent from the webmail; mail sent from other apps doesn't include it yet.
+Desktop and phone mail apps keep their own signatures, so set your signature in the app as well. Mail apps that use
+JMAP can also see your default signature for new messages; they get a shorter copy without images when a signature
+is too large for them.

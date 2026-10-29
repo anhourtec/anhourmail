@@ -1,6 +1,6 @@
 ---
 title: Audit log
-description: See every change made in your account, who made it and when, including anything Anhourtec staff did.
+description: See every change made in your account, who made it and when, including anything Anhourtec staff did and when support opened it.
 ---
 
 The audit log lists every change in your account: domains added, mailboxes created or suspended, aliases, invites,
@@ -23,6 +23,24 @@ Select an entry to see its details. Passwords, links from emails, secrets and ma
 If anyone at Anhourtec looks at or changes your account, for example while helping you with a support request, it
 appears in your audit log as **Anhourtec staff** with their role. Staff can't read your mail: there is no way to do it
 from our tools.
+
+## Anhourtec support access
+
+To help with a support request, an Anhourtec support person may need to see your console the way your admins see it,
+for example to find out why a domain isn't verifying. This is called support access. It is:
+
+- **Read-only.** They see your settings, people, domains and mailboxes, but they can't change anything, can't open
+  webmail and can't read your mail. Billing, deleting the account, roles, passwords and two-factor sign-in stay yours.
+- **Short.** It lasts <Value of="actAsMinutes" /> minutes. They can extend it, giving a new reason each time, but
+  never past <Value of="actAsMaxHours" /> hours in all.
+- **Explained.** They must write down why they need it, and confirm it's them before it starts. Accounts of
+  Anhourtec staff can't be opened this way.
+- **Recorded.** Your audit log shows **Anhourtec support access started** with the reason they gave, every change
+  they tried (refused, because it's read-only), and **Anhourtec support access ended**. These entries are listed as
+  **Anhourtec staff · Support access**; choose **Anhourtec staff** in the filters to see only them.
+- **Announced.** Your account's Owners get an email when it starts, with the reason and a link to the audit log.
+
+If you see support access you didn't ask for, write to <Value of="supportEmail" /> and tell us.
 
 ## Filters
 
