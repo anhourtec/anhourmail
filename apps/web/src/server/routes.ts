@@ -305,6 +305,17 @@ export const ROUTES: readonly RouteSpec[] = [
     guard: "app_password.manage.own",
     accountParam: "accountId",
   },
+  // Console → webmail handoff, step 2 (ADR-0024): one's own mailbox only; the harness's random id is a 404 for anyone
+  // allowed. Staff acting as someone hold Auditor there, which doesn't have the permission (403).
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/mailboxes/:mailboxId/webmail-handoff",
+    file: "app/api/accounts/[accountId]/mailboxes/[mailboxId]/webmail-handoff/route.ts",
+    guard: "webmail.open.own",
+    accountParam: "accountId",
+    audits: "webmail.handoff_started",
+    probeStatus: 404,
+  },
   {
     method: "GET",
     path: "/api/accounts/:accountId/mailboxes/:mailboxId/app-passwords",
@@ -560,6 +571,16 @@ export const ROUTES: readonly RouteSpec[] = [
     probeStatus: 400,
   },
   { method: "DELETE", path: "/api/webmail/auth", file: "app/api/webmail/auth/route.ts", guard: "public" },
+  // Console → webmail handoff (ADR-0024), webmail origin: the start sets the verifier cookie and redirects to the
+  // console page (the harness follows it to a 200 page); the redemption without a code is a validation error.
+  { method: "GET", path: "/api/webmail/handoff", file: "app/api/webmail/handoff/route.ts", guard: "public" },
+  {
+    method: "POST",
+    path: "/api/webmail/handoff",
+    file: "app/api/webmail/handoff/route.ts",
+    guard: "public",
+    probeStatus: 400,
+  },
   { method: "GET", path: "/api/webmail/session", file: "app/api/webmail/session/route.ts", guard: "webmail" },
   { method: "POST", path: "/api/webmail/jmap", file: "app/api/webmail/jmap/route.ts", guard: "webmail" },
   {

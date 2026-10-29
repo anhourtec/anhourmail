@@ -40,6 +40,9 @@ const STATUS: Record<string, number> = {
   alias_admin_locked: 403,
   rate_limited: 429,
   alias_daily_limit: 429,
+  // Console → webmail handoff (ADR-0024): a code we don't know (or already used), and a refusal with a reason.
+  handoff_invalid: 400,
+  handoff_refused: 409,
 };
 
 export type RouteOptions = {
@@ -69,6 +72,10 @@ export const ok = (data: unknown, status = 200) => NextResponse.json({ data }, {
 
 const errorBody = (code: string, message: string, status: number) =>
   NextResponse.json({ error: { code, message } }, { status });
+
+/** A domain error as `route()` would answer it, for handlers that must add headers to the error response. */
+export const domainErrorResponse = (err: DomainError): NextResponse =>
+  errorBody(err.code, err.message, STATUS[err.code] ?? 400);
 
 const SAFE = new Set(["GET", "HEAD", "OPTIONS"]);
 
