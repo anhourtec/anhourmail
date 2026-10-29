@@ -50,3 +50,17 @@ redirectUri, codeChallenge, codeChallengeMethod:"S256"}` returns `client_code`; 
   passwords) and one directory server-wide in Community; revisit later.
 - Impersonation service account for every webmail request: one god credential that bypasses the user's MFA; rejected
   for interactive use.
+
+## Update (2026-10-29)
+
+- **No address pre-fill.** Since 2026-10-23 the console's **Open webmail** links to the bare sign-in page: nothing in
+  the URL fills in the address, because a sign-in link carrying an email address looks like phishing to browsers'
+  checks and anyone could craft one. The consequence "the console → webmail handoff only pre-fills the address" no
+  longer holds; the handoff carries nothing.
+- **Push is not built yet.** Decision 2 stands; meanwhile the client asks `Email/changes` every 30 s while the tab
+  is visible (at once on focus or reconnect, backing off after errors) and reloads the open conversation in place
+  when a change touches it (05-webmail.md "Push").
+- **Password changes.** A person changing their own mailbox password in the webmail stays signed in in that session
+  and is signed out everywhere else; an administrator's new password signs the webmail out everywhere. A mailbox
+  whose password an administrator set with "change at first sign-in" sees a password step before any mail
+  (05-webmail.md "First-sign-in password step").

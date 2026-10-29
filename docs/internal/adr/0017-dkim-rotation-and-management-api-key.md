@@ -65,3 +65,12 @@ Consequences: rotation needs the customer to publish the new key first (Stalwart
 nothing changes under them meanwhile); Ed25519 is published alongside RSA (an extra signature, never the only one).
 Part 1 of the decision (worker-owned fixed selectors, CNAME delegation, 90-day rotation) stays the target once the
 platform DKIM zone can be published through a DNS provider; part 2 (scoped API key) is unchanged.
+
+Update (2026-10-28): a customer domain now verifies only when a TXT with the same public key (`p=`) is published
+behind every selector the domain signs with (`checkRecords`, `packages/core/src/domains/dns.ts`); the worker waits
+briefly for the RSA key after adding the domain and the scheduler backfills keys for domains added earlier. Because a
+pending domain on Stalwart makes the name local there, abandoned pending claims are released or expired
+(`PENDING_DOMAIN` in `packages/shared/src/plans.ts`; `02-mail-infrastructure.md` "Customer domain records" and
+"Domain lifecycle"). Part 2 has since been split into three scoped keys — provisioning, operations, audit — behind
+an internal management proxy (ADR-0020 "Credential split"; `02-mail-infrastructure.md` "Stalwart configuration
+principles").

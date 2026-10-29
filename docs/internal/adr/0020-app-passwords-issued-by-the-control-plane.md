@@ -2,6 +2,7 @@
 
 **Status:** Accepted 2026-10-22 · amended 2026-10-23 (credential split, below — supersedes the single management
 key in decision 1) · amended 2026-10-23 (mailbox passwords, below — console-made mailboxes now have a known password)
+· updated 2026-10-28 (mailbox handovers, below)
 
 ## Context
 
@@ -169,6 +170,17 @@ proxy still refuses service accounts, system mailboxes, extra credentials and ot
 revokes every OAuth token; the `credentialId` changes on the first replacement after creation but **not** on later
 ones, so detection catches a replacement made before our first reset only (open item: a stronger signal). A legacy
 mailbox's credential is recorded at its next `mailbox.ensure` (`job:mailbox-backfill`), adopting whatever it has then.
+
+**Update (2026-10-28): mailbox handovers.** "Add a user" and "Make this a user" (a person-less mailbox becomes
+someone's) set a password for a mailbox whose old password may still be known, so the decision above gained four
+rules (details in `07-security.md` "Mailbox passwords"): the person's own change is refused (409
+`password_change_pending`) while an administrator's password is waiting; console reset emails for a login whose
+address is such a mailbox are held (`consoleResetHeld`); a `mailbox.password` job that gives up keeps an
+administrator's hash (the console asks for it again) and drops only the person's own change; and "Make this a user"
+moves the mailbox's app passwords to `revoking` in the same transaction, since they survive a password replacement.
+`mailbox.pending_password_by_owner` (migration 0020) marks a waiting hash as the person's own, so applying it is what
+ends the first-sign-in change (`mailbox.must_change_password`). Stalwart still has no "must change" state: IMAP, POP3
+and SMTP keep accepting the administrator's password until the person changes it (accepted residual).
 
 ## Consequences
 

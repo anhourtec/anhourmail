@@ -84,3 +84,12 @@ Phase 6 (trust tiers, outbound counters) isn't built.
   interim gate.
 - Ops: on a server whose `RECONCILE_IGNORE_DOMAINS` is the platform domain, unknown non-system accounts there are now
   reported. Any other hand-made account on the system domain must be removed or recorded.
+
+## Update (2026-10-24)
+
+"Add a user" (`packages/core/src/mailboxes/add-user.ts`, `POST /api/accounts/:accountId/users`) can put the new
+person's mailbox on the platform domain under the same rules, allowance, no-reuse check and email-confirmation gate;
+the route spends `platformMailboxAccount` and `platformMailboxIp` like the mailbox route, and the entry is
+`account.user_added` with meta `platformAddress`. Storage is pooled per account since 2026-10-23 (`plans.ts`
+`storagePoolGb`), so a free address shares the Free account's pool. The availability answer the console uses to offer
+it (`people/availability.ts`, `email_unverified` when the sign-in email isn't confirmed) changes nothing above.

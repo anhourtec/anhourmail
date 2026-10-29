@@ -45,7 +45,9 @@ non-member as group, two From addresses, forged Sender, missing From: refused wi
 - Mailing-list software and forwarders that rewrite `From:` must submit as their own address.
 - Addendum 2026-10-28: the same script also deletes every `Authentication-Results` header from submitted mail
   (`editheader`), because Stalwart stamps none on authenticated submission and a sender could otherwise plant results
-  the recipient's webmail would show (`07-security.md` "Authentication results in the webmail").
+  the recipient's webmail would show (`07-security.md` "Authentication results in the webmail"). `stack:verify`
+  submits a message with a forged results header and checks it arrives without one; the webmail in turn trusts only
+  the results header directly below our own topmost `Received` (`02-mail-infrastructure.md`).
 - Stalwart-specific detail: Sieve match variables (`${1}`) are empty in this context, so the script compares with
   `${envelope.from}` directly. Re-verify on every Stalwart upgrade (rule 22) — `stack:verify` does.
 

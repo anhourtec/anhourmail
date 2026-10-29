@@ -82,3 +82,15 @@ retention from the pinned server's configuration schema (`x:DataRetention`, `x:E
 - **Rely on Stalwart for depth and signature safety** — rejected: the probe shows neither is enforced.
 - **Server-side disclaimer via Sieve now** — deferred: body rewriting risks breaking MIME and DKIM.
 - **Store folder favourites in IMAP METADATA / mailbox annotations** — rejected for v1: not exposed over JMAP.
+
+## Update (2026-10-29)
+
+What the webmail has built against this decision so far (05-webmail.md): folders are read from Stalwart with their
+counts and nesting, and messages move between them (archive, delete, junk, Move to, Restore from Trash); creating,
+renaming, moving and deleting folders, favourites, search folders, archive by year and rules are not built yet, so
+the BFF's folder limits (decision 3) aren't exercised. The proxy still refuses `Mailbox/set`. Signatures are one
+plain-text signature per identity, stored as `Identity.textSignature` with an escaped `htmlSignature` mirror
+(`server/webmail/service.ts`); the rich-text composer (2026-10-24) inserts it as a marked block after the `-- ` line
+and swaps it when From changes. Several signatures, defaults per message type, images, templates and disclaimers are
+still ahead. Whether provisioning creates the Archive folder (decision 2) should be re-checked against the worker
+before folder management ships.
