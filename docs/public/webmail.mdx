@@ -8,8 +8,8 @@ The webmail is AnhourMail in your browser, at <Value of="webmailHost" />. It's a
 
 ## Sign in
 
-1. Go to <Value of="webmailHost" />. From the console you can also open your menu and choose **Open webmail**,
-   which fills in your address for you.
+1. Go to <Value of="webmailHost" />. From the console you can also choose **Open webmail** in the sidebar or your
+   menu. The sign-in page never fills in an address from a link, so type it yourself (or let your password manager).
 2. Enter your **mailbox address** and your **mailbox password** — the password of the mailbox itself, not an app
    password.
 3. Choose **Sign in**.
@@ -23,6 +23,11 @@ a key that stays on our servers, never in the browser. Your mailbox password is 
 created; change it in [Settings → Account](/docs/webmail-settings#account). Changing it keeps you signed in where you
 changed it and signs the webmail out everywhere else; when an admin sets a new one, the webmail signs out everywhere.
 Forgot it? Ask an owner or admin of your account to [set a new one](/docs/mailboxes#set-a-new-password).
+
+If an admin set your password and asked you to change it, the webmail shows **Choose your own password** before
+your mail. Enter the **password you were given** and a new one twice (or choose **Generate a strong password**), then
+**Save and open my mail**. Mail apps and app passwords aren't affected. If the change takes a moment to apply, you're
+asked to sign in again with the new password in a minute.
 
 If the webmail says a mailbox can't be used, the message says why:
 
@@ -53,6 +58,11 @@ tile to switch. You can have up to five open at once. **Sign out** signs out of 
 - The list shows the newest first, with how long ago each arrived ("24 minutes ago", "1 day ago", then the date). A
   blue dot after the sender means unread; the number beside a sender is how many messages the conversation holds.
 - Opening a conversation marks it read. Use the arrows at the top of the message to go to the previous or next one.
+- A conversation shows every message in it, oldest first, under the subject and the folders it's in. The newest
+  message and any unread ones are open; earlier ones are folded to one line — choose one to open it, or use
+  **Expand all** / **Collapse all**. Choose the recipients under the sender's name (with the small arrow) to see the
+  message's details, including who sent and signed it (**mailed-by** and **signed-by**) when our mail server checked
+  it.
 - The list checks for new mail every half minute while the webmail is open. When a reply arrives in the conversation
   you're reading, it appears there too, without closing it; **Refresh** above the list updates both straight away.
 - Plain-text messages keep their line breaks, and links and addresses in them work. Earlier messages quoted in a
@@ -61,16 +71,21 @@ tile to switch. You can have up to five open at once. **Sign out** signs out of 
   bigger. Forwarded messages open in place. Everything else downloads when you choose it; files are never opened in
   the webmail itself.
 - Calendar invitations show as a card with the time, place and organiser. Replying to invitations is coming soon.
-- In the ⋮ menu, **Show original** shows the message's source, and **Print** opens a printable copy.
+- Each message has its own ⋮ menu: **Reply**, **Reply all**, **Forward**, **Delete**, **Mark unread from here**,
+  **Block** the sender, **Report spam** (or **Not spam**), **Report phishing**, **Print**, **Download message** (an
+  `.eml` file) and **Show original**.
+- **Show original** opens a new tab with the message's ID, when it was created and how long it took to arrive, who it
+  was from and to, whether it passed the **SPF**, **DKIM** and **DMARC** checks, and its full source. Use
+  **Download original** or **Copy to clipboard** to share it, for example with support.
 - Very long messages show the first part with **View entire message**.
 - **Priority** in the sidebar collects every message you've flagged, in any folder.
 - **Pinned** conversations stay at the top of their folder, in their own section. Use the pin button on a message.
 
 ## Writing mail
 
-- Choose **New email** in the sidebar (or press `c`); on a phone or tablet it floats at the bottom of the list. Type addresses in **To**; press Enter or a comma after each
-  one, or pick from the suggestions (your [contacts](/docs/contacts) and people you've written to, the ones you
-  email most first). **Cc Bcc** adds those fields. People you send to are saved to **Other contacts** automatically
+- Choose **New email** in the sidebar (or press `c`); on a phone or tablet it floats at the bottom of the list.
+  Type addresses in **To**; press Enter or a comma after each one, or pick from the suggestions (your
+  [contacts](/docs/contacts) and people you've written to, the ones you email most first). **Cc Bcc** adds those fields. People you send to are saved to **Other contacts** automatically
   (you can turn this off).
 - If you have aliases or masked aliases, choose which address to send from in **From**.
 - Attach files with the paperclip (up to <Value of="attachmentPerFile" /> each, <Value of="attachmentPerMessage" /> per
@@ -99,12 +114,11 @@ wrote:" line.
 **Pasting:** formatted text you paste keeps its safe formatting (headings, lists, tables, links, colours). Anything
 else is removed, including the toolbars and buttons some pages and browser extensions add.
 
-**Insert HTML:** the code button in the toolbar opens **Insert HTML**. Paste HTML or upload an `.html` file (up to
-
-<Value of="htmlMaxSize" />
-). You see a preview of exactly what will be sent, a list of anything that was removed, and a warning if it loads images
-from another server. Choose **Insert** to add it where your cursor was. Images from another server show as a placeholder
-in the preview and while you write — nothing is loaded from that server on your device — and are sent as they are.
+**Insert HTML** (up to <Value of="htmlMaxSize" />): the code button in the toolbar opens **Insert HTML**. Paste
+HTML or upload an `.html` file. You see a preview of exactly what will be sent, a list of anything that was removed,
+and a warning if it loads images from another server. Choose **Insert** to add it where your cursor was. Images from
+another server show as a placeholder in the preview and while you write — nothing is loaded from that server on your
+device — and are sent as they are.
 
 ### What is removed from HTML you send
 
@@ -133,9 +147,14 @@ the check.
 
 - **Archive** keeps a conversation but takes it out of the Inbox. **Delete** moves it to Trash; in Trash (and Junk)
   you can delete forever, after a confirmation. Both Trash and Junk have **Empty** in their ⋯ menu.
-- **Report spam** moves a conversation to Junk and helps the filters learn; **Not spam** moves it back.
+- **Restore** in Trash puts a conversation back where it belongs: messages you sent go to Sent, everything else to
+  the Inbox.
+- **Report spam** moves a conversation to Junk and helps the filters learn; **Not spam** moves it back. **Report
+  phishing** does the same for mail that tries to trick you into giving away a password or money.
+- **Block** in a message's ⋮ menu adds the sender to your
+  [blocked senders](/docs/webmail-settings#junk-and-blocked-senders) and moves the conversation to Junk.
 - **Move to** in the ⋮ menu files a conversation in any folder.
-- Archive, delete, junk and move show a notice with **Undo** for a few seconds.
+- Archive, delete, junk, move and restore show a notice with **Undo** for a few seconds.
 - **Select several:** hover over the square avatar and tick it (or press `x`); hold Shift to tick a range. The bar that
   appears acts on all of them.
 
