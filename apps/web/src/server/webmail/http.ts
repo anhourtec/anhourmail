@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import "server-only";
 
+import { createHmac, timingSafeEqual } from "node:crypto";
+
 import { NextResponse } from "next/server";
 
 import type { WebmailRefusal } from "@anhourmail/core/webmail";
@@ -33,11 +35,38 @@ export const BLOCKED_NOTICES: Record<WebmailRefusal, string> = {
   gone: "This mailbox no longer exists. If you think this is a mistake, ask your account's admin.",
 };
 
-/** The refusal named by a notice cookie or `?reason=` value (`unavailable` is the older name for `suspended`). */
+/** The refusal named by a notice cookie (`unavailable` is the older name for `suspended`). */
 export function blockedNoticeFor(value: string | undefined): string | null {
   if (value === undefined) return null;
   if (value === "unavailable") return BLOCKED_NOTICES.suspended;
   return Object.hasOwn(BLOCKED_NOTICES, value) ? BLOCKED_NOTICES[value as WebmailRefusal] : null;
+}
+
+/** How long a signed `?reason=` link shows its notice (seconds), like the notice cookie's Max-Age. */
+export const NOTICE_LINK_TTL_SEC = 60;
+
+const noticeMac = (secret: string, reason: string, exp: string) =>
+  createHmac("sha256", secret).update(`${NOTICE_COOKIE}\0${reason}\0${exp}`).digest("base64url").slice(0, 22);
+
+/**
+ * The `?reason=` value a server page redirects to the sign-in page with when it finds the session blocked (pages
+ * can't set the notice cookie). It is `reason.expiry.mac` under the server secret, so a crafted link can't make the
+ * sign-in page show a suspension or deletion notice for nobody.
+ */
+export function signedNoticeReason(secret: string, reason: WebmailRefusal, nowMs = Date.now()): string {
+  const exp = String(Math.floor(nowMs / 1000) + NOTICE_LINK_TTL_SEC);
+  return `${reason}.${exp}.${noticeMac(secret, reason, exp)}`;
+}
+
+/** The notice for a signed `?reason=` value; null when it is missing, forged, altered or expired. */
+export function blockedNoticeForLink(secret: string, value: string | undefined, nowMs = Date.now()): string | null {
+  const [reason, exp, mac, ...rest] = (value ?? "").split(".");
+  if (!reason || !exp || !mac || rest.length > 0 || !/^\d{1,12}$/.test(exp)) return null;
+  if (Number(exp) * 1000 < nowMs) return null;
+  const want = Buffer.from(noticeMac(secret, reason, exp));
+  const have = Buffer.from(mac);
+  if (have.length !== want.length || !timingSafeEqual(have, want)) return null;
+  return reason === "unavailable" ? null : blockedNoticeFor(reason);
 }
 
 /** Maps webmail BFF errors to the `{ error: { code, message } }` envelope; null when `err` isn't one of ours. */

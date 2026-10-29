@@ -5,11 +5,14 @@ import {
   ACCOUNT_HEADER,
   BLOCKED_NOTICES,
   blockedNoticeFor,
+  blockedNoticeForLink,
   BodyTooLargeError,
   MAX_UPLOADS,
   noAccount,
+  NOTICE_LINK_TTL_SEC,
   readCappedBytes,
   shownAccount,
+  signedNoticeReason,
   withUploadSlot,
 } from "./http";
 
@@ -70,5 +73,26 @@ describe("why a mailbox can't use the webmail", () => {
     expect(blockedNoticeFor(undefined)).toBeNull();
     expect(blockedNoticeFor("toString")).toBeNull();
     expect(blockedNoticeFor("<b>")).toBeNull();
+  });
+
+  const secret = "s".repeat(32);
+  const now = 1_800_000_000_000;
+
+  it("shows the notice for a link our pages signed, until it expires", () => {
+    const link = signedNoticeReason(secret, "person_suspended", now);
+    expect(blockedNoticeForLink(secret, link, now)).toBe(BLOCKED_NOTICES.person_suspended);
+    expect(blockedNoticeForLink(secret, link, now + NOTICE_LINK_TTL_SEC * 1000)).toBe(BLOCKED_NOTICES.person_suspended);
+    expect(blockedNoticeForLink(secret, link, now + (NOTICE_LINK_TTL_SEC + 1) * 1000)).toBeNull();
+  });
+
+  it("shows nothing for a crafted, altered or foreign link", () => {
+    const link = signedNoticeReason(secret, "suspended", now);
+    const [, exp, mac] = link.split(".");
+    expect(blockedNoticeForLink(secret, "suspended", now)).toBeNull();
+    expect(blockedNoticeForLink(secret, undefined, now)).toBeNull();
+    expect(blockedNoticeForLink(secret, `gone.${exp ?? ""}.${mac ?? ""}`, now)).toBeNull();
+    expect(blockedNoticeForLink(secret, `suspended.${String(Number(exp) + 600)}.${mac ?? ""}`, now)).toBeNull();
+    expect(blockedNoticeForLink(secret, `${link}.x`, now)).toBeNull();
+    expect(blockedNoticeForLink("t".repeat(32), link, now)).toBeNull();
   });
 });
