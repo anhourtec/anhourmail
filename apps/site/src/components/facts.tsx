@@ -25,6 +25,7 @@ import {
   PRODUCT_DOMAIN,
   PUBLIC_PLATFORM,
   RECOVERY_CODES,
+  REMOTE_IMAGES,
   SECOND_STEP_LIMITS,
   STEP_UP_MINUTES,
   SUPPORT_EMAIL,
@@ -93,6 +94,10 @@ const VALUES = {
   attachmentPerMessage: `${String(WEBMAIL_ATTACHMENTS.perMessageMb)} MB`,
   htmlMaxSize: `${String(WEBMAIL_HTML.maxMb)} MB`,
   htmlInlineImage: `${String(WEBMAIL_HTML.inlineImageKb)} KB`,
+  // Remote images through the webmail's image proxy (packages/shared/src/webmail.ts)
+  remoteImageSize: `${String(REMOTE_IMAGES.maxMb)} MB`,
+  remoteImagesPerMessage: String(REMOTE_IMAGES.perMessage),
+  remoteImageSenders: String(REMOTE_IMAGES.maxSenders),
   bulkAddOnName: ADDONS[BULK_MAIL.addOnId].name,
   bulkAddOnStatus: ADDONS[BULK_MAIL.addOnId].status === "planned" ? "coming later" : "available now",
   bulkAddOnPlans: ADDONS[BULK_MAIL.addOnId].requires.map((id) => PLANS[id].name).join(" and "),

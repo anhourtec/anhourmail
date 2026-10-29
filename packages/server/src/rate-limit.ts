@@ -40,6 +40,9 @@ export const LIMITS = {
   webmailSignInAddress: { limit: 10, windowSec: 900, by: "caller", failMode: "closed" },
   webmail: { limit: 900, windowSec: 60, by: "caller", failMode: "open" },
   webmailDownload: { limit: 120, windowSec: 60, by: "caller", failMode: "open" },
+  // The image proxy: each request makes an outbound fetch from our servers (a message loads at most 100 images).
+  // Fail closed: without the limiter, nothing would bound what a session makes us fetch.
+  webmailImage: { limit: 300, windowSec: 60, by: "caller", failMode: "closed" },
   // The contacts list reads every card (up to 5,000 in batches): tighter than the proxy.
   webmailContacts: { limit: 120, windowSec: 60, by: "caller", failMode: "open" },
   webmailUpload: { limit: 60, windowSec: 600, by: "caller", failMode: "closed" },

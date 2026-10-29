@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * Webmail preferences (docs/internal/05-webmail.md "Settings"): how the webmail looks and behaves for one mailbox.
- * Stored per mailbox in the control plane (`webmail_preference`), never mail content and no addresses. Mail-flow
- * settings (automatic replies, forwarding, junk rules, signatures) live in the mail server instead.
+ * Stored per mailbox in the control plane (`webmail_preference`), never mail content and no addresses (the senders
+ * whose images load are kept as keyed hashes, `imageSenders`). Mail-flow settings (automatic replies, forwarding,
+ * junk rules, signatures) live in the mail server instead.
  *
  * No schema library here (this package has no dependencies): `normalizePreferences` reads anything stored and
  * falls back to the default per field, and `parsePreferencePatch` accepts only known keys with allowed values.
@@ -31,6 +32,26 @@ export const REGIONS = [
   { id: "en-IN", label: "India" },
 ] as const;
 export const HOUR_CYCLES = ["auto", "h12", "h23"] as const;
+/** When remote images load (through the image proxy): only when asked, also for senders in contacts, or always. */
+export const REMOTE_IMAGE_MODES = ["ask", "contacts", "always"] as const;
+
+/**
+ * Remote images in the webmail (published in the docs, enforced by the image proxy): the largest image in MB
+ * (1 MB = 1024 × 1024 bytes), how many images of one message can be loaded, how many redirects are followed, how
+ * long one image may take, how long a message's image links stay valid, and how many senders can be remembered.
+ */
+export const REMOTE_IMAGES = {
+  maxMb: 5,
+  perMessage: 100,
+  maxRedirects: 3,
+  timeoutSeconds: 10,
+  linkMinutes: 60,
+  maxSenders: 500,
+} as const;
+
+/** A remembered sender: a keyed hash of the address (base64url, 22 characters), never the address itself. */
+const SENDER_KEY = /^[A-Za-z0-9_-]{22}$/;
+export const isSenderKey = (v: unknown): v is string => typeof v === "string" && SENDER_KEY.test(v);
 
 export type WebmailPreferences = {
   theme: (typeof THEMES)[number];
@@ -63,6 +84,10 @@ export type WebmailPreferences = {
   newMailSound: boolean;
   /** A desktop notification (sender and "New message", never the content) for new Inbox mail. */
   desktopNotifications: boolean;
+  /** When remote images load through the image proxy without asking. */
+  remoteImages: (typeof REMOTE_IMAGE_MODES)[number];
+  /** Senders whose images always load: keyed hashes from the server (`MessageView.senderKey`), never addresses. */
+  imageSenders: string[];
 };
 
 export const DEFAULT_PREFERENCES: Readonly<WebmailPreferences> = {
@@ -91,6 +116,8 @@ export const DEFAULT_PREFERENCES: Readonly<WebmailPreferences> = {
   emptyTrashOnSignOut: false,
   newMailSound: true,
   desktopNotifications: false,
+  remoteImages: "ask",
+  imageSenders: [],
 };
 
 const TIME_ZONE = /^[A-Za-z][A-Za-z0-9_+-]{0,30}(?:\/[A-Za-z0-9_+-]{1,30}){0,2}$/;
@@ -129,6 +156,9 @@ const CHECKS: { [K in keyof WebmailPreferences]: Check } = {
   emptyTrashOnSignOut: bool,
   newMailSound: bool,
   desktopNotifications: bool,
+  remoteImages: oneOf(REMOTE_IMAGE_MODES),
+  imageSenders: (v) =>
+    Array.isArray(v) && v.length <= REMOTE_IMAGES.maxSenders && v.every(isSenderKey) && new Set(v).size === v.length,
 };
 
 const KEYS = Object.keys(CHECKS) as (keyof WebmailPreferences)[];
@@ -140,6 +170,8 @@ export function normalizePreferences(stored: unknown): WebmailPreferences {
   for (const key of KEYS) {
     if (Object.hasOwn(src, key) && CHECKS[key](src[key])) out[key] = src[key];
   }
+  // A fresh array: the default's must never be shared (and changed) between results.
+  out.imageSenders = [...(out.imageSenders as string[])];
   return out as WebmailPreferences;
 }
 
