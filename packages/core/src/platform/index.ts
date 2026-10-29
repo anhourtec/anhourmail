@@ -3,3 +3,4 @@ export type * from "./repository";
 export * from "./service";
 export * from "./bootstrap";
 export * from "./suspension";
+export * from "./act-as";

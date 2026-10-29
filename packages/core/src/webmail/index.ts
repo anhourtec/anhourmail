@@ -3,4 +3,5 @@ export * from "./access";
 export * from "./password-change-gate";
 export * from "./settings-repository";
 export * from "./settings-service";
+export * from "./signatures-service";
 export * from "./managed-script";

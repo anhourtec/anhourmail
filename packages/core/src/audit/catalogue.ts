@@ -84,6 +84,10 @@ export const AUDIT_ACTIONS = [
   "junk_rules.changed",
   "identity.changed",
   "webmail.preferences_changed",
+  "webmail.signature_added",
+  "webmail.signature_changed",
+  "webmail.signature_removed",
+  "webmail.signature_defaults_changed",
   // billing
   "billing.plan_changed",
   "billing.payment_succeeded",
@@ -103,6 +107,7 @@ export const AUDIT_ACTIONS = [
   "staff.role_granted",
   "staff.role_revoked",
   "staff.act_as_started",
+  "staff.act_as_renewed",
   "staff.act_as_ended",
   "staff.account_viewed",
   "staff.credentials_reset",

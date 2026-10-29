@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   ACCOUNT_A,
   ACCOUNT_B,
+  actAs,
   anonymous,
   BREACHED_PW,
   deps as makeDeps,
@@ -48,6 +49,18 @@ const MBX_OWNER = "abababab-abab-4bab-8bab-abababababab";
 const MBX_NEW = "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd";
 const MBX_GONE = "efefefef-efef-4fef-8fef-efefefefefef";
 const MBX_B = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+
+/** The job's worker gave up on it (as `runNextJob` does after the last attempt): claimed, then given up. */
+async function giveUpJob(d: ReturnType<typeof setup>["d"], jobId: string): Promise<void> {
+  const job = d.uow.state.jobs.find((j) => j.id === jobId);
+  if (!job) throw new Error("job expected");
+  Object.assign(job, { status: "running", lockToken: "claim-1", lockedAt: d.clock.now() });
+  expect(
+    await d.uow.run((r) =>
+      r.provisioning.giveUp({ id: jobId, lockToken: "claim-1" }, "mail server unavailable", new Date()),
+    ),
+  ).toBe(true);
+}
 
 function setup() {
   const clock = fixedClock("2026-10-23T12:00:00Z");
@@ -210,7 +223,7 @@ describe("resetting a mailbox password (admins)", () => {
     const { d } = setup();
     const actingAs: UserActor = {
       ...owner,
-      actingAs: { staffUserId: "staff", staffEmail: "s@anhourtec.test", staffRole: "support_admin", reason: "t" },
+      actingAs: actAs(ACCOUNT_A, "support_admin"),
     };
     await expect(reset(d, actingAs, ACCOUNT_A, MBX_MEMBER)).rejects.toThrow(ForbiddenError);
     expect(d.uow.state.audit.at(-1)).toMatchObject({ result: "denied", errorCode: "act_as" });
@@ -246,7 +259,7 @@ describe("resetting a mailbox password (admins)", () => {
     expect(await view()).toMatchObject({ passwordPending: false, passwordApplyFailed: false });
     const { jobId } = await reset(d, owner, ACCOUNT_A, MBX_MEMBER);
     expect(await view()).toMatchObject({ passwordPending: true, passwordApplyFailed: false });
-    await d.uow.run((r) => r.provisioning.giveUp(jobId, "mail server unavailable", new Date())); // hash kept
+    await giveUpJob(d, jobId); // hash kept
     expect(await view()).toMatchObject({ passwordPending: false, passwordApplyFailed: true });
     await reset(d, owner, ACCOUNT_A, MBX_MEMBER, "another new password");
     expect(await view()).toMatchObject({ passwordPending: true, passwordApplyFailed: false });
@@ -293,7 +306,7 @@ describe("changing one's own mailbox password (webmail)", () => {
     expect(await lastPasswordChangeFailed(d, "kid@family.ca")).toBe(false); // none yet
     const { jobId } = await changeOwnMailboxPassword(d, fakeHasher, "kid@family.ca", { password: MAILBOX_PW }, req);
     expect(await lastPasswordChangeFailed(d, " Kid@Family.ca ")).toBe(false); // waiting
-    await d.uow.run((r) => r.provisioning.giveUp(jobId, "mail server unavailable", new Date()));
+    await giveUpJob(d, jobId);
     expect(await lastPasswordChangeFailed(d, "kid@family.ca")).toBe(true);
     expect(await passwordJobState(d, jobId)).toBe("failed");
     // A new attempt replaces the answer; other mailboxes and unknown addresses are unaffected.
@@ -323,7 +336,7 @@ describe("changing one's own mailbox password (webmail)", () => {
       pendingPasswordByOwner: false,
     });
     // Gave up: still refused (the hash is kept), and the first-sign-in step doesn't blame the person's change.
-    await d.uow.run((r) => r.provisioning.giveUp(jobId, "mail server unavailable", new Date()));
+    await giveUpJob(d, jobId);
     await expect(
       changeOwnMailboxPassword(d, fakeHasher, "kid@family.ca", { password: MAILBOX_PW }, req),
     ).rejects.toThrow(PasswordChangePendingError);

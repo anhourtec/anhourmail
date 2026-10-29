@@ -91,3 +91,74 @@ export type SuspensionRepository = {
   addHold(mailboxId: string, kind: MailboxHoldKind): Promise<void>;
   removeHold(mailboxId: string, kind: MailboxHoldKind): Promise<void>;
 };
+
+/** Why an act-as session ended (ADR-0023): staff ended it, it ran out, its console session ended, or the role went. */
+/**
+ * Why a session ended: the staff member ended it, it ran out, its console session ended, the staff member lost the
+ * role, or someone in the account became staff meanwhile (rule 28).
+ */
+export type ActAsEndReason = "staff" | "expired" | "signed_out" | "role_removed" | "staff_account";
+
+/** A staff act-as session (ADR-0023). `reason` is the staff member's own words; the account's admins see it. */
+export type ActAsSession = {
+  id: string;
+  staffUserId: string;
+  staffEmail: string;
+  /** The staff role that allowed it, when it started. */
+  staffRole: PlatformRole;
+  /** The console session it belongs to: other sessions of the same person stay in the staff view. */
+  authSessionId: string;
+  accountId: string;
+  accountName: string;
+  reason: string;
+  startedAt: Date;
+  expiresAt: Date;
+  endedAt: Date | null;
+  endReason: ActAsEndReason | null;
+};
+
+/**
+ * Staff act-as sessions (ADR-0023). A session is open while it isn't ended and `expiresAt` is after now. Writes only
+ * through `mutation()` (audited in the same transaction). Rows are kept after they end (who opened what, and when).
+ */
+export type ActAsRepository = {
+  /** The open session bound to this console session of this staff member, or null. */
+  active(staffUserId: string, authSessionId: string, now: Date): Promise<ActAsSession | null>;
+  /** Any open session of this staff member (whichever console session holds it). */
+  openFor(staffUserId: string, now: Date): Promise<ActAsSession | null>;
+  get(id: string): Promise<ActAsSession | null>;
+  /**
+   * True when someone in the account holds a platform role or signs in with a company address or one of its
+   * subdomains (rule 28). One query: checked on every request while acting.
+   */
+  staffInAccount(accountId: string): Promise<boolean>;
+  /**
+   * Stores a new session. At most one per staff member may be unclosed (`ended_at` null; Postgres enforces it with a
+   * partial unique index): a second throws `ConflictError` with `ACT_AS_ALREADY_OPEN`, so concurrent starts can't
+   * both succeed.
+   */
+  create(input: {
+    staffUserId: string;
+    staffRole: PlatformRole;
+    authSessionId: string;
+    accountId: string;
+    reason: string;
+    startedAt: Date;
+    expiresAt: Date;
+  }): Promise<ActAsSession>;
+  /** Moves an open session's expiry and reason (renewal); false when it is no longer open. */
+  renew(id: string, expiresAt: Date, reason: string, now: Date): Promise<boolean>;
+  /** Ends a session that isn't ended yet; false when it already was (a concurrent end). */
+  end(id: string, at: Date, reason: ActAsEndReason): Promise<boolean>;
+  /**
+   * Sessions not yet marked ended that must be: past their expiry, whose console session is gone, whose staff member
+   * no longer holds one of `roles`, or whose account now has staff in it. Oldest first, at most `limit`; only
+   * `staffUserId`'s when given. `reason` is the first that applies.
+   */
+  due(
+    now: Date,
+    roles: readonly PlatformRole[],
+    limit: number,
+    staffUserId?: string,
+  ): Promise<{ session: ActAsSession; reason: Exclude<ActAsEndReason, "staff"> }[]>;
+};

@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import { deps as makeDeps, fixedClock } from "../__tests__/helpers";
 import type { MailServer } from "./ports";
-import { enqueueProvisioning, reconcile, requeueActiveMailboxes, runNextJob } from "./service";
-import { backoffMs, MAX_ATTEMPTS } from "./types";
+import { enqueueProvisioning, reconcile, requeueActiveMailboxes, runClaimedJob, runNextJob } from "./service";
+import { backoffMs, MAX_ATTEMPTS, STALE_RUNNING_MS } from "./types";
 
 type Box = {
   address: string;
@@ -156,6 +156,7 @@ function setup(clock = fixedClock("2026-10-21T12:00:00Z")) {
     address: "hello@example.test",
     kind: "alias",
     enabled: true,
+    adminLocked: false,
     description: null,
     createdAt: new Date(0),
   });
@@ -723,6 +724,89 @@ describe("customer Sieve lock drift and backfill", () => {
   });
 });
 
+describe("a stale claim taken over by another worker (lock token)", () => {
+  /**
+   * The first worker's call to the mail server stalls past the stale limit; meanwhile a second worker takes the job
+   * over and finishes it. Then the first call returns (or fails) and the first worker records its outcome.
+   */
+  function stalling(
+    d: ReturnType<typeof setup>["d"],
+    clock: ReturnType<typeof fixedClock>,
+    outcome: "ok" | "fail",
+  ): { mail: MailServer; second: { lockLost: boolean; attempts: number } | null } {
+    const base = fakeMailServer();
+    const state: { second: { lockLost: boolean; attempts: number } | null } = { second: null };
+    let stalled = false;
+    const mail: MailServer = {
+      ...base,
+      ensureDomain: async (name, catchAll) => {
+        if (!stalled) {
+          stalled = true;
+          clock.set(new Date(clock.now().getTime() + STALE_RUNNING_MS + 1));
+          const job = await runNextJob(d, base);
+          state.second = job && { lockLost: job.lockLost, attempts: job.attempts };
+          if (outcome === "fail") throw new Error("mail server unavailable");
+        }
+        return base.ensureDomain(name, catchAll);
+      },
+    };
+    return {
+      mail,
+      get second() {
+        return state.second;
+      },
+    };
+  }
+
+  it("a late success changes nothing: the newer claim already finished the job", async () => {
+    const { d, clock } = setup();
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    const run = stalling(d, clock, "ok");
+    const first = await runNextJob(d, run.mail);
+    expect(run.second).toEqual({ lockLost: false, attempts: 2 });
+    expect(first).toMatchObject({ attempts: 1, lockLost: true });
+    expect(d.uow.state.jobs[0]).toMatchObject({ status: "succeeded", attempts: 2, lockToken: null });
+  });
+
+  it("a late failure doesn't put a finished job back in the queue", async () => {
+    const { d, clock } = setup();
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    const run = stalling(d, clock, "fail");
+    const first = await runNextJob(d, run.mail);
+    expect(first?.lockLost).toBe(true);
+    expect(d.uow.state.jobs[0]).toMatchObject({ status: "succeeded", lastError: null });
+    expect(await runNextJob(d, fakeMailServer())).toBeNull(); // nothing re-queued
+  });
+
+  it("a late last failure doesn't give up the job or mark the subject: audited as denied", async () => {
+    const { d, clock } = setup();
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    d.uow.state.jobs[0]!.attempts = MAX_ATTEMPTS - 1; // the next claim is the last attempt
+    const run = stalling(d, clock, "fail");
+    const first = await runNextJob(d, run.mail);
+    expect(first).toMatchObject({ attempts: MAX_ATTEMPTS, lockLost: true });
+    expect(d.uow.state.jobs[0]).toMatchObject({ status: "succeeded", attempts: MAX_ATTEMPTS + 1 });
+    expect(d.uow.state.domains[0]).toMatchObject({ lastError: null, stalwartId: "dom:example.test" });
+    expect(d.uow.state.audit).toEqual([
+      expect.objectContaining({
+        action: "platform.provisioning_failed",
+        result: "denied",
+        errorCode: "lock_lost",
+        meta: { jobId: d.uow.state.jobs[0]!.id, attempts: MAX_ATTEMPTS },
+      }),
+    ]);
+  });
+
+  it("a fresh claim is never taken over", async () => {
+    const { d, clock } = setup();
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    const held = await d.uow.run((r) => r.provisioning.claimNext(clock.now()));
+    clock.set(new Date(clock.now().getTime() + STALE_RUNNING_MS - 1));
+    expect(await runNextJob(d, fakeMailServer())).toBeNull();
+    expect(held && (await d.uow.run((r) => r.provisioning.complete(held, clock.now())))).toBe(true);
+  });
+});
+
 describe("one job per subject at a time", () => {
   it("never claims a second job for a subject that already has one running", async () => {
     const { d } = setup();
@@ -735,7 +819,8 @@ describe("one job per subject at a time", () => {
     await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
     expect((await runNextJob(d, mail))?.subjectId).toBe("d1"); // other subjects still run
     expect(await runNextJob(d, mail)).toBeNull(); // m1's second job waits
-    await d.uow.run((r) => r.provisioning.complete(running?.id ?? "", d.clock.now()));
+    if (!running) throw new Error("claim expected");
+    await d.uow.run((r) => r.provisioning.complete(running, d.clock.now()));
     expect((await runNextJob(d, mail))?.subjectId).toBe("m1");
   });
 
@@ -1126,5 +1211,128 @@ describe("mailbox passwords (worker)", () => {
     }
     expect(d.uow.state.mailboxes[0]?.status).toBe("failed");
     expect(d.uow.state.mailboxPasswords[0]?.pendingHash).toBeNull();
+  });
+});
+
+describe("a worker that stalled past the stale limit never pushes what it read before", () => {
+  /** Counts the mail server calls that change something. */
+  function counted(mail: ReturnType<typeof fakeMailServer>) {
+    const calls: string[] = [];
+    const wrap = (k: "ensureDomain" | "ensureMailbox" | "setMailboxPassword" | "removeDomain") => {
+      const m = mail as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+      const orig = m[k];
+      if (!orig) throw new Error(`no ${k}`);
+      m[k] = (...args: unknown[]) => {
+        calls.push(k);
+        return orig(...args);
+      };
+    };
+    wrap("ensureDomain");
+    wrap("ensureMailbox");
+    wrap("setMailboxPassword");
+    wrap("removeDomain");
+    return calls;
+  }
+
+  const provisioned = async () => {
+    const { d, clock } = setup();
+    const mail = fakeMailServer();
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    while (await runNextJob(d, mail));
+    return { d, clock, mail, calls: counted(mail) };
+  };
+
+  /** Worker A claims; it stalls past the limit; `change` happens; worker B takes over and runs everything; A resumes. */
+  async function stalledThenResumed(
+    t: Awaited<ReturnType<typeof provisioned>>,
+    kind: "mailbox.ensure" | "mailbox.password" | "domain.ensure",
+    subjectId: string,
+    change: () => Promise<void> | void,
+  ) {
+    await enqueueProvisioning(t.d, { kind, subjectId });
+    const a = await t.d.uow.run((r) => r.provisioning.claimNext(t.clock.now()));
+    if (!a) throw new Error("claim expected");
+    t.clock.set(new Date(t.clock.now().getTime() + STALE_RUNNING_MS + 1));
+    await change();
+    await enqueueProvisioning(t.d, { kind, subjectId });
+    while (await runNextJob(t.d, t.mail)); // worker B: takes over A's job, then the newer one
+    const before = [...t.calls];
+    const resumed = await runClaimedJob(t.d, t.mail, a);
+    return { resumed, before, after: t.calls };
+  }
+
+  it("mailbox.password: the old hash never replaces the newer one", async () => {
+    const t = await provisioned();
+    await t.d.uow.run((r) => r.mailboxPasswords.setPending("m1", PHC(1), "grant-1"));
+    const { resumed, before, after } = await stalledThenResumed(t, "mailbox.password", "m1", () =>
+      t.d.uow.run((r) => r.mailboxPasswords.setPending("m1", PHC(2), "grant-2")),
+    );
+    expect(resumed.lockLost).toBe(true);
+    expect(after).toEqual(before); // A called nothing
+    expect(t.mail.boxes[0]).toMatchObject({ passwordHash: PHC(2), grant: "grant-2" });
+    expect(t.d.uow.state.mailboxPasswords[0]).toMatchObject({ pendingHash: null });
+    expect(t.d.uow.state.audit.some((e) => e.action === "platform.provisioning_failed")).toBe(false);
+  });
+
+  it("mailbox.ensure: a suspension made meanwhile isn't lifted, and the aliases stay as they are now", async () => {
+    const t = await provisioned();
+    const { resumed, after, before } = await stalledThenResumed(t, "mailbox.ensure", "m1", () => {
+      t.d.uow.state.mailboxes[0]!.status = "suspended";
+      t.d.uow.state.aliases = [];
+    });
+    expect(resumed.lockLost).toBe(true);
+    expect(after).toEqual(before);
+    expect(t.mail.boxes[0]).toMatchObject({ suspended: true, aliases: [] });
+    expect(t.d.uow.state.mailboxes[0]).toMatchObject({ status: "suspended" });
+  });
+
+  it("domain.ensure: a catch-all turned off meanwhile isn't turned back on", async () => {
+    const t = await provisioned();
+    t.d.uow.state.catchAll.push({ domainId: "d1", mailboxId: "m1" });
+    const { resumed, after, before } = await stalledThenResumed(t, "domain.ensure", "d1", () => {
+      t.d.uow.state.catchAll = [];
+    });
+    expect(resumed.lockLost).toBe(true);
+    expect(after).toEqual(before);
+    expect(t.mail.catchAll.get("example.test")).toBeNull();
+  });
+
+  it("a stall inside a call: the writes after it are refused, nothing is recorded, the newer claim decides", async () => {
+    const t = await provisioned();
+    await enqueueProvisioning(t.d, { kind: "mailbox.ensure", subjectId: "m1" });
+    const a = await t.d.uow.run((r) => r.provisioning.claimNext(t.clock.now()));
+    if (!a) throw new Error("claim expected");
+    const base = fakeMailServer();
+    let stalled = false;
+    let takeover: { lockLost: boolean } | null = null;
+    const stalling: MailServer = {
+      ...base,
+      ensureMailbox: async (input) => {
+        if (!stalled) {
+          stalled = true;
+          t.clock.set(new Date(t.clock.now().getTime() + STALE_RUNNING_MS + 1));
+          takeover = await runNextJob(t.d, base); // worker B takes the job over and finishes it
+          t.d.uow.state.mailboxes[0]!.lastError = "after B";
+        }
+        return base.ensureMailbox(input);
+      },
+    };
+    const resumed = await runClaimedJob(t.d, stalling, a);
+    expect(takeover).toMatchObject({ lockLost: false });
+    expect(resumed.lockLost).toBe(true);
+    // A's directory write after its call never landed (it would have cleared lastError).
+    expect(t.d.uow.state.mailboxes[0]).toMatchObject({ lastError: "after B" });
+    expect(t.d.uow.state.jobs.find((j) => j.id === a.id)).toMatchObject({ status: "succeeded", attempts: 2 });
+  });
+
+  it("a worker still working renews its lease before each call, so it isn't taken over", async () => {
+    const t = await provisioned();
+    await enqueueProvisioning(t.d, { kind: "mailbox.ensure", subjectId: "m1" });
+    const a = await t.d.uow.run((r) => r.provisioning.claimNext(t.clock.now()));
+    if (!a) throw new Error("claim expected");
+    t.clock.set(new Date(t.clock.now().getTime() + STALE_RUNNING_MS - 1_000));
+    expect((await runClaimedJob(t.d, t.mail, a)).lockLost).toBe(false);
+    expect(t.d.uow.state.jobs.find((j) => j.id === a.id)).toMatchObject({ status: "succeeded", attempts: 1 });
   });
 });

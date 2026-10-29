@@ -17,7 +17,22 @@ export type ProvisioningJob = {
   attempts: number;
   lastError: string | null;
   runAfter: Date;
+  /**
+   * Set each time a worker claims the job (a fresh random value per claim), null while it isn't running. Finishing,
+   * retrying or giving up a job needs the token of the claim that holds it, so a worker whose claim went stale and was
+   * taken over can't overwrite the newer claim's outcome.
+   */
+  lockToken: string | null;
 };
+
+/** A job just claimed by this worker: the claim's lock token is what `complete` / `retry` / `giveUp` need. */
+export type ClaimedJob = ProvisioningJob & { status: "running"; lockToken: string };
+
+/** The claim a worker holds on a job (from `claimNext`). */
+export type JobClaim = { id: string; lockToken: string };
+
+/** A job left `running` this long (crashed or stuck worker) is claimable again, under a new lock token. */
+export const STALE_RUNNING_MS = 10 * 60 * 1000;
 
 export type DomainState = { id: string; accountId: string; name: string; status: string; stalwartId: string | null };
 

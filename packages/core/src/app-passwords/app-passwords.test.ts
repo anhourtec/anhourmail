@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { APP_PASSWORDS_PER_MAILBOX, type AppPasswordProtocol } from "@anhourmail/shared/security";
 
-import { ACCOUNT_A, ACCOUNT_B, anonymous, deps as makeDeps, fixedClock, req, user } from "../__tests__/helpers";
+import { ACCOUNT_A, ACCOUNT_B, actAs, anonymous, deps as makeDeps, fixedClock, req, user } from "../__tests__/helpers";
 import {
   EnrolmentRequiredError,
   ForbiddenError,
@@ -234,7 +234,7 @@ describe("creating app passwords", () => {
     const issuer = fakeIssuer();
     const actingAs: UserActor = {
       ...member,
-      actingAs: { staffUserId: "staff", staffEmail: "s@anhourtec.com", staffRole: "support_admin", reason: "help" },
+      actingAs: actAs(ACCOUNT_A, "support_admin"),
     };
     await expect(create(d, issuer, actingAs)).rejects.toThrow(/acting as/);
     await expect(create(d, issuer, { ...member, mustEnrol: "two_factor" })).rejects.toBeInstanceOf(

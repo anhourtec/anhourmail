@@ -84,6 +84,7 @@ function setup() {
     address: "hi@family.ca",
     kind: "alias",
     enabled: true,
+    adminLocked: false,
     description: null,
     createdAt: new Date(0),
   });

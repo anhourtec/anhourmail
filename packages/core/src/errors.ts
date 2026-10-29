@@ -129,3 +129,24 @@ export class BusyError extends DomainError {
     super(message, "rate_limited");
   }
 }
+
+/**
+ * An account administrator turned this alias off, and only an administrator can turn it back on (HTTP 403 with its
+ * own code, so the console can say why). Its person can still see it.
+ */
+export class AliasAdminLockedError extends ForbiddenError {
+  override readonly code = "alias_admin_locked";
+  constructor() {
+    super("An administrator turned this alias off. Ask an account admin if you need it back on.");
+  }
+}
+
+/**
+ * The account has created as many aliases (or masked aliases) today as its plan allows per UTC day
+ * (`PLANS[plan].aliasCreationsPerDay`): HTTP 429 with its own code, so the console can say when it resets.
+ */
+export class AliasDailyLimitError extends DomainError {
+  constructor(message: string) {
+    super(message, "alias_daily_limit");
+  }
+}

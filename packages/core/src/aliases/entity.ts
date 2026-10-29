@@ -15,6 +15,12 @@ export type MailAlias = {
   kind: AliasKind;
   /** Disabled aliases are refused at SMTP time and can't be sent from; the address stays reserved. */
   enabled: boolean;
+  /**
+   * Turned off by an account administrator (`alias.manage.any`) on a mailbox that isn't theirs: until an
+   * administrator turns it back on (which lifts the lock), the mailbox's own person can't turn it on or delete it
+   * (deleting would free the address to be added again). Only ever true while `enabled` is false.
+   */
+  adminLocked: boolean;
   /** The owner's own note ("newsletter", "shop.example"); never shown to anyone outside the account. */
   description: string | null;
   createdAt: Date;

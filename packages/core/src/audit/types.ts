@@ -9,6 +9,9 @@ export type AuditResult = "success" | "denied" | "failed";
 /** `platform` or `account:<id>`. Each scope has its own hash chain. */
 export type AuditScope = "platform" | `account:${string}`;
 
+/** The `on_behalf_of` of an entry written during a staff act-as session. */
+export type ActAsAttribution = { userId: string; email: string; accountId: string; sessionId: string };
+
 /** What a service passes in. Snapshots keep entries readable after users or objects are deleted. */
 export type AuditEntryInput = {
   scope: AuditScope;
@@ -20,8 +23,11 @@ export type AuditEntryInput = {
     role: PlatformRole | AccountRole | null;
     accountId: string | null;
   };
-  /** The staff member, during an act-as session. */
-  onBehalfOf: { userId: string; email: string } | null;
+  /**
+   * Set on everything done during a staff act-as session (ADR-0023): the staff member, the customer account they act
+   * in and the act-as session id. The actor is then the staff member too (type `staff`).
+   */
+  onBehalfOf: ActAsAttribution | null;
   target: { type: string; id: string | null; label: string | null };
   result: AuditResult;
   errorCode: string | null;

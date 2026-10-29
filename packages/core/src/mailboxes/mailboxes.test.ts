@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   ACCOUNT_A,
   ACCOUNT_B,
+  actAs,
   anonymous,
   BREACHED_PW,
   deps as makeDeps,
@@ -258,12 +259,7 @@ describe("mailboxes service", () => {
     const d = setup();
     const actingAs = {
       ...owner,
-      actingAs: {
-        staffUserId: "staff",
-        staffEmail: "s@anhourtec.test",
-        staffRole: "support_admin" as const,
-        reason: "t",
-      },
+      actingAs: actAs(ACCOUNT_A, "support_admin"),
     };
     await expect(create(d, actingAs, ACCOUNT_A, { localPart: "x", domainId: DOMAIN_A })).rejects.toThrow(
       ForbiddenError,

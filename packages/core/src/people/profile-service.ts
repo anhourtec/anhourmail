@@ -64,6 +64,16 @@ export const OTHER_ACCOUNT_PROFILE =
 
 export const ROLE_PROFILE = "Only an owner can edit the profile of an owner or an admin.";
 
+/**
+ * Staff acting in a customer account (ADR-0023) change no profile or photo, their own included: it would land in the
+ * customer's log as a change by Anhourtec staff. Refused as 403, audited as denied `act_as`.
+ */
+export const ACTING_PROFILE =
+  "You can't change profiles or photos while you have support access open, your own included. End it first.";
+
+/** True while the actor is staff acting in a customer account. */
+export const actingAsStaff = (actor: Actor): boolean => actor.kind === "user" && actor.actingAs !== undefined;
+
 /** The member of the account with this id; a 404 for anyone else (never confirms another account's people). */
 export async function memberOf(repos: Repositories, accountId: string, userId: string) {
   const target =
@@ -124,7 +134,7 @@ export async function updatePersonProfile(
   req: RequestMeta,
 ): Promise<ProfileChange> {
   const own = userId === selfId(actor);
-  const out = await mutation<ProfileChange | EditRefusal>(
+  const out = await mutation<ProfileChange | EditRefusal | "act_as">(
     deps,
     actor,
     req,
@@ -136,6 +146,7 @@ export async function updatePersonProfile(
       target: { type: "person", id: userId },
     },
     async (repos) => {
+      if (actingAsStaff(actor)) return { result: "act_as" as const, denied: { code: "act_as" } };
       if (own && !(actor.kind === "user" && actor.memberships.some((m) => m.accountId === accountId))) {
         throw new NotFoundError();
       }
@@ -159,6 +170,7 @@ export async function updatePersonProfile(
       };
     },
   );
+  if (out === "act_as") throw new ForbiddenError(ACTING_PROFILE);
   if (out === "role") throw new ForbiddenError(ROLE_PROFILE);
   if (out === "other_account") throw new ForbiddenError(OTHER_ACCOUNT_PROFILE);
   return out;
@@ -177,7 +189,7 @@ export async function updateOwnProfile(
 ): Promise<ProfileChange> {
   const accounts = actor.kind === "user" ? [...new Set(actor.memberships.map((m) => m.accountId))] : [];
   const [first, ...rest] = accounts;
-  return mutation(
+  const out = await mutation<ProfileChange | "act_as">(
     deps,
     actor,
     req,
@@ -189,6 +201,7 @@ export async function updateOwnProfile(
     },
     async (repos) => {
       if (actor.kind !== "user") throw new UnauthenticatedError();
+      if (actingAsStaff(actor)) return { result: "act_as", target: { label: actor.email }, denied: { code: "act_as" } };
       const after = profileDetails(input.profile ?? {});
       const changed = changedFields(await repos.people.profile(actor.userId), after);
       if (changed.length > 0) await repos.people.setProfile(actor.userId, after);
@@ -201,4 +214,6 @@ export async function updateOwnProfile(
       };
     },
   );
+  if (out === "act_as") throw new ForbiddenError(ACTING_PROFILE);
+  return out;
 }

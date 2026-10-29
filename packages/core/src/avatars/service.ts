@@ -14,6 +14,8 @@ import {
 } from "../errors";
 import { mutation, type MutationSpec } from "../mutation";
 import {
+  ACTING_PROFILE,
+  actingAsStaff,
   type EditRefusal,
   editRefusal,
   memberOf,
@@ -101,8 +103,8 @@ const selfId = (actor: Actor): string | null => (actor.kind === "user" ? actor.u
 
 type Resolved = { owner: AvatarOwner; label: string; meta: Record<string, unknown>; copies: string[] };
 /** Why a change is refused (403, audited as denied with this code; `role` is recorded as `forbidden`). */
-type Refusal = EditRefusal | "not_member";
-type Resolution = Resolved | { refusal: Refusal; label: string; message?: string };
+type Refusal = EditRefusal | "not_member" | "act_as";
+type Resolution = Resolved | { refusal: Refusal; label: string | null; message?: string };
 type Change = { set: Uint8Array; images: ImageNormaliser } | { remove: true };
 type Outcome = { ref: AvatarRef | null } | { refused: Refusal; message?: string };
 
@@ -213,6 +215,7 @@ function ownChange(deps: Deps, actor: Actor, req: RequestMeta, change: Change) {
     },
     async () => {
       if (actor.kind !== "user") throw new UnauthenticatedError();
+      if (actingAsStaff(actor)) return { refusal: "act_as", label: actor.email, message: ACTING_PROFILE };
       return { owner: { kind: "person", id: actor.userId }, label: actor.email, meta: { self: true }, copies: rest };
     },
     change,
@@ -248,6 +251,7 @@ function personChange(deps: Deps, actor: Actor, req: RequestMeta, accountId: str
       target: { type: "person", id: userId },
     },
     async (repos) => {
+      if (actingAsStaff(actor)) return { refusal: "act_as", label: null, message: ACTING_PROFILE };
       if (own && !(actor.kind === "user" && actor.memberships.some((m) => m.accountId === accountId))) {
         throw new NotFoundError();
       }

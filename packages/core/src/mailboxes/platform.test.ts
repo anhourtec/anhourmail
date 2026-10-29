@@ -15,6 +15,7 @@ vi.mock("../aliases/entity", async (importOriginal) => {
 import {
   ACCOUNT_A,
   ACCOUNT_B,
+  actAs,
   anonymous,
   BREACHED_PW,
   deps as makeDeps,
@@ -184,6 +185,7 @@ describe("creating a free platform address", () => {
       address: `alias.taken@${PLATFORM}`,
       kind: "masked",
       enabled: true,
+      adminLocked: false,
       description: null,
       createdAt: new Date(0),
     });
@@ -223,7 +225,7 @@ describe("creating a free platform address", () => {
     const { d } = setup();
     const actingAs = {
       ...owner,
-      actingAs: { staffUserId: "ga", staffEmail: "ga@anhourtec.test", staffRole: "global_admin" as const, reason: "t" },
+      actingAs: actAs(ACCOUNT_A, "global_admin"),
     };
     await expect(claim(d, actingAs, ACCOUNT_A, "jane")).rejects.toThrow(ForbiddenError);
     expect(d.uow.state.mailboxes).toHaveLength(0);
@@ -458,7 +460,7 @@ describe("staff create a platform address in a customer account", () => {
     const { d } = setup();
     const actingAs = {
       ...globalAdmin,
-      actingAs: { staffUserId: "ga", staffEmail: "ga@anhourtec.test", staffRole: "global_admin" as const, reason: "t" },
+      actingAs: actAs(ACCOUNT_A, "global_admin"),
     };
     await expect(staffCreatePlatformMailbox(d, actingAs, ACCOUNT_A, { localPart: "jane" }, req)).rejects.toThrow(
       ForbiddenError,

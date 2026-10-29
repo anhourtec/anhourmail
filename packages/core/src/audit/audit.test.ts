@@ -110,14 +110,29 @@ describe("audit records", () => {
     expect(staff.actor).toMatchObject({ type: "staff", role: "support_admin", accountId: null });
     const plain = auditActor(user(), null);
     expect(plain.actor).toMatchObject({ type: "user", role: null });
-    const actingAs = auditActor(
-      {
-        ...user({ account: [[ACCOUNT_A, "owner"]] }),
-        actingAs: { staffUserId: "s1", staffEmail: "s@anhourtec.test", staffRole: "support_admin", reason: "ticket" },
+    // Act-as (ADR-0023): the staff member, recorded as staff with their platform role, in every scope.
+    const acting = {
+      ...user({ account: [[ACCOUNT_A, "auditor"]] }),
+      actingAs: {
+        sessionId: "as1",
+        accountId: ACCOUNT_A,
+        staffUserId: "u1",
+        staffEmail: "u1@example.test",
+        staffRole: "support_admin" as const,
+        reason: "ticket 1234",
+        expiresAt: new Date(0),
       },
-      ACCOUNT_A,
-    );
-    expect(actingAs.onBehalfOf).toEqual({ userId: "s1", email: "s@anhourtec.test" });
+    };
+    for (const scope of [ACCOUNT_A, null]) {
+      const out = auditActor(acting, scope, true);
+      expect(out.actor).toMatchObject({ type: "staff", role: "support_admin", accountId: ACCOUNT_A });
+      expect(out.onBehalfOf).toEqual({
+        userId: "u1",
+        email: "u1@example.test",
+        accountId: ACCOUNT_A,
+        sessionId: "as1",
+      });
+    }
     // A staff path records staff as staff even for a member of the account; a plain member is unaffected.
     const staffMember = user({ platform: ["support_admin"], account: [[ACCOUNT_A, "owner"]] });
     expect(auditActor(staffMember, ACCOUNT_A).actor).toMatchObject({ type: "user", role: "owner" });
@@ -249,15 +264,24 @@ describe("audit labels", () => {
     expect(
       describeActor({ ...base, actor: { ...base.actor, type: "staff", role: null, email: null } }).detail,
     ).toBeNull();
-    expect(describeActor({ ...base, onBehalfOf: { userId: "s", email: "s@anhourtec.test" } })).toEqual({
+    const actAs = { userId: "s", email: "s@anhourtec.test", accountId: "a", sessionId: "x" };
+    expect(
+      describeActor({
+        ...base,
+        actor: { ...base.actor, type: "staff", role: "support_admin", email: "s@anhourtec.test" },
+        onBehalfOf: actAs,
+      }),
+    ).toEqual({
       kind: "staff",
       label: "Anhourtec staff",
-      detail: "s@anhourtec.test acting as u@example.test",
+      detail: "Support access · Support Administrator · s@anhourtec.test",
     });
-    expect(
-      describeActor({ ...base, actor: { ...base.actor, email: null }, onBehalfOf: { userId: "s", email: "s@x" } })
-        .detail,
-    ).toBe("s@x acting as a member");
+    // Whatever the actor fields say, an entry with on_behalf_of is staff (rule 49).
+    expect(describeActor({ ...base, actor: { ...base.actor, role: null }, onBehalfOf: actAs })).toEqual({
+      kind: "staff",
+      label: "Anhourtec staff",
+      detail: "Support access · s@anhourtec.test",
+    });
     expect(describeActor({ ...base, actor: { ...base.actor, type: "system", email: "mailbox-purge" } })).toEqual({
       kind: "system",
       label: "System",

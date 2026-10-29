@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import { ACCOUNT_A, ACCOUNT_B, anonymous, deps as makeDeps, fixedClock, req, user } from "../__tests__/helpers";
 import {
+  AliasAdminLockedError,
+  AliasDailyLimitError,
   ConflictError,
   ForbiddenError,
   NotFoundError,
@@ -12,6 +14,7 @@ import {
 } from "../errors";
 import { maskedLocalPart, normaliseDescription } from "./entity";
 import { createAlias, deleteAlias, listAliases, setAliasEnabled } from "./service";
+import { PLANS } from "@anhourmail/shared/plans";
 
 const owner = user({ id: "owner", account: [[ACCOUNT_A, "owner"]] });
 const userAdmin = user({ id: "uadmin", account: [[ACCOUNT_A, "user_admin"]] });
@@ -144,7 +147,10 @@ describe("aliases service", () => {
     await expect(createAlias(d, owner, ACCOUNT_A, chosen("a5"), req)).rejects.toThrow(PlanLimitError);
     await createAlias(d, owner, ACCOUNT_A, { kind: "masked", mailboxId: MBX_OWNER }, req);
     const o = await listAliases(d, owner, ACCOUNT_A);
-    expect(o.limits).toEqual({ alias: { used: 5, max: 5 }, masked: { used: 1, max: 10 } });
+    expect(o.limits).toEqual({
+      alias: { used: 5, max: 5, createdToday: 5, perDay: PLANS.free.aliasCreationsPerDay.alias },
+      masked: { used: 1, max: 10, createdToday: 1, perDay: PLANS.free.aliasCreationsPerDay.masked },
+    });
   });
 
   it("masked aliases need the mailbox's domain to still be the account's", async () => {
@@ -175,7 +181,7 @@ describe("aliases service", () => {
     // Admins with alias.manage.any reach every mailbox.
     const all = await listAliases(d, userAdmin, ACCOUNT_A);
     expect(all.aliases).toHaveLength(2);
-    expect(all.limits.alias).toEqual({ used: 2, max: null }); // Plus: unlimited
+    expect(all.limits.alias).toMatchObject({ used: 2, max: null }); // Plus: unlimited
   });
 
   it("role addresses (postmaster@, admin@, …) are for account admins only", async () => {
@@ -224,5 +230,157 @@ describe("aliases service", () => {
     await expect(listAliases(d, anonymous, ACCOUNT_A)).rejects.toThrow(UnauthenticatedError);
     expect(d.uow.state.audit.some((e) => e.result === "denied" && e.action === "alias.created")).toBe(true);
     expect(d.uow.state.aliases).toHaveLength(1);
+  });
+});
+
+describe("admin lock: an alias an administrator turned off", () => {
+  async function lockedByAdmin(admin = userAdmin) {
+    const d = setup();
+    const a = await createAlias(d, member, ACCOUNT_A, chosen("kid.shop", MBX_MEMBER), req);
+    const off = await setAliasEnabled(d, admin, ACCOUNT_A, a.id, { enabled: false }, req);
+    return { d, a, off };
+  }
+
+  it("an administrator turning off someone else's alias locks it, audited", async () => {
+    const { d, off } = await lockedByAdmin();
+    expect(off).toMatchObject({ enabled: false, adminLocked: true });
+    expect(d.uow.state.aliases[0]).toMatchObject({ enabled: false, adminLocked: true });
+    expect(d.uow.state.audit.at(-1)).toMatchObject({
+      action: "alias.toggled",
+      result: "success",
+      meta: { enabled: false, adminLocked: true },
+    });
+    // Its person still sees it, marked.
+    const seen = await listAliases(d, member, ACCOUNT_A);
+    expect(seen.aliases).toEqual([expect.objectContaining({ address: "kid.shop@family.ca", adminLocked: true })]);
+  });
+
+  it("its person can't turn it back on or delete it (403, audited as denied); nothing changes", async () => {
+    const { d, a } = await lockedByAdmin();
+    await expect(setAliasEnabled(d, member, ACCOUNT_A, a.id, { enabled: true }, req)).rejects.toThrow(
+      AliasAdminLockedError,
+    );
+    expect(d.uow.state.audit.at(-1)).toMatchObject({
+      action: "alias.toggled",
+      result: "denied",
+      errorCode: "alias_admin_locked",
+      target: { id: a.id, label: "kid.shop@family.ca" },
+    });
+    await expect(deleteAlias(d, member, ACCOUNT_A, a.id, req)).rejects.toThrow(AliasAdminLockedError);
+    expect(d.uow.state.audit.at(-1)).toMatchObject({
+      action: "alias.deleted",
+      result: "denied",
+      errorCode: "alias_admin_locked",
+    });
+    expect(new AliasAdminLockedError()).toBeInstanceOf(ForbiddenError);
+    // Turning it off again is allowed and keeps the lock.
+    expect(await setAliasEnabled(d, member, ACCOUNT_A, a.id, { enabled: false }, req)).toMatchObject({
+      adminLocked: true,
+    });
+    expect(d.uow.state.aliases[0]).toMatchObject({ enabled: false, adminLocked: true });
+  });
+
+  it("an administrator lifts it by turning it on; then its person manages it again", async () => {
+    const { d, a } = await lockedByAdmin(owner);
+    const on = await setAliasEnabled(d, owner, ACCOUNT_A, a.id, { enabled: true }, req);
+    expect(on).toMatchObject({ enabled: true, adminLocked: false });
+    expect(d.uow.state.audit.at(-1)).toMatchObject({ meta: { enabled: true, adminLockLifted: true } });
+    // Off by its own person: no lock, so they can turn it on again.
+    expect(await setAliasEnabled(d, member, ACCOUNT_A, a.id, { enabled: false }, req)).toMatchObject({
+      adminLocked: false,
+    });
+    expect(await setAliasEnabled(d, member, ACCOUNT_A, a.id, { enabled: true }, req)).toMatchObject({
+      enabled: true,
+    });
+    expect(await deleteAlias(d, member, ACCOUNT_A, a.id, req)).toEqual({ id: a.id });
+  });
+
+  it("an administrator may delete a locked alias", async () => {
+    const { d, a } = await lockedByAdmin();
+    expect(await deleteAlias(d, userAdmin, ACCOUNT_A, a.id, req)).toEqual({ id: a.id });
+  });
+
+  it("an administrator turning off their own mailbox's alias doesn't lock it", async () => {
+    const d = setup();
+    const a = await createAlias(d, owner, ACCOUNT_A, chosen("me"), req);
+    expect(await setAliasEnabled(d, owner, ACCOUNT_A, a.id, { enabled: false }, req)).toMatchObject({
+      adminLocked: false,
+    });
+    expect(d.uow.state.audit.at(-1)?.meta).toEqual({ enabled: false });
+  });
+
+  it("out of scope stays 404, not the lock: another account and another person's mailbox", async () => {
+    const { d, a } = await lockedByAdmin();
+    const otherMember = user({ id: "other", account: [[ACCOUNT_A, "member"]] });
+    await expect(setAliasEnabled(d, otherMember, ACCOUNT_A, a.id, { enabled: true }, req)).rejects.toThrow(
+      NotFoundError,
+    );
+    await expect(setAliasEnabled(d, ownerB, ACCOUNT_A, a.id, { enabled: true }, req)).rejects.toThrow(NotFoundError);
+    expect(d.uow.state.aliases[0]).toMatchObject({ enabled: false, adminLocked: true });
+  });
+});
+
+describe("daily alias creation cap", () => {
+  const perDay = PLANS.free.aliasCreationsPerDay;
+
+  it("counts creations per UTC day and kind, not live aliases: deleting gives none back", async () => {
+    const d = setup("free");
+    for (let i = 0; i < perDay.alias; i++) {
+      const a = await createAlias(d, owner, ACCOUNT_A, chosen(`churn${String(i)}`), req);
+      await deleteAlias(d, owner, ACCOUNT_A, a.id, req);
+    }
+    expect(d.uow.state.aliases).toHaveLength(0);
+    const err = await createAlias(d, owner, ACCOUNT_A, chosen("one.more"), req).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AliasDailyLimitError);
+    expect(err).toMatchObject({
+      code: "alias_daily_limit",
+      message: `This account has created ${String(perDay.alias)} aliases today, the most it can in one day. You can create more after midnight UTC.`,
+    });
+    expect(d.uow.state.audit.at(-1)).toMatchObject({
+      action: "alias.created",
+      result: "denied",
+      errorCode: "alias_daily_limit",
+      meta: { kind: "alias", perDay: perDay.alias },
+    });
+    expect(d.uow.state.aliases).toHaveLength(0); // nothing created
+    // Masked aliases have their own count.
+    expect(await createAlias(d, owner, ACCOUNT_A, { kind: "masked", mailboxId: MBX_OWNER }, req)).toMatchObject({
+      kind: "masked",
+    });
+    expect((await listAliases(d, owner, ACCOUNT_A)).limits.alias).toMatchObject({
+      used: 0,
+      createdToday: perDay.alias,
+      perDay: perDay.alias,
+    });
+  });
+
+  it("is per account, and resets at midnight UTC", async () => {
+    const clock = fixedClock("2026-10-22T23:59:00Z");
+    const d = setup("free");
+    d.clock = clock;
+    for (let i = 0; i < perDay.masked; i++) {
+      const m = await createAlias(d, owner, ACCOUNT_A, { kind: "masked", mailboxId: MBX_OWNER }, req);
+      await deleteAlias(d, owner, ACCOUNT_A, m.id, req);
+    }
+    await expect(createAlias(d, member, ACCOUNT_A, { kind: "masked", mailboxId: MBX_MEMBER }, req)).rejects.toThrow(
+      AliasDailyLimitError,
+    );
+    // Another account isn't affected.
+    expect(await createAlias(d, ownerB, ACCOUNT_B, { kind: "masked", mailboxId: MBX_B }, req)).toBeTruthy();
+    clock.set(new Date("2026-10-23T00:00:00Z"));
+    expect(await createAlias(d, owner, ACCOUNT_A, { kind: "masked", mailboxId: MBX_OWNER }, req)).toBeTruthy();
+    expect((await listAliases(d, owner, ACCOUNT_A)).limits.masked.createdToday).toBe(1);
+  });
+
+  it("paid plans have their own (higher) daily caps", () => {
+    expect(PLANS.plus.aliasCreationsPerDay.alias).toBeGreaterThan(perDay.alias);
+    expect(PLANS.supporter.aliasCreationsPerDay).toEqual(PLANS.plus.aliasCreationsPerDay);
+  });
+
+  it("a refused create (bad input, plan limit) isn't counted", async () => {
+    const d = setup("free");
+    await expect(createAlias(d, owner, ACCOUNT_A, chosen("bad local"), req)).rejects.toThrow(ValidationError);
+    await expect(createAlias(d, ownerB, ACCOUNT_A, chosen("x"), req)).rejects.toThrow(NotFoundError);
+    expect((await listAliases(d, owner, ACCOUNT_A)).limits.alias.createdToday).toBe(0);
   });
 });

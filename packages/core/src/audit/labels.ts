@@ -143,8 +143,9 @@ const EXPLICIT: Partial<Record<AuditAction, string>> = {
   "abuse.report_resolved": "Abuse report resolved",
   "staff.role_granted": "Staff role granted",
   "staff.role_revoked": "Staff role revoked",
-  "staff.act_as_started": "Staff started acting as someone",
-  "staff.act_as_ended": "Staff stopped acting as someone",
+  "staff.act_as_started": "Anhourtec support access started",
+  "staff.act_as_renewed": "Anhourtec support access extended",
+  "staff.act_as_ended": "Anhourtec support access ended",
   "staff.account_viewed": "Staff viewed the account",
   "staff.credentials_reset": "Staff reset sign-in details",
   "data.export_requested": "Export requested",
@@ -167,6 +168,10 @@ const EXPLICIT: Partial<Record<AuditAction, string>> = {
   "forwarding.confirmed": "Forwarding address confirmed",
   "identity.changed": "Sender name or signature changed",
   "webmail.preferences_changed": "Webmail settings changed",
+  "webmail.signature_added": "Signature added",
+  "webmail.signature_changed": "Signature changed",
+  "webmail.signature_removed": "Signature deleted",
+  "webmail.signature_defaults_changed": "Default signatures changed",
   "message_trace.viewed": "Message trace viewed",
   "bulk.addon_enabled": "Bulk sending add-on turned on",
   "bulk.addon_disabled": "Bulk sending add-on turned off",
@@ -206,14 +211,14 @@ export type ActorDescription = {
 
 /**
  * Who did it (CLAUDE.md rule 49): staff actions on an account — including anything done during an act-as session —
- * are always labelled "Anhourtec staff" with the role and, for act-as, the person they acted as.
+ * are always labelled "Anhourtec staff" with the role and email; act-as entries say "Support access" first (ADR-0023).
  */
 export function describeActor(e: Pick<AuditEntry, "actor" | "onBehalfOf">): ActorDescription {
   if (e.onBehalfOf) {
     return {
       kind: "staff",
       label: "Anhourtec staff",
-      detail: `${e.onBehalfOf.email} acting as ${e.actor.email ?? "a member"}`,
+      detail: ["Support access", roleLabel(e.actor.role), e.onBehalfOf.email].filter(Boolean).join(" · "),
     };
   }
   switch (e.actor.type) {

@@ -7,6 +7,7 @@ import { GENERATED_MAILBOX_PASSWORD } from "@anhourmail/shared/security";
 import {
   ACCOUNT_A,
   ACCOUNT_B,
+  actAs,
   anonymous,
   BREACHED_PW,
   deps as makeDeps,
@@ -207,7 +208,7 @@ describe("addUser", () => {
     await expect(add(d, owner, { localPart: "KIM" })).rejects.toThrow(/already has a console login/);
     const acting = {
       ...owner,
-      actingAs: { staffUserId: "s", staffEmail: "s@x", staffRole: "support_admin" as const, reason: "r" },
+      actingAs: actAs(ACCOUNT_A, "support_admin"),
     };
     await expect(add(d, acting, { localPart: "lee" })).rejects.toThrow(ForbiddenError);
 

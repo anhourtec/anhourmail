@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 
-import { ACCOUNT_A, ACCOUNT_B, deps, req, user } from "../__tests__/helpers";
+import { ACCOUNT_A, ACCOUNT_B, actAs, deps, req, user } from "../__tests__/helpers";
 import { authorize, can } from "../actor";
 import { AccountSuspendedError } from "../errors";
 import type { Mailbox, MailboxStatus } from "../mailboxes/entity";
@@ -139,7 +139,7 @@ describe("suspendAccount", () => {
     });
     const actingAs = {
       ...GA,
-      actingAs: { staffUserId: "ga", staffEmail: "ga@x", staffRole: "global_admin" as const, reason: "r" },
+      actingAs: actAs(ACCOUNT_A, "global_admin"),
     };
     await expect(suspendAccount(d, actingAs, ACCOUNT_A, { reason: "spam" }, SESSION, req)).rejects.toMatchObject({
       code: "forbidden",

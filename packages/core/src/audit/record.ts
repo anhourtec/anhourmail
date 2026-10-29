@@ -24,10 +24,19 @@ export function auditActor(
         onBehalfOf: null,
       };
     case "user": {
-      const asStaff = staffPath && actor.actingAs === undefined && actor.platformRoles.length > 0;
+      // Staff acting in a customer account (ADR-0023): always recorded as staff, with their platform role and the
+      // act-as session, whichever scope the entry lands in (rule 49).
+      if (actor.actingAs) {
+        const a = actor.actingAs;
+        return {
+          actor: { type: "staff", userId: actor.userId, email: actor.email, role: a.staffRole, accountId: a.accountId },
+          onBehalfOf: { userId: a.staffUserId, email: a.staffEmail, accountId: a.accountId, sessionId: a.sessionId },
+        };
+      }
+      const asStaff = staffPath && actor.platformRoles.length > 0;
       const membership =
         accountId === null || asStaff ? undefined : actor.memberships.find((m) => m.accountId === accountId);
-      const isStaffAction = actor.actingAs === undefined && membership === undefined && actor.platformRoles.length > 0;
+      const isStaffAction = membership === undefined && actor.platformRoles.length > 0;
       return {
         actor: {
           type: isStaffAction ? "staff" : "user",
@@ -36,7 +45,7 @@ export function auditActor(
           role: membership?.role ?? actor.platformRoles[0] ?? null,
           accountId: membership?.accountId ?? null,
         },
-        onBehalfOf: actor.actingAs ? { userId: actor.actingAs.staffUserId, email: actor.actingAs.staffEmail } : null,
+        onBehalfOf: null,
       };
     }
   }

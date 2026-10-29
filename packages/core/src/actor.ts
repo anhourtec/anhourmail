@@ -21,6 +21,20 @@ import {
 /** Who is asking. Built by the app from the session; services never trust client-supplied roles. */
 export type Membership = { accountId: string; role: AccountRole };
 
+/** A staff act-as session as the actor carries it (ADR-0023). */
+export type ActingAs = {
+  /** The act-as session id (recorded in every audit entry's `on_behalf_of`). */
+  sessionId: string;
+  /** The customer account being acted in (also the actor's only membership). */
+  accountId: string;
+  staffUserId: string;
+  staffEmail: string;
+  /** The staff role that allowed it (an `ACT_AS_ROLES` role), recorded as the audit entry's role. */
+  staffRole: PlatformRole;
+  reason: string;
+  expiresAt: Date;
+};
+
 export type UserActor = {
   kind: "user";
   userId: string;
@@ -30,8 +44,13 @@ export type UserActor = {
   platformRoles: readonly PlatformRole[];
   memberships: readonly Membership[];
   suspended: boolean;
-  /** Set during a staff "act as" session: the staff member really acting. */
-  actingAs?: { staffUserId: string; staffEmail: string; staffRole: PlatformRole; reason: string };
+  /**
+   * Set while Anhourtec staff act in a customer account (ADR-0023). The actor is still the staff member (`userId`,
+   * `email` are theirs; `staffUserId` / `staffEmail` repeat them for audit attribution), with their platform roles set
+   * aside and exactly one membership: the target account with `ACT_AS_ACCOUNT_ROLE` (read-only). Services that must
+   * never run during act-as (passwords, app passwords, staff tools) refuse on this field as well.
+   */
+  actingAs?: ActingAs;
   /**
    * A sign-in factor one of their accounts requires and they haven't set up (core `missingFactor`). While set, only
    * `self` permissions pass: everything else answers `EnrolmentRequiredError` until they enrol.

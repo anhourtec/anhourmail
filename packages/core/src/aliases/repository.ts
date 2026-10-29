@@ -8,6 +8,14 @@ export type AliasRepository = {
   count(accountId: string, kind: AliasKind): Promise<number>;
   /** Throws `ConflictError` if the address is already an alias (the database's unique index is the backstop). */
   insert(alias: MailAlias): Promise<void>;
-  setEnabled(id: string, enabled: boolean): Promise<void>;
+  /** `adminLocked` is stored as given (the service keeps it false whenever `enabled` is true). */
+  setEnabled(id: string, enabled: boolean, adminLocked: boolean): Promise<void>;
   delete(id: string): Promise<void>;
+  /**
+   * Aliases of this kind the account created on this UTC day (`YYYY-MM-DD`), deleted ones included: a count of
+   * creations, never of the aliases that exist.
+   */
+  creationsOn(accountId: string, kind: AliasKind, day: string): Promise<number>;
+  /** Counts one more creation of this kind on this UTC day; the account's counts from before yesterday may be dropped (yesterday's is kept for clock skew). */
+  recordCreation(accountId: string, kind: AliasKind, day: string): Promise<void>;
 };

@@ -1,17 +1,37 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { DkimKey } from "@anhourmail/shared/dns";
 
-import type { DesiredMailbox, DomainState, JobKind, MailboxState, ProvisioningJob } from "./types";
+import type {
+  ClaimedJob,
+  DesiredMailbox,
+  DomainState,
+  JobClaim,
+  JobKind,
+  MailboxState,
+  ProvisioningJob,
+} from "./types";
 
-/** The provisioning queue. `claimNext` is atomic: two workers never get the same job. */
+/**
+ * The provisioning queue. `claimNext` is atomic: two workers never get the same job. Each claim carries a new lock
+ * token; `complete`, `retry` and `giveUp` change the job only while that claim still holds it (status `running` with
+ * the same token) and return whether they did. A claim left running for `STALE_RUNNING_MS` can be taken over by
+ * another worker, so the first worker's late outcome is then a no-op (`false`) instead of overwriting the newer one.
+ */
 export type ProvisioningRepository = {
   /** Idempotent: a queued job for the same kind + subject is reused, not duplicated. */
   enqueue(input: { kind: JobKind; subjectId: string; runAfter: Date }): Promise<ProvisioningJob>;
   /** Never claims a job whose subject already has another job running (one subject is applied one job at a time). */
-  claimNext(now: Date): Promise<ProvisioningJob | null>;
-  complete(id: string, now: Date): Promise<void>;
-  retry(id: string, error: string, runAfter: Date, now: Date): Promise<void>;
-  giveUp(id: string, error: string, now: Date): Promise<void>;
+  claimNext(now: Date): Promise<ClaimedJob | null>;
+  /**
+   * Re-confirms the claim right before a side effect and renews its lease (`locked_at = now`), so a worker that is
+   * still working isn't taken over. False (nothing changed) when another claim holds the job now or it isn't running:
+   * the caller must stop without touching the mail server or the directory. Inside a unit of work it also holds the
+   * job row until commit, so a takeover waits for the writes that follow it in the same unit.
+   */
+  renew(claim: JobClaim, now: Date): Promise<boolean>;
+  complete(claim: JobClaim, now: Date): Promise<boolean>;
+  retry(claim: JobClaim, error: string, runAfter: Date, now: Date): Promise<boolean>;
+  giveUp(claim: JobClaim, error: string, now: Date): Promise<boolean>;
   get(id: string): Promise<ProvisioningJob | null>;
   /** The most recently queued job of this kind for this subject, whatever its status, or null. */
   latest(kind: JobKind, subjectId: string): Promise<ProvisioningJob | null>;

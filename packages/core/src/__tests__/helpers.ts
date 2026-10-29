@@ -2,10 +2,10 @@
 import { createHash } from "node:crypto";
 
 import { platformFacts } from "@anhourmail/shared/platform";
-import type { AccountRole, PlatformRole } from "@anhourmail/shared/rbac";
+import { ACT_AS_ACCOUNT_ROLE, type AccountRole, type PlatformRole } from "@anhourmail/shared/rbac";
 
 import { MemoryUnitOfWork } from "../../../adapters/src/memory";
-import type { Actor, UserActor } from "../actor";
+import type { ActingAs, Actor, UserActor } from "../actor";
 import type { Clock, Deps, RequestMeta } from "../ports";
 
 export const ACCOUNT_A = "11111111-1111-4111-8111-111111111111";
@@ -39,6 +39,28 @@ export function user(
 }
 
 export const anonymous: Actor = { kind: "anonymous" };
+
+/** An act-as record for `accountId` (ADR-0023), for tests that check a service refuses during act-as. */
+export function actAs(accountId: string, staffRole: PlatformRole = "support_admin", staffUserId = "staff-1"): ActingAs {
+  return {
+    sessionId: "act-as-1",
+    accountId,
+    staffUserId,
+    staffEmail: `${staffUserId}@anhourtec.test`,
+    staffRole,
+    reason: "Customer ticket 1234",
+    expiresAt: new Date("2099-01-01T00:00:00Z"),
+  };
+}
+
+/** Staff acting in `accountId` as the server builds them: platform roles set aside, read-only membership there only. */
+export function actingStaff(accountId: string, staffRole: PlatformRole = "support_admin", id = "staff-1"): UserActor {
+  return {
+    ...user({ id, account: [[accountId, ACT_AS_ACCOUNT_ROLE]] }),
+    email: `${id}@anhourtec.test`,
+    actingAs: actAs(accountId, staffRole, id),
+  };
+}
 
 /**
  * Stands in for the argon2id hasher (`@anhourmail/adapters` `mailboxPasswordHasher`): an argon2id-shaped PHC string

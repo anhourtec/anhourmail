@@ -3,9 +3,9 @@ import { isSystemLocalPart } from "@anhourmail/shared/addresses";
 
 import { turnOffCatchAllFor } from "../domains/catch-all";
 import { mutation } from "../mutation";
-import type { Deps, RequestMeta } from "../ports";
+import type { Deps, Repositories, RequestMeta } from "../ports";
 import type { MailServer } from "./ports";
-import { backoffMs, type JobKind, MAX_ATTEMPTS, type ProvisioningJob } from "./types";
+import { backoffMs, type ClaimedJob, type JobKind, MAX_ATTEMPTS } from "./types";
 
 const SYSTEM = { kind: "system", name: "provisioning" } as const;
 const req = (id: string): RequestMeta => ({ requestId: `job-${id}`, ip: null, userAgent: null });
@@ -19,13 +19,33 @@ export function enqueueProvisioning(deps: Deps, input: { kind: JobKind; subjectI
 const describe = (err: unknown): string =>
   (err instanceof Error ? `${err.name}: ${err.message}` : String(err)).replace(/\s+/g, " ").slice(0, 300);
 
-async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promise<void> {
+/** This run's claim on the job was taken over by another worker: stop, touching nothing more. */
+class LockLostError extends Error {
+  constructor() {
+    super("provisioning job claim lost");
+    this.name = "LockLostError";
+  }
+}
+
+/**
+ * Applies a claimed job. Every call to the mail server is preceded by `held`: one unit of work that re-confirms this
+ * claim (renewing its lease) and re-reads the subject's current desired state, so a worker that stalled past
+ * `STALE_RUNNING_MS` and was taken over stops instead of pushing what it read before (an old password hash, a lifted
+ * suspension, an old alias set or catch-all). Every directory write after a call renews the claim in its own
+ * transaction too. A takeover can then only land between `held` and the call itself, which the mail-server client's
+ * request timeout (seconds) keeps far below the stale limit (minutes).
+ */
+async function apply(deps: Deps, mail: MailServer, job: ClaimedJob): Promise<void> {
+  const held = <T>(fn: (r: Repositories) => Promise<T>): Promise<T> =>
+    deps.uow.run(async (r) => {
+      if (!(await r.provisioning.renew(job, deps.clock.now()))) throw new LockLostError();
+      return fn(r);
+    });
   if (job.kind === "app_password.revoke") {
     // Subject: a mailbox. Each `revoking` app password comes off the mail server, then its row goes.
-    const pending = await deps.uow.run((r) => r.appPasswords.revoking(job.subjectId));
-    if (pending.length === 0) return;
-    const mailbox = await deps.uow.run((r) => r.directory.getMailbox(job.subjectId));
+    const pending = await held((r) => r.appPasswords.revoking(job.subjectId));
     for (const p of pending) {
+      const mailbox = await held((r) => r.directory.getMailbox(job.subjectId));
       if (mailbox?.stalwartId) {
         await mail.revokeAppPassword({
           externalId: mailbox.stalwartId,
@@ -33,17 +53,18 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
           createdAt: p.credentialCreatedAt,
         });
       }
-      await deps.uow.run((r) => r.appPasswords.deleteRevoked(p.id));
+      await held((r) => r.appPasswords.deleteRevoked(p.id));
     }
     return;
   }
   if (job.kind === "mailbox.password") {
     // Subject: a mailbox. Sets the password waiting for it (an argon2id hash; the worker never sees a password).
-    const m = await deps.uow.run((r) => r.directory.getMailbox(job.subjectId));
+    // Read right before the call, under a confirmed claim: the hash sent is the one waiting now.
+    const m = await held((r) => r.directory.getMailbox(job.subjectId));
     if (!m?.pendingPasswordHash) return; // gone, or already applied by an earlier run
     if (m.status === "deleting") {
       // Going away: nobody can sign in to it, so the waiting hash is simply dropped.
-      await deps.uow.run((r) => r.directory.clearPendingPassword(m.id));
+      await held((r) => r.directory.clearPendingPassword(m.id));
       return;
     }
     if (m.stalwartId === null) throw new Error("mailbox is not on the mail server yet");
@@ -53,7 +74,7 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
       passwordHash: m.pendingPasswordHash,
       grant: m.pendingPasswordGrant,
     });
-    await deps.uow.run(async (r) => {
+    await held(async (r) => {
       await r.directory.passwordApplied(m.id, m.pendingPasswordHash, credentialId);
       // The person's own password is on the mail server now: their first-sign-in password change is done. (An
       // admin's reset never clears it; a failed job leaves it set, and the old password keeps working.)
@@ -62,15 +83,15 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
     return;
   }
   if (job.kind === "domain.remove") {
-    const domain = await deps.uow.run((r) => r.directory.getDomain(job.subjectId));
+    const domain = await held((r) => r.directory.getDomain(job.subjectId));
     if (!domain) return; // already gone
     if (domain.status !== "removing") throw new Error(`domain not marked for removal (status ${domain.status})`);
     // Another row recorded on the mail server for this name (a claim from before the per-name lock) keeps it there:
     // only this row goes. While this row is on the mail server no other pending claim can be recorded there.
-    if (!(await deps.uow.run((r) => r.directory.domainOnMailServerElsewhere(domain.name, domain.id)))) {
+    if (!(await held((r) => r.directory.domainOnMailServerElsewhere(domain.name, domain.id)))) {
       await mail.removeDomain(domain.name);
     }
-    await deps.uow.run((r) => r.directory.deleteDomain(domain.id));
+    await held((r) => r.directory.deleteDomain(domain.id));
     return;
   }
   if (job.kind === "domain.ensure") {
@@ -91,24 +112,25 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
     if (pending && (await deps.uow.run((r) => r.directory.domainOnMailServerElsewhere(domain.name, domain.id)))) {
       throw new Error("domain is being set up by another account");
     }
-    // The catch-all as it is now (only while its mailbox is active; turned off otherwise; never while pending).
-    const catchAll = pending ? null : await deps.uow.run((r) => r.catchAll.targetAddress(domain.id));
+    // The catch-all as it is now (only while its mailbox is active; turned off otherwise; never while pending), read
+    // under a confirmed claim right before the call.
+    const catchAll = await held(async (r) => (pending ? null : r.catchAll.targetAddress(domain.id)));
     const { externalId } = await mail.ensureDomain(domain.name, catchAll);
     // Deleted (still pending) while we were adding it: take it off again unless someone else holds the name now.
     const offAgainUnlessHeld = async () => {
-      const held = await deps.uow.run(
+      const kept = await held(
         async (r) =>
           (await r.directory.claimedDomainOwner(domain.name)) !== null ||
           (await r.directory.domainOnMailServerElsewhere(domain.name, domain.id)),
       );
-      if (!held) await mail.removeDomain(domain.name);
+      if (!kept) await mail.removeDomain(domain.name);
     };
     const now = await deps.uow.run((r) => r.directory.getDomain(domain.id));
     if (!now) return offAgainUnlessHeld();
     // Marked for removal while we were adding it: take it off again so the mail server keeps no orphan (unless another
     // row is recorded there for this name).
     if (now.status === "removing") {
-      if (!(await deps.uow.run((r) => r.directory.domainOnMailServerElsewhere(domain.name, domain.id)))) {
+      if (!(await held((r) => r.directory.domainOnMailServerElsewhere(domain.name, domain.id)))) {
         await mail.removeDomain(domain.name);
       }
       return;
@@ -117,7 +139,7 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
     // the moment before this (it had no mail-server id yet) is caught by the second read. Recorded under the per-name
     // lock, re-checking that no other claim was recorded meanwhile: two pending claims that both passed the check
     // above can't both own the mail server's domain (the loser leaves it in place: it is the winner's now).
-    const recorded = await deps.uow.run(async (r) => {
+    const recorded = await held(async (r) => {
       await r.directory.lockDomainName(domain.name);
       const holder = await r.directory.claimedDomainOwner(domain.name);
       if (holder !== null && holder !== domain.accountId) return false;
@@ -131,7 +153,7 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
     // The RSA key (the one every receiver checks) is created a moment after the domain: retry until it is there, so
     // the customer is never shown a partial set.
     if (!keys.some((k) => /(^|;)\s*k=rsa\s*(;|$)/i.test(k.value))) throw new Error("DKIM keys not ready yet");
-    await deps.uow.run((r) => r.directory.markDomain(domain.id, { lastError: null, dkimKeys: keys }));
+    await held((r) => r.directory.markDomain(domain.id, { lastError: null, dkimKeys: keys }));
     return;
   }
   const first = await deps.uow.run((r) => r.directory.getMailbox(job.subjectId));
@@ -141,8 +163,9 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
     r.directory.claimedDomainOwner(first.address.slice(first.address.lastIndexOf("@") + 1)),
   );
   if (owner !== null && owner !== first.accountId) throw new Error("domain belongs to another account");
-  // Read again right before talking to the mail server, so what we apply is the latest intent.
-  const mailbox = await deps.uow.run((r) => r.directory.getMailbox(job.subjectId));
+  // Read again right before talking to the mail server, under a confirmed claim, so what we apply is the latest intent
+  // (status and suspension, quota, aliases, sender name, a waiting password).
+  const mailbox = await held((r) => r.directory.getMailbox(job.subjectId));
   if (!mailbox) throw new Error("mailbox not found");
   const deleting = mailbox.status === "deleting";
   // A deleted mailbox that never reached the mail server has nothing to take off it; one whose grace period has
@@ -163,7 +186,7 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
       ? []
       : mailbox.aliases.map((a) => ({ address: a.address, enabled: a.enabled, description: a.description })),
   });
-  await deps.uow.run(async (r) => {
+  await held(async (r) => {
     const current = await r.directory.getMailbox(mailbox.id);
     if (!current) return;
     // Changed while we worked (suspended, resumed, deleted, restored): that change queued its own job, which applies
@@ -187,16 +210,35 @@ async function apply(deps: Deps, mail: MailServer, job: ProvisioningJob): Promis
 const isDue = (purgeAfter: Date | null, now: Date): boolean => purgeAfter !== null && purgeAfter <= now;
 
 /**
+ * A job this worker ran. `lockLost`: its claim went stale while it ran and another worker took the job over, so this
+ * run's outcome (done, retry or give up) was discarded and the newer claim decides (the caller logs it).
+ */
+export type ProcessedJob = ClaimedJob & { lockLost: boolean };
+
+/**
  * Claims and runs one job. Returns the job (or null when the queue is empty). Failures retry with backoff; the
  * last failure gives up, marks the subject failed and writes `platform.provisioning_failed` to the audit log.
+ * Every outcome is recorded only while this run's claim still holds the job (its lock token); otherwise nothing of it
+ * is written and `lockLost` is set.
  */
-export async function runNextJob(deps: Deps, mail: MailServer): Promise<ProvisioningJob | null> {
+export async function runNextJob(deps: Deps, mail: MailServer): Promise<ProcessedJob | null> {
   const job = await deps.uow.run((r) => r.provisioning.claimNext(deps.clock.now()));
   if (!job) return null;
+  return runClaimedJob(deps, mail, job);
+}
+
+/**
+ * Runs a job this worker has already claimed (`runNextJob` = claim + this). Exported for tests that hold a claim while
+ * another worker takes the job over.
+ */
+export async function runClaimedJob(deps: Deps, mail: MailServer, job: ClaimedJob): Promise<ProcessedJob> {
+  let owned = true;
   try {
     await apply(deps, mail, job);
-    await deps.uow.run((r) => r.provisioning.complete(job.id, deps.clock.now()));
+    owned = await deps.uow.run((r) => r.provisioning.complete(job, deps.clock.now()));
   } catch (err) {
+    // Taken over before a side effect: nothing of this run is recorded (the newer claim applies the latest state).
+    if (err instanceof LockLostError) return { ...job, lockLost: true };
     const error = describe(err);
     const now = deps.clock.now();
     if (job.attempts >= MAX_ATTEMPTS) {
@@ -211,7 +253,15 @@ export async function runNextJob(deps: Deps, mail: MailServer): Promise<Provisio
           target: { type: job.kind, id: job.subjectId },
         },
         async (repos) => {
-          await repos.provisioning.giveUp(job.id, error, now);
+          // Taken over by another worker: its claim decides; the subject is left as it is (audited as denied).
+          if (!(await repos.provisioning.giveUp(job, error, now))) {
+            owned = false;
+            return {
+              result: undefined,
+              denied: { code: "lock_lost" },
+              meta: { jobId: job.id, attempts: job.attempts },
+            };
+          }
           let catchAllOff: string[] = [];
           let adminPasswordKept = false;
           if (job.kind === "mailbox.password") {
@@ -254,12 +304,12 @@ export async function runNextJob(deps: Deps, mail: MailServer): Promise<Provisio
         },
       );
     } else {
-      await deps.uow.run((r) =>
-        r.provisioning.retry(job.id, error, new Date(now.getTime() + backoffMs(job.attempts)), now),
+      owned = await deps.uow.run((r) =>
+        r.provisioning.retry(job, error, new Date(now.getTime() + backoffMs(job.attempts)), now),
       );
     }
   }
-  return job;
+  return { ...job, lockLost: !owned };
 }
 
 export type DriftReport = {

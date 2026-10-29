@@ -52,4 +52,48 @@ export type WebmailSettingsRepository = {
   /** The pending target with this token hash (any mailbox), or null. */
   forwardingByToken(tokenHash: string): Promise<ForwardingTarget | null>;
   clearForwarding(mailboxId: string): Promise<void>;
+} & SignatureRepository;
+
+/**
+ * One of a mailbox's named signatures (docs/internal/05-webmail.md "Signatures"). `html` was sanitised by the BFF
+ * before it got here and `text` was generated from it; neither is ever logged or audited.
+ */
+export type StoredSignature = {
+  id: string;
+  mailboxId: string;
+  accountId: string;
+  name: string;
+  html: string;
+  text: string;
+  /** The default for new messages (at most one per mailbox). */
+  defaultNew: boolean;
+  /** The default for replies and forwards (at most one per mailbox). */
+  defaultReply: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type SignatureRepository = {
+  /**
+   * Holds the mailbox's signatures for the rest of the transaction, so parallel changes can't both pass the count and
+   * size caps (Postgres: a transaction-scoped advisory lock keyed by the mailbox id).
+   */
+  lockSignatures(mailboxId: string): Promise<void>;
+  /** The mailbox's signatures, oldest first. */
+  signatures(mailboxId: string): Promise<StoredSignature[]>;
+  /** Whether the mailbox's signatures were started (the old single signature was brought over, or one was added). */
+  signaturesStarted(mailboxId: string): Promise<boolean>;
+  markSignaturesStarted(mailboxId: string, at: Date): Promise<void>;
+  insertSignature(signature: StoredSignature): Promise<void>;
+  /** Changes the name and/or content of one of the mailbox's signatures; false when it isn't there. */
+  updateSignature(
+    mailboxId: string,
+    id: string,
+    change: { name?: string; html?: string; text?: string },
+    at: Date,
+  ): Promise<boolean>;
+  /** Deletes one of the mailbox's signatures (a default it was falls back to none); false when it isn't there. */
+  deleteSignature(mailboxId: string, id: string): Promise<boolean>;
+  /** Sets both defaults (null is none); ids must be the mailbox's own (checked by the caller). */
+  setSignatureDefaults(mailboxId: string, defaults: { newMessage: string | null; reply: string | null }): Promise<void>;
 };

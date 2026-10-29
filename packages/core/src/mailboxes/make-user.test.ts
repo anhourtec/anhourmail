@@ -7,6 +7,7 @@ import { GENERATED_MAILBOX_PASSWORD } from "@anhourmail/shared/security";
 import {
   ACCOUNT_A,
   ACCOUNT_B,
+  actAs,
   anonymous,
   deps as makeDeps,
   fakeHasher,
@@ -249,7 +250,7 @@ describe("makeMailboxUser", () => {
     await expect(make(d, owner, { profile: { country: "Nowhere" } })).rejects.toThrow(ValidationError);
     const acting = {
       ...owner,
-      actingAs: { staffUserId: "s", staffEmail: "s@x", staffRole: "support_admin" as const, reason: "r" },
+      actingAs: actAs(ACCOUNT_A, "support_admin"),
     };
     await expect(make(d, acting)).rejects.toThrow(ForbiddenError);
     d.uow.state.userEmails.someone = "support@family.ca";

@@ -11,7 +11,12 @@ import type { CatchAllRepository, DomainRepository } from "./domains/repository"
 import type { MailboxPasswordRepository, MailboxRepository, PlatformAddressRepository } from "./mailboxes/repository";
 import type { MailboxStorageRepository } from "./mailboxes/storage";
 import type { InviteRepository, PeopleRepository } from "./people/repository";
-import type { PlatformAccountRepository, StaffRepository, SuspensionRepository } from "./platform/repository";
+import type {
+  ActAsRepository,
+  PlatformAccountRepository,
+  StaffRepository,
+  SuspensionRepository,
+} from "./platform/repository";
 import type { MailDirectoryRepository, ProvisioningRepository } from "./provisioning/ports";
 import type { SecurityRepository } from "./security/repository";
 import type { WebmailSettingsRepository } from "./webmail/settings-repository";
@@ -39,6 +44,7 @@ export type Repositories = {
   appPasswords: AppPasswordRepository;
   catchAll: CatchAllRepository;
   avatars: AvatarRepository;
+  actAs: ActAsRepository;
 };
 
 /**
