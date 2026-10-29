@@ -22,7 +22,16 @@ import {
   VenetianMaskIcon,
 } from "lucide-react";
 
-import { ADDONS, BILLING, formatPrice, PLAN_ORDER, PLANS, PRODUCT_DOMAIN, storageText } from "@anhourmail/shared";
+import {
+  ADDONS,
+  ALIASES_PER_MAILBOX,
+  BILLING,
+  formatPrice,
+  PLAN_ORDER,
+  PLANS,
+  PRODUCT_DOMAIN,
+  storageText,
+} from "@anhourmail/shared";
 import { Breadcrumbs, type Crumb } from "@anhourmail/ui/page-header";
 
 import { PROTOCOL_LIST } from "@/lib/ia";
@@ -267,8 +276,12 @@ export function PlanCards() {
                   p.includedMailboxes === 1 ? `${String(p.storagePoolGb)} GB storage` : storageText(p).pool,
                   p.includedMailboxes === 1 ? "1 mailbox" : `${String(p.includedMailboxes)} mailboxes included`,
                   p.customDomains ? "Bring your own domains" : `An @${PRODUCT_DOMAIN} address`,
-                  p.aliases === null ? "Unlimited aliases" : `${p.aliases} aliases`,
-                  p.maskedAliases === null ? "Unlimited masked aliases" : `${p.maskedAliases} masked aliases`,
+                  p.aliases === null
+                    ? `Up to ${String(ALIASES_PER_MAILBOX)} aliases per mailbox`
+                    : `${String(p.aliases)} aliases`,
+                  p.maskedAliases === null
+                    ? "Masked aliases within the same allowance"
+                    : `${String(p.maskedAliases)} masked aliases`,
                   ...(p.catchAll ? ["Catch-all addresses"] : []),
                   ...(p.supporterBadge ? ["Supporter badge and early features"] : []),
                 ].map((line) => (

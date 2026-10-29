@@ -6,6 +6,7 @@ import { CheckIcon, MinusIcon } from "lucide-react";
 
 import {
   ADDONS,
+  aliasAllowance,
   BILLING,
   formatPrice,
   MAX_MAILBOXES,
@@ -59,8 +60,9 @@ const ROWS: readonly { label: string; value: (p: Plan) => RowValue }[] = [
     value: (p) => (p.platformMailboxes === null ? `Up to ${String(MAX_MAILBOXES)}` : String(p.platformMailboxes)),
   },
   { label: "Your own domains", value: (p) => p.customDomains },
-  { label: "Aliases", value: (p) => (p.aliases === null ? "Unlimited" : String(p.aliases)) },
-  { label: "Masked aliases", value: (p) => (p.maskedAliases === null ? "Unlimited" : String(p.maskedAliases)) },
+  // At a time; paid plans: per mailbox, both kinds together (packages/shared/src/plans.ts).
+  { label: "Aliases", value: (p) => aliasAllowance(p).aliases },
+  { label: "Masked aliases", value: (p) => aliasAllowance(p).maskedAliases },
   { label: "Catch-all", value: (p) => p.catchAll },
   { label: "Webmail and every mail app", value: () => true },
   { label: "Export anytime", value: () => true },

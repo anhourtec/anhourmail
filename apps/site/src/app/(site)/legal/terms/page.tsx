@@ -2,7 +2,17 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { ADDONS, BILLING, BRAND, BULK_MAIL, formatPrice, PLAN_ORDER, PLANS, PRODUCT_DOMAIN } from "@anhourmail/shared";
+import {
+  ACCOUNT_DELETION_GRACE_DAYS,
+  ADDONS,
+  BILLING,
+  BRAND,
+  BULK_MAIL,
+  formatPrice,
+  PLAN_ORDER,
+  PLANS,
+  PRODUCT_DOMAIN,
+} from "@anhourmail/shared";
 
 import { type LegalSection, LegalPage } from "@/components/legal/legal-page";
 import { LEGAL_CONTACTS } from "@/lib/legal";
@@ -141,8 +151,9 @@ const SECTIONS: LegalSection[] = [
     body: (
       <>
         <p>
-          <strong>You</strong> can delete your account at any time from the console. Mail, contacts and settings are
-          then deleted; billing records are kept only as long as the law requires.
+          <strong>You</strong> can delete your account at any time from the console. Its mailboxes are suspended at once
+          and, after a {ACCOUNT_DELETION_GRACE_DAYS}-day grace period in which you can cancel, its mail, contacts and
+          settings are deleted; billing records are kept only as long as the law requires.
         </p>
         <p>
           <strong>We</strong> may restrict, suspend or close an account that breaks these terms or the Acceptable Use

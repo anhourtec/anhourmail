@@ -20,7 +20,7 @@ import {
   ZapIcon,
 } from "lucide-react";
 
-import { ADDONS, BILLING, PRODUCT_DOMAIN } from "@anhourmail/shared";
+import { ADDONS, ALIASES_PER_MAILBOX, BILLING, PRODUCT_DOMAIN } from "@anhourmail/shared";
 
 import { AliasToggles, DnsChecks, InstantList, TerminalCard, TrackerBlocked } from "@/components/landing/illustrations";
 import { WebmailMock } from "@/components/landing/webmail-mock";
@@ -55,7 +55,11 @@ const FEATURES = [
     eyebrow: "Aliases and masked aliases",
     title: "A different address for every sign-up.",
     body: "Give each shop and newsletter its own random address. See which ones get mail, and switch one off the moment it’s sold.",
-    bullets: ["One-click off switch", "A note on each, so you know where you used it", "Unlimited on paid plans"],
+    bullets: [
+      "One-click off switch",
+      "A note on each, so you know where you used it",
+      `Up to ${String(ALIASES_PER_MAILBOX)} per mailbox on paid plans`,
+    ],
     bloom: "violet",
     art: <AliasToggles />,
   },

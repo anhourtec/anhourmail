@@ -30,7 +30,7 @@ import {
   ZapIcon,
 } from "lucide-react";
 
-import { customerDomainRecords, PLAN_ORDER, PLANS, PUBLIC_PLATFORM } from "@anhourmail/shared";
+import { aliasAllowance, customerDomainRecords, PLAN_ORDER, PLANS, PUBLIC_PLATFORM } from "@anhourmail/shared";
 
 import { AuditMock, ConsoleMock } from "@/components/landing/console-mock";
 import { DkimKeys, SettingsCard } from "@/components/landing/extra-art";
@@ -72,7 +72,6 @@ const requiredRecords = customerDomainRecords("example.com", "x", PUBLIC_PLATFOR
   { selector: "rsa", value: "" },
   { selector: "ed25519", value: "" },
 ]).filter((r) => r.required).length;
-const limit = (n: number | null) => (n === null ? "unlimited" : String(n));
 
 export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
   "custom-domains": {
@@ -201,7 +200,7 @@ export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
       {
         icon: LayersIcon,
         title: "Generous limits",
-        body: `Free: ${limit(PLANS.free.aliases)} aliases and ${limit(PLANS.free.maskedAliases)} masked aliases. ${PLANS.plus.name}: ${limit(PLANS.plus.aliases)}.`,
+        body: `Free: ${aliasAllowance(PLANS.free).aliases} aliases and ${aliasAllowance(PLANS.free).maskedAliases} masked aliases at a time. ${PLANS.plus.name}: up to ${aliasAllowance(PLANS.plus).aliases}, both kinds together.`,
       },
     ],
     faq: [

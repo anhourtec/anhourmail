@@ -2,7 +2,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { BRAND } from "@anhourmail/shared";
+import { ACCOUNT_DELETION_GRACE_DAYS, BRAND, DATA_EXPORT } from "@anhourmail/shared";
 
 import { type LegalSection, LegalPage } from "@/components/legal/legal-page";
 import { LEGAL_CONTACTS } from "@/lib/legal";
@@ -133,14 +133,17 @@ const SECTIONS: LegalSection[] = [
           <strong>Access:</strong> ask what we hold about you and get a copy. We answer within 30 days.
         </li>
         <li>
-          <strong>Export:</strong> download all of your mail and contacts yourself, at any time, in standard formats.
+          <strong>Export:</strong> download all of your mail and contacts yourself, at any time, in standard formats
+          (from the webmail), and a copy of your account’s settings, your own details and the activity log from the
+          console. Exports we prepare for you are kept for {DATA_EXPORT.keepDays} days, then deleted.
         </li>
         <li>
           <strong>Correction:</strong> fix your details in the console or ask us to.
         </li>
         <li>
-          <strong>Deletion:</strong> close your account and we delete your mail, contacts and settings, keeping only
-          what the law requires.
+          <strong>Deletion:</strong> delete your account and, after a {ACCOUNT_DELETION_GRACE_DAYS}-day grace period in
+          which you can change your mind, we delete its mail, contacts and settings, keeping only what the law requires
+          (such as the activity log for the period above). You can also delete your own sign-in.
         </li>
         <li>
           <strong>Complaints:</strong> contact {privacy} first. You can also complain to the Office of the Information
