@@ -76,8 +76,8 @@ built in the open; billing, abuse controls and the production deployment come ne
   proxy, syncs incrementally, caches locally and renders lists virtually. No IMAP in the browser path.
 - **Private by default**: no tracking pixels, no third-party analytics, remote images blocked until you allow
   them, HTML mail rendered in a sandboxed frame.
-- **Your domain, your addresses**: guided DNS setup with live per-record checks, catch-all, unlimited aliases and
-  masked (random) aliases you can switch off at any time.
+- **Your domain, your addresses**: guided DNS setup with live per-record checks, catch-all, aliases and
+  masked (random) aliases (up to 400 per mailbox on paid plans) you can switch off at any time.
 - **Standard protocols**: IMAP, SMTP and JMAP for any mail app, with app passwords and two-factor sign-in.
 - **Leave whenever you want**: full export (mbox/EML + contacts) and account deletion, any time.
 - **Transparent**: a public cost breakdown, a transparency report and open-source code.
