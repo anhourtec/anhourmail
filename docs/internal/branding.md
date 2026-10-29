@@ -1,6 +1,6 @@
 # Branding
 
-Last updated: 2026-10-21. Adapted from iotkinect-portal's design system (app) and BookYourPTO's marketing style (site): see `research/reference-patterns.md` "Design system" and "BookYourPTO-Frontend". Tokens: `packages/ui/src/styles/tokens.css`. Type: `typography.md`.
+Last updated: 2026-10-29. Adapted from iotkinect-portal's design system (app) and BookYourPTO's marketing style (site): see `research/reference-patterns.md` "Design system" and "BookYourPTO-Frontend". Tokens: `packages/ui/src/styles/tokens.css`. Type: `typography.md`.
 
 ## Principles
 
@@ -47,7 +47,9 @@ Dark mode (`.dark` on `<html>`, `next-themes`, default `system`): background 7 1
 - **Sidebar** (decision 2026-10-22, maintainer: the console uses the webmail sidebar's design): shared pieces in
   `apps/web/src/components/sidebar/app-sidebar.tsx`. Top: square initial tiles (mailboxes in the webmail, accounts in
   the console; the current one has a check badge) and a ⋮ menu, then the name and the address under a hairline, then
-  one prominent outlined action (New email; New mailbox / New invite / New alias / Find an account by role). Rows are
+  one prominent outlined action (New email; Add a user / New invite / New alias / Find an account by role — when the
+  account is full, Add a user or New invite shows disabled with the reason beside it, `primaryAction` in
+  `components/console-shell.tsx`). Rows are
   16 px icon + label, 32 px tall, counts on the right in mono (primary when something waits on someone), the current
   row tinted with a primary icon; muted section labels ("Folders"; "Mail", "People", "Account", "Platform"). Foot:
   Help & feedback, Keyboard shortcuts (`?`), theme switch and sign out. Collapses to a 56 px icon rail (tooltips,
