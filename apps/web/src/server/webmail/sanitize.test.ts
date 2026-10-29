@@ -232,3 +232,31 @@ describe("quoted replies and signatures in HTML mail", () => {
     expect(sanitizeMessageHtml('<div id="divRplyFwdMsg">From: x</div>').html).toContain('data-am-quote="1"');
   });
 });
+
+describe("image links for the image proxy", () => {
+  it("adds a link only when the caller signs, and never keeps a forged one", () => {
+    const plain = sanitizeMessageHtml('<img src="https://cdn.example.org/a.png" data-am-img="v1.1.forged.mac">');
+    expect(plain.html).not.toContain("data-am-img");
+    expect(plain.loadableImages).toBe(0);
+    const signed = sanitizeMessageHtml(
+      '<img src="https://cdn.example.org/a.png" data-am-img="v1.1.forged.mac"><img src="cid:gone">',
+      new Map(),
+      { imageLink: () => "v1.9.real.mac" },
+    );
+    expect(signed.html).toContain('data-am-img="v1.9.real.mac"');
+    expect(signed.html).not.toContain("forged");
+    expect(signed.loadableImages).toBe(1);
+    expect(signed.blockedImages).toBe(2);
+  });
+
+  it("leaves an image blocked when the signer refuses it or returns something unsafe", () => {
+    const refused = sanitizeMessageHtml('<img src="https://cdn.example.org:8443/a.png">', new Map(), {
+      imageLink: () => null,
+    });
+    expect(refused.loadableImages).toBe(0);
+    const odd = sanitizeMessageHtml('<img src="https://cdn.example.org/a.png">', new Map(), {
+      imageLink: () => '"><script>',
+    });
+    expect(odd.html).not.toContain("data-am-img");
+  });
+});

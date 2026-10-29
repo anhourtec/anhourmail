@@ -13,7 +13,10 @@ import sanitizeHtml from "sanitize-html";
  * - Links keep http(s)/mailto only and open in a new tab without a referrer.
  * - **Remote content is blocked**: remote `<img>` sources become placeholders (`data-am-blocked`), 1×1 trackers
  *   are dropped, `srcset`/`background` attributes are removed, and CSS `url()`, `image-set()` and `@import` are
- *   neutralised. Inline images come from `cid:` parts the caller resolved to `data:` URIs.
+ *   neutralised. Inline images come from `cid:` parts the caller resolved to `data:` URIs. When the caller passes
+ *   `imageLink`, each blocked `<img>` (never a dropped tracker, never a CSS background) also carries a signed image
+ *   link (`data-am-img`) the reader can load through the image proxy (`image-proxy.ts`); the address itself never
+ *   stays in the HTML.
  * - CSS (style attributes and `<style>` blocks) is scrubbed of comments, escapes, `expression()`, `behavior`,
  *   `-moz-binding` and `javascript:`.
  */
@@ -24,6 +27,15 @@ export type SanitizeResult = {
   blockedImages: number;
   /** Tracking pixels that were removed outright. */
   blockedTrackers: number;
+  /** Blocked images that carry an image link (loadable through the image proxy). */
+  loadableImages: number;
+};
+
+export type SanitizeOptions = {
+  /** Signs a remote image address into an image link; null when it can't be fetched (left blocked). */
+  imageLink?: (url: string) => string | null;
+  /** At most this many images get a link (the rest stay blocked). */
+  maxLinks?: number;
 };
 
 const ALLOWED_TAGS = [
@@ -52,7 +64,7 @@ const COMMON_ATTRS = [
 const ALLOWED_ATTRS: Record<string, string[]> = {
   "*": COMMON_ATTRS,
   a: ["href", "name", "target", "rel"],
-  img: ["src", "alt", "border", "data-am-blocked", "data-am-drop"],
+  img: ["src", "alt", "border", "data-am-blocked", "data-am-drop", "data-am-img"],
   table: ["border", "cellpadding", "cellspacing", "bgcolor", "summary"],
   td: ["bgcolor", "colspan", "rowspan", "nowrap", "abbr", "headers", "scope"],
   th: ["bgcolor", "colspan", "rowspan", "nowrap", "abbr", "headers", "scope"],
@@ -228,10 +240,14 @@ function quoteOrSig(
 export function sanitizeMessageHtml(
   input: string,
   inlineImages: ReadonlyMap<string, string> = new Map(),
+  opts: SanitizeOptions = {},
 ): SanitizeResult {
   const css = { remote: 0 };
   let blockedImages = 0;
   let blockedTrackers = 0;
+  let links = 0;
+  let loadableImages = 0;
+  const maxLinks = opts.maxLinks ?? 100;
 
   // sanitize-html runs one transform per tag (a specific one, else "*"), so every transform cleans styles.
   const withCleanStyle = (attribs: Record<string, string>): Record<string, string> => {
@@ -248,7 +264,7 @@ export function sanitizeMessageHtml(
     return out;
   };
 
-  const html = sanitizeHtml(input.replace(/data-am-(?:quote|sig|blocked|drop)/gi, "data-x"), {
+  const html = sanitizeHtml(input.replace(/data-am-(?:quote|sig|blocked|drop|img)/gi, "data-x"), {
     allowedTags: ALLOWED_TAGS,
     allowedAttributes: ALLOWED_ATTRS,
     allowVulnerableTags: true, // <style> only: its contents are scrubbed below
@@ -282,6 +298,13 @@ export function sanitizeMessageHtml(
             out["data-am-drop"] = "1";
           } else if (src !== "") {
             out["data-am-blocked"] = "1";
+            if (opts.imageLink && REMOTE.test(src) && links < maxLinks) {
+              const link = opts.imageLink(src);
+              if (link !== null && /^[A-Za-z0-9._-]+$/.test(link)) {
+                out["data-am-img"] = link;
+                links += 1;
+              }
+            }
           }
         }
         return { tagName, attribs: out };
@@ -297,7 +320,10 @@ export function sanitizeMessageHtml(
         blockedTrackers += 1;
         return true;
       }
-      if (frame.tag === "img" && frame.attribs["data-am-blocked"] === "1") blockedImages += 1;
+      if (frame.tag === "img" && frame.attribs["data-am-blocked"] === "1") {
+        blockedImages += 1;
+        if (frame.attribs["data-am-img"] !== undefined) loadableImages += 1;
+      }
       return false;
     },
   });
@@ -316,7 +342,7 @@ export function sanitizeMessageHtml(
     /<details\b([^>]*\sdata-am-quote="1"[^>]*)>/g,
     '<details$1><summary title="Show quoted text" aria-label="Show quoted text">&#8226;&#8226;&#8226;</summary>',
   );
-  return { html: toggled, blockedImages: blockedImages + css.remote, blockedTrackers };
+  return { html: toggled, blockedImages: blockedImages + css.remote, blockedTrackers, loadableImages };
 }
 
 /**

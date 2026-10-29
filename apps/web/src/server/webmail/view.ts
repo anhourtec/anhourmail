@@ -95,6 +95,13 @@ export type MessageView = {
   truncated: boolean;
   blockedImages: number;
   blockedTrackers: number;
+  /** Blocked images that carry an image link (`data-am-img`): "Load images" fetches them through the image proxy. */
+  loadableImages: number;
+  /**
+   * This sender's key for "Always load images from this sender" (a keyed hash of the From address, matched against
+   * the `imageSenders` preference), or null when there is no sender or nothing to load.
+   */
+  senderKey: string | null;
   attachments: AttachmentView[];
 };
 
@@ -191,7 +198,12 @@ export type BodyExtras = { markdown?: string; events?: CalendarEvent[] };
 
 export function buildMessageView(
   email: JmapEmail,
-  sanitize: (html: string) => { html: string; blockedImages: number; blockedTrackers: number },
+  sanitize: (html: string) => {
+    html: string;
+    blockedImages: number;
+    blockedTrackers: number;
+    loadableImages?: number;
+  },
   toText: (html: string) => string = (h) => h,
   extras: BodyExtras = {},
 ): MessageView {
@@ -205,11 +217,13 @@ export function buildMessageView(
   let html: string | null = null;
   let blockedImages = 0;
   let blockedTrackers = 0;
+  let loadableImages = 0;
   if (htmlParts.length > 0) {
     const r = sanitize(htmlParts.map((p) => values[p.partId ?? ""]?.value ?? "").join("\n"));
     html = r.html;
     blockedImages = r.blockedImages;
     blockedTrackers = r.blockedTrackers;
+    loadableImages = r.loadableImages ?? 0;
   }
   const plain = textParts.map((p) => values[p.partId ?? ""]?.value ?? "").join("\n\n");
   const markdown = html === null && plain.trim() === "" && extras.markdown ? markdownBlocks(extras.markdown) : null;
@@ -268,6 +282,8 @@ export function buildMessageView(
     truncated,
     blockedImages,
     blockedTrackers,
+    loadableImages,
+    senderKey: null,
     attachments,
   };
 }

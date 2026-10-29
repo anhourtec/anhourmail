@@ -205,7 +205,7 @@ export const MAX_FULL_BODY_BYTES = 8_000_000;
 type Sanitize = (
   html: string,
   inline: ReadonlyMap<string, string>,
-) => { html: string; blockedImages: number; blockedTrackers: number };
+) => { html: string; blockedImages: number; blockedTrackers: number; loadableImages?: number };
 
 /** Inline images we embed as data: URIs: per image and per message. */
 const MAX_INLINE_IMAGE = 512 * 1024;
