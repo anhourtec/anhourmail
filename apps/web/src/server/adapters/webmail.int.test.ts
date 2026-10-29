@@ -181,6 +181,40 @@ describe("webmail BFF on the dev Stalwart", () => {
     expect(caught).toBe(1);
   });
 
+  it("sends rich text as multipart/alternative with a text part, scripts removed", async () => {
+    const tag = randomBytes(5).toString("hex");
+    const outside = `outside-html-${tag}@example.com`;
+    const owner = service();
+    const { sessionId } = await owner.signIn(OWNER, demoPassword(OWNER));
+    const identity = (await owner.identities(sessionId)).find((i) => i.email === OWNER);
+    if (!identity) throw new Error("owner identity missing");
+    const draft = await owner.saveDraft(sessionId, {
+      identityId: identity.id,
+      to: [{ name: null, email: outside }],
+      cc: [],
+      bcc: [],
+      subject: `int-test html ${tag}`,
+      text: "",
+      html: `<p>Hello <b>rich ${tag}</b></p><script>alert(1)</script>`,
+      attachments: [],
+    });
+    await owner.send(sessionId, draft.id, identity.id);
+    const deadline = Date.now() + 40_000;
+    let id: string | undefined;
+    while (!id && Date.now() < deadline) {
+      const r = await fetch(`${MAILPIT}/api/v1/search?query=${encodeURIComponent(`to:${outside}`)}`);
+      id = ((await r.json()) as { messages?: { ID: string }[] }).messages?.[0]?.ID;
+      if (!id) await new Promise((res) => setTimeout(res, 1500));
+    }
+    if (!id) throw new Error("html mail never reached Mailpit");
+    const raw = await (await fetch(`${MAILPIT}/api/v1/message/${id}/raw`)).text();
+    expect(raw).toMatch(/Content-Type: multipart\/alternative/i);
+    expect(raw).toMatch(/Content-Type: text\/plain/i);
+    expect(raw).toMatch(/Content-Type: text\/html/i);
+    expect(raw).toContain(`rich ${tag}`);
+    expect(raw).not.toContain("<script");
+  });
+
   it("can undo a send while it is held", async () => {
     const tag = randomBytes(5).toString("hex");
     const owner = service();
