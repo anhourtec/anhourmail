@@ -150,3 +150,35 @@ export class AliasDailyLimitError extends DomainError {
     super(message, "alias_daily_limit");
   }
 }
+
+/** Why a console → webmail handoff was refused (ADR-0024); the people-facing message says what to do instead. */
+export type WebmailHandoffRefusal =
+  | "invalid"
+  | "wrong_browser"
+  | "expired"
+  | "session_ended"
+  | "mailbox_unavailable"
+  | "password_change_required"
+  | "step_up_required";
+
+const HANDOFF_MESSAGES: Record<WebmailHandoffRefusal, string> = {
+  invalid: "This link to your mailbox has expired or was already used. Open webmail from the console again.",
+  wrong_browser:
+    "This link to your mailbox was already used, or opened in a different browser. Open webmail from the console again, in this browser.",
+  expired: "This link to your mailbox has expired. Open webmail from the console again.",
+  session_ended: "You're no longer signed in to the console. Sign in there and open webmail again.",
+  mailbox_unavailable: "This mailbox can't be opened right now: it's suspended, being deleted or not ready yet.",
+  step_up_required: "Confirm it's you in the console first, then open webmail again.",
+  password_change_required:
+    "This mailbox needs a new password first. Sign in to the webmail with the password you were given to choose your own.",
+};
+
+/**
+ * The console → webmail handoff can't go ahead (ADR-0024): HTTP 409 `handoff_refused` (400 `handoff_invalid` for a
+ * code we don't know), and the page offers the ordinary sign-in instead.
+ */
+export class WebmailHandoffError extends DomainError {
+  constructor(readonly reason: WebmailHandoffRefusal) {
+    super(HANDOFF_MESSAGES[reason], reason === "invalid" ? "handoff_invalid" : "handoff_refused");
+  }
+}

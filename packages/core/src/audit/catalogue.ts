@@ -88,6 +88,9 @@ export const AUDIT_ACTIONS = [
   "webmail.signature_changed",
   "webmail.signature_removed",
   "webmail.signature_defaults_changed",
+  // console → webmail handoff (ADR-0024): the code minted, then redeemed (or refused)
+  "webmail.handoff_started",
+  "webmail.handoff_redeemed",
   // billing
   "billing.plan_changed",
   "billing.payment_succeeded",

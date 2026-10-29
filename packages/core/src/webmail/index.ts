@@ -5,3 +5,4 @@ export * from "./settings-repository";
 export * from "./settings-service";
 export * from "./signatures-service";
 export * from "./managed-script";
+export * from "./handoff";
