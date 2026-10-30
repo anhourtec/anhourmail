@@ -14,9 +14,11 @@ export type MenuEntry =
       onSelect: () => void;
       danger?: boolean;
       disabled?: boolean;
-      /** A checkable item (filter menus). */
+      /** A checkable item (filter menus, the mailbox list). */
       checked?: boolean;
       hint?: string;
+      /** The label is an address: shown in mono, truncated, with the whole of it as the tooltip. */
+      mono?: boolean;
     }
   | { separator: true }
   | { heading: string };
@@ -33,6 +35,7 @@ export function Menu({
   side = "bottom",
   trigger,
   className = "",
+  fill = false,
 }: {
   label: string;
   icon: LucideIcon;
@@ -42,10 +45,15 @@ export function Menu({
   /** Replaces the default icon button content. */
   trigger?: ReactNode;
   className?: string;
+  /**
+   * The panel starts at the nearest positioned ancestor's left edge and is at least as wide as it (the webmail
+   * sidebar's account menu under the sidebar header), growing with its labels up to 20rem; longer ones truncate.
+   */
+  fill?: boolean;
 }) {
   const { open, toggle, close, trigger: triggerRef, panel } = usePopover();
   return (
-    <div className={`relative ${className}`}>
+    <div className={`${fill ? "" : "relative"} ${className}`}>
       <Tooltip label={label} disabled={open}>
         <button
           ref={triggerRef}
@@ -62,9 +70,11 @@ export function Menu({
       {open && (
         <div
           ref={panel}
-          className={`absolute z-50 ${align === "end" ? "right-0" : "left-0"} ${side === "bottom" ? "top-full mt-1" : "bottom-full mb-1"}`}
+          className={`absolute z-50 ${fill ? "left-0 w-max min-w-full max-w-[min(20rem,calc(100vw-1.5rem))]" : align === "end" ? "right-0" : "left-0"} ${side === "bottom" ? "top-full mt-1" : "bottom-full mb-1"}`}
         >
-          <PanelSurface className="max-h-[min(40rem,calc(100dvh-6rem))] min-w-52 overflow-y-auto overscroll-contain">
+          <PanelSurface
+            className={`max-h-[min(40rem,calc(100dvh-6rem))] overflow-y-auto overscroll-contain ${fill ? "w-full" : "min-w-52 max-w-80"}`}
+          >
             <div role="menu" aria-label={label} onKeyDown={menuKeys} className="flex flex-col">
               {items.map((item, i) => {
                 if ("separator" in item) {
@@ -82,6 +92,7 @@ export function Menu({
                   <button
                     key={item.label}
                     type="button"
+                    {...(item.mono ? { title: item.label } : {})}
                     role={item.checked === undefined ? "menuitem" : "menuitemcheckbox"}
                     {...(item.checked === undefined ? {} : { "aria-checked": item.checked })}
                     aria-disabled={item.disabled === true ? true : undefined}
@@ -99,7 +110,9 @@ export function Menu({
                     ) : (
                       ItemIcon && <ItemIcon className="size-4 shrink-0" aria-hidden />
                     )}
-                    <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                    <span className={`min-w-0 flex-1 truncate ${item.mono ? "font-mono text-[12.5px]" : ""}`}>
+                      {item.label}
+                    </span>
                     {item.hint && <kbd className="font-mono text-[11px] text-muted-foreground">{item.hint}</kbd>}
                   </button>
                 );
