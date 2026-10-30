@@ -45,3 +45,41 @@ test("trust pages load", async ({ page }) => {
     await expect(page.locator("h1")).toHaveCount(1);
   }
 });
+
+test("pages carry a canonical URL, share tags and valid structured data", async ({ page, consoleErrors }) => {
+  const cases = [
+    { path: "/", types: ["Organization", "WebSite", "WebApplication", "FAQPage"] },
+    { path: "/pricing", types: ["WebApplication", "BreadcrumbList"] },
+    { path: "/features/aliases", types: ["BreadcrumbList"] },
+    { path: "/docs/features", types: ["BreadcrumbList"] },
+  ];
+  for (const c of cases) {
+    await page.goto(`${urls.site}${c.path}`);
+    await expect(page.locator("h1")).toHaveCount(1);
+    // Next writes the home page's canonical without the trailing slash.
+    const canonical = new URL(c.path, urls.site).toString().replace(/\/$/, "");
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", canonical);
+    await expect(page.locator('meta[property="og:image"]')).toHaveCount(1);
+    const blocks = await page.locator('script[type="application/ld+json"]').allTextContents();
+    const types = blocks
+      .flatMap((b): unknown[] => {
+        const data: unknown = JSON.parse(b);
+        return Array.isArray(data) ? (data as unknown[]) : [data];
+      })
+      .map((d) => (d as { "@type": string })["@type"]);
+    expect(types).toEqual(c.types);
+  }
+  expect(consoleErrors).toEqual([]);
+});
+
+test("robots.txt and the sitemap cover the site's own pages only", async ({ request }) => {
+  const robots = await (await request.get(`${urls.site}/robots.txt`)).text();
+  expect(robots).toContain(`Sitemap: ${new URL("/sitemap.xml", urls.site).toString()}`);
+  const sitemap = await (await request.get(`${urls.site}/sitemap.xml`)).text();
+  const locs = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1] ?? "");
+  expect(locs).toContain(new URL("/docs/features", urls.site).toString());
+  expect(locs).toContain(new URL("/pricing", urls.site).toString());
+  for (const loc of locs) expect(new URL(loc).origin).toBe(new URL(urls.site).origin);
+  expect(sitemap).not.toContain(HOSTS.app);
+  expect(sitemap).not.toContain(HOSTS.webmail);
+});
