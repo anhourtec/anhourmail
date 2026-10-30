@@ -19,14 +19,14 @@ import { PRODUCT_DOMAIN } from "@anhourmail/shared";
 
 import { AliasToggles, TrackerBlocked } from "@/components/landing/illustrations";
 import { CtaBand, EssentialsGrid, FeatureRow, PageHero, Prose, SectionHead } from "@/components/sections";
+import { pageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
-  title: "Privacy and security",
+export const metadata: Metadata = pageMetadata({
+  title: "Privacy and security: how we protect your email",
   description:
     "How AnhourMail protects your account and your mail: open source, no tracking, encryption in transit, two-step sign-in, app passwords and a visible activity log.",
-  alternates: { canonical: "/security" },
-  openGraph: { title: "Privacy and security · AnhourMail", url: "/security" },
-};
+  path: "/security",
+});
 
 const PRACTICES = [
   {

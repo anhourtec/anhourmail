@@ -6,12 +6,13 @@ import { ACCOUNT_DELETION_GRACE_DAYS, BRAND, DATA_EXPORT } from "@anhourmail/sha
 
 import { type LegalSection, LegalPage } from "@/components/legal/legal-page";
 import { LEGAL_CONTACTS } from "@/lib/legal";
+import { pageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: "Privacy Policy",
   description: `How ${BRAND.company} handles personal information for ${BRAND.product}. Draft under legal review.`,
-  alternates: { canonical: "/legal/privacy" },
-};
+  path: "/legal/privacy",
+});
 
 const privacy = <a href={`mailto:${LEGAL_CONTACTS.privacy}`}>{LEGAL_CONTACTS.privacy}</a>;
 

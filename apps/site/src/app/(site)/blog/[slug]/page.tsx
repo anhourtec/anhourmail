@@ -7,6 +7,7 @@ import { ArrowLeftIcon } from "lucide-react";
 
 import { getMDXComponents } from "@/components/mdx";
 import { CtaBand } from "@/components/sections";
+import { pageMetadata } from "@/lib/seo";
 import { blog } from "@/lib/source";
 
 type Props = { params: Promise<{ slug: string }> };
@@ -21,18 +22,13 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   const page = blog.getPage([slug]);
   if (!page) return {};
-  return {
+  return pageMetadata({
     title: page.data.title,
     description: page.data.description,
-    alternates: { canonical: page.url },
-    openGraph: {
-      type: "article",
-      title: page.data.title,
-      description: page.data.description,
-      url: page.url,
-      publishedTime: page.data.date,
-    },
-  };
+    path: page.url,
+    type: "article",
+    publishedTime: page.data.date,
+  });
 }
 
 const date = new Intl.DateTimeFormat("en-CA", { dateStyle: "long", timeZone: "UTC" });

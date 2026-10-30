@@ -6,13 +6,13 @@ import { BRAND, PLANS } from "@anhourmail/shared";
 
 import { Reveal } from "@/components/reveal";
 import { CtaBand, PageHero, Prose } from "@/components/sections";
+import { pageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: "Where the money goes",
   description: `What a ${BRAND.product} subscription pays for. Real numbers are published once we launch.`,
-  alternates: { canonical: "/costs" },
-  openGraph: { title: "Where the money goes · AnhourMail", url: "/costs" },
-};
+  path: "/costs",
+});
 
 const CATEGORIES = [
   { title: "Servers", body: "The machines that receive, store and send your mail, and run the webmail." },

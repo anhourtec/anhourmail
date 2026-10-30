@@ -6,13 +6,13 @@ import { BRAND, PRODUCT_DOMAIN } from "@anhourmail/shared";
 
 import { Reveal } from "@/components/reveal";
 import { CtaBand, PageHero, Prose } from "@/components/sections";
+import { pageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: "Transparency report",
   description: `Requests for user data ${BRAND.product} receives, and how we answer them.`,
-  alternates: { canonical: "/transparency" },
-  openGraph: { title: "Transparency report · AnhourMail", url: "/transparency" },
-};
+  path: "/transparency",
+});
 
 const LAST_UPDATED = "2026-10-21";
 

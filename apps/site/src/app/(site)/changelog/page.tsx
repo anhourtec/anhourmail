@@ -2,12 +2,14 @@
 import type { Metadata } from "next";
 
 import { getChangelog } from "@/lib/changelog";
+import { pageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
-  title: "Changelog",
-  description: "What changed in AnhourMail, newest first.",
-  alternates: { canonical: "/changelog" },
-};
+export const metadata: Metadata = pageMetadata({
+  title: "Changelog: what’s new",
+  description:
+    "Every user-facing change to AnhourMail, newest first: webmail, console, custom domains, aliases, mail apps and docs.",
+  path: "/changelog",
+});
 
 const dateFmt = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "short", day: "2-digit", timeZone: "UTC" });
 

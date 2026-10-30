@@ -6,12 +6,13 @@ import { ADDONS, BRAND, BULK_MAIL, PLANS } from "@anhourmail/shared";
 
 import { type LegalSection, LegalPage } from "@/components/legal/legal-page";
 import { LEGAL_CONTACTS } from "@/lib/legal";
+import { pageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: "Acceptable Use Policy",
   description: `What you can't do with ${BRAND.product}, and how we enforce it. Draft under legal review.`,
-  alternates: { canonical: "/legal/acceptable-use" },
-};
+  path: "/legal/acceptable-use",
+});
 
 const abuse = <a href={`mailto:${LEGAL_CONTACTS.abuse}`}>{LEGAL_CONTACTS.abuse}</a>;
 

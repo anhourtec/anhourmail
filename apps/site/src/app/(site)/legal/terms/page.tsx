@@ -16,12 +16,13 @@ import {
 
 import { type LegalSection, LegalPage } from "@/components/legal/legal-page";
 import { LEGAL_CONTACTS } from "@/lib/legal";
+import { pageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: "Terms of Service",
   description: `The agreement between you and ${BRAND.company} for using ${BRAND.product}. Draft under legal review.`,
-  alternates: { canonical: "/legal/terms" },
-};
+  path: "/legal/terms",
+});
 
 const paid = PLAN_ORDER.filter((id) => PLANS[id].price !== null);
 

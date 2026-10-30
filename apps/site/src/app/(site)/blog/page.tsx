@@ -7,13 +7,13 @@ import { ArrowRightIcon } from "lucide-react";
 import { Reveal } from "@/components/reveal";
 import { CtaBand, PageHero } from "@/components/sections";
 import { blogIndex } from "@/lib/source";
+import { pageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: "Blog",
   description: "Notes from the people building AnhourMail: why we make the choices we do.",
-  alternates: { canonical: "/blog" },
-  openGraph: { title: "Blog · AnhourMail", url: "/blog" },
-};
+  path: "/blog",
+});
 
 const date = new Intl.DateTimeFormat("en-CA", { dateStyle: "long", timeZone: "UTC" });
 

@@ -2,12 +2,13 @@
 import type { Metadata } from "next";
 
 import { CREDITS, THANKS } from "@/lib/credits";
+import { pageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: "Credits",
   description: "The open-source projects AnhourMail is built on, and their licences.",
-  alternates: { canonical: "/credits" },
-};
+  path: "/credits",
+});
 
 export default function CreditsPage() {
   return (

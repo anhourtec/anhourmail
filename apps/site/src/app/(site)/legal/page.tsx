@@ -5,12 +5,13 @@ import Link from "next/link";
 import { ArrowRightIcon, FileTextIcon } from "lucide-react";
 
 import { LEGAL_PAGES } from "@/lib/legal";
+import { pageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: "Legal",
   description: "Terms of Service, Privacy Policy and Acceptable Use Policy for AnhourMail. Drafts under legal review.",
-  alternates: { canonical: "/legal" },
-};
+  path: "/legal",
+});
 
 export default function LegalIndexPage() {
   return (

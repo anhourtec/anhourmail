@@ -8,14 +8,14 @@ import { BRAND, PRODUCT_DOMAIN } from "@anhourmail/shared";
 
 import { Reveal } from "@/components/reveal";
 import { CtaBand, EssentialsGrid, PageHero, Prose, SectionHead } from "@/components/sections";
+import { pageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
-  title: "Switch to AnhourMail",
+export const metadata: Metadata = pageMetadata({
+  title: "Switch email providers and keep your address",
   description:
     "Moving from another provider: forward your mail now, bring your domain, and import old mail when the import tool arrives.",
-  alternates: { canonical: "/switch" },
-  openGraph: { title: "Switch to AnhourMail", url: "/switch" },
-};
+  path: "/switch",
+});
 
 const STEPS = [
   {

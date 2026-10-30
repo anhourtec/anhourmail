@@ -10,14 +10,14 @@ import { PRODUCT_DOMAIN } from "@anhourmail/shared";
 import { Reveal } from "@/components/reveal";
 import { CtaBand, PageHero } from "@/components/sections";
 import { LEGAL_CONTACTS } from "@/lib/legal";
+import { pageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
-  title: "Support",
+export const metadata: Metadata = pageMetadata({
+  title: "Support and help",
   description:
     "Get help with AnhourMail: documentation, contact addresses for support, abuse and security, and service status.",
-  alternates: { canonical: "/support" },
-  openGraph: { title: "Support · AnhourMail", url: "/support" },
-};
+  path: "/support",
+});
 
 const mail = (addr: string) => (
   <a href={`mailto:${addr}`} className="font-mono text-[13px] underline underline-offset-2">
