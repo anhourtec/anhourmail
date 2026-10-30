@@ -226,6 +226,7 @@ describe("managed Sieve script (management credentials)", () => {
     const blobs = new Map<string, string>();
     const usings: string[][] = [];
     let seq = 0;
+    let state = 0;
     let created: Record<string, unknown> | null = null;
     const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -245,14 +246,18 @@ describe("managed Sieve script (management credentials)", () => {
       };
       usings.push(body.using);
       const methodResponses = body.methodCalls.map(([name, a, id]) => {
-        if (name === "SieveScript/get") return [name, { list: scripts.map((s) => ({ ...s })) }, id];
+        if (name === "SieveScript/get")
+          return [name, { state: String(state), list: scripts.map((s) => ({ ...s })) }, id];
         if (name === "x:Domain/get") return [name, { list: [{ id: "d1", name: "a.test" }] }, id];
         if (name === "x:Account/get") return [name, { list: [] }, id];
         if (name === "x:Account/set") {
           created = (a.create as Record<string, Record<string, unknown>>).u ?? null;
           return [name, { created: { u: { id: "u9" } } }, id];
         }
-        // SieveScript/set
+        // SieveScript/set: a stale ifInState is a method error, as on the pinned server.
+        if (typeof a.ifInState === "string" && a.ifInState !== String(state))
+          return ["error", { type: "stateMismatch" }, id];
+        state += 1;
         const c = (a.create ?? {}) as Record<string, { name: string; blobId: string }>;
         const made: Record<string, { id: string }> = {};
         for (const [k, v] of Object.entries(c)) {
@@ -282,10 +287,10 @@ describe("managed Sieve script (management credentials)", () => {
     expect(await m.getSieveScript("acc1", "anhourmail")).toBeNull();
     expect(await m.activateSieveScript("acc1", "anhourmail")).toBe(false);
     await m.putSieveScript("acc1", "anhourmail", "keep;\n");
-    expect(await m.getSieveScript("acc1", "anhourmail")).toEqual({ content: "keep;\n", active: true });
+    expect(await m.getSieveScript("acc1", "anhourmail")).toMatchObject({ content: "keep;\n", active: true });
     await m.putSieveScript("acc1", "anhourmail", "discard;\n");
     expect(s.scripts).toHaveLength(1);
-    expect(await m.getSieveScript("acc1", "anhourmail")).toEqual({ content: "discard;\n", active: true });
+    expect(await m.getSieveScript("acc1", "anhourmail")).toMatchObject({ content: "discard;\n", active: true });
     // A user's bare deactivate: reported, then turned back on (nothing else is deleted).
     for (const x of s.scripts) x.isActive = false;
     expect((await m.getSieveScript("acc1", "anhourmail"))?.active).toBe(false);
@@ -293,6 +298,23 @@ describe("managed Sieve script (management credentials)", () => {
     expect(s.scripts[0]?.isActive).toBe(true);
     // Standard JMAP Sieve calls, not only the management capability.
     expect(s.usings.some((u) => u.includes("urn:ietf:params:jmap:sieve"))).toBe(true);
+  });
+
+  it("writes only when the Sieve state is unchanged since the read (compare-and-swap), keeping the active flag", async () => {
+    const s = sieveServer();
+    const m = new StalwartManagement(transport(s.fetchImpl));
+    expect(await m.putSieveScriptIfUnchanged("acc1", "anhourmail", "keep;\n", "0")).toBe(false); // no script yet
+    await m.putSieveScript("acc1", "anhourmail", "keep;\n");
+    const read = await m.getSieveScript("acc1", "anhourmail");
+    expect(read?.state).toMatch(/^\d+$/);
+    // A save in between moves the state on: the stale write is refused and the save stays.
+    await m.putSieveScript("acc1", "anhourmail", "discard;\n");
+    expect(await m.putSieveScriptIfUnchanged("acc1", "anhourmail", "upgraded;\n", read?.state ?? "")).toBe(false);
+    expect((await m.getSieveScript("acc1", "anhourmail"))?.content).toBe("discard;\n");
+    const now = await m.getSieveScript("acc1", "anhourmail");
+    expect(await m.putSieveScriptIfUnchanged("acc1", "anhourmail", "upgraded;\n", now?.state ?? "")).toBe(true);
+    expect(await m.getSieveScript("acc1", "anhourmail")).toMatchObject({ content: "upgraded;\n", active: true });
+    expect(await m.putSieveScriptIfUnchanged("acc1", "anhourmail", "x;\n", "")).toBe(false); // never blind
   });
 
   it("creates new accounts locked even when the caller doesn't say", async () => {

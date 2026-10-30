@@ -762,14 +762,53 @@ export class StalwartManagement {
   // no access). `accountId` is the mailbox's JMAP account id (equal to its x:Account id, verified on v0.16.27).
 
   /** The mailbox's managed script `name` (its text and whether it's the active one), or null when it has none. */
-  async getSieveScript(accountId: string, name: string): Promise<{ content: string; active: boolean } | null> {
+  async getSieveScript(
+    accountId: string,
+    name: string,
+  ): Promise<{ content: string; active: boolean; state: string } | null> {
     const res = await this.transport.rawCall(SIEVE_USING, [
       ["SieveScript/get", { accountId, properties: ["name", "blobId", "isActive"] }, "g"],
     ]);
-    const list = (res.get("g")?.list ?? []) as { name: string; blobId: string; isActive?: boolean }[];
+    const got = res.get("g");
+    const list = (got?.list ?? []) as { name: string; blobId: string; isActive?: boolean }[];
     const script = list.find((s) => s.name === name);
     if (!script) return null;
-    return { content: await this.transport.downloadBlob(accountId, script.blobId), active: script.isActive === true };
+    return {
+      content: await this.transport.downloadBlob(accountId, script.blobId),
+      active: script.isActive === true,
+      // The account's Sieve state at this read, for `putSieveScriptIfUnchanged`.
+      state: typeof got?.state === "string" ? got.state : "",
+    };
+  }
+
+  /**
+   * Compare-and-swap write of the existing script `name`: `SieveScript/set` with `ifInState`, so it lands only if no
+   * Sieve change happened on the account since the read that returned `state` (verified on v0.16.27: a stale state is
+   * refused with the `stateMismatch` method error and nothing changes). Keeps the script's active flag as it is. False
+   * on a state change or when the script is gone; throws on any other refusal.
+   */
+  async putSieveScriptIfUnchanged(accountId: string, name: string, content: string, state: string): Promise<boolean> {
+    if (state === "") return false;
+    const got = await this.transport.rawCall(SIEVE_USING, [
+      ["SieveScript/get", { accountId, properties: ["name"] }, "g"],
+    ]);
+    const ours = ((got.get("g")?.list ?? []) as { id: string; name: string }[]).find((s) => s.name === name);
+    if (!ours) return false;
+    const blobId = await this.transport.uploadBlob(accountId, "application/sieve", content);
+    try {
+      const res =
+        (
+          await this.transport.rawCall(SIEVE_USING, [
+            ["SieveScript/set", { accountId, ifInState: state, update: { [ours.id]: { blobId } } }, "s"],
+          ])
+        ).get("s") ?? {};
+      const failed = (res.notUpdated as Record<string, { type?: string }> | undefined)?.[ours.id];
+      if (failed) throw new StalwartError(`SieveScript/set ${failed.type ?? "failed"}`, "set", failed);
+      return true;
+    } catch (err) {
+      if (err instanceof StalwartError && err.kind === "method" && err.message.includes("stateMismatch")) return false;
+      throw err;
+    }
   }
 
   /**
