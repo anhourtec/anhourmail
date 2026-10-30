@@ -5,12 +5,14 @@
  *
  * - only the capabilities and methods the webmail uses (grown per slice — nothing administrative, no `x:*`),
  * - at most `MAX_CALLS` calls (Stalwart's `maxCallsInRequest`),
- * - every call's `accountId` must be the signed-in account (shared accounts arrive with their own slice),
+ * - every call's `accountId` must be the active mailbox's account (for a mailbox shared with the person, that mailbox's
+ *   own account: the BFF holds its token, ADR-0026 §6), and `Identity/get` there needs a send right,
  * - the body is capped at `MAX_REQUEST_BYTES` before parsing,
  * - `Email/set` may only change keywords and move messages (`mailboxIds`), and destroy messages — which the service
  *   then checks are all in Trash or Junk before forwarding. Creating messages (drafts) and sending go through their
  *   own BFF endpoints (`/api/webmail/drafts`, `/api/webmail/send`), never through this proxy, so identity, size and
- *   recipient checks can't be bypassed by a hand-written JMAP request.
+ *   recipient checks can't be bypassed by a hand-written JMAP request. `Email/set` and `Email/import` that would set
+ *   `sender`, any `header:*` or the on-behalf tag header are refused outright (ADR-0026 §8).
  */
 
 export const ALLOWED_CAPABILITIES: ReadonlySet<string> = new Set([
@@ -50,9 +52,35 @@ export type PolicyResult =
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
+/**
+ * What the policy needs to know about the mailbox: its Drafts folder (nothing may be moved into it), and whether it is
+ * a mailbox shared with the person (a delegated entry, ADR-0026 §6) and with which rights: its identities
+ * (`Identity/get`) are only for someone who may send from it.
+ */
+export type PolicyContext = { draftsId?: string | undefined; delegated?: { send: boolean } | undefined };
+
+/** The send-on-behalf tag header (ADR-0026 §8): only the BFF's own submission ever writes it. */
+const ON_BEHALF_HEADER = "x-anhourmail-on-behalf";
+
+/**
+ * True when a message-writing call (`Email/set`, `Email/import`) carries anything that would set who a message is
+ * sent by: a `sender` property, any raw `header:*` property, or the on-behalf tag header, anywhere in its arguments
+ * (ADR-0026 §8, slice 13 requirement 3). `Sender:` and the tag are built server-side only, after the right is checked.
+ */
+export function setsSenderFields(args: unknown, depth = 0): boolean {
+  if (depth > 8 || typeof args !== "object" || args === null) return false;
+  if (Array.isArray(args)) return args.some((v) => setsSenderFields(v, depth + 1));
+  for (const [key, value] of Object.entries(args)) {
+    const k = key.toLowerCase();
+    const leaf = k.split("/").pop() ?? k;
+    if (leaf === "sender" || leaf.startsWith("header:") || k.includes(ON_BEHALF_HEADER)) return true;
+    if (typeof value === "string" && value.toLowerCase().includes(ON_BEHALF_HEADER)) return true;
+    if (setsSenderFields(value, depth + 1)) return true;
+  }
+  return false;
+}
+
 /** Validates a parsed JMAP request against the allow-list for `accountId`. */
-/** What the policy needs to know about the mailbox: its Drafts folder (nothing may be moved into it). */
-export type PolicyContext = { draftsId?: string | undefined };
 
 /** Keywords the proxy never sets: `$draft` (drafts are only made by the BFF) and the BFF's own marker. */
 const DRAFT_KEYWORD = "keywords/$draft";
@@ -76,8 +104,16 @@ export function checkJmapRequest(input: unknown, accountId: string, ctx: PolicyC
     if (typeof name !== "string" || typeof id !== "string" || !isRecord(args) || id.length > 64) {
       return { ok: false, message: "Malformed method call." };
     }
+    // Checked before the allow-list, so a later widening of it can never let a client set a Sender or the tag.
+    if ((name === "Email/set" || name === "Email/import") && setsSenderFields(args)) {
+      return { ok: false, message: "The sender of a message can't be set here." };
+    }
     if (!ALLOWED_METHODS.has(name)) return { ok: false, message: `Method not available: ${name.slice(0, 64)}` };
     if (args.accountId !== accountId) return { ok: false, message: "Unknown account." };
+    // A mailbox shared with the person: its sending identities only for someone who may send from it.
+    if (name === "Identity/get" && ctx.delegated && !ctx.delegated.send) {
+      return { ok: false, message: "Method not available: Identity/get" };
+    }
     if (name === "Email/set") {
       const set = checkEmailSet(args, ctx);
       if (!set.ok) return { ok: false, message: set.message };
