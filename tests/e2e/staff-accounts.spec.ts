@@ -10,7 +10,8 @@ test("a Global Administrator finds an account, opens it, and its owner sees the 
   await signIn(page, u.users.globalAdmin, u.password);
   await (await openNav(page)).getByRole("link", { name: "Customer accounts" }).click();
   await expect(page.getByRole("heading", { name: "Customer accounts", level: 1 })).toBeVisible();
-  await page.getByLabel("Search accounts").fill(u.run);
+  // The full name: every journey world of the run shares the run id, more than a page of accounts.
+  await page.getByLabel("Search accounts").fill(u.accountName);
   await page.getByRole("button", { name: "Search", exact: true }).click();
   await page.getByRole("link", { name: u.accountName }).click();
   await expect(page.getByRole("heading", { name: u.accountName, level: 1 })).toBeVisible();
@@ -61,7 +62,8 @@ test("a customer account's own pages are a 404 for staff", async ({ page }) => {
   const u = e2eUsers();
   await signIn(page, u.users.globalAdmin, u.password);
   await (await openNav(page)).getByRole("link", { name: "Customer accounts" }).click();
-  await page.getByLabel("Search accounts").fill(u.run);
+  // The full name: every journey world of the run shares the run id, more than a page of accounts.
+  await page.getByLabel("Search accounts").fill(u.accountName);
   await page.getByRole("button", { name: "Search", exact: true }).click();
   await page.getByRole("link", { name: u.accountName }).click();
   await expect(page.getByRole("heading", { name: u.accountName, level: 1 })).toBeVisible();
