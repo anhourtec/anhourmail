@@ -33,6 +33,20 @@ export type MutationOutcome<T> = {
     target?: { id?: string | null; label?: string | null };
     meta: Record<string, unknown>;
   }[];
+  /**
+   * Other actions this change made, each recorded as its own entry right after the main one, in the same unit of work
+   * (same actor, request and result): e.g. one `delegation.revoked` per grant a removal took away. Written in the
+   * mutation's scope, or in `accountId`'s when given (null: the platform log).
+   */
+  also?: AuditAlso[];
+};
+
+/** One more entry written with a mutation (`MutationOutcome.also`). */
+export type AuditAlso = {
+  action: AuditAction;
+  accountId?: string | null;
+  target: { type: string; id?: string | null; label?: string | null };
+  meta: Record<string, unknown>;
 };
 
 /**
@@ -117,6 +131,21 @@ export async function mutation<T>(
               label: copy.target?.label ?? entry.target.label,
             },
             meta: redactMeta(copy.meta),
+          },
+          deps.clock.now(),
+        );
+      }
+      for (const extra of out.also ?? []) {
+        const extraSpec = {
+          ...spec,
+          action: extra.action,
+          accountId: extra.accountId === undefined ? spec.accountId : extra.accountId,
+        };
+        await repos.audit.append(
+          {
+            ...auditBase(actor, req, extraSpec, entry.result, entry.errorCode, scopeOf(extraSpec)),
+            target: { type: extra.target.type, id: extra.target.id ?? null, label: extra.target.label ?? null },
+            meta: redactMeta(extra.meta),
           },
           deps.clock.now(),
         );

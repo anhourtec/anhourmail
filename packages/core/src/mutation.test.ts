@@ -99,4 +99,27 @@ describe("mutation()", () => {
     const [entry] = await d.uow.run((r) => r.audit.chain("platform"));
     expect(entry).toMatchObject({ result: "denied", errorCode: "bot_check" });
   });
+
+  it("writes the `also` entries after the main one, in the same unit of work, in their own scope when given", async () => {
+    const d = deps();
+    await mutation(d, user({ account: [[ACCOUNT_A, "owner"]] }), req, spec(ACCOUNT_A), async () => ({
+      result: 1,
+      target: { id: "dom-1" },
+      also: [
+        { action: "delegation.revoked", target: { type: "mailbox", id: "mbx-1" }, meta: { token: "t", right: "x" } },
+        { action: "delegation.granted", accountId: ACCOUNT_B, target: { type: "mailbox", label: "a@b" }, meta: {} },
+        { action: "delegation.granted", accountId: null, target: { type: "mailbox" }, meta: {} },
+      ],
+    }));
+    const chain = await d.uow.run((r) => r.audit.chain(`account:${ACCOUNT_A}`));
+    expect(chain.map((e) => [e.action, e.result, e.target.id, e.requestId])).toEqual([
+      ["domain.added", "success", "dom-1", req.requestId],
+      ["delegation.revoked", "success", "mbx-1", req.requestId],
+    ]);
+    expect(chain[1]?.meta).toEqual({ token: "[redacted]", right: "x" });
+    expect(chain[1]?.actor).toEqual(chain[0]?.actor);
+    const inB = await d.uow.run((r) => r.audit.chain(`account:${ACCOUNT_B}`));
+    expect(inB.map((e) => [e.action, e.target.label])).toEqual([["delegation.granted", "a@b"]]);
+    expect((await d.uow.run((r) => r.audit.chain("platform"))).map((e) => e.action)).toEqual(["delegation.granted"]);
+  });
 });
