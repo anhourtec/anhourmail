@@ -114,7 +114,7 @@ export function RoleForm({
 }
 
 /**
- * Remove someone from the account (two steps). Their mailboxes and mail stay. `closeHref`: where to go after (the
+ * Remove someone from the account (two steps). Their mailboxes and mail stay, person-less with sign-in off. `closeHref`: where to go after (the
  * details panel closes, since the person is gone).
  */
 export function RemovePerson({
@@ -162,7 +162,10 @@ export function RemovePerson({
             return null;
           }}
         >
-          <p>They lose access to this account at once. Their mailboxes and mail stay.</p>
+          <p>
+            They lose access to this account at once. Their mailboxes and mail stay, as shared addresses with their
+            sign-in turned off.
+          </p>
         </ConfirmDialog>
       )}
     </>

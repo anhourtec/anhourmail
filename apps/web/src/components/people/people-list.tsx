@@ -393,7 +393,7 @@ export function PeopleList({
         >
           <p>
             {confirm.ids.length === 1 ? "They lose" : "They each lose"} access to this account at once. Their mailboxes
-            and mail stay.
+            and mail stay, as shared addresses with their sign-in turned off.
           </p>
         </ConfirmDialog>
       )}
