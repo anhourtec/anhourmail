@@ -36,7 +36,7 @@ const personId = z.string().trim().min(1).max(200);
 export const delegationChangeSchema = z.strictObject({ userId: personId, right: z.enum(DELEGATION_RIGHTS) });
 export type DelegationChange = z.infer<typeof delegationChangeSchema>;
 
-/** `PUT /api/accounts/:accountId/mailboxes/:mailboxId/delegation`: people added to and removed from the three lists. */
+/** `PATCH /api/accounts/:accountId/mailboxes/:mailboxId/delegation`: people added to and removed from the three lists. */
 export const delegationUpdateSchema = z
   .strictObject({
     add: z.array(delegationChangeSchema).max(DELEGATION_BATCH_MAX).default([]),
@@ -62,7 +62,7 @@ export const convertToSharedSchema = z.strictObject({
 export type ConvertToSharedInput = z.infer<typeof convertToSharedSchema>;
 
 /**
- * `DELETE /api/accounts/:accountId/members/:userId` (optional body): give one person read and manage (and send as) on
+ * `DELETE /api/accounts/:accountId/people/:userId` (optional body): give one person read and manage (and send as) on
  * every mailbox the leaver owns, in the removal's own transaction.
  */
 export const memberRemovalSchema = z.strictObject({
