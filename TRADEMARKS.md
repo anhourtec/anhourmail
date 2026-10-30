@@ -32,4 +32,4 @@ applies to your fork, including making your modified source available to your us
 
 ## Questions
 
-Not sure whether your use is fine? Email legal@anhourmail.com — we're happy to help.
+Not sure whether your use is fine? Email legal@anhourtec.com — we're happy to help.

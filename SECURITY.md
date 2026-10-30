@@ -7,7 +7,7 @@ helps keep users safe.
 
 **Please do not open a public GitHub issue, discussion or pull request for a security problem.**
 
-Email **security@anhourmail.com** with:
+Email **security@anhourtec.com** with:
 
 - a description of the issue and its impact;
 - the steps to reproduce it, or a proof of concept against your **own** local instance;

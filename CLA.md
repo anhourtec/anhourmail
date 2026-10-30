@@ -107,4 +107,4 @@ When you open your first pull request, the **CLA Assistant** bot comments with a
 reply on the pull request as instructed, or follow the link to sign with your GitHub account. Your signature is
 recorded once and covers all your future pull requests to `anhourtec/anhourmail`.
 
-Contributing on behalf of a company? Email legal@anhourmail.com for the Corporate CLA.
+Contributing on behalf of a company? Email legal@anhourtec.com for the Corporate CLA.

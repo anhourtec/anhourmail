@@ -104,7 +104,7 @@
 | **Run your own instance**       | The [self-hosting guide](https://anhourmail.com/docs/self-hosting).                                  |
 | **Understand how it's built**   | [How it works](#how-it-works) and the [architecture notes](./docs/internal/01-architecture.md).      |
 | **Help build it**               | [Contributing](./CONTRIBUTING.md) and the [roadmap](./docs/internal/09-roadmap.md).                  |
-| **Report a security problem**   | Privately, to **security@anhourmail.com** ([SECURITY.md](./SECURITY.md)). Never in a public issue.   |
+| **Report a security problem**   | Privately, to **security@anhourtec.com** ([SECURITY.md](./SECURITY.md)). Never in a public issue.    |
 
 ## Why AnhourMail
 
@@ -503,7 +503,7 @@ addresses or mail content in issues.
 ## Security
 
 > [!CAUTION]
-> Please don't open public issues for security problems. Report them privately to **security@anhourmail.com**; see
+> Please don't open public issues for security problems. Report them privately to **security@anhourtec.com**; see
 > [SECURITY.md](./SECURITY.md).
 
 ## License

@@ -5,13 +5,13 @@ tests, and make the pull request easy to review.
 
 ## Choose the right workflow
 
-| If you want to                                          | Start here                                                                      |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Change the console, webmail, API or worker              | [Set up local development](#set-up-local-development) below                     |
-| Run AnhourMail on your own server without changing code | The [self-hosting guide](https://anhourmail.com/docs/self-hosting)              |
-| Improve the public docs                                 | [`docs/public`](./docs/public) (published at anhourmail.com/docs)               |
-| Change plans, limits, hostnames or DNS records          | [`packages/shared`](./packages/shared) — the one source of truth                |
-| Report a security problem                               | **Not an issue** — email security@anhourmail.com ([SECURITY.md](./SECURITY.md)) |
+| If you want to                                          | Start here                                                                     |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Change the console, webmail, API or worker              | [Set up local development](#set-up-local-development) below                    |
+| Run AnhourMail on your own server without changing code | The [self-hosting guide](https://anhourmail.com/docs/self-hosting)             |
+| Improve the public docs                                 | [`docs/public`](./docs/public) (published at anhourmail.com/docs)              |
+| Change plans, limits, hostnames or DNS records          | [`packages/shared`](./packages/shared) — the one source of truth               |
+| Report a security problem                               | **Not an issue** — email security@anhourtec.com ([SECURITY.md](./SECURITY.md)) |
 
 Local development and self-hosting are different paths. Development uses the root `.env` and the dev compose
 profile, where every outbound message is caught by Mailpit. Do not reuse a development `.env` on a server.
