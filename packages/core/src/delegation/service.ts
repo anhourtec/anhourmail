@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { DELEGATION_RIGHTS, delegationUpdateSchema, firstIssue } from "@anhourmail/shared/delegation";
+import { PLANS } from "@anhourmail/shared/plans";
 
-import { type Actor, authorize } from "../actor";
+import { type Actor, authorize, can } from "../actor";
 import { ConflictError, ForbiddenError, NotFoundError, StepUpRequiredError, ValidationError } from "../errors";
 import type { Mailbox } from "../mailboxes/entity";
 import { mutation, type MutationOutcome } from "../mutation";
@@ -88,6 +89,29 @@ export async function getMailboxDelegation(
   });
 }
 
+/**
+ * What the console offers for delegation in this account (`delegation.read`): whether the plan includes it (with the
+ * plan's name, for "The Free plan doesn't include …") and whether the viewer may give or take away access at all. Guard
+ * rail 8 is per mailbox (`MailboxDelegation.canManage`); the services check everything again.
+ */
+export type DelegationAvailability = { plan: boolean; planName: string; canManage: boolean };
+
+export async function delegationAvailability(
+  deps: Deps,
+  actor: Actor,
+  accountId: string,
+): Promise<DelegationAvailability> {
+  authorize(actor, "delegation.read", accountId);
+  const account = await deps.uow.run((r) => r.accounts.get(accountId));
+  if (!account) throw new NotFoundError();
+  const plan = PLANS[account.plan];
+  return {
+    plan: plan.delegation,
+    planName: plan.name,
+    canManage: actor.kind === "user" && !actor.actingAs && can(actor, "delegation.manage.any", accountId),
+  };
+}
+
 /** One mailbox a person can open or send from, with their rights on it (People panel, `delegation.read`). */
 export type PersonDelegation = { mailboxId: string; address: string; rights: DelegationRight[] };
 
@@ -124,7 +148,7 @@ type Refusal = "act_as" | "locked" | "step_up_required";
  * Adds and removes people on a mailbox's three lists in one batch (`delegation.manage.any`): one unit of work, one audit
  * entry per change (`delegation.granted` / `delegation.revoked`, reason `admin`; the first change is the main entry).
  * Order of checks: acting as someone (403 `act_as`, before anything is looked up), the request's shape (400), the
- * mailbox (404), guard rail 8 (403), the plan (403 `plan_limit`), a mailbox being deleted (409), a fresh step-up on this
+ * mailbox (404), guard rail 8 (403), the plan when anyone is added (403 `plan_limit`; removing always works), a mailbox being deleted (409), a fresh step-up on this
  * console session (403 `step_up_required`), then the grant rules (404 a person outside the account; 409 the mailbox's
  * own person, the limits). Refusals are audited as denied. Returns the lists as they now are.
  */
@@ -159,7 +183,8 @@ export async function updateMailboxDelegation(
       });
       const members = await repos.people.list(accountId);
       if (!mayDelegate(actor, accountId, m, members)) return refuse("locked");
-      await assertDelegationPlan(repos, accountId);
+      // Taking access away always works, so an account that left a plan with delegation can still remove what it gave.
+      if (parsed.data.add.length > 0) await assertDelegationPlan(repos, accountId);
       if (m.status === "deleting") throw new ConflictError("This mailbox is being deleted. Restore it first.");
       if (
         !session.sessionId ||

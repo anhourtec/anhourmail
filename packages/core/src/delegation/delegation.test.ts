@@ -17,7 +17,12 @@ import {
 import type { Mailbox, MailboxStatus } from "../mailboxes/entity";
 import type { Deps, UnitOfWork } from "../ports";
 import { dropOwnGrants, dropPersonGrants } from "./cascade";
-import { getMailboxDelegation, listPersonDelegations, updateMailboxDelegation } from "./service";
+import {
+  delegationAvailability,
+  getMailboxDelegation,
+  listPersonDelegations,
+  updateMailboxDelegation,
+} from "./service";
 
 const SHARED = "aaaaaaaa-0000-4000-8000-000000000001";
 const KIM_BOX = "aaaaaaaa-0000-4000-8000-000000000002";
@@ -293,9 +298,14 @@ describe("updateMailboxDelegation", () => {
     expect(s.audit.filter((e) => e.action === "delegation.granted").map((e) => e.result)).toEqual(["failed"]);
   });
 
-  it("needs a plan with delegation (403 plan_limit)", async () => {
-    const { as, update } = world("free");
-    await expect(update(as("owner"), SHARED, { add: [add("kim", "full_access")] })).rejects.toThrow(PlanLimitError);
+  it("needs a plan with delegation to add people (403 plan_limit); removing access works on any plan", async () => {
+    const { s, as, update } = world();
+    await update(as("owner"), SHARED, { add: [add("kim", "full_access")] });
+    const account = s.accounts.find((a) => a.id === ACCOUNT_A);
+    if (account) account.plan = "free"; // a downgrade after the grant
+    await expect(update(as("owner"), SHARED, { add: [add("kim", "send_as")] })).rejects.toThrow(PlanLimitError);
+    const after = await update(as("owner"), SHARED, { add: [], remove: [add("kim", "full_access")] });
+    expect(after.fullAccess).toEqual([]);
   });
 
   it("refuses a mailbox being deleted, a malformed batch, someone outside the account and the mailbox's own person", async () => {
@@ -392,6 +402,33 @@ describe("listPersonDelegations", () => {
     await update(as("owner"), SHARED, { add: [add("kim", "full_access")] });
     s.mailboxes = s.mailboxes.filter((m) => m.id !== SHARED);
     expect(await listPersonDelegations(d, as("owner"), ACCOUNT_A, "kim")).toEqual([]);
+  });
+});
+
+describe("delegationAvailability", () => {
+  it("says whether the plan includes delegation and whether the viewer may change grants", async () => {
+    const { d, as } = world();
+    expect(await delegationAvailability(d, as("owner"), ACCOUNT_A)).toEqual({
+      plan: true,
+      planName: "Plus",
+      canManage: true,
+    });
+    expect((await delegationAvailability(d, as("uadmin"), ACCOUNT_A)).canManage).toBe(true);
+    expect((await delegationAvailability(d, as("auditor"), ACCOUNT_A)).canManage).toBe(false);
+    const free = world("free");
+    expect(await delegationAvailability(free.d, free.as("owner"), ACCOUNT_A)).toMatchObject({
+      plan: false,
+      planName: "Free",
+    });
+  });
+
+  it("never offers changes while acting as someone; 403 without delegation.read, 404 across accounts", async () => {
+    const { d, as } = world();
+    const acting = { ...(as("owner") as Extract<Actor, { kind: "user" }>), actingAs: actAs(ACCOUNT_A) };
+    expect((await delegationAvailability(d, acting, ACCOUNT_A)).canManage).toBe(false);
+    await expect(delegationAvailability(d, as("kim"), ACCOUNT_A)).rejects.toThrow(ForbiddenError);
+    await expect(delegationAvailability(d, as("owner-b"), ACCOUNT_A)).rejects.toThrow(NotFoundError);
+    await expect(delegationAvailability(d, { kind: "anonymous" }, ACCOUNT_A)).rejects.toThrow(UnauthenticatedError);
   });
 });
 
