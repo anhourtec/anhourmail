@@ -15,7 +15,9 @@ export const SIGN_IN_URL = `${APP_URL}/sign-in`;
 
 export const SITE_NAME = BRAND.product;
 
-export const SITE_DESCRIPTION = "Private, fast email with your own domain. Open source, no ads, no tracking.";
+/** The default meta description (home page, share cards): what it is, for whom, in search words, under 160 characters. */
+export const SITE_DESCRIPTION =
+  "Private, low-cost email hosting on your own domain: masked aliases, fast open-source webmail, IMAP, SMTP and JMAP. A free address, no ads, no tracking.";
 
 /** Top-level header links after the Features menu. */
 export const NAV_LINKS = [
