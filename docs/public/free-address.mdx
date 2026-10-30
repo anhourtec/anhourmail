@@ -26,9 +26,17 @@ Mail apps use [app passwords](/docs/clients/app-passwords) rather than this pass
   hyphens and underscores. Capitals are fine to type; addresses are not case-sensitive.
 - Start and end with a letter or a number, and don't put two dots in a row.
 - Shorter names are held back for now.
-- Some names are reserved, such as `admin`, `support`, `postmaster`, `abuse`, `billing`, `security` and our own
-  names, so that nobody can pass themselves off as us. Look-alikes count too: `no.reply`, `post_master` or `admin2`
-  are refused, and so is any name containing our name.
+- Some names are reserved so that nobody can pass themselves off as us, as a business's role address or as an
+  account-security message:
+  - mail and server names such as `postmaster`, `abuse`, `webmail` and `autoconfig`;
+  - role addresses such as `admin`, `support`, `contact`, `hello`, `billing`, `careers`, `press` and `legal`;
+  - automated senders and placeholders such as `noreply`, `notifications`, `newsletter`, `test` and `nobody`;
+  - account and security words such as `security`, `verify`, `login`, `password`, `recovery` and `official`, also at
+    the start or end of a longer name (`support-desk`, `bank.security`);
+  - our own names, anywhere in a name.
+
+  Look-alikes count too: `no.reply`, `post_master`, `n0reply` or `admin2` are refused.
+
 - Names are first come, first served. A name that was used once isn't given to anyone else, even after it's deleted:
   mail meant for its old owner never reaches someone new. The account that had it can take it back.
 

@@ -93,3 +93,15 @@ the route spends `platformMailboxAccount` and `platformMailboxIp` like the mailb
 `account.user_added` with meta `platformAddress`. Storage is pooled per account since 2026-10-23 (`plans.ts`
 `storagePoolGb`), so a free address shares the Free account's pool. The availability answer the console uses to offer
 it (`people/availability.ts`, `email_unverified` when the sign-in email isn't confirmed) changes nothing above.
+
+## Update (2026-10-30): a much fuller reserved list
+
+At the maintainer's request the reserved names in `packages/shared/src/addresses.ts` were widened and grouped by
+purpose: mail and network infrastructure plus our own hostnames, company role addresses, automated senders and
+placeholder names, account-security and trust words, and mail-report and mailing-list conventions. Fragments
+(reserved anywhere) gained `donotreply`, `hostmaster`, `passwordreset`, `accountsecurity` and `trustandsafety`;
+prefixes gained `helpdesk`, `confirm`, `official`, `password`, `signin` and the customer-service words; a new suffix check refuses trust words at the end of a name (`team-support`, `bank.security`, `wallet-verify`, `bank-alerts`, `mail-service`); `rn` is read as `m` (`adrnin`). After review, `login` is reserved only as a whole name (it starts real surnames such as Loginov) and `billing` isn't checked at the end of a name (`jane.billings`). Names already claimed are
+not affected (reservation applies to new claims). Other companies' names, the most likely impersonation targets, can't
+be listed in this public repository (CLAUDE.md rule 57); a private, deploy-time list read by the server is a
+follow-up. Staff role addresses on the platform domain (aliases to staff mailboxes on `anhourtec.com`, created only by
+the bootstrap or a Global Administrator) are the next piece.
