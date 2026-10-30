@@ -90,10 +90,14 @@ export function linkingSanitizer(
 }
 
 /**
- * Whether a message's From can be trusted for loading images without asking. Our own Authentication-Results must
- * show DMARC passing for the From domain, or DKIM passing for it (or a parent domain). Anything else asks first.
+ * Whether a message's From can be trusted for loading images without asking. Either our own server vouches that the
+ * From address submitted it here (`internal`: the internal-mail marker, `isInternalMail` — mail between our own
+ * users and our system mail, which never passes the inbound checks), or our own Authentication-Results show DMARC
+ * passing for the From domain, or DKIM passing for it (or a parent domain). Anything else asks first.
  */
-export function senderVerified(from: string, auth: AuthSummary | null | undefined): boolean {
+export function senderVerified(from: string, auth: AuthSummary | null | undefined, internal = false): boolean {
+  // The marker is bound to this From address and Message-ID under the server's key, and only our server adds it.
+  if (internal) return true;
   // `undefined`: the results couldn't be read (or the message is attached to another): not verified.
   // `null`: no results of ours. That isn't proof of anything: a copy forwarded by a mailbox's own redirect rule
   // arrives with our LMTP `Received` on top and no results, whatever its From says.
@@ -109,15 +113,17 @@ export function senderVerified(from: string, auth: AuthSummary | null | undefine
 /**
  * The view with its sender's key, when it has images to load and a sender whose From is verified (else unchanged):
  * a forged From must not load a remembered sender's images, which would tell the forger the message was opened.
+ * `internal` is `isInternalMail` for this message's headers and From (false when unknown).
  */
 export function withSenderKey(
   view: MessageView,
   secret: string,
   mailbox: string,
   auth: AuthSummary | null | undefined,
+  internal = false,
 ): MessageView {
   const from = view.from[0]?.email;
-  if (view.loadableImages === 0 || !from || !senderVerified(from, auth)) return view;
+  if (view.loadableImages === 0 || !from || !senderVerified(from, auth, internal)) return view;
   return { ...view, senderKey: senderKey(secret, mailbox, from), senderVerified: true };
 }
 

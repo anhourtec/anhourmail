@@ -177,6 +177,20 @@ describe("the reader's linking sanitiser", () => {
     expect(key(undefined).senderKey).toBeNull();
     expect(key(null).senderVerified).toBe(false);
   });
+
+  it("gives a sender key for mail our server vouches was submitted here by its From (internal-mail marker)", () => {
+    const loadable = buildMessageView(email('<img src="https://c.example.org/a.png">'), (h) => sanitize(h, new Map()));
+    const internal = withSenderKey(loadable, SECRET, "me@a.test", null, true);
+    expect(internal.senderVerified).toBe(true);
+    expect(internal.senderKey).toBe(senderKey(SECRET, "me@a.test", "news@shop.example"));
+    expect(senderVerified("news@shop.example", undefined, true)).toBe(true);
+    // Without the marker, no results of ours is still not verified (the run-32 redirect case).
+    expect(withSenderKey(loadable, SECRET, "me@a.test", null, false).senderVerified).toBe(false);
+    expect(senderVerified("news@shop.example", null)).toBe(false);
+    // Nothing to load: unchanged either way.
+    const none = buildMessageView(email("<p>Hello</p>"), (h) => sanitize(h, new Map()));
+    expect(withSenderKey(none, SECRET, "me@a.test", null, true).senderKey).toBeNull();
+  });
 });
 
 describe("serveImage", () => {
