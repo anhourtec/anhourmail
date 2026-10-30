@@ -24,6 +24,10 @@ Logo: the Anhourtec glyphs spelling ANHOURMAIL, with the O drawn as an envelope.
 | `site.webmanifest`                       | Web app manifest                                                 |
 | `og-image.png`                           | Social share card, 1200 × 630, navy (the marketing site's image) |
 
+`github/social-preview.png` (1280 × 640, navy, logo and tagline) is the repository's GitHub social preview, rendered
+with `node scripts/render-social-preview.mjs` and uploaded by hand in GitHub → Settings → General → Social preview.
+It sits in a sub-folder, so it isn't copied into the apps.
+
 `BRAND_ICONS` in `packages/ui/src/anhourtec-logo.tsx` wires the icons and manifest into each app's metadata.
 
 ## Logos
