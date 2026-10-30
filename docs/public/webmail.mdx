@@ -256,11 +256,16 @@ Choose **Load images** on the note to see the pictures. They're fetched by our s
 shown in the message, so the sender's server sees our request instead of you: never your IP address, your browser,
 your cookies or the page you're on.
 
-- **Always load from this sender** on the note loads this sender's images by themselves from then on. **Stop loading
-  from this sender** undoes it.
+- When we can confirm who sent the message, **Load images** asks how: **Just this once**, or **Always for** the
+  sender's address, which loads their images by themselves from then on. Press Escape to change your mind.
+  After the images load, **Stop loading from this sender** undoes "always" (and **Always load from this sender**
+  remembers a sender you loaded once).
+- When we can't confirm the message really comes from the sender's domain (it didn't pass the domain's sender
+  checks), **Load images** loads them this once and the note says so: we'll ask again next time, because a message
+  that only pretends to be from someone mustn't be able to tell when you open it.
 - In **Settings → Reading → Remote images** you can also load images from people in your contacts, or always.
 - Images load by themselves for a remembered sender or a contact only when the message really comes from that
-  sender's domain (it passed the domain's sender checks). A message that only pretends to be from them asks first.
+  sender's domain. A message that only pretends to be from them asks first.
 - Each image can be up to <Value of="remoteImageSize" />, and up to <Value of="remoteImagesPerMessage" /> images load
   per message. Pictures in other formats (such as SVG) and images used as backgrounds stay blocked.
 - Loading an image still tells the sender that _someone_ opened the message through our proxy. If that matters, leave
