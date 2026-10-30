@@ -359,8 +359,13 @@ an app container direct access to Stalwart's management listener.
       as an incident — find the block from the bounce text, request delisting or contact that server's postmaster the
       same day, and record it in the runbook; the target is resolved within a day or two. Never work around a block by
       rotating domains or IPs.
-    - Details live in `docs/internal/03-anti-spam-and-abuse.md` ("Platform reputation") and the deliverability
-      research; publish sending limits, never detection rules (rule 33).
+    - **Designed never to be blocked:** every outbound path meets the large mailbox providers' published sender
+      requirements (Gmail, Yahoo, Microsoft, Proton and others) at the bulk-sender level from day one: aligned SPF,
+      DKIM and DMARC, forward-confirmed PTR matching the HELO name, TLS, RFC-valid messages, complaint rate below
+      0.1 % (never 0.3 %), feedback loops registered, warmed IPs. A change that weakens any of them is a defect.
+    - Details and status of each requirement live in `docs/internal/03-anti-spam-and-abuse.md` ("Platform
+      reputation", "Designed never to be blocked") and the deliverability research; publish sending limits, never
+      detection rules (rule 33).
 
 ## Project conventions
 

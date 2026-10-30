@@ -167,6 +167,34 @@ Lists multiply one message into many deliveries, so they are an abuse amplifier 
   same day, find and stop the cause (usually one abusive or compromised sender), and record it in the deliverability
   runbook. Target: resolved within a day or two. Never rotate domains or IPs to get around a block.
 
+### Designed never to be blocked: the big receivers' sender requirements
+
+The large mailbox providers (Gmail, Yahoo/AOL, Microsoft Outlook.com/Hotmail, Proton and others) publish what they
+require of senders and enforce it with temporary and permanent rejections (`research/deliverability.md` §3). Our
+`anhourmail.com` mail can cross their 5,000-a-day "bulk" line once there are a few thousand users, and our IPs are
+shared by everyone, so we meet the **bulk** rules for all mail from day one. The binding limit is the spam-complaint
+rate: aim below **0.1 %**, never reach **0.3 %** (Gmail Postmaster) — one abusive account can push a shared IP over it,
+so prevention comes before the queue.
+
+| Requirement (who enforces it)                                                 | Our design                                                                                                                                                                                                                                       | Status                                                       |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
+| SPF and DKIM on every message, aligned with From (all)                        | SPF `-all` in the DNS templates; Stalwart signs Ed25519 + RSA-2048 per domain; From must equal the signed-in account (ADR-0019 sender-identity script)                                                                                           | Built (DNS published per domain at go-live)                  |
+| DMARC published, aligned (all bulk senders)                                   | DMARC in the platform and customer templates; rollout `none → quarantine → reject` after clean reports                                                                                                                                           | Built in templates; `reject` at Phase 8–9                    |
+| Forward-confirmed reverse DNS (PTR) matching the HELO name (Gmail, Microsoft) | `mx1.<domain>` is the PTR target and EHLO name                                                                                                                                                                                                   | Pre-staging live-server item (rDNS); required before Phase 7 |
+| TLS for transmission (Gmail)                                                  | Stalwart offers and uses STARTTLS/implicit TLS; MTA-STS `testing → enforce`; TLS-RPT                                                                                                                                                             | Built; `enforce` after clean TLS-RPT (Phase 6)               |
+| RFC 5322-valid messages, no impersonation (Gmail)                             | One From, one Sender, valid Message-ID enforced at submission (ADR-0019); webmail builds messages server-side                                                                                                                                    | Built                                                        |
+| Spam rate < 0.1 %, never 0.3 % (Gmail, Yahoo)                                 | Trust tiers with sending limits (`packages/shared/src/sending.ts`), new-account ramps, per-account daily caps, fail-closed outbound counters, outbound content scanning, automatic `restricted` on complaint or bounce spikes, `abuse@` workflow | Limits in shared; enforcement and automation Phase 6         |
+| Complaint feedback loops (Gmail Postmaster, Microsoft SNDS/JMRP, Yahoo CFL)   | Register every outbound IP and `anhourmail.com`; opaque per-account token in Message-ID so redacted complaints map to an account                                                                                                                 | Phase 7 (registration at go-live)                            |
+| No forwarding of mail that fails checks (protects our DKIM and IPs)           | Forwarding guard: no redirect of DMARC failures or unpassed own-domain mail (ADR-0019 "forwarding and DMARC"); SRS for redirects still open                                                                                                      | Guard built 2026-10-30; SRS open                             |
+| One-click unsubscribe (RFC 8058) for marketing mail (Gmail, Yahoo, Microsoft) | Only bulk/marketing sending needs it; that is Phase 10, from customers' own domains on a separate path (rule 62)                                                                                                                                 | Phase 10                                                     |
+| Warm, consistent volume from new IPs (Microsoft, Gmail)                       | 4-week warm-up plan (`research/deliverability.md` §6) on the production IPs; clean IP and /24 screening before use                                                                                                                               | Phase 7                                                      |
+| Not on blocklists                                                             | Screen IPs and /24 before use; monitor the major DNS blocklists and postmaster dashboards; alert on bounce codes that name a block                                                                                                               | Phase 6 (monitoring) / Phase 7 (screening)                   |
+| Separate reputation for risky traffic                                         | New and free accounts ramp slowly; bulk (Phase 10) never shares the personal-mail IPs or the platform domains                                                                                                                                    | Ramps Phase 6; bulk Phase 10                                 |
+
+**When a block happens anyway** (an obscure or strict server, or a provider's temporary deferral): the playbook in the
+section above — read the bounce, fix the cause (usually one sender), request delisting or contact that postmaster the
+same day, record it; resolved within a day or two. A block at a large provider is a Sev-1 incident.
+
 ## Events from Stalwart (Phase 1 prototype)
 
 `x:WebHook` (Community) posts batched events `{"events":[{id, createdAt, type, data}]}`, signed with
