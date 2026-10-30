@@ -10,11 +10,12 @@
  *   6. Sender identity (ADR-0019): an authenticated submission with a forged header From, two From lines, a second
  *      Sender header, a From/Sender field name written oddly (space or tab before the colon, mixed case) or a null
  *      envelope sender is refused, also when addressed to the sender's own mailbox. Send on behalf (ADR-0026 §8): From =
- *      the mailbox and Sender = a delegate pass only with the web app's tag for exactly that pair and that Message-ID
- *      (`onBehalfTag`), over SMTP and JMAP, and arrive without the tag header (in Mailpit and in a local mailbox's
- *      stored copy); a wrong, missing, empty, other-pair or other-message tag, a missing or doubled Message-ID, odd
- *      Sender forms (group, `<>`, encoded word, source route) and a delegate putting the mailbox in From even with the
- *      tag are refused. Each case uses a fresh recipient so the per-recipient throttle never answers first.
+ *      the mailbox and Sender = a delegate pass only with the web app's tag for exactly that pair, that Message-ID and
+ *      an expiry not yet passed (`onBehalfTag`), over SMTP and JMAP, and arrive without the tag or expiry header (in
+ *      Mailpit and in a local mailbox's stored copy); a wrong, missing, empty, other-pair, other-message or
+ *      other-expiry tag, an expired one, a missing, doubled or malformed expiry, a missing, doubled or unreadable
+ *      Message-ID (even with the tag made for an empty one), odd Sender forms (group, `<>`, encoded word, source route)
+ *      and a delegate putting the mailbox in From even with the tag are refused. Each case uses a fresh recipient so the per-recipient throttle never answers first.
  *   7. A submitted message reaches a local mailbox without any Authentication-Results header, so a sender can't
  *      plant results our server never produced (07-security.md "Authentication results in the webmail").
  *   8. Unknown local recipients (02-mail-infrastructure.md "Unknown recipients"): refused at RCPT with 550 on a
@@ -25,12 +26,18 @@
  *   npm run stack:verify      (after `npm run stack:up` and `npm run db:seed`)
  */
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import net from "node:net";
 import tls from "node:tls";
 
 import { hashPassword } from "@anhourmail/adapters/auth";
-import { ON_BEHALF_HEADER, onBehalfTag, resolveSenderDelegationKey } from "@anhourmail/core/webmail";
+import {
+  ON_BEHALF_EXPIRES_HEADER,
+  ON_BEHALF_HEADER,
+  onBehalfExpires,
+  onBehalfTag,
+  resolveSenderDelegationKey,
+} from "@anhourmail/core/webmail";
 import { JmapClient } from "@anhourmail/jmap-client";
 import { stalwartDevAdmin } from "@anhourmail/stalwart-client";
 
@@ -320,10 +327,24 @@ await protocolCheck("Submission: Authentication-Results headers stripped before 
 const onBehalfKey = resolveSenderDelegationKey(process.env);
 const bobAddress = `bob@${DEV_DOMAIN}`;
 const newMessageId = () => `${randomUUID()}@verify.${DEV_DOMAIN}`;
-const tagFor = (messageId: string, delegate = bobAddress) => onBehalfTag(onBehalfKey, user, delegate, messageId);
-/** Sender, Message-ID(s) and tag header lines for an SMTP submission (`tag: null` = no tag header). */
-const onBehalf = (o: { tag: string | null; messageIds: string[]; sender?: string }) =>
-  `Sender: ${o.sender ?? bobAddress}\r\n${o.messageIds.map((id) => `Message-ID: <${id}>\r\n`).join("")}${
+/** A fresh expiry (the web app's `ON_BEHALF_TTL_MS` ahead), or `ms` from now. */
+const expiresIn = (ms?: number) => onBehalfExpires(Date.now(), ms);
+const tagFor = (messageId: string, expires: string, delegate = bobAddress) =>
+  onBehalfTag(onBehalfKey, user, delegate, messageId, expires);
+/**
+ * Sender, Message-ID(s), expiry and tag header lines for an SMTP submission (`tag: null` = no tag header; `expires`
+ * a list of values, `[]` for none; `rawIds` written as given instead of `<id>`).
+ */
+const onBehalf = (o: {
+  tag: string | null;
+  messageIds: string[];
+  expires: string[];
+  sender?: string;
+  rawIds?: boolean;
+}) =>
+  `Sender: ${o.sender ?? bobAddress}\r\n${o.messageIds
+    .map((id) => `Message-ID: ${o.rawIds === true ? id : `<${id}>`}\r\n`)
+    .join("")}${o.expires.map((e) => `${ON_BEHALF_EXPIRES_HEADER}: ${e}\r\n`).join("")}${
     o.tag === null ? "" : `${ON_BEHALF_HEADER}: ${o.tag}\r\n`
   }`;
 /** The headers of the one Mailpit message to `to`, keys lowercased. */
@@ -342,7 +363,8 @@ const deliveredOnBehalf = (h: Record<string, string[]> | undefined) =>
   h !== undefined &&
   (h.from ?? []).some((v) => v.includes(user)) &&
   (h.sender ?? []).some((v) => v.includes(bobAddress)) &&
-  !(ON_BEHALF_HEADER.toLowerCase() in h);
+  !(ON_BEHALF_HEADER.toLowerCase() in h) &&
+  !(ON_BEHALF_EXPIRES_HEADER.toLowerCase() in h);
 const fresh = (label: string) => `on-behalf-${label}-${randomUUID().slice(0, 8)}@example.com`;
 const refusedOnBehalf = async (label: string, extra: string, as?: { user: string; password: string }) =>
   refusedBySenderCheck(await submitWithHeaderFrom(user, { to: fresh(label), extra, ...(as ? { as } : {}) }));
@@ -352,7 +374,11 @@ await protocolCheck(
   async () => {
     const to = fresh("smtp");
     const id = newMessageId();
-    const reply = await submitWithHeaderFrom(user, { to, extra: onBehalf({ tag: tagFor(id), messageIds: [id] }) });
+    const exp = expiresIn();
+    const reply = await submitWithHeaderFrom(user, {
+      to,
+      extra: onBehalf({ tag: tagFor(id, exp), messageIds: [id], expires: [exp] }),
+    });
     return reply.startsWith("250") && deliveredOnBehalf(await mailpitHeaders(to));
   },
 );
@@ -361,6 +387,7 @@ await protocolCheck(
   async () => {
     const to = fresh("jmap");
     const id = newMessageId();
+    const exp = expiresIn();
     const accountId = await alice.accountId();
     const drafts = await alice.mailboxByRole("drafts");
     const ids = await alice.request([["Identity/get", { accountId, ids: null }, "i"]]);
@@ -380,7 +407,8 @@ await protocolCheck(
               sender: [{ email: bobAddress }],
               to: [{ email: to }],
               subject: "stack-verify on behalf",
-              [`header:${ON_BEHALF_HEADER}:asText`]: tagFor(id),
+              [`header:${ON_BEHALF_EXPIRES_HEADER}:asText`]: exp,
+              [`header:${ON_BEHALF_HEADER}:asText`]: tagFor(id, exp),
               bodyValues: { b: { value: "On-behalf check." } },
               textBody: [{ partId: "b", type: "text/plain" }],
             },
@@ -407,11 +435,12 @@ await protocolCheck(
 await protocolCheck("Send on behalf (local delivery): the stored copy has Sender and no tag header", async () =>
   withThrowawayMailbox("onbehalf", async (box) => {
     const id = newMessageId();
+    const exp = expiresIn();
     const subject = `stack-verify on behalf local ${token}`;
     const reply = await submitWithHeaderFrom(user, {
       to: box.user,
       subject,
-      extra: onBehalf({ tag: tagFor(id), messageIds: [id] }),
+      extra: onBehalf({ tag: tagFor(id, exp), messageIds: [id], expires: [exp] }),
     });
     if (!reply.startsWith("250")) return false;
     const reader = new JmapClient({
@@ -433,22 +462,60 @@ await protocolCheck("Send on behalf (local delivery): the stored copy has Sender
     return (
       names.includes("sender") &&
       headers.some((h) => h.name.toLowerCase() === "sender" && h.value.includes(bobAddress)) &&
-      !names.includes(ON_BEHALF_HEADER.toLowerCase())
+      !names.includes(ON_BEHALF_HEADER.toLowerCase()) &&
+      !names.includes(ON_BEHALF_EXPIRES_HEADER.toLowerCase())
     );
   }),
 );
 {
   const id = newMessageId();
-  const good = tagFor(id);
+  const exp = expiresIn();
+  const good = tagFor(id, exp);
+  const ob = (o: {
+    tag: string | null;
+    messageIds?: string[];
+    expires?: string[];
+    sender?: string;
+    rawIds?: boolean;
+  }) => onBehalf({ messageIds: [id], expires: [exp], ...o });
+  // The script's formula done by hand, for inputs `onBehalfTag` itself refuses to make a tag for.
+  const sha = (x: string) => createHash("sha256").update(x).digest("hex");
+  const manual = (messageId: string, expires: string) =>
+    sha(`${onBehalfKey}|${sha(`${onBehalfKey}|${user}|${bobAddress}|${messageId}|${expires}`)}`);
+  // Expired by the mail server's own clock (its HTTP Date header), ten minutes back: never "past" only on this machine.
+  const serverNow = Date.parse((await fetch(`${base}/jmap/session`)).headers.get("date") ?? "");
+  const past = onBehalfExpires(Number.isNaN(serverNow) ? Date.now() : serverNow, -10 * 60_000);
+  check(
+    "Send on behalf: the expired case's expiry is before the mail server's clock",
+    !Number.isNaN(serverNow) && Date.parse(past) < serverNow,
+  );
   const cases: [string, string][] = [
-    ["wrong tag", onBehalf({ tag: "0".repeat(64), messageIds: [id] })],
-    ["missing tag", onBehalf({ tag: null, messageIds: [id] })],
-    ["empty tag header", onBehalf({ tag: "", messageIds: [id] })],
-    ["another pair's tag", onBehalf({ tag: good, messageIds: [id], sender: `someone@${DEV_DOMAIN}` })],
+    ["wrong tag", ob({ tag: "0".repeat(64) })],
+    ["missing tag", ob({ tag: null })],
+    ["empty tag header", ob({ tag: "" })],
+    ["another pair's tag", ob({ tag: good, sender: `someone@${DEV_DOMAIN}` })],
     // Replay: a tag copied from one message is useless on any other.
-    ["a tag made for another Message-ID", onBehalf({ tag: good, messageIds: [newMessageId()] })],
-    ["no Message-ID", onBehalf({ tag: good, messageIds: [] })],
-    ["two Message-IDs (tag right for one)", onBehalf({ tag: good, messageIds: [newMessageId(), id] })],
+    ["a tag made for another Message-ID", ob({ tag: good, messageIds: [newMessageId()] })],
+    ["no Message-ID", ob({ tag: good, messageIds: [] })],
+    ["two Message-IDs (tag right for one)", ob({ tag: good, messageIds: [newMessageId(), id] })],
+    // Expiry (ADR-0026 slice 13): a right tag whose time has passed, or one moved to another time.
+    ["an expired tag (right for its expiry)", ob({ tag: tagFor(id, past), expires: [past] })],
+    ["a tag with its expiry header changed", ob({ tag: good, expires: [expiresIn(60 * 60_000)] })],
+    ["no expiry header", ob({ tag: good, expires: [] })],
+    ["two expiry headers (one right)", ob({ tag: good, expires: [exp, exp] })],
+    [
+      "an expiry not in the UTC form (tag right for it)",
+      ob({ tag: manual(id, `${exp.slice(0, 19)}+00:00`), expires: [`${exp.slice(0, 19)}+00:00`] }),
+    ],
+    // An unreadable Message-ID reads as empty: the tag for an empty id must never pass (verified 2026-10-30).
+    [
+      "an empty Message-ID with the tag for an empty one",
+      ob({ tag: manual("", exp), messageIds: ["<>"], rawIds: true }),
+    ],
+    [
+      "a Message-ID without brackets (tag right for it)",
+      ob({ tag: manual("garbage", exp), messageIds: ["garbage"], rawIds: true }),
+    ],
   ];
   // Sender forms an expression might read oddly: never accepted without the web app's tag, not with an empty one.
   for (const [form, sender] of [
@@ -457,14 +524,14 @@ await protocolCheck("Send on behalf (local delivery): the stored copy has Sender
     ["an encoded word", `=?utf-8?q?B=C3=B6b?= <${bobAddress}>`],
     ["a source route", `<@relay.example:${bobAddress}>`],
   ] as const) {
-    cases.push([`Sender as ${form}, no tag`, onBehalf({ tag: null, messageIds: [id], sender })]);
-    cases.push([`Sender as ${form}, empty tag`, onBehalf({ tag: "", messageIds: [id], sender })]);
+    cases.push([`Sender as ${form}, no tag`, ob({ tag: null, sender })]);
+    cases.push([`Sender as ${form}, empty tag`, ob({ tag: "", sender })]);
   }
   for (const [label, extra] of cases) {
     await protocolCheck(`Send on behalf: ${label} refused`, () => refusedOnBehalf("refuse", extra));
   }
   await protocolCheck("Send on behalf: delegate putting the mailbox in From refused, even with the tag", () =>
-    refusedOnBehalf("forge", onBehalf({ tag: good, messageIds: [id] }), { user: bobAddress, password }),
+    refusedOnBehalf("forge", ob({ tag: good }), { user: bobAddress, password }),
   );
 }
 await protocolCheck("IMAP 143: greeting + STARTTLS offered", async () => {
