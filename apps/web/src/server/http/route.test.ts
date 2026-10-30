@@ -10,7 +10,7 @@ import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 
 import { setContainerForTests } from "../container";
 import { resetEnvForTests } from "../env";
-import { logPath, ok, readJson, route, routeTemplate } from "./route";
+import { logPath, ok, readJson, readOptionalJson, route, routeTemplate } from "./route";
 
 vi.mock("../auth/actor", () => ({ getActor: async () => ANONYMOUS }));
 // The gate itself is tested in webmail/password-gate.test.ts; here only whether route() consults it.
@@ -115,6 +115,19 @@ describe("route()", () => {
     })(new Request("http://localhost:43200/api/x"), params);
     expect(boom.status).toBe(500);
     expect(JSON.stringify(await boom.json())).not.toContain("secret detail");
+  });
+
+  it("reads an optional body: none (or whitespace) is null, JSON is parsed, malformed JSON is a 400", async () => {
+    const same = { origin: "http://localhost:43200" };
+    const optional = route(async ({ req }) => ok(await readOptionalJson(req)));
+    const none = await optional(post("http://localhost:43200/api/x", "", same), params);
+    expect(await none.json()).toEqual({ data: null });
+    const blank = await optional(post("http://localhost:43200/api/x", "  \n", same), params);
+    expect(await blank.json()).toEqual({ data: null });
+    const json = await optional(post("http://localhost:43200/api/x", { a: 1 }, same), params);
+    expect(await json.json()).toEqual({ data: { a: 1 } });
+    const bad = await optional(post("http://localhost:43200/api/x", "{nope", same), params);
+    expect(bad.status).toBe(400);
   });
 
   it("blocks cross-origin writes and writes without an origin", async () => {

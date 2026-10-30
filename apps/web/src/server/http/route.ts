@@ -236,3 +236,13 @@ export async function enforceLimit(name: LimitName, subject: string): Promise<vo
 export async function readJson(req: Request): Promise<unknown> {
   return (await req.json()) as unknown;
 }
+
+/**
+ * Parses a body that may be left out (`DELETE` with options, `POST` whose fields all have defaults): no body (or only
+ * whitespace) is `null`; anything else must be JSON, and malformed JSON surfaces as a 400 via `route()` — never read as
+ * "no options", so a request that meant something is never carried out without it.
+ */
+export async function readOptionalJson(req: Request): Promise<unknown> {
+  const text = await req.text();
+  return text.trim() === "" ? null : (JSON.parse(text) as unknown);
+}
