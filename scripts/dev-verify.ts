@@ -18,6 +18,21 @@
  *      and a delegate putting the mailbox in From even with the tag are refused. Each case uses a fresh recipient so the per-recipient throttle never answers first.
  *   7. A submitted message reaches a local mailbox without any Authentication-Results header, so a sender can't
  *      plant results our server never produced (07-security.md "Authentication results in the webmail").
+ *   9. Internal-mail marker (ADR-0019 update 2026-10-30): mail submitted here over JMAP or SMTP 465 is delivered with
+ *      exactly one `X-AnhourMail-Internal` that the webmail's own check (`isInternalMail`) accepts for its From — a
+ *      marker the client planted is replaced, none is added without a Message-ID; the same marker copied into a port 25
+ *      message (with the same From and Message-ID) is removed on arrival, and our Authentication-Results are still read;
+ *      a copy of that outside message redirected by a mailbox's own rule has no marker and no results the webmail would
+ *      trust (not verified), while a redirected copy of internal mail keeps a valid marker. A different key fails the
+ *      check (negative control).
+ *  10. Forwarding guard (ADR-0019 updates "forwarding and DMARC"): the real generator's script on throwaway mailboxes —
+ *      the pre-change script forwards our `dmarc=fail` (control); the start-up upgrade equals today's script and its
+ *      compare-and-swap write loses to a save made in between; our `dmarc=fail`, own-domain or subdomain From without our
+ *      top-most pass for that domain, two From headers or addresses, a planted pass and pass words injected through a
+ *      quoted MAIL FROM are kept, not forwarded; foreign
+ *      mail, another id's fail and internal mail are forwarded; the spam skip still applies; and Stalwart's regex engine
+ *      matches the pass pattern at a header's end and its anchored form against our real header. Dev has no DNS, so a
+ *      real DMARC pass or fail is a pre-staging check.
  *   8. Unknown local recipients (02-mail-infrastructure.md "Unknown recipients"): refused at RCPT with 550 on a
  *      domain without a catch-all, inbound on 25 and on authenticated submission (465); a catch-all domain still
  *      accepts them; a JMAP submission to one is created but reports the 550 in `deliveryStatus` (no bounce), which
@@ -39,8 +54,11 @@ import {
   resolveSenderDelegationKey,
 } from "@anhourmail/core/webmail";
 import { JmapClient } from "@anhourmail/jmap-client";
-import { stalwartDevAdmin } from "@anhourmail/stalwart-client";
+import { INTERNAL_MAIL_HEADER, stalwartDevAdmin } from "@anhourmail/stalwart-client";
 
+import { isInternalMail, ourAuthResultsHeader, trustedAuthservIds } from "../apps/web/src/server/webmail/original";
+import { buildScript, DEFAULT_RULES, dmarcPassRegex, upgradeManagedScript } from "../apps/web/src/server/webmail/sieve";
+import { MANAGED_SIEVE_SCRIPT } from "@anhourmail/shared/webmail";
 import { DEV_DOMAIN } from "../infra/stalwart/dev-plan";
 
 const base = process.env.STALWART_URL ?? "http://127.0.0.1:43080";
@@ -532,6 +550,401 @@ await protocolCheck("Send on behalf (local delivery): the stored copy has Sender
   }
   await protocolCheck("Send on behalf: delegate putting the mailbox in From refused, even with the tag", () =>
     refusedOnBehalf("forge", ob({ tag: good }), { user: bobAddress, password }),
+  );
+}
+// Internal-mail marker (ADR-0019 update 2026-10-30, 05-webmail.md "Remote images"). The key is the one the dev plan
+// wrote into the script (as for send on behalf); never printed.
+{
+  type Box = { user: string; password: string };
+  type Header = { name: string; value: string };
+  const readerFor = (box: Box) =>
+    new JmapClient({
+      sessionUrl: `${base}/jmap/session`,
+      authorization: `Basic ${Buffer.from(`${box.user}:${box.password}`).toString("base64")}`,
+    });
+  /** The stored headers of the message with `subject` in `box`'s Inbox, or undefined if it never arrives. */
+  const storedHeaders = async (box: Box, subject: string, timeoutMs?: number): Promise<Header[] | undefined> => {
+    const reader = readerFor(box);
+    const boxInbox = await reader.mailboxByRole("inbox");
+    if (!boxInbox) return undefined;
+    const got = await waitFor(
+      async () => (await reader.listEmails(boxInbox.id, 20)).find((e) => e.subject === subject),
+      timeoutMs,
+    );
+    if (!got) return undefined;
+    const res = await reader.request([
+      ["Email/get", { accountId: await reader.accountId(), ids: [got.id], properties: ["headers"] }, "g"],
+    ]);
+    const list = (res.get("g")?.list ?? []) as { headers?: Header[] }[];
+    return (list[0]?.headers ?? []).map((h) => ({ name: h.name, value: h.value.trim() }));
+  };
+  const markers = (h: Header[]) => h.filter((x) => x.name.trim().toLowerCase() === INTERNAL_MAIL_HEADER.toLowerCase());
+  const valueOf = (h: Header[], name: string) => h.find((x) => x.name.toLowerCase() === name)?.value ?? "";
+  const trusted = trustedAuthservIds(undefined, [`mail.${DEV_DOMAIN}`], false);
+  /** A whole message over port 25 from an outside envelope sender; resolves to the reply to the message data. */
+  async function deliverInbound(
+    to: string,
+    headers: string,
+    opts: { bdat?: boolean; mailFrom?: string } = {},
+  ): Promise<string> {
+    await sleep(250);
+    const w = await wire(port("STALWART_SMTP_PORT", 25), false);
+    try {
+      await w.read(/^220 /m);
+      w.send("EHLO outside.example");
+      await w.read(/^250 /m);
+      for (const line of [`MAIL FROM:<${opts.mailFrom ?? `verify@outside-${token}.example`}>`, `RCPT TO:<${to}>`]) {
+        w.send(line);
+        const reply = await w.read(/^\d{3} /m);
+        if (/^[45]\d\d /m.test(reply)) return reply;
+      }
+      if (opts.bdat === true) {
+        // CHUNKING (advertised on 25): the whole message in one last chunk; `send` writes its final CRLF.
+        const msg = `${headers}To: ${to}\r\n\r\nx\r\n`;
+        w.send(`BDAT ${String(Buffer.byteLength(msg))} LAST\r\n${msg.slice(0, -2)}`);
+      } else {
+        w.send("DATA");
+        await w.read(/^354 /m);
+        w.send(`${headers}To: ${to}\r\n\r\nx\r\n.`);
+      }
+      const res = await w.read(/^\d{3} /m);
+      w.send("QUIT");
+      return res;
+    } finally {
+      w.close();
+    }
+  }
+  const otherKey = createHash("sha256").update(`not-${onBehalfKey}`).digest("hex");
+
+  await protocolCheck("Internal mail: marker on every path, never forgeable from outside or by redirect", async () =>
+    withThrowawayMailbox("intbox", (box) =>
+      withThrowawayMailbox("intfwd", (fwd) =>
+        withThrowawayMailbox("inttgt", async (tgt) => {
+          // fwd redirects every message to tgt and keeps a copy (the webmail's forwarding rule, in short).
+          await stalwartDevAdmin().putSieveScript(
+            fwd.id,
+            "verify",
+            `require ["copy"];\nredirect :copy "${tgt.user}";\n`,
+          );
+          const results: [string, boolean][] = [];
+          const note = (name: string, ok: boolean) => results.push([name, ok]);
+
+          // (b) JMAP submission, the webmail's path.
+          const jmapSubject = `stack-verify internal jmap ${token}`;
+          await alice.sendText({ from: user, to: [box.user], subject: jmapSubject, text: "Internal mail check." });
+          const viaJmap = (await storedHeaders(box, jmapSubject)) ?? [];
+          note(
+            "JMAP: one marker, valid for its From",
+            markers(viaJmap).length === 1 && isInternalMail(viaJmap, user, onBehalfKey, trusted),
+          );
+          note("negative control: another key fails", !isInternalMail(viaJmap, user, otherKey, trusted));
+          note("another From fails", !isInternalMail(viaJmap, `bob@${DEV_DOMAIN}`, onBehalfKey, trusted));
+
+          // (a) SMTP 465 with planted markers (three spellings): replaced by exactly one of ours.
+          const smtpSubject = `stack-verify internal smtp ${token}`;
+          const planted = `${INTERNAL_MAIL_HEADER}: ${"ab".repeat(32)}\r\nx-anhourmail-internal : ${"cd".repeat(32)}\r\n${INTERNAL_MAIL_HEADER}\t: ${"ef".repeat(32)}\r\n`;
+          const smtpReply = await submitWithHeaderFrom(user, {
+            to: box.user,
+            subject: smtpSubject,
+            extra: `Message-ID: <${newMessageId()}>\r\n${planted}`,
+          });
+          const viaSmtp = (await storedHeaders(box, smtpSubject)) ?? [];
+          note(
+            "SMTP 465: planted markers replaced by one valid marker",
+            smtpReply.startsWith("250") &&
+              markers(viaSmtp).length === 1 &&
+              isInternalMail(viaSmtp, user, onBehalfKey, trusted),
+          );
+          // No Message-ID: nothing to bind the marker to, so none (the reader then asks first).
+          const bareSubject = `stack-verify internal bare ${token}`;
+          await submitWithHeaderFrom(user, { to: box.user, subject: bareSubject });
+          const bare = (await storedHeaders(box, bareSubject)) ?? [{ name: "missing", value: "" }];
+          note(
+            "SMTP 465 without a Message-ID: no marker",
+            markers(bare).length === 0 && !bare.some((h) => h.name === "missing"),
+          );
+
+          // (d) Port 25: the genuine marker from the JMAP message, with its From and Message-ID, is removed on arrival.
+          const replayed = `From: ${user}\r\nMessage-ID: ${valueOf(viaJmap, "message-id")}\r\n${markers(viaJmap)
+            .map((m) => `${INTERNAL_MAIL_HEADER}: ${m.value}\r\n`)
+            .join("")}x-anhourmail-internal : ${markers(viaJmap)[0]?.value ?? ""}\r\n`;
+          const inSubject = `stack-verify internal inbound ${token}`;
+          const inReply = await deliverInbound(box.user, `${replayed}Subject: ${inSubject}\r\n`);
+          const inbound = (await storedHeaders(box, inSubject)) ?? [{ name: "missing", value: "" }];
+          note(
+            "port 25: a copied genuine marker is removed, our results still read",
+            inReply.startsWith("250") &&
+              markers(inbound).length === 0 &&
+              !isInternalMail(inbound, user, onBehalfKey, trusted) &&
+              ourAuthResultsHeader(inbound, trusted) !== null,
+          );
+
+          // (e) The same outside message to fwd: the redirected copy has no marker and no results the webmail trusts.
+          const fwdSubject = `stack-verify internal redirect25 ${token}`;
+          const fwdReply = await deliverInbound(fwd.user, `${replayed}Subject: ${fwdSubject}\r\n`);
+          const redirected = (await storedHeaders(tgt, fwdSubject)) ?? [{ name: "missing", value: "" }];
+          note(
+            "redirected copy of outside mail: no marker, no trusted results (not verified)",
+            fwdReply.startsWith("250") &&
+              !redirected.some((h) => h.name === "missing") &&
+              markers(redirected).length === 0 &&
+              !isInternalMail(redirected, user, onBehalfKey, trusted) &&
+              ourAuthResultsHeader(redirected, trusted) === null,
+          );
+          // A redirected copy of internal mail keeps its marker: its From is ours and verified.
+          const fwdIntSubject = `stack-verify internal redirect ${token}`;
+          await alice.sendText({
+            from: user,
+            to: [fwd.user],
+            subject: fwdIntSubject,
+            text: "Internal redirect check.",
+          });
+          const redirectedInt = (await storedHeaders(tgt, fwdIntSubject)) ?? [];
+          note(
+            "redirected copy of internal mail: marker still valid",
+            isInternalMail(redirectedInt, user, onBehalfKey, trusted),
+          );
+
+          // Recipients: the marker is added only when every one is local (none reaches outside recipients).
+          const mixedSubject = `stack-verify internal mixed ${token}`;
+          const external = `internal-mixed-${token}@example.com`;
+          await alice.sendText({ from: user, to: [box.user, external], subject: mixedSubject, text: "Mixed." });
+          const mixed = (await storedHeaders(box, mixedSubject)) ?? [{ name: "missing", value: "" }];
+          const outside = await mailpitHeaders(external);
+          note(
+            "local + outside recipients: no marker on either copy",
+            !mixed.some((h) => h.name === "missing") &&
+              markers(mixed).length === 0 &&
+              outside !== undefined &&
+              !(INTERNAL_MAIL_HEADER.toLowerCase() in outside),
+          );
+          const bothSubject = `stack-verify internal both ${token}`;
+          await alice.sendText({ from: user, to: [box.user, fwd.user], subject: bothSubject, text: "Both local." });
+          const both = (await storedHeaders(box, bothSubject)) ?? [];
+          note("two local recipients: marked", isInternalMail(both, user, onBehalfKey, trusted));
+
+          // Port 25 with the genuine marker under names Stalwart doesn't treat as the header (verified 2026-10-30: NBSP,
+          // BOM and \v are kept as written, \f is removed) and over BDAT: never accepted by the reader.
+          const genuine = markers(viaJmap)[0]?.value ?? "";
+          const base25 = `From: ${user}\r\nMessage-ID: ${valueOf(viaJmap, "message-id")}\r\n`;
+          for (const [label, name] of [
+            ["NBSP", `${INTERNAL_MAIL_HEADER}\u00a0`],
+            ["BOM", `\ufeff${INTERNAL_MAIL_HEADER}`],
+            ["VT", `${INTERNAL_MAIL_HEADER}\v`],
+            ["FF", `${INTERNAL_MAIL_HEADER}\f`],
+          ] as const) {
+            const subject = `stack-verify internal name ${label} ${token}`;
+            const reply = await deliverInbound(box.user, `${base25}${name}: ${genuine}\r\nSubject: ${subject}\r\n`);
+            const got = (await storedHeaders(box, subject)) ?? [{ name: "missing", value: "" }];
+            const kept = got.filter((h) => h.name.toLowerCase().includes("anhourmail-internal")).length;
+            console.log(`      port 25 marker named with ${label}: ${kept > 0 ? "kept as written" : "removed"}`);
+            note(
+              `port 25 marker named with ${label}: not internal`,
+              reply.startsWith("250") &&
+                !got.some((h) => h.name === "missing") &&
+                !isInternalMail(got, user, onBehalfKey, trusted),
+            );
+          }
+          const bdatSubject = `stack-verify internal bdat ${token}`;
+          const bdatReply = await deliverInbound(
+            box.user,
+            `${base25}${INTERNAL_MAIL_HEADER}: ${genuine}\r\nSubject: ${bdatSubject}\r\n`,
+            { bdat: true },
+          );
+          const bdat = (await storedHeaders(box, bdatSubject)) ?? [{ name: "missing", value: "" }];
+          note(
+            "port 25 over BDAT: the marker is removed",
+            bdatReply.startsWith("250") && !bdat.some((h) => h.name === "missing") && markers(bdat).length === 0,
+          );
+
+          const failed = results.filter(([, ok]) => !ok).map(([n]) => n);
+          if (failed.length > 0) console.log(`      internal mail: failed ${failed.join("; ")}`);
+          return failed.length === 0;
+        }),
+      ),
+    ),
+  );
+
+  // Forwarding skips DMARC failures (maintainer decision 2026-10-30, ADR-0019 update "forwarding and DMARC"). Dev has
+  // no DNS, so Stalwart's own results always say temperror: the fail cases plant a results header with our authserv-id,
+  // which the rule treats like ours (a sender can only stop forwarding of their own message). The script is the real
+  // generator's output, first in the pre-2026-10-30 form, then upgraded with the start-up transform.
+  await protocolCheck(
+    "Forwarding guard: our dmarc=fail, or own-domain mail without our pass, stays in the inbox; upgrade is a compare-and-swap",
+    async () =>
+      withThrowawayMailbox("dmarcfwd", (fwd) =>
+        withThrowawayMailbox("dmarctgt", async (tgt) => {
+          const rules = { ...DEFAULT_RULES, forwarding: { enabled: true, address: tgt.user, keepCopy: true } };
+          const ctx = { identities: [fwd.user], contacts: [], mailboxDomain: DEV_DOMAIN };
+          const older = buildScript(rules, { ...ctx, authservIds: [] });
+          const today = buildScript(rules, { ...ctx, authservIds: trusted });
+          const admin = stalwartDevAdmin();
+          const results: [string, boolean][] = [];
+          const note = (name: string, ok: boolean) => results.push([name, ok]);
+          const ours = (verdict: string) =>
+            `Authentication-Results: mail.${DEV_DOMAIN}; dmarc=${verdict} header.from=${DEV_DOMAIN} policy.dmarc=none\r\n`;
+          const foreign = `someone@outside-${token}.example`;
+          const own = `someone@${DEV_DOMAIN}`;
+          /** Sends on port 25 to fwd; [kept in fwd's inbox, forwarded to tgt]. */
+          const outcome = async (
+            label: string,
+            extra: string,
+            from = foreign,
+            mailFrom?: string,
+          ): Promise<[boolean, boolean]> => {
+            const subject = `stack-verify fwd ${label} ${token}`;
+            const reply = await deliverInbound(
+              fwd.user,
+              `${extra}From: ${from}\r\nSubject: ${subject}\r\n`,
+              mailFrom === undefined ? {} : { mailFrom },
+            );
+            if (!reply.startsWith("250")) return [false, false];
+            const kept = (await storedHeaders(fwd, subject)) !== undefined;
+            const forwarded = (await storedHeaders(tgt, subject, 6_000)) !== undefined;
+            return [kept, forwarded];
+          };
+          const same = (a: [boolean, boolean], b: [boolean, boolean]) => a[0] === b[0] && a[1] === b[1];
+          const KEPT_ONLY: [boolean, boolean] = [true, false];
+          const BOTH: [boolean, boolean] = [true, true];
+
+          // The pre-2026-10-30 script, then the start-up upgrade, written with a compare-and-swap.
+          await admin.putSieveScript(fwd.id, MANAGED_SIEVE_SCRIPT, older);
+          note(
+            "older script: our dmarc=fail is still forwarded (control)",
+            same(await outcome("old-fail", ours("fail")), BOTH),
+          );
+          const upgraded = upgradeManagedScript(older, trusted, DEV_DOMAIN);
+          note("start-up upgrade gives today's script", upgraded === today);
+          const read = await admin.getSieveScript(fwd.id, MANAGED_SIEVE_SCRIPT);
+          // A save lands between the read and the write: the write is refused and the save stays.
+          await admin.putSieveScript(fwd.id, MANAGED_SIEVE_SCRIPT, `${older}# saved meanwhile\n`);
+          const lost = await admin.putSieveScriptIfUnchanged(
+            fwd.id,
+            MANAGED_SIEVE_SCRIPT,
+            upgraded ?? "",
+            read?.state ?? "",
+          );
+          const kept = await admin.getSieveScript(fwd.id, MANAGED_SIEVE_SCRIPT);
+          note(
+            "compare-and-swap: a save in between wins",
+            !lost && kept?.content.trimEnd() === `${older}# saved meanwhile`,
+          );
+          const fresh = await admin.getSieveScript(fwd.id, MANAGED_SIEVE_SCRIPT);
+          const wrote = await admin.putSieveScriptIfUnchanged(
+            fwd.id,
+            MANAGED_SIEVE_SCRIPT,
+            upgraded ?? "",
+            fresh?.state ?? "",
+          );
+          const now = await admin.getSieveScript(fwd.id, MANAGED_SIEVE_SCRIPT);
+          note(
+            "compare-and-swap: with the current state it writes, still active",
+            wrote && now?.content.trimEnd() === today.trimEnd() && now.active,
+          );
+
+          note("foreign From, our results temperror (dev): kept and forwarded", same(await outcome("plain", ""), BOTH));
+          note("foreign From, our id says dmarc=fail: kept only", same(await outcome("fail", ours("fail")), KEPT_ONLY));
+          note(
+            "foreign From, another id says dmarc=fail: kept and forwarded",
+            same(
+              await outcome("other", "Authentication-Results: other.example; dmarc=fail header.from=x.example\r\n"),
+              BOTH,
+            ),
+          );
+          // The mailbox's own domain without a DMARC pass in our top-most results (dev: temperror, as for no record).
+          note("own-domain From, no DMARC pass: kept only", same(await outcome("own", "", own), KEPT_ONLY));
+          note(
+            "own-subdomain From, no DMARC pass: kept only",
+            same(await outcome("sub", "", `someone@sub.${DEV_DOMAIN}`), KEPT_ONLY),
+          );
+          note(
+            "own-domain From, a planted pass below ours: kept only",
+            same(await outcome("planted", ours("pass"), own), KEPT_ONLY),
+          );
+          note(
+            "own-domain From, the pass words injected through a quoted MAIL FROM: kept only",
+            same(
+              await outcome(
+                "inject",
+                "",
+                own,
+                `"x; dmarc=pass header.from=${DEV_DOMAIN} policy.dmarc=none"@outside-${token}.example`,
+              ),
+              KEPT_ONLY,
+            ),
+          );
+          // More than one From (Stalwart writes `dmarc=none header.from=` for these): never a pass for the own domain.
+          note(
+            "two From headers, one foreign and one own: kept only",
+            same(await outcome("two-hdr", "", `someone@evil-${token}.example\r\nFrom: ${own}`), KEPT_ONLY),
+          );
+          note(
+            "a From listing a foreign and an own address: kept only",
+            same(await outcome("two-addr", "", `someone@evil-${token}.example, ${own}`), KEPT_ONLY),
+          );
+          note(
+            "spam skip unchanged: X-Spam-Status Yes is kept only",
+            same(await outcome("spam", "X-Spam-Status: Yes\r\n"), KEPT_ONLY),
+          );
+          // Internal mail from the mailbox's own domain has no results header at all: still forwarded.
+          const internalSubject = `stack-verify fwd internal ${token}`;
+          await alice.sendText({ from: user, to: [fwd.user], subject: internalSubject, text: "Forwarding check." });
+          note(
+            "internal mail from the own domain: forwarded",
+            (await storedHeaders(tgt, internalSubject)) !== undefined,
+          );
+
+          // The pass branch can't be produced here (no DNS), so check the regex in Stalwart's own engine: it matches a
+          // pass item at a header's end, and its anchored form matches our real header (whose verdict is temperror).
+          const passRe = dmarcPassRegex(DEV_DOMAIN);
+          const engine = (index: number, regex: string) =>
+            `require ["index", "regex", "copy"];\nif header :index ${String(index)} :regex "Authentication-Results" "${regex.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}" {\n  redirect :copy "${tgt.user}";\n}\n`;
+          await admin.putSieveScript(fwd.id, MANAGED_SIEVE_SCRIPT, engine(2, passRe));
+          note(
+            "engine: the pass regex matches a pass at a header's end",
+            same(await outcome("re-pass", ours("pass")), BOTH),
+          );
+          note("engine: and not a temperror", same(await outcome("re-temp", ours("temperror")), KEPT_ONLY));
+          note(
+            "engine: nor a pass for a foreign header.from",
+            same(
+              await outcome(
+                "re-foreign",
+                `Authentication-Results: mail.${DEV_DOMAIN}; dmarc=pass header.from=evil-${token}.example policy.dmarc=none\r\n`,
+              ),
+              KEPT_ONLY,
+            ),
+          );
+          await admin.putSieveScript(
+            fwd.id,
+            MANAGED_SIEVE_SCRIPT,
+            engine(1, passRe.replace("dmarc=pass", "dmarc=temperror")),
+          );
+          note(
+            "engine: the anchored form matches our real top-most header",
+            same(await outcome("re-real", "", own), BOTH),
+          );
+          note(
+            "engine: injected words in our real header don't match the anchored pass form",
+            await (async () => {
+              await admin.putSieveScript(fwd.id, MANAGED_SIEVE_SCRIPT, engine(1, passRe));
+              return same(
+                await outcome(
+                  "re-inject",
+                  "",
+                  own,
+                  `"x; dmarc=pass header.from=${DEV_DOMAIN}"@outside-${token}.example`,
+                ),
+                KEPT_ONLY,
+              );
+            })(),
+          );
+
+          const failedChecks = results.filter(([, ok]) => !ok).map(([n]) => n);
+          if (failedChecks.length > 0) console.log(`      forwarding: failed ${failedChecks.join("; ")}`);
+          return failedChecks.length === 0;
+        }),
+      ),
   );
 }
 await protocolCheck("IMAP 143: greeting + STARTTLS offered", async () => {
