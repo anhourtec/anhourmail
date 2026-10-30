@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 
-import { ACCOUNT_A, ACCOUNT_B, actAs, deps, req, user } from "../__tests__/helpers";
+import { ACCOUNT_A, ACCOUNT_B, actAs, deps, fakeHasher, req, user } from "../__tests__/helpers";
 import { authorize, can } from "../actor";
 import { AccountSuspendedError } from "../errors";
 import type { Mailbox, MailboxStatus } from "../mailboxes/entity";
@@ -171,7 +171,7 @@ describe("suspendAccount", () => {
     expect(can(owner, "self.security.manage")).toBe(true);
     const d = world();
     await suspendAccount(d, GA, ACCOUNT_A, { reason: "phishing" }, SESSION, req);
-    await expect(resumeMailbox(d, owner, ACCOUNT_A, M_ACTIVE, req)).rejects.toMatchObject({
+    await expect(resumeMailbox(d, owner, ACCOUNT_A, M_ACTIVE, req, fakeHasher)).rejects.toMatchObject({
       code: "account_suspended",
     });
     const denied = d.uow.state.audit.find((e) => e.errorCode === "account_suspended");
@@ -272,7 +272,7 @@ describe("suspendPerson", () => {
     expect(status(d, M_PERSON)).toBe("suspended");
     expect(status(d, M_ACTIVE)).toBe("provisioning");
     const owner = user({ id: "owner-a", account: [[ACCOUNT_A, "owner"]] });
-    await expect(resumeMailbox(d, owner, ACCOUNT_A, M_PERSON, req)).rejects.toThrow(/Anhourtec suspended/);
+    await expect(resumeMailbox(d, owner, ACCOUNT_A, M_PERSON, req, fakeHasher)).rejects.toThrow(/Anhourtec suspended/);
     const lifted = await liftPersonSuspension(d, GA, "member-a", SESSION, req);
     expect(lifted.mailboxes).toBe(1);
     expect(status(d, M_PERSON)).toBe("provisioning");
@@ -289,10 +289,10 @@ describe("suspendPerson", () => {
     await suspendPerson(d, GA, "member-a", { reason: "spam" }, SESSION, req);
     expect(d.uow.state.mailboxHolds.filter((h) => h.mailboxId === M_PERSON)).toEqual([]);
     const owner = user({ id: "owner-a", account: [[ACCOUNT_A, "owner"]] });
-    await expect(resumeMailbox(d, owner, ACCOUNT_A, M_PERSON, req)).rejects.toThrow(/Anhourtec suspended/);
+    await expect(resumeMailbox(d, owner, ACCOUNT_A, M_PERSON, req, fakeHasher)).rejects.toThrow(/Anhourtec suspended/);
     await liftPersonSuspension(d, GA, "member-a", SESSION, req);
     expect(status(d, M_PERSON)).toBe("suspended");
-    await resumeMailbox(d, owner, ACCOUNT_A, M_PERSON, req);
+    await resumeMailbox(d, owner, ACCOUNT_A, M_PERSON, req, fakeHasher);
     expect(status(d, M_PERSON)).toBe("provisioning");
   });
 

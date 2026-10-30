@@ -3,7 +3,16 @@ import { describe, expect, it } from "vitest";
 
 import { MAILBOX_DELETE_GRACE_DAYS } from "@anhourmail/shared/plans";
 
-import { ACCOUNT_A, ACCOUNT_B, anonymous, deps as makeDeps, fixedClock, req, user } from "../__tests__/helpers";
+import {
+  ACCOUNT_A,
+  ACCOUNT_B,
+  anonymous,
+  deps as makeDeps,
+  fakeHasher,
+  fixedClock,
+  req,
+  user,
+} from "../__tests__/helpers";
 import { createAlias, listAliases, setAliasEnabled } from "../aliases/service";
 import { ConflictError, ForbiddenError, NotFoundError, UnauthenticatedError } from "../errors";
 import type { Deps, UnitOfWork } from "../ports";
@@ -142,18 +151,18 @@ describe("suspend and resume", () => {
     });
     await expect(suspendMailbox(d, owner, ACCOUNT_A, MBX, req)).rejects.toThrow("already suspended");
 
-    const back = await resumeMailbox(d, owner, ACCOUNT_A, MBX, req);
+    const back = await resumeMailbox(d, owner, ACCOUNT_A, MBX, req, fakeHasher);
     expect(back.status).toBe("provisioning"); // the worker turns access back on, then marks it active
     expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "mailbox.unsuspended", result: "success" });
     expect(d.uow.state.jobs.filter((j) => j.subjectId === MBX)).toHaveLength(1); // the queued job is reused
-    await expect(resumeMailbox(d, owner, ACCOUNT_A, MBX, req)).rejects.toThrow("isn't suspended");
+    await expect(resumeMailbox(d, owner, ACCOUNT_A, MBX, req, fakeHasher)).rejects.toThrow("isn't suspended");
   });
 
   it("refuses to resume once the domain is no longer the account's", async () => {
     const { d } = setup();
     await suspendMailbox(d, owner, ACCOUNT_A, MBX, req);
     d.uow.state.domains[0]!.status = "removing";
-    await expect(resumeMailbox(d, owner, ACCOUNT_A, MBX, req)).rejects.toThrow(ConflictError);
+    await expect(resumeMailbox(d, owner, ACCOUNT_A, MBX, req, fakeHasher)).rejects.toThrow(ConflictError);
     expect(box(d)?.status).toBe("suspended");
   });
 
@@ -165,9 +174,9 @@ describe("suspend and resume", () => {
     await expect(suspendMailbox(d, ownerB, ACCOUNT_A, MBX, req)).rejects.toThrow(NotFoundError);
     // Account B's owner naming account A's mailbox under their own account: not found, nothing changes.
     await expect(suspendMailbox(d, ownerB, ACCOUNT_B, MBX, req)).rejects.toThrow(NotFoundError);
-    await expect(resumeMailbox(d, ownerB, ACCOUNT_B, MBX, req)).rejects.toThrow(NotFoundError);
+    await expect(resumeMailbox(d, ownerB, ACCOUNT_B, MBX, req, fakeHasher)).rejects.toThrow(NotFoundError);
     await expect(deleteMailbox(d, ownerB, ACCOUNT_B, MBX, req)).rejects.toThrow(NotFoundError);
-    await expect(restoreMailbox(d, ownerB, ACCOUNT_B, MBX, req)).rejects.toThrow(NotFoundError);
+    await expect(restoreMailbox(d, ownerB, ACCOUNT_B, MBX, req, fakeHasher)).rejects.toThrow(NotFoundError);
     await expect(deleteMailbox(d, owner, ACCOUNT_A, "not-an-id", req)).rejects.toThrow(NotFoundError);
     expect(box(d)?.status).toBe("active");
     expect(d.uow.state.jobs).toEqual([]);
@@ -214,7 +223,7 @@ describe("delete with a grace period, and restore", () => {
     expect((await deleteMailbox(d, owner, ACCOUNT_A, MBX, req)).status).toBe("deleting");
     expect(d.uow.state.audit.at(-1)?.meta).toMatchObject({ from: "suspended" });
     await expect(suspendMailbox(d, owner, ACCOUNT_A, MBX, req)).rejects.toThrow("Restore it first");
-    await expect(resumeMailbox(d, owner, ACCOUNT_A, MBX, req)).rejects.toThrow(ConflictError);
+    await expect(resumeMailbox(d, owner, ACCOUNT_A, MBX, req, fakeHasher)).rejects.toThrow(ConflictError);
     await expect(setMailboxQuota(d, owner, ACCOUNT_A, MBX, { quotaGb: 2 }, req)).rejects.toThrow("Restore it first");
     await expect(deleteMailbox(d, owner, ACCOUNT_A, MBX, req)).rejects.toThrow("already being deleted");
   });
@@ -223,21 +232,52 @@ describe("delete with a grace period, and restore", () => {
     const { d, clock } = setup();
     await deleteMailbox(d, owner, ACCOUNT_A, MBX, req);
     clock.set(new Date(clock.now().getTime() + 29 * DAY));
-    const v = await restoreMailbox(d, userAdmin, ACCOUNT_A, MBX, req);
+    const v = await restoreMailbox(d, userAdmin, ACCOUNT_A, MBX, req, fakeHasher);
     expect(v).toMatchObject({ status: "provisioning", purgeAfter: null });
     expect(box(d)).toMatchObject({ status: "provisioning", purgeAfter: null });
     expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "mailbox.restored", result: "success" });
-    await expect(restoreMailbox(d, owner, ACCOUNT_A, MBX, req)).rejects.toThrow("isn't being deleted");
+    await expect(restoreMailbox(d, owner, ACCOUNT_A, MBX, req, fakeHasher)).rejects.toThrow("isn't being deleted");
+  });
+
+  it("a restore applies a password set while it was being deleted (its person left), and only then", async () => {
+    const { d } = setup();
+    await deleteMailbox(d, owner, ACCOUNT_A, MBX, req);
+    await restoreMailbox(d, owner, ACCOUNT_A, MBX, req, fakeHasher);
+    expect(d.uow.state.jobs.some((j) => j.kind === "mailbox.password")).toBe(false);
+    await deleteMailbox(d, owner, ACCOUNT_A, MBX, req);
+    await d.uow.run((r) => r.mailboxPasswords.setPending(MBX, "$argon2id$leaver", "grant"));
+    await restoreMailbox(d, owner, ACCOUNT_A, MBX, req, fakeHasher);
+    expect(d.uow.state.jobs.filter((j) => j.kind === "mailbox.password").map((j) => j.subjectId)).toEqual([MBX]);
+    // The proxy's grant is signed again (the stored one may have run out); the hash is the one that was waiting.
+    const box = d.uow.state.mailboxes.find((m) => m.id === MBX);
+    expect(d.uow.state.mailboxPasswords.find((p) => p.mailboxId === MBX)).toMatchObject({
+      pendingHash: "$argon2id$leaver",
+      grant: `grant-for-${String(box?.stalwartId)}`,
+    });
+  });
+
+  it("a resume applies a password still waiting (its person left while it was suspended)", async () => {
+    const { d } = setup();
+    await suspendMailbox(d, owner, ACCOUNT_A, MBX, req);
+    await d.uow.run((r) => r.mailboxPasswords.setPending(MBX, "$argon2id$leaver", "grant"));
+    await resumeMailbox(d, owner, ACCOUNT_A, MBX, req, fakeHasher);
+    expect(d.uow.state.jobs.filter((j) => j.kind === "mailbox.password").map((j) => j.subjectId)).toEqual([MBX]);
+    // The proxy's grant is signed again (the stored one may have run out); the hash is the one that was waiting.
+    const box = d.uow.state.mailboxes.find((m) => m.id === MBX);
+    expect(d.uow.state.mailboxPasswords.find((p) => p.mailboxId === MBX)).toMatchObject({
+      pendingHash: "$argon2id$leaver",
+      grant: `grant-for-${String(box?.stalwartId)}`,
+    });
   });
 
   it("refuses to restore after the grace period, or when the domain is no longer the account's", async () => {
     const { d, clock } = setup();
     await deleteMailbox(d, owner, ACCOUNT_A, MBX, req);
     d.uow.state.domains[0]!.status = "removing";
-    await expect(restoreMailbox(d, owner, ACCOUNT_A, MBX, req)).rejects.toThrow("no longer active");
+    await expect(restoreMailbox(d, owner, ACCOUNT_A, MBX, req, fakeHasher)).rejects.toThrow("no longer active");
     d.uow.state.domains[0]!.status = "active";
     clock.set(new Date(clock.now().getTime() + MAILBOX_DELETE_GRACE_DAYS * DAY));
-    await expect(restoreMailbox(d, owner, ACCOUNT_A, MBX, req)).rejects.toThrow("grace period has ended");
+    await expect(restoreMailbox(d, owner, ACCOUNT_A, MBX, req, fakeHasher)).rejects.toThrow("grace period has ended");
     expect(box(d)?.status).toBe("deleting");
   });
 
@@ -290,7 +330,7 @@ describe("scheduled purge", () => {
       meta: { aliases: 1 },
     });
     // Gone for good: restoring is now "not found", and another run has nothing to do.
-    await expect(restoreMailbox(d, owner, ACCOUNT_A, MBX, req)).rejects.toThrow(NotFoundError);
+    await expect(restoreMailbox(d, owner, ACCOUNT_A, MBX, req, fakeHasher)).rejects.toThrow(NotFoundError);
     expect(await purgeDueMailboxes(d, mail)).toEqual({ purged: 0, failed: 0, held: 0 });
     expect(box(d, MBX_B)).toBeDefined(); // other mailboxes untouched
     expect(box(d, MBX_OWNER)).toBeDefined();
@@ -400,9 +440,9 @@ describe("owners' and admins' mailboxes", () => {
     }
     // The owner can; the User Admin still can't resume or restore it afterwards.
     await suspendMailbox(d, owner, ACCOUNT_A, MBX_OWNER, req);
-    await expect(resumeMailbox(d, userAdmin, ACCOUNT_A, MBX_OWNER, req)).rejects.toThrow(ForbiddenError);
+    await expect(resumeMailbox(d, userAdmin, ACCOUNT_A, MBX_OWNER, req, fakeHasher)).rejects.toThrow(ForbiddenError);
     await deleteMailbox(d, owner, ACCOUNT_A, MBX_DADMIN, req);
-    await expect(restoreMailbox(d, userAdmin, ACCOUNT_A, MBX_DADMIN, req)).rejects.toThrow(ForbiddenError);
+    await expect(restoreMailbox(d, userAdmin, ACCOUNT_A, MBX_DADMIN, req, fakeHasher)).rejects.toThrow(ForbiddenError);
     expect((await getMailbox(d, owner, ACCOUNT_A, MBX_DADMIN)).lifecycleLocked).toBe(false);
 
     const denied = d.uow.state.audit.filter((e) => e.result === "denied");

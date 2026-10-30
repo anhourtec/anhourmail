@@ -676,12 +676,15 @@ export async function resumeMailbox(
   accountId: string,
   id: string,
   req: RequestMeta,
+  hasher: PasswordHasher,
 ): Promise<MailboxView> {
   return lifecycle(deps, actor, accountId, id, req, "mailbox.unsuspended", async (repos, m) => {
     if (m.status !== "suspended") throw new ConflictError("This mailbox isn't suspended.");
     await assertNotHeld(repos, accountId, m.id, m.userId);
     await assertDomainHeld(repos, accountId, m.address);
-    return { next: await moveTo(deps, repos, m, "provisioning", null) };
+    const next = await moveTo(deps, repos, m, "provisioning", null);
+    await queueWaitingPassword(deps, repos, hasher, m);
+    return { next };
   });
 }
 
@@ -729,6 +732,7 @@ export async function restoreMailbox(
   accountId: string,
   id: string,
   req: RequestMeta,
+  hasher: PasswordHasher,
 ): Promise<MailboxView> {
   return lifecycle(deps, actor, accountId, id, req, "mailbox.restored", async (repos, m) => {
     if (m.status !== "deleting") throw new ConflictError("This mailbox isn't being deleted.");
@@ -737,8 +741,32 @@ export async function restoreMailbox(
     }
     await assertNotHeld(repos, accountId, m.id, m.userId);
     await assertDomainHeld(repos, accountId, m.address);
-    return { next: await moveTo(deps, repos, m, "provisioning", null) };
+    const next = await moveTo(deps, repos, m, "provisioning", null);
+    await queueWaitingPassword(deps, repos, hasher, m);
+    return { next };
   });
+}
+
+/**
+ * A resume or restore applies a password still waiting from while the mailbox was off (an administrator's, or the
+ * one that cut a leaver's sign-in off, `removeMember`); the worker keeps the account off until it lands, so the old
+ * password never works again. The management proxy's grant is signed again here: the one stored with the hash only
+ * lasts a short while, and a restore can come weeks later.
+ */
+async function queueWaitingPassword(
+  deps: Deps,
+  repos: Repositories,
+  hasher: PasswordHasher,
+  m: Mailbox,
+): Promise<void> {
+  if (m.stalwartId === null) return;
+  const waiting = await repos.directory.getMailbox(m.id);
+  if (!waiting?.pendingPasswordHash) return;
+  const grant = hasher.grant?.({ externalId: m.stalwartId, passwordHash: waiting.pendingPasswordHash }) ?? null;
+  await repos.mailboxPasswords.setPending(m.id, waiting.pendingPasswordHash, grant, {
+    byOwner: waiting.pendingPasswordByOwner,
+  });
+  await repos.provisioning.enqueue({ kind: "mailbox.password", subjectId: m.id, runAfter: deps.clock.now() });
 }
 
 /**

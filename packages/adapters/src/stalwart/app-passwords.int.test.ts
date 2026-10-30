@@ -546,7 +546,7 @@ describe("app passwords on Stalwart", () => {
     await drain(m.id);
     expect(await imapLogin(phone.secret)).toBe(false);
     expect(await sessionStatus(phone.secret)).toBe(403);
-    await resumeMailbox(deps, actor, accountId, m.id, meta);
+    await resumeMailbox(deps, actor, accountId, m.id, meta, { hash: hashPassword });
     await drain(m.id);
     expect(await imapLogin(phone.secret)).toBe(true);
 

@@ -206,7 +206,7 @@ describe("mailbox lifecycle against Stalwart", () => {
     expect((await reconcile(deps, mail)).suspensionMismatch.map((x) => x.address)).not.toContain(address);
 
     // Resume: sign-in works again and the message is still there.
-    await resumeMailbox(deps, system, accountId, m.id, meta);
+    await resumeMailbox(deps, system, accountId, m.id, meta, { hash: hashPassword });
     await drain(m.id);
     expect(await mailboxRow(m.id)).toMatchObject({ status: "active", lastError: null });
     expect(await mgmt.getUser(stalwartId)).toMatchObject({ suspended: false });
@@ -225,7 +225,7 @@ describe("mailbox lifecycle against Stalwart", () => {
     expect(report.unknownOnMailServer.mailboxes).not.toContain(address);
 
     // Restore: back on, aliases back, mail still there.
-    await restoreMailbox(deps, system, accountId, m.id, meta);
+    await restoreMailbox(deps, system, accountId, m.id, meta, { hash: hashPassword });
     await drain(m.id);
     expect(await mailboxRow(m.id)).toMatchObject({ status: "active", purgeAfter: null });
     expect((await mgmt.listUsers()).find((u) => u.address === address)?.aliases).toContain(alias);
@@ -286,7 +286,7 @@ describe("mailbox lifecycle against Stalwart", () => {
         await gate;
       });
       await holding;
-      const restore = restoreMailbox(deps, system, acct.id, m.id, meta);
+      const restore = restoreMailbox(deps, system, acct.id, m.id, meta, { hash: hashPassword });
       await new Promise((r) => setTimeout(r, 300));
       release();
       await purge;

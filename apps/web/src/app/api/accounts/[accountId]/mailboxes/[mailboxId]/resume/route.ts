@@ -16,6 +16,7 @@ export const POST = route(async ({ req, meta }, params) =>
       str(params.accountId),
       str(params.mailboxId),
       meta,
+      container().passwords,
     ),
   ),
 );
