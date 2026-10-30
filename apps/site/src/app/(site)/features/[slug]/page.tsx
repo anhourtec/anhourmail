@@ -6,10 +6,12 @@ import { notFound } from "next/navigation";
 import { ArrowRightIcon } from "lucide-react";
 
 import { FEATURE_ICONS } from "@/components/feature-icons";
+import { JsonLd } from "@/components/json-ld";
 import { Reveal } from "@/components/reveal";
 import { CtaBand, EssentialsGrid, FaqList, FeatureRow, PageHero, SectionHead, Seam } from "@/components/sections";
 import { FEATURE_CONTENT } from "@/lib/feature-content";
 import { FEATURE_PAGES, type FeatureSlug, featureHref } from "@/lib/ia";
+import { breadcrumbJsonLd, pageMetadata } from "@/lib/seo";
 
 type Props = { params: Promise<{ slug: string }> };
 
@@ -25,12 +27,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   if (!isSlug(slug)) return {};
   const c = FEATURE_CONTENT[slug];
-  return {
-    title: c.title,
-    description: c.description,
-    alternates: { canonical: featureHref(slug) },
-    openGraph: { title: `${c.title} · AnhourMail`, description: c.description, url: featureHref(slug) },
-  };
+  return pageMetadata({ title: c.seoTitle, description: c.description, path: featureHref(slug) });
 }
 
 export default async function FeaturePage({ params }: Props) {
@@ -40,6 +37,13 @@ export default async function FeaturePage({ params }: Props) {
   const nav = FEATURE_PAGES.find((f) => f.slug === slug)?.nav ?? c.eyebrow;
   return (
     <>
+      <JsonLd
+        data={breadcrumbJsonLd([
+          { name: "Home", path: "/" },
+          { name: "Features", path: "/features" },
+          { name: nav, path: featureHref(slug) },
+        ])}
+      />
       <PageHero crumbs={[{ label: "Features", href: "/features" }, { label: nav }]} title={c.title} lead={c.lead}>
         {c.heroArt}
       </PageHero>

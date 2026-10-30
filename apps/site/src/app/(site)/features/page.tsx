@@ -8,20 +8,20 @@ import { FEATURE_ICONS } from "@/components/feature-icons";
 import { Reveal } from "@/components/reveal";
 import { CtaBand, EssentialsGrid, SectionHead, PageHero } from "@/components/sections";
 import { FEATURE_PAGES, featureHref } from "@/lib/ia";
+import { pageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
-  title: "Features",
+export const metadata: Metadata = pageMetadata({
+  title: "Features: custom domains, aliases and private webmail",
   description:
-    "Everything in AnhourMail: your own domain, aliases and masked aliases, fast JMAP webmail, privacy by default and every mail app.",
-  alternates: { canonical: "/features" },
-  openGraph: { title: "Features · AnhourMail", url: "/features" },
-};
+    "Custom domain email, aliases and masked aliases, fast open-source webmail, privacy by default, and IMAP, SMTP and JMAP for any mail app.",
+  path: "/features",
+});
 
 export default function FeaturesPage() {
   return (
     <>
       <PageHero
-        title="Everything a private inbox needs"
+        title="Email hosting with everything a private inbox needs"
         lead="Your own domain, an address for every sign-up, webmail that keeps up with you — and nothing watching over your shoulder."
       />
       <section className="am-site-section">
@@ -68,6 +68,16 @@ export default function FeaturesPage() {
         <div className="flex flex-col gap-12">
           <SectionHead title="The essentials, on every plan." />
           <EssentialsGrid />
+          <Reveal className="flex flex-wrap justify-center gap-x-8 gap-y-3">
+            <Link href="/docs/features" className="am-site-link-arrow">
+              The full feature list
+              <ArrowRightIcon className="size-4" aria-hidden="true" />
+            </Link>
+            <Link href="/pricing" className="am-site-link-arrow">
+              Compare plans
+              <ArrowRightIcon className="size-4" aria-hidden="true" />
+            </Link>
+          </Reveal>
         </div>
       </section>
       <CtaBand />

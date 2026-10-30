@@ -53,6 +53,8 @@ type Row = {
 export type FeatureContent = {
   eyebrow: string;
   title: string;
+  /** The page's <title>: the words people search for, said plainly (the visible H1 stays `title`). */
+  seoTitle: string;
   lead: string;
   description: string;
   heroArt: ReactNode;
@@ -77,9 +79,10 @@ export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
   "custom-domains": {
     eyebrow: "Custom domains",
     title: "Your address, your domain",
+    seoTitle: "Custom domain email hosting with guided DNS setup",
     lead: "Use the domain you already own. We show every DNS record, check each one live, and sign your mail with keys made for your domain.",
     description:
-      "Use your own domain with AnhourMail: guided DNS setup, live per-record checks and DKIM signing keys made for your domain.",
+      "Email on your own domain with AnhourMail: guided DNS setup, a live check for every record, DKIM signing keys made for your domain, and catch-all.",
     heroArt: <ConsoleMock view="home" />,
     rows: [
       {
@@ -88,9 +91,9 @@ export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
         title: "Copy, paste, watch it go green.",
         body: `You add ${String(requiredRecords)} required records at your DNS provider. Each one has a copy button and its own live check, so you always know exactly what’s left.`,
         bullets: [
-          "Step-by-step guides for popular DNS providers",
+          "Works with any DNS provider",
           "Live check per record",
-          "Mail starts flowing as soon as the MX record passes",
+          "Mail starts arriving once the ownership and MX records pass",
         ],
         bloom: "blue",
         art: <DnsChecks />,
@@ -156,9 +159,10 @@ export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
   aliases: {
     eyebrow: "Aliases",
     title: "A different address for every sign-up",
-    lead: "Give every shop, newsletter and app its own address. See which ones get mail, and switch any of them off the moment it’s sold.",
+    seoTitle: "Email aliases and masked aliases",
+    lead: "Give every shop, newsletter and app its own address, and switch any of them off the moment it’s sold.",
     description:
-      "Aliases and masked aliases on AnhourMail: random per-site addresses, per-alias stats and a one-click off switch.",
+      "Email aliases and masked aliases on AnhourMail: a random address for every site, a note on each, and an off switch when one starts getting spam.",
     heroArt: <ConsoleMock view="aliases" />,
     rows: [
       {
@@ -174,7 +178,7 @@ export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
         icon: BarChart3Icon,
         label: "Know who leaked it",
         title: "Spam on an alias? You know exactly who sold it.",
-        body: "Every alias counts the mail it receives. When one starts getting junk, switch it off — nothing else changes.",
+        body: "Each site gets its own address, so spam arriving on one tells you who passed it on. Switch that alias off — nothing else changes.",
         bullets: ["A note on each alias", "Turn off without deleting", "Turn back on any time"],
         bloom: "blue",
         art: <AliasToggles />,
@@ -222,17 +226,18 @@ export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
   webmail: {
     eyebrow: "Webmail",
     title: "Webmail that feels instant",
-    lead: "Built on JMAP, the modern mail protocol, so it syncs only what changed and shows new mail the moment it arrives.",
+    seoTitle: "Fast, open-source webmail built on JMAP",
+    lead: "Built on JMAP, the modern mail protocol, so it fetches only what changed instead of downloading whole folders.",
     description:
-      "AnhourMail's open-source webmail: JMAP sync, push updates, keyboard shortcuts and safe rendering of every message.",
+      "AnhourMail’s open-source webmail: JMAP sync, threads, search, keyboard shortcuts, undo send, contacts and safe rendering of every message.",
     heroArt: <WebmailMock />,
     rows: [
       {
         icon: ZapIcon,
         label: "JMAP sync",
-        title: "Only what changed, as soon as it changes.",
-        body: "Instead of re-downloading folders, the webmail asks for what changed since last time and listens for new mail. Big mailboxes stay fast.",
-        bullets: ["Incremental sync", "Push updates, no polling", "Local cache for instant folder switching"],
+        title: "Only what changed, nothing more.",
+        body: "Instead of re-downloading folders, the webmail asks the server what changed since last time and loads only what’s on screen. Big mailboxes stay fast.",
+        bullets: ["Incremental sync", "New mail checked while it’s open", "Long lists load as you scroll"],
         bloom: "cyan",
         art: <InstantList />,
       },
@@ -262,12 +267,16 @@ export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
         title: "Keyboard shortcuts",
         body: "Move, archive, reply and search without reaching for the mouse.",
       },
-      { icon: FilterIcon, title: "Filters", body: "Sort mail automatically with rules that run on the server." },
+      {
+        icon: FilterIcon,
+        title: "Rules on the server",
+        body: "Blocked senders, forwarding and automatic replies run on the mail server, so they work in every app.",
+      },
       { icon: ArchiveIcon, title: "Threads", body: "Conversations grouped together, newest first." },
       {
         icon: BellIcon,
-        title: "Status",
-        body: "The webmail arrives with the beta. Until then, any IMAP app works.",
+        title: "Undo send",
+        body: "Changed your mind? Take a message back for a few seconds after you send it.",
       },
     ],
     faq: [
@@ -282,9 +291,10 @@ export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
   privacy: {
     eyebrow: "Privacy",
     title: "Private by default, not by setting",
+    seoTitle: "Private email: no ads, no tracking, remote images blocked",
     lead: "No ads, no tracking, no profiling. The protections are switched on from the first message — you don’t have to find them.",
     description:
-      "How AnhourMail keeps your mail private: no ads or tracking, remote images blocked, and staff actions you can see.",
+      "Privacy-focused email from AnhourMail: no ads or tracking, remote images blocked until you load them through our proxy, and every staff action shown to you.",
     heroArt: <TrackerBlocked />,
     rows: [
       {
@@ -344,6 +354,7 @@ export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
   apps: {
     eyebrow: "Mail apps",
     title: "Keep the apps you already like",
+    seoTitle: "IMAP, SMTP and JMAP email for any mail app",
     lead: `${PROTOCOL_LIST} work with any standard mail app, on every device. App passwords keep your main password out of them.`,
     description: `Use AnhourMail in any mail app: ${PROTOCOL_LIST}, app passwords and automatic setup.`,
     heroArt: <SettingsCard />,
@@ -383,7 +394,11 @@ export const FEATURE_CONTENT: Record<FeatureSlug, FeatureContent> = {
         title: "Every platform",
         body: "Desktop, phone and tablet — use as many as you like.",
       },
-      { icon: RefreshCwIcon, title: "Push mail", body: "New mail shows up on your devices as it arrives." },
+      {
+        icon: RefreshCwIcon,
+        title: "Contacts sync",
+        body: "Your address book syncs to your phone and computer over CardDAV.",
+      },
       { icon: GlobeIcon, title: "Your domain too", body: "Custom domains work in every app exactly the same way." },
     ],
     faq: [

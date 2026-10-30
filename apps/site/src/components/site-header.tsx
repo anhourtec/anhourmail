@@ -48,6 +48,13 @@ export function SiteHeader() {
                   );
                 })}
                 <Link
+                  href="/docs/features"
+                  className="flex items-center justify-between gap-3 rounded-[14px] p-3 text-[13.5px] text-white/75 transition-colors hover:bg-white/[0.07] hover:text-white"
+                >
+                  The full feature list
+                  <ArrowRightIcon className="size-4" aria-hidden="true" />
+                </Link>
+                <Link
                   href="/switch"
                   className="flex items-center justify-between gap-3 rounded-[14px] p-3 text-[13.5px] text-white/75 transition-colors hover:bg-white/[0.07] hover:text-white"
                 >
@@ -87,6 +94,9 @@ export function SiteHeader() {
                   {f.nav}
                 </Link>
               ))}
+              <Link href="/docs/features" className="am-site-nav-link flex">
+                Full feature list
+              </Link>
               <div className="my-2 border-white/10 border-t" />
               {NAV_LINKS.map((l) => (
                 <Link key={l.href} href={l.href} className="am-site-nav-link flex">
