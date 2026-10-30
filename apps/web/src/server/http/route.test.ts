@@ -10,6 +10,7 @@ import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 
 import { setContainerForTests } from "../container";
 import { resetEnvForTests } from "../env";
+import { pinnedAddress, PinnedMailboxMissingError } from "../webmail/pin";
 import { logPath, ok, readJson, readOptionalJson, route, routeTemplate } from "./route";
 
 vi.mock("../auth/actor", () => ({ getActor: async () => ANONYMOUS }));
@@ -311,5 +312,36 @@ describe("webmail control-plane access", () => {
     ).toBe(401);
     expect((await handler({})(get("am.webmail=delegated"), params)).status).toBe(200);
     expect(ran).toBe(2);
+  });
+
+  it("runs webmail routes pinned to the tab's shared mailbox, and refuses a pin it can't honour (Open another mailbox)", async () => {
+    const seen: (string | null)[] = [];
+    const pinned = (opts: Parameters<typeof route>[1], fail = false) =>
+      route(async () => {
+        seen.push(pinnedAddress());
+        if (fail) throw new PinnedMailboxMissingError("not open");
+        return ok(true);
+      }, opts);
+    const at = (headers: Record<string, string>, query = "") =>
+      new Request(`http://localhost:43300/api/webmail/x${query}`, { headers });
+    expect((await pinned({ session: "webmail" })(at({ "x-webmail-shared": "Desk@Family.test" }), params)).status).toBe(
+      200,
+    );
+    expect((await pinned({ session: "webmail" })(at({}, "?shared=desk%40family.test"), params)).status).toBe(200);
+    expect((await pinned({ session: "webmail" })(at({}), params)).status).toBe(200);
+    // Console routes never pin.
+    expect((await pinned({})(at({ "x-webmail-shared": "desk@family.test" }), params)).status).toBe(200);
+    expect(seen).toEqual(["desk@family.test", "desk@family.test", null, null]);
+    // A malformed pin, or one naming no open shared mailbox: the one delegation refusal, marked for the tab.
+    for (const res of [
+      await pinned({ session: "webmail" })(at({ "x-webmail-shared": "not-an-address" }), params),
+      await pinned({ session: "webmail" }, true)(at({ "x-webmail-shared": "desk@family.test" }), params),
+    ]) {
+      expect(res.status).toBe(404);
+      expect(res.headers.get("x-webmail-refused")).toBe("mailbox");
+      expect(await res.json()).toEqual({
+        error: { code: "not_found", message: "You don't have access to this mailbox." },
+      });
+    }
   });
 });

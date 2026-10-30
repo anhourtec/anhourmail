@@ -110,6 +110,7 @@ describe("webmail delegation gate", () => {
     const refused = fake({ s1: shared }, false);
     const res = await delegationBlock(withCookie("am.webmail=s1"), "full_access", refused.deps);
     expect(res?.status).toBe(404);
+    expect(res?.headers.get("x-webmail-refused")).toBe("mailbox");
     expect(await res?.json()).toEqual({
       error: { code: "not_found", message: "You don't have access to this mailbox." },
     });

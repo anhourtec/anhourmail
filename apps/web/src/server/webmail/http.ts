@@ -9,6 +9,7 @@ import type { WebmailRefusal } from "@anhourmail/core/webmail";
 import { SUPPORT_EMAIL } from "@anhourmail/shared/platform";
 
 import { webmailCookie } from "./instance";
+import { PinnedMailboxMissingError, REFUSED_HEADER } from "./pin";
 import {
   WebmailBlockedError,
   WebmailBusyError,
@@ -94,7 +95,12 @@ export function webmailErrorResponse(err: unknown): Response | null {
   }
   if (err instanceof WebmailRefusedError) return body("refused", err.message, 400);
   // One answer for every refused delegated mailbox (ADR-0026 §6): it never says whether an address exists.
-  if (err instanceof WebmailDelegationRefusedError) return body("not_found", DELEGATION_REFUSED, 404);
+  if (err instanceof WebmailDelegationRefusedError || err instanceof PinnedMailboxMissingError) {
+    const res = body("not_found", DELEGATION_REFUSED, 404);
+    // Lets a mailbox-scoped tab tell this refusal from "that message is gone" (the same for every refused case).
+    res.headers.set(REFUSED_HEADER, "mailbox");
+    return res;
+  }
   if (err instanceof WebmailOwnMailboxOnlyError) return body("own_mailbox_only", OWN_MAILBOX_ONLY, 403);
   if (err instanceof WebmailQuotaError) return body("rate_limited", err.message, 429);
   if (err instanceof WebmailSendUnconfirmedError) {

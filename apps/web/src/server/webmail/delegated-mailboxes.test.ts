@@ -26,6 +26,7 @@ import { WebmailSettingsService, WebmailSignaturesService } from "@anhourmail/co
 
 import { mailExportStream } from "./export";
 import { checkJmapRequest, setsSenderFields } from "./jmap-policy";
+import { PinnedMailboxMissingError, withPinnedMailbox } from "./pin";
 import { changeWebmailPassword } from "./password";
 import { WebmailSettings } from "./settings";
 import {
@@ -376,6 +377,156 @@ describe("mailboxes shared with the person in the webmail (ADR-0026 §6)", () =>
     const s = await t.store.read(sessionId);
     expect([s, ...(s?.others ?? [])].filter((m) => m && !m.delegated)).toHaveLength(5);
     await expect(t.svc.addMailbox(sessionId, "own5@x.test", "right")).rejects.toThrow(/5 mailboxes/);
+  });
+});
+
+describe("a tab scoped to a mailbox shared with the person (Open another mailbox, ADR-0026 §6)", () => {
+  const get = () => ({
+    using: [CORE, MAIL],
+    methodCalls: [["Mailbox/get", { accountId: "x" }, "m"] as [string, Record<string, unknown>, string]],
+  });
+
+  it("opens it without switching the session, then reads it pinned while other requests stay on the active one", async () => {
+    const t = setup();
+    t.grant(DESK, "full_access");
+    const { sessionId } = await t.svc.signIn("kim@family.test", "right");
+    const opened = await t.svc.openDelegated(sessionId, "desk@family.test", req, { activate: false });
+    expect(opened.username).toBe("kim@family.test");
+    expect(t.minted).toEqual(["desk@family.test"]);
+    expect(t.audits()).toHaveLength(1);
+    await withPinnedMailbox("desk@family.test", () => t.svc.jmap(sessionId, get()));
+    expect(t.calls.at(-1)?.auth).toBe("Bearer at-desk@family.test");
+    await t.svc.jmap(sessionId, get());
+    expect(t.calls.at(-1)?.auth).toBe("Bearer at-kim@family.test");
+    expect((await t.store.read(sessionId))?.username).toBe("kim@family.test");
+    // Opened again (a reload of the tab): its grant is checked, nothing minted, still not switched.
+    await t.svc.openDelegated(sessionId, "desk@family.test", req, { activate: false });
+    expect(t.minted).toEqual(["desk@family.test"]);
+    expect((await t.store.read(sessionId))?.username).toBe("kim@family.test");
+  });
+
+  it("leaves another tab's switch alone, whichever tab refreshes a token", async () => {
+    const t = setup();
+    t.grant(DESK, "full_access");
+    t.grant(LEE_BOX, "full_access");
+    const { sessionId } = await t.svc.signIn("kim@family.test", "right");
+    await t.svc.openDelegated(sessionId, "desk@family.test", req, { activate: false });
+    // The person's main tab switches to lee@ meanwhile.
+    await t.svc.openDelegated(sessionId, "lee@family.test", req);
+    t.advance(3_600_000);
+    // The first use refreshes the person's own token (proving it), the next the pinned mailbox's own.
+    await withPinnedMailbox("desk@family.test", () => t.svc.jmap(sessionId, get()));
+    await withPinnedMailbox("desk@family.test", () => t.svc.jmap(sessionId, get()));
+    expect(t.calls.at(-1)?.auth).toBe("Bearer at-desk@family.test-r1");
+    expect((await t.store.read(sessionId))?.username).toBe("lee@family.test");
+    await t.svc.jmap(sessionId, get());
+    expect(t.calls.at(-1)?.auth).toBe("Bearer at-lee@family.test-r1");
+  });
+
+  it("keeps each request's own view when refreshes race and a compare-and-set is lost", async () => {
+    const t = setup();
+    t.grant(DESK, "full_access");
+    const { sessionId } = await t.svc.signIn("kim@family.test", "right");
+    await t.svc.openDelegated(sessionId, "desk@family.test", req, { activate: false });
+    t.advance(3_600_000);
+    // The first write after this loses its compare-and-set (another tab wrote in between).
+    const write = t.store.write.bind(t.store);
+    let lose = 1;
+    t.store.write = async (id, data) => {
+      if (lose > 0) {
+        lose -= 1;
+        return false;
+      }
+      return write(id, data);
+    };
+    const [own, pinned, pinnedAgain] = await Promise.all([
+      t.svc.session(sessionId),
+      withPinnedMailbox("desk@family.test", () => t.svc.session(sessionId)),
+      withPinnedMailbox("desk@family.test", () => t.svc.session(sessionId)),
+    ]);
+    expect(own?.username).toBe("kim@family.test");
+    expect(pinned?.username).toBe("desk@family.test");
+    expect(pinnedAgain?.username).toBe("desk@family.test");
+    expect((await t.store.read(sessionId))?.username).toBe("kim@family.test");
+    expect(lose).toBe(0);
+  });
+
+  it("refuses the same way for no grant, the person's own address and a pin on a mailbox not open here", async () => {
+    const t = setup();
+    const { sessionId } = await t.svc.signIn("kim@family.test", "right");
+    for (const address of ["desk@family.test", "desk@b.test", "kim@family.test"]) {
+      const err = await t.svc.openDelegated(sessionId, address, req, { activate: false }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err instanceof DelegatedMailboxRefusedError || err instanceof WebmailDelegationRefusedError).toBe(true);
+    }
+    await expect(withPinnedMailbox("desk@family.test", () => t.svc.jmap(sessionId, get()))).rejects.toBeInstanceOf(
+      PinnedMailboxMissingError,
+    );
+    expect(t.minted).toEqual([]);
+  });
+
+  it("refuses the pinned tab after a revoke without dropping anything; the person's own use drops it", async () => {
+    const t = setup();
+    t.grant(DESK, "full_access");
+    const { sessionId } = await t.svc.signIn("kim@family.test", "right");
+    await t.svc.openDelegated(sessionId, "desk@family.test", req, { activate: false });
+    t.s.delegations = [];
+    for (const _ of [1, 2]) {
+      await expect(withPinnedMailbox("desk@family.test", () => t.svc.jmap(sessionId, get()))).rejects.toBeInstanceOf(
+        WebmailDelegationRefusedError,
+      );
+    }
+    const s = await t.store.read(sessionId);
+    expect(s?.username).toBe("kim@family.test");
+    expect(s?.others?.map((m) => m.username)).toEqual(["desk@family.test"]);
+    await t.svc.jmap(sessionId, get());
+    expect(t.calls.at(-1)?.auth).toBe("Bearer at-kim@family.test");
+    // The session's own listing drops it.
+    await t.svc.mailboxes(sessionId);
+    expect((await t.store.read(sessionId))?.others ?? []).toEqual([]);
+  });
+
+  it("never pins an entry a send opened, so a link can't end its undo hold; opening the tab checks and marks it", async () => {
+    const t = setup();
+    t.grant(DESK, "full_access");
+    const { sessionId } = await t.svc.signIn("kim@family.test", "right");
+    // As a send leaves it: open, for sending only.
+    const cur = await t.svc.openDelegated(sessionId, "desk@family.test", req, { activate: false });
+    await t.store.write(sessionId, {
+      ...cur,
+      others: (cur.others ?? []).map((m) =>
+        m.delegated ? { ...m, delegated: { ...m.delegated, opened: "send" as const } } : m,
+      ),
+    });
+    await expect(withPinnedMailbox("desk@family.test", () => t.svc.jmap(sessionId, get()))).rejects.toBeInstanceOf(
+      PinnedMailboxMissingError,
+    );
+    expect((await t.store.read(sessionId))?.others?.map((m) => m.username)).toEqual(["desk@family.test"]);
+    // The tab's own open (a click, or this origin) checks read and manage now and marks the entry.
+    await t.svc.openDelegated(sessionId, "desk@family.test", req, { activate: false });
+    expect(t.minted).toEqual(["desk@family.test"]);
+    await withPinnedMailbox("desk@family.test", () => t.svc.jmap(sessionId, get()));
+    expect(t.calls.at(-1)?.auth).toBe("Bearer at-desk@family.test");
+  });
+
+  it("keeps sending, drafts, identities and settings out of the pinned tab", async () => {
+    const t = setup();
+    t.grant(DESK, "full_access");
+    t.grant(DESK, "send_as");
+    const { sessionId } = await t.svc.signIn("kim@family.test", "right");
+    await t.svc.openDelegated(sessionId, "desk@family.test", req, { activate: false });
+    const draft = { to: [], cc: [], bcc: [], subject: "", text: "", attachments: [], identityId: "i1" };
+    await withPinnedMailbox("desk@family.test", async () => {
+      for (const attempt of [
+        () => t.svc.identities(sessionId),
+        () => t.svc.senders(sessionId),
+        () => t.svc.saveDraft(sessionId, draft),
+        () => t.svc.send(sessionId, "d1", "i1"),
+        () => t.svc.mailRules(sessionId),
+      ]) {
+        await expect(attempt()).rejects.toBeInstanceOf(WebmailOwnMailboxOnlyError);
+      }
+    });
   });
 });
 

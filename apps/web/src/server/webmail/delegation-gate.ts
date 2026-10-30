@@ -7,6 +7,7 @@ import { log } from "@anhourmail/server/log";
 
 import { DELEGATION_REFUSED, OWN_MAILBOX_ONLY, webmailErrorResponse } from "./http";
 import { webmail, webmailSessionId } from "./instance";
+import { REFUSED_HEADER } from "./pin";
 import type { WebmailSession } from "./session-store";
 
 /**
@@ -77,5 +78,7 @@ export async function delegationBlock(
   await deps.drop(id, s.username).catch((err: unknown) => {
     log.warn("webmail: delegated entry not dropped", { component: "webmail", err });
   });
-  return answer("not_found", DELEGATION_REFUSED, 404);
+  const refused = answer("not_found", DELEGATION_REFUSED, 404);
+  refused.headers.set(REFUSED_HEADER, "mailbox");
+  return refused;
 }

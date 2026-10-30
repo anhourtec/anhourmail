@@ -58,6 +58,7 @@ import {
 } from "./sieve";
 import { QueueFullError, UserQueue, withLimitRetry } from "./queue";
 import { MAX_MAILBOXES, type MailboxTokens, type WebmailSession, type WebmailSessionStore } from "./session-store";
+import { pinnedAddress, withPinnedMailbox } from "./pin";
 import { calendarEvents, type CalendarEvent, MAX_MARKDOWN } from "./body";
 import {
   AUTO_SAVE_OFF,
@@ -407,7 +408,10 @@ export class WebmailService {
   /** Console sessions seen alive recently (handoff-born webmail sessions), until when. */
   readonly #consoleAlive = new Map<string, number>();
   readonly #base: string;
-  /** One refresh at a time per session (several tabs or calls may notice expiry together). */
+  /**
+   * One refresh at a time per session and mailbox (several tabs or calls may notice expiry together). Keyed by the
+   * mailbox too: a tab pinned to a shared mailbox (`pin.ts`) refreshes that entry while another tab uses another.
+   */
   readonly #refreshing = new Map<string, Promise<WebmailSession | null>>();
   readonly #roles = new Map<string, { at: number; roles: Roles }>();
   readonly #identities = new Map<string, { at: number; list: Identity[] }>();
@@ -434,6 +438,14 @@ export class WebmailService {
       ...deps,
     };
     this.#base = deps.stalwartUrl.replace(/\/+$/, "");
+    // Deferred work (the end of an undo hold, contacts auto-save) runs outside any pin of the request that scheduled
+    // it (`pin.ts`), on the session as it is then.
+    const defer = this.#d.defer;
+    this.#d.defer = (fn, ms) => {
+      defer(() => {
+        withPinnedMailbox(null, fn);
+      }, ms);
+    };
   }
 
   get store(): WebmailSessionStore {
@@ -592,7 +604,7 @@ export class WebmailService {
         ? { ...rest, ...fresh }
         : { ...rest, others: (rest.others ?? []).map((m) => (m.username === fresh.username ? fresh : m)) };
     const newId = await this.#d.store.create(next);
-    this.#refreshing.delete(sessionId);
+    this.#forgetRefresh(sessionId);
     await this.#d.store.destroy(sessionId);
     return newId;
   }
@@ -706,11 +718,37 @@ export class WebmailService {
    * `openDelegatedMailbox` checks the grant now, mints a throwaway credential, exchanges it once and destroys it, and
    * audits it; the tokens are sealed into this session only. Every refusal is the same 404.
    */
-  async openDelegated(sessionId: string, address: string, req: RequestMeta): Promise<WebmailSession> {
+  async openDelegated(
+    sessionId: string,
+    address: string,
+    req: RequestMeta,
+    opts: { activate?: boolean } = {},
+  ): Promise<WebmailSession> {
     const s = await this.#sessionOrOwn(sessionId);
     if (!s) throw new WebmailSignedOutError("signed out");
     const want = address.trim().toLowerCase();
     const already = [s, ...(s.others ?? [])].find((m) => m.username.toLowerCase() === want);
+    if (opts.activate === false) {
+      // For a mailbox-scoped tab (`pin.ts`): opened (or checked, if open already) without switching what the session's
+      // other tabs show. The tab then pins it on every request. The person's own mailboxes are never opened this way.
+      if (already && !already.delegated) throw new WebmailDelegationRefusedError("own mailbox");
+      if (already) {
+        // Not dropped when refused: an entry opened to send from (a send right only) stays for its undo hold; the
+        // list drops entries with no right left.
+        if (!(await this.#delegatedOk(sessionId, s, already))) throw new WebmailDelegationRefusedError("not granted");
+        // Read and manage checked just now: the entry may be pinned to a tab from here on (`pin.ts`).
+        if (already.delegated?.opened === "full_access") return s;
+        return this.#update(sessionId, (cur) => {
+          const mark = (m: MailboxTokens): MailboxTokens =>
+            m.delegated && m.username === already.username
+              ? { ...m, delegated: { ...m.delegated, opened: "full_access" } }
+              : m;
+          return { ...cur, ...mark(cur), others: (cur.others ?? []).map(mark) };
+        });
+      }
+      await this.#openEntry(sessionId, s, want, "full_access", req);
+      return (await this.#d.store.read(sessionId)) ?? s;
+    }
     if (already) return this.switchMailbox(sessionId, already.username);
     const entry = await this.#openEntry(sessionId, s, want, "full_access", req);
     return this.#update(sessionId, (cur) => {
@@ -777,7 +815,12 @@ export class WebmailService {
     );
     const entry: MailboxTokens = {
       ...value,
-      delegated: { mailboxId: mailbox.mailboxId, granteeUserId: mailbox.granteeUserId, via: mailbox.via },
+      delegated: {
+        mailboxId: mailbox.mailboxId,
+        granteeUserId: mailbox.granteeUserId,
+        via: mailbox.via,
+        opened: need === "full_access" ? "full_access" : "send",
+      },
     };
     await this.#update(sessionId, (cur) => {
       const { others = [] } = cur;
@@ -847,7 +890,7 @@ export class WebmailService {
     if (!own) throw new WebmailDelegationRefusedError("own mailbox not signed in");
     const end = async (why: string): Promise<never> => {
       this.#viaProven.delete(key);
-      this.#refreshing.delete(sessionId);
+      this.#forgetRefresh(sessionId);
       this.#d.delegation?.gate.forget(this.#gateKey(sessionId));
       await this.#d.store.destroy(sessionId);
       throw new WebmailSignedOutError(why);
@@ -914,6 +957,13 @@ export class WebmailService {
 
   async #dropDelegated(sessionId: string, usernames: ReadonlySet<string>): Promise<WebmailSession> {
     this.#d.delegation?.gate.forget(this.#gateKey(sessionId));
+    // A request pinned to a tab never drops an entry (a link could otherwise end another tab's send and its undo):
+    // it is refused instead, and the entry goes on the session's own next use or listing.
+    if (pinnedAddress() !== null) {
+      const s = await withPinnedMailbox(null, () => this.#d.store.read(sessionId));
+      if (!s) throw new WebmailSignedOutError("signed out");
+      return s;
+    }
     return this.#update(sessionId, (cur) => {
       const { others = [], createdAt, version, console: bound, ...active } = cur;
       const all = [active, ...others].filter((m) => !(m.delegated && usernames.has(m.username)));
@@ -971,7 +1021,7 @@ export class WebmailService {
   async signOut(sessionId: string): Promise<void> {
     // Stalwart v0.16 has no token revocation endpoint: dropping our only copy ends the session; the access token
     // lapses within the hour.
-    this.#refreshing.delete(sessionId);
+    this.#forgetRefresh(sessionId);
     await this.#d.store.destroy(sessionId);
   }
 
@@ -983,29 +1033,37 @@ export class WebmailService {
     const s = await this.#d.store.read(sessionId);
     if (!s) return null;
     if (await this.consoleEnded(s)) {
-      this.#refreshing.delete(sessionId);
+      this.#forgetRefresh(sessionId);
       await this.#d.store.destroy(sessionId);
       return null;
     }
     // The session's own mailbox decides whether the session goes on (a delegated active entry is the gate's).
     const access = await this.#d.access.state(s.delegated?.via ?? s.username);
     if (access !== "ok") {
-      this.#refreshing.delete(sessionId);
+      this.#forgetRefresh(sessionId);
       await this.#d.store.destroy(sessionId);
       throw new WebmailBlockedError("mailbox unavailable", access);
     }
     // A delegated mailbox: the grant now, before any use or refresh of its token (ADR-0026 §6).
     if (s.delegated && !(await this.#delegatedOk(sessionId, s, s))) {
-      this.#refreshing.delete(sessionId);
+      this.#forgetRefresh(sessionId);
       await this.#dropDelegated(sessionId, new Set([s.username]));
       throw new WebmailDelegationRefusedError("not granted");
     }
     if (!opts.forceRefresh && s.expiresAt - this.#d.now() > this.#d.refreshSkewMs) return s;
-    const pending = this.#refreshing.get(sessionId);
-    if (pending) return pending;
-    const p = this.#refresh(sessionId, s).finally(() => this.#refreshing.delete(sessionId));
-    this.#refreshing.set(sessionId, p);
+    // Per session, pin and entry: a pinned tab and the session's own tabs never share one refresh's view of the session.
+    const key = `${sessionId}\0${pinnedAddress() ?? ""}\0${s.username}`;
+    const pending = this.#refreshing.get(key);
+    // Another request's refresh of this entry: wait for it, then read the session as this request sees it.
+    if (pending) return (await pending) === null ? null : this.#d.store.read(sessionId);
+    const p = this.#refresh(sessionId, s).finally(() => this.#refreshing.delete(key));
+    this.#refreshing.set(key, p);
     return p;
+  }
+
+  /** Forgets the session's refreshes in flight (signed out or ended). */
+  #forgetRefresh(sessionId: string): void {
+    for (const key of this.#refreshing.keys()) if (key.startsWith(`${sessionId}\0`)) this.#refreshing.delete(key);
   }
 
   async #refresh(sessionId: string, s: WebmailSession): Promise<WebmailSession | null> {

@@ -3,6 +3,8 @@ import { createHash, randomBytes } from "node:crypto";
 
 import type { KeyRing } from "@anhourmail/server/keyring";
 
+import { pinnedAddress, pinView, unpinWrite } from "./pin";
+
 /**
  * Webmail sessions (ADR-0003, ADR-0018, CLAUDE.md rule 16). The browser holds only an opaque random id in an
  * HttpOnly cookie. Redis holds, under a hash of that id, the user's Stalwart access and refresh tokens sealed with
@@ -31,6 +33,11 @@ export type MailboxTokens = {
     granteeUserId: string;
     /** The delegate's own signed-in mailbox the grant comes through (lowercase). */
     via: string;
+    /**
+     * What it was opened (or last re-checked) for: `full_access` (read and manage, or a mailbox-scoped tab) or `send`
+     * (minted by a send). Only a `full_access` entry can be pinned to a tab (`pin.ts`); absent on older records.
+     */
+    opened?: "full_access" | "send";
   };
 };
 
@@ -115,8 +122,17 @@ export class WebmailSessionStore {
    * Updates a session read earlier: only if nobody wrote it since (`data.version`), and only while it exists — a
    * refresh finishing after sign-out or after a mailbox switch writes nothing and gets false.
    */
-  async write(sessionId: string, data: WebmailSession): Promise<boolean> {
+  async write(sessionId: string, written: WebmailSession): Promise<boolean> {
     const key = this.#key(sessionId);
+    let data = written;
+    if (pinnedAddress() !== null) {
+      // A request pinned to a shared mailbox (a mailbox-scoped tab) writes the session's real active mailbox back. It
+      // is taken from the record this write replaces (the same version, or the compare-and-set below fails anyway),
+      // never from what another read in this request saw.
+      const stored = await this.#readRaw(key);
+      if (!stored || (stored.version ?? 0) !== (written.version ?? 0)) return false;
+      data = unpinWrite(written, stored);
+    }
     const ttl = this.#ttl(data);
     if (ttl <= 0) {
       await this.#kv.del(key);
@@ -136,10 +152,19 @@ export class WebmailSessionStore {
     return `${String(data.version ?? 0)}.${this.#ring.encrypt(PURPOSE, JSON.stringify(data), key)}`;
   }
 
-  /** The session, or null when unknown, expired, tampered with or sealed under a retired key. */
+  /**
+   * The session, or null when unknown, expired, tampered with or sealed under a retired key. In a request pinned to a
+   * shared mailbox (`pin.ts`), that mailbox is the active entry of what is returned (`PinnedMailboxMissingError` when it
+   * isn't open in this session).
+   */
   async read(sessionId: string): Promise<WebmailSession | null> {
     if (!isSessionId(sessionId)) return null;
-    const key = this.#key(sessionId);
+    const data = await this.#readRaw(this.#key(sessionId));
+    return data ? pinView(data) : null;
+  }
+
+  /** The stored record as it is (no pin applied), or null; drops one that is expired or can't be opened. */
+  async #readRaw(key: string): Promise<WebmailSession | null> {
     const stored = await this.#kv.get(key);
     if (stored === null) return null;
     const m = /^(\d{1,15})\.(.*)$/s.exec(stored);
