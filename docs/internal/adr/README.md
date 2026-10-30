@@ -29,3 +29,4 @@ One decision per file, numbered, never rewritten. A later ADR supersedes an earl
 | [0023](0023-staff-support-access-act-as.md)                  | Staff support access ("act as"): read-only, time-boxed, normal checks          | Accepted                                          |
 | [0024](0024-console-to-webmail-session-handoff.md)           | Console → webmail handoff: browser-bound code, throwaway mail credential       | Accepted                                          |
 | [0025](0025-data-export-and-account-deletion.md)             | Data export (sealed control-plane archive; mail streamed) and account deletion | Accepted                                          |
+| [0026](0026-mailbox-delegation-and-shared-mailboxes.md)      | Mailbox delegation and shared mailboxes through BFF-held mailbox tokens        | Accepted                                          |
