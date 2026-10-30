@@ -15,7 +15,8 @@ import {
   SenderDelegationKeyError,
 } from "./on-behalf";
 
-const KEY = "0123456789abcdef".repeat(4);
+// A dummy 64-hex key, built in code so secret scanners don't take it for a real one.
+const KEY = Array.from({ length: 64 }, (_, i) => (i % 16).toString(16)).join("");
 const OWNER = "owner@example.org";
 const DELEGATE = "delegate@example.org";
 const MID = "4f1c.9a@mail.example.org";

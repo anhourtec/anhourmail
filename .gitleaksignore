@@ -1,3 +1,8 @@
 # Findings reviewed and confirmed not to be secrets. One fingerprint per line (commit:file:rule:line).
 # fdc1cae: a dummy, unsigned image-link token in a unit test (base64 of http://127.0.0.1/); the test now builds it.
 fdc1cae181c1f0cc1b2f583af5b42c7b8bd344e6:apps/web/src/app/api/webmail/img/route.test.ts:generic-api-key:52
+# 05393a2, f427b00, 55dc55a, e16b363: the dummy test key "0123456789abcdef" × 4 in unit tests; the tests now build it.
+05393a224babf6dfa8a057841c39082452e16d7b:packages/core/src/webmail/on-behalf.test.ts:generic-api-key:15
+f427b00df6129c2ed06c4ee37630a757a6599b55:packages/stalwart-client/src/sender.test.ts:generic-api-key:15
+55dc55a467a6475bc8e96db2ca3a6c66db03134b:packages/core/src/webmail/internal-mail.test.ts:generic-api-key:9
+e16b3634cbd2626c3939c72e35a347cb06ff18cd:apps/web/src/server/webmail/original.test.ts:generic-api-key:263
