@@ -28,6 +28,7 @@ import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 import { COMPOSED_KEYWORD, delegatedSendingLimits, stricterLimits } from "./compose";
 import { webmailErrorResponse } from "./http";
 import { checkJmapRequest } from "./jmap-policy";
+import { PinnedMailboxMissingError, withPinnedMailbox } from "./pin";
 import {
   GrantRefusedError,
   type OAuthTokens,
@@ -267,8 +268,11 @@ function applyPatch(e: Email, patch: Record<string, unknown>) {
  * Kim (account A) signs in to kim@; desk@ (shared) and lee@ are in her account, desk@b.test in another. Delegation is
  * the real core code on the in-memory adapter; the gate never caches here.
  */
-function setup(opts: { key?: string | null } = {}) {
+function setup(opts: { key?: string | null; rotate?: boolean } = {}) {
   let now = Date.parse("2026-10-30T12:00:00Z");
+  /** Refresh tokens handed to the OAuth refresh, in order; with `rotate`, the ones used up. */
+  const refreshes: string[] = [];
+  const spent = new Set<string>();
   const uow = new MemoryUnitOfWork();
   const s = uow.state;
   const deps: Deps = { uow, clock: { now: () => new Date(now) }, platform: PUBLIC_PLATFORM };
@@ -343,8 +347,22 @@ function setup(opts: { key?: string | null } = {}) {
         return { accessToken: `at-${name}`, refreshToken: `rt-${name}`, expiresAt: now + 3_600_000 };
       },
       refresh: async (token) => {
-        const who = token.replace(/^rt-/, "");
-        return { accessToken: `at-${who}-r1`, refreshToken: token, expiresAt: now + 3_600_000 };
+        refreshes.push(token);
+        if (!opts.rotate) {
+          const who = token.replace(/^rt-/, "");
+          return { accessToken: `at-${who}-r1`, refreshToken: token, expiresAt: now + 3_600_000 };
+        }
+        // Rotating refresh tokens: each is good once; using one again is refused (as a reuse would be).
+        await new Promise((r) => setTimeout(r, 5));
+        if (spent.has(token)) throw new GrantRefusedError("refresh token reused");
+        spent.add(token);
+        const [, who = "", n = "0"] = /^rt-(.+?)(?:~(\d+))?$/.exec(token) ?? [];
+        const next = Number(n) + 1;
+        return {
+          accessToken: `at-${who}-r${String(next)}`,
+          refreshToken: `rt-${who}~${String(next)}`,
+          expiresAt: now + 3_600_000,
+        };
       },
     },
     handoffSignIn: async ({ address }) => {
@@ -404,6 +422,7 @@ function setup(opts: { key?: string | null } = {}) {
     svc,
     s,
     server,
+    refreshes,
     grant,
     revoke,
     states,
@@ -731,6 +750,78 @@ describe("sending from a mailbox shared with the person (ADR-0026 §6, §8; slic
     ).rejects.toBeInstanceOf(WebmailOwnMailboxOnlyError);
     await expect(t.svc.senders(sessionId)).rejects.toBeInstanceOf(WebmailOwnMailboxOnlyError);
     expect(t.server.box("desk@family.test").submissions).toEqual([]);
+  });
+
+  it("sends from a shared tab's compose requests pinned to the own mailbox, while a shared one is active", async () => {
+    // The person switched this session to desk@ ("Shared with you"); a tab scoped to desk@ writes a reply from it.
+    const t = setup();
+    t.grant(DESK, "full_access");
+    t.grant(DESK, "send_as");
+    const { sessionId } = await t.svc.signIn("kim@family.test", "right");
+    await t.svc.openDelegated(sessionId, "desk@family.test", req);
+    expect((await t.svc.session(sessionId))?.username).toBe("desk@family.test");
+    const out = await withPinnedMailbox(
+      "kim@family.test",
+      async () => {
+        expect((await t.svc.senders(sessionId)).shared).toEqual([
+          { mailbox: "desk@family.test", mode: "send_as", label: "desk@family.test" },
+        ]);
+        const draftId = await t.draft(sessionId, {
+          subject: "Re: Quarterly figures",
+          inReplyTo: ["q1@example.org"],
+          references: ["q0@example.org", "q1@example.org"],
+        });
+        return t.svc.send(sessionId, draftId, KIM_ID, "acc-kim@family.test", { from: "desk@family.test", req });
+      },
+      "own",
+    );
+    expect(out.from).toBe("desk@family.test");
+    const desk = t.server.box("desk@family.test");
+    const sent = desk.emails.get(desk.submissions[0]?.emailId ?? "");
+    // The reply keeps its thread: rebuilt in desk@ with the original's ids.
+    expect(sent).toMatchObject({
+      inReplyTo: ["q1@example.org"],
+      references: ["q0@example.org", "q1@example.org"],
+      from: [{ name: "Desk", email: "desk@family.test" }],
+    });
+    expect(t.sendAudits()).toHaveLength(1);
+    // Other tabs still show desk@: the pinned requests left the session's active mailbox alone.
+    expect((await t.svc.session(sessionId))?.username).toBe("desk@family.test");
+    // Undo from the same tab, pinned the same way.
+    const undone = await withPinnedMailbox(
+      "kim@family.test",
+      () => t.svc.undoSend(sessionId, out.submissionId, "acc-kim@family.test", { mailbox: "desk@family.test", req }),
+      "own",
+    );
+    expect(t.server.box("kim@family.test").emails.has(undone.draftId)).toBe(true);
+    // An own pin can't name the shared mailbox (nor anything not signed in here): own-mailbox-only still holds.
+    for (const address of ["desk@family.test", "lee@family.test"]) {
+      await expect(withPinnedMailbox(address, () => t.svc.senders(sessionId), "own")).rejects.toBeInstanceOf(
+        PinnedMailboxMissingError,
+      );
+    }
+  });
+
+  it("refreshes the own mailbox once when a shared tab's proof and its own-pinned compose request both need it", async () => {
+    const t = setup({ rotate: true });
+    t.grant(DESK, "full_access");
+    t.grant(DESK, "send_as");
+    const { sessionId } = await t.svc.signIn("kim@family.test", "right");
+    await t.svc.openDelegated(sessionId, "desk@family.test", req, { activate: false });
+    // Past the own token's expiry and the proof's 10 s: the shared tab's read proves kim@ (refreshing it) while its
+    // compose request, pinned to kim@, refreshes the same entry.
+    t.advance(3_600_000);
+    const [read, write] = await Promise.all([
+      withPinnedMailbox("desk@family.test", () => t.svc.roles(sessionId)),
+      withPinnedMailbox("kim@family.test", () => t.svc.senders(sessionId), "own"),
+    ]);
+    expect(read.inbox).toBeDefined();
+    expect(write.shared.map((m) => m.mailbox)).toEqual(["desk@family.test"]);
+    expect(t.refreshes.filter((r) => r.startsWith("rt-kim@family.test"))).toEqual(["rt-kim@family.test"]);
+    // Still signed in, with the one refreshed token kept.
+    const after = await t.svc.session(sessionId);
+    expect(after?.username).toBe("kim@family.test");
+    expect(after?.refreshToken).toBe("rt-kim@family.test~1");
   });
 
   it("only sends a draft the BFF built in the own Drafts, from the own identity named", async () => {

@@ -7,10 +7,13 @@ import { createKeyRing } from "@anhourmail/server/keyring";
 
 import {
   navigationFromUs,
+  ownPinFrom,
   PinnedMailboxMissingError,
   pinFrom,
   pinnedAddress,
+  pinnedKind,
   pinView,
+  requestPin,
   unpinWrite,
   withPinnedMailbox,
 } from "./pin";
@@ -170,5 +173,98 @@ describe("pinning a shared mailbox to one tab (ADR-0026 §6, Open another mailbo
     expect(stored?.username).toBe("kim@family.test");
     expect(stored?.others?.find((m) => m.username === "team@family.test")?.accessToken).toBe("at-team-r1");
     await expect(withPinnedMailbox("lee@family.test", () => store.read(id))).rejects.toThrow(PinnedMailboxMissingError);
+  });
+});
+
+describe("pinning the person's own mailbox for a shared tab's compose requests (ADR-0026 §6, sending from one)", () => {
+  it("reads the own pin from its header only, lowercased; never from a link; malformed or both kinds refused", () => {
+    expect(ownPinFrom(req({ "x-webmail-own": " Kim@Family.test " }))).toBe("kim@family.test");
+    expect(ownPinFrom(req({}, "?own=kim%40family.test"))).toBeNull();
+    expect(requestPin(req({ "x-webmail-own": "kim@family.test" }))).toEqual({
+      address: "kim@family.test",
+      kind: "own",
+    });
+    expect(requestPin(req({ "x-webmail-shared": "desk@family.test" }))).toEqual({
+      address: "desk@family.test",
+      kind: "shared",
+    });
+    expect(requestPin(req())).toBeNull();
+    for (const bad of ["", "kim", "<kim@family.test>", "kim@family.test|x"]) {
+      expect(() => requestPin(req({ "x-webmail-own": bad }))).toThrow(PinnedMailboxMissingError);
+    }
+    expect(() =>
+      requestPin(req({ "x-webmail-own": "kim@family.test", "x-webmail-shared": "desk@family.test" })),
+    ).toThrow(PinnedMailboxMissingError);
+    expect(() =>
+      requestPin(
+        req({ "x-webmail-own": "kim@family.test", "sec-fetch-site": "same-origin" }, "?shared=desk%40family.test"),
+      ),
+    ).toThrow(PinnedMailboxMissingError);
+  });
+
+  it("shows one of the person's own sign-ins as the active one, and writes the real active one back", () => {
+    // The session's real active mailbox is a shared one (switched to in another tab).
+    const stored: WebmailSession = {
+      ...entry("desk@family.test", "full_access"),
+      createdAt: 1,
+      version: 2,
+      others: [entry("kim@family.test"), entry("kim@other.test"), entry("team@family.test", "full_access")],
+    };
+    withPinnedMailbox(
+      "kim@family.test",
+      () => {
+        expect(pinnedKind()).toBe("own");
+        const view = pinView(stored);
+        expect(view.username).toBe("kim@family.test");
+        expect(view.delegated).toBeUndefined();
+        const written = unpinWrite({ ...view, accessToken: "at-kim-r1" }, stored);
+        expect(written.username).toBe("desk@family.test");
+        expect(written.others?.find((m) => m.username === "kim@family.test")?.accessToken).toBe("at-kim-r1");
+      },
+      "own",
+    );
+    // Already the active one: unchanged.
+    const s = session();
+    withPinnedMailbox(
+      "kim@family.test",
+      () => {
+        expect(pinView(s)).toBe(s);
+      },
+      "own",
+    );
+  });
+
+  it("never makes a delegated entry, or a mailbox not signed in here, active through an own pin", () => {
+    const s = session();
+    for (const address of ["desk@family.test", "team@family.test", "sales@family.test", "lee@family.test"]) {
+      expect(() => withPinnedMailbox(address, () => pinView(s), "own")).toThrow(PinnedMailboxMissingError);
+    }
+  });
+
+  it("goes through the session store: compose requests see the own mailbox, the stored active one stays", async () => {
+    const store = new WebmailSessionStore(memoryKv(), createKeyRing([{ id: "k1", key: randomBytes(32) }]));
+    const s = session();
+    const { others = [], ...kim } = s;
+    const desk = others[1];
+    if (!desk) throw new Error("fixture");
+    // desk@ (shared) is the session's active mailbox; kim@ is one of the others.
+    const id = await store.create({
+      ...desk,
+      createdAt: Date.now(),
+      others: [kim, ...others.filter((m) => m !== desk)],
+    });
+    await withPinnedMailbox(
+      "kim@family.test",
+      async () => {
+        const view = await store.read(id);
+        expect(view?.username).toBe("kim@family.test");
+        if (!view) throw new Error("no session");
+        expect(await store.write(id, { ...view, accessToken: "at-kim-r2" })).toBe(true);
+      },
+      "own",
+    );
+    const after = await store.read(id);
+    expect(after?.username).toBe("desk@family.test");
+    expect(after?.others?.find((m) => m.username === "kim@family.test")?.accessToken).toBe("at-kim-r2");
   });
 });

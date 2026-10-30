@@ -17,7 +17,7 @@ import { mailboxAccessBlock } from "../webmail/access-block";
 import { DELEGATION_REFUSED } from "../webmail/http";
 import { delegationBlock, type DelegationMode } from "../webmail/delegation-gate";
 import { PASSWORD_CHANGE_REQUIRED, passwordChangeBlock } from "../webmail/password-gate";
-import { PinnedMailboxMissingError, pinFrom, REFUSED_HEADER, withPinnedMailbox } from "../webmail/pin";
+import { PinnedMailboxMissingError, REFUSED_HEADER, requestPin, withPinnedMailbox } from "../webmail/pin";
 
 /**
  * Every API handler goes through `route()` (CLAUDE.md rules 12–14):
@@ -178,35 +178,40 @@ export function route(handler: Handler, opts: RouteOptions = {}) {
           errorCode = "forbidden";
           res = errorBody("forbidden", "Cross-origin request blocked.", 403);
         } else {
-          // A mailbox-scoped tab pins its shared mailbox on every request (`webmail/pin.ts`): the gates and the
-          // handler all see that mailbox as the active one, and the session's real active mailbox is left alone.
-          const pin = opts.session === "webmail" ? pinFrom(req) : null;
-          res = await withPinnedMailbox(pin, async () => {
-            // A blocked mailbox first (every webmail route, sign-out and the password change included), then the
-            // password change the mailbox still owes.
-            const unavailable = opts.session === "webmail" ? await mailboxAccessBlock(req) : null;
-            // Then a mailbox shared with the person: the grant now, or the person's own mailbox for this route.
-            const shared =
-              !unavailable && opts.session === "webmail" ? await delegationBlock(req, opts.delegated) : null;
-            const blocked =
-              !unavailable && !shared && opts.session === "webmail" && opts.passwordChange !== "allowed"
-                ? await passwordChangeBlock(req)
-                : null;
-            if (unavailable) {
-              errorCode = "mailbox_unavailable";
-              return unavailable;
-            }
-            if (shared) {
-              errorCode = "delegation";
-              return shared;
-            }
-            if (blocked) {
-              errorCode = PASSWORD_CHANGE_REQUIRED;
-              return blocked;
-            }
-            const meta: RequestMeta = { requestId, ip, userAgent: req.headers.get("user-agent") };
-            return handler({ req, meta }, params);
-          });
+          // A mailbox-scoped tab pins its shared mailbox on every request (`webmail/pin.ts`), or the person's own
+          // mailbox on its compose requests: the gates and the handler all see that mailbox as the active one, and the
+          // session's real active mailbox is left alone.
+          const pin = opts.session === "webmail" ? requestPin(req) : null;
+          res = await withPinnedMailbox(
+            pin?.address ?? null,
+            async () => {
+              // A blocked mailbox first (every webmail route, sign-out and the password change included), then the
+              // password change the mailbox still owes.
+              const unavailable = opts.session === "webmail" ? await mailboxAccessBlock(req) : null;
+              // Then a mailbox shared with the person: the grant now, or the person's own mailbox for this route.
+              const shared =
+                !unavailable && opts.session === "webmail" ? await delegationBlock(req, opts.delegated) : null;
+              const blocked =
+                !unavailable && !shared && opts.session === "webmail" && opts.passwordChange !== "allowed"
+                  ? await passwordChangeBlock(req)
+                  : null;
+              if (unavailable) {
+                errorCode = "mailbox_unavailable";
+                return unavailable;
+              }
+              if (shared) {
+                errorCode = "delegation";
+                return shared;
+              }
+              if (blocked) {
+                errorCode = PASSWORD_CHANGE_REQUIRED;
+                return blocked;
+              }
+              const meta: RequestMeta = { requestId, ip, userAgent: req.headers.get("user-agent") };
+              return handler({ req, meta }, params);
+            },
+            pin?.kind,
+          );
           for (const [k, v] of Object.entries(rl.headers)) res.headers.set(k, v);
         }
       } catch (err) {

@@ -10,7 +10,7 @@ import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 
 import { setContainerForTests } from "../container";
 import { resetEnvForTests } from "../env";
-import { pinnedAddress, PinnedMailboxMissingError } from "../webmail/pin";
+import { pinnedAddress, pinnedKind, PinnedMailboxMissingError } from "../webmail/pin";
 import { logPath, ok, readJson, readOptionalJson, route, routeTemplate } from "./route";
 
 vi.mock("../auth/actor", () => ({ getActor: async () => ANONYMOUS }));
@@ -316,9 +316,11 @@ describe("webmail control-plane access", () => {
 
   it("runs webmail routes pinned to the tab's shared mailbox, and refuses a pin it can't honour (Open another mailbox)", async () => {
     const seen: (string | null)[] = [];
+    const kinds: (string | null)[] = [];
     const pinned = (opts: Parameters<typeof route>[1], fail = false) =>
       route(async () => {
         seen.push(pinnedAddress());
+        kinds.push(pinnedKind());
         if (fail) throw new PinnedMailboxMissingError("not open");
         return ok(true);
       }, opts);
@@ -331,7 +333,19 @@ describe("webmail control-plane access", () => {
     expect((await pinned({ session: "webmail" })(at({}), params)).status).toBe(200);
     // Console routes never pin.
     expect((await pinned({})(at({ "x-webmail-shared": "desk@family.test" }), params)).status).toBe(200);
-    expect(seen).toEqual(["desk@family.test", "desk@family.test", null, null]);
+    // A shared tab's compose requests pin the person's own mailbox (header only); both kinds at once are refused.
+    expect((await pinned({ session: "webmail" })(at({ "x-webmail-own": "Kim@Family.test" }), params)).status).toBe(200);
+    expect(kinds.at(-1)).toBe("own");
+    expect(
+      (
+        await pinned({ session: "webmail" })(
+          at({ "x-webmail-own": "kim@family.test", "x-webmail-shared": "desk@family.test" }),
+          params,
+        )
+      ).status,
+    ).toBe(404);
+    expect(seen).toEqual(["desk@family.test", "desk@family.test", null, null, "kim@family.test"]);
+    expect(kinds).toEqual(["shared", "shared", null, null, "own"]);
     // A malformed pin, or one naming no open shared mailbox: the one delegation refusal, marked for the tab.
     for (const res of [
       await pinned({ session: "webmail" })(at({ "x-webmail-shared": "not-an-address" }), params),

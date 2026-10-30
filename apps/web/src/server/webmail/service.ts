@@ -58,7 +58,7 @@ import {
 } from "./sieve";
 import { QueueFullError, UserQueue, withLimitRetry } from "./queue";
 import { MAX_MAILBOXES, type MailboxTokens, type WebmailSession, type WebmailSessionStore } from "./session-store";
-import { pinnedAddress, withPinnedMailbox } from "./pin";
+import { pinnedAddress, pinnedKind, withPinnedMailbox } from "./pin";
 import { calendarEvents, type CalendarEvent, MAX_MARKDOWN } from "./body";
 import {
   AUTO_SAVE_OFF,
@@ -896,17 +896,60 @@ export class WebmailService {
       throw new WebmailSignedOutError(why);
     };
     let token = own.accessToken;
-    let refreshed: OAuthTokens | null = null;
+    let refreshed = false;
+    /**
+     * A refresh of that own entry, shared with `session()`'s (the same `#refreshing` key: session, no pin, entry), so
+     * one refresh token is never used twice at once — a shared tab's reads prove the own mailbox while its compose
+     * requests, pinned to it, may be refreshing it. One already in flight is awaited and its tokens used.
+     */
     const refresh = async (): Promise<boolean> => {
-      if (!own.refreshToken || refreshed) return false;
-      try {
-        refreshed = await this.#d.oauth.refresh(own.refreshToken);
-      } catch (err) {
-        if (err instanceof GrantRefusedError) return end("own mailbox token revoked");
-        log.warn("webmail: own mailbox refresh failed", { component: "webmail", err });
-        throw new WebmailUnavailableError("mail server unavailable");
+      if (refreshed) return false;
+      refreshed = true;
+      const refreshKey = `${sessionId}\0\0${own.username}`;
+      const pending = this.#refreshing.get(refreshKey);
+      if (pending) {
+        if ((await pending) === null) throw new WebmailSignedOutError("signed out");
+        const cur = await withPinnedMailbox(null, () => this.#d.store.read(sessionId));
+        const after = cur ? ownEntries(cur).find((m) => m.username === own.username) : undefined;
+        if (!after) throw new WebmailSignedOutError("signed out");
+        if (after.accessToken === token) return false;
+        token = after.accessToken;
+        return true;
       }
-      token = refreshed.accessToken;
+      const used = own.refreshToken;
+      if (!used) return false;
+      const run = (async (): Promise<WebmailSession | null> => {
+        let fresh: OAuthTokens;
+        try {
+          fresh = await this.#d.oauth.refresh(used);
+        } catch (err) {
+          if (err instanceof GrantRefusedError) return end("own mailbox token revoked");
+          log.warn("webmail: own mailbox refresh failed", { component: "webmail", err });
+          throw new WebmailUnavailableError("mail server unavailable");
+        }
+        token = fresh.accessToken;
+        // Kept only over the tokens this refresh replaced: a concurrent change wins (it refreshes again on its use).
+        // Written unpinned (the swap matches the entry itself), so a pinned entry dropped meanwhile can't lose them.
+        return withPinnedMailbox(null, () =>
+          this.#update(sessionId, (cur) => {
+            const swap = (m: MailboxTokens): MailboxTokens =>
+              !m.delegated && m.username === own.username && m.refreshToken === used
+                ? { ...m, accessToken: fresh.accessToken, refreshToken: fresh.refreshToken, expiresAt: fresh.expiresAt }
+                : m;
+            return { ...cur, ...swap(cur), others: (cur.others ?? []).map(swap) };
+          }),
+        ).catch((err: unknown): WebmailSession | null => {
+          if (err instanceof WebmailSignedOutError) return null;
+          log.warn("webmail: refreshed own tokens not kept", { component: "webmail", err });
+          return s;
+        });
+      })();
+      this.#refreshing.set(refreshKey, run);
+      try {
+        await run;
+      } finally {
+        if (this.#refreshing.get(refreshKey) === run) this.#refreshing.delete(refreshKey);
+      }
       return true;
     };
     if (own.expiresAt - now <= this.#d.refreshSkewMs) await refresh();
@@ -925,19 +968,6 @@ export class WebmailService {
     }
     const body = (await res.json().catch(() => null)) as { username?: unknown } | null;
     if (typeof body?.username !== "string" || body.username.toLowerCase() !== via) return end("own mailbox changed");
-    const fresh = refreshed as OAuthTokens | null;
-    if (fresh) {
-      // Keep the refreshed tokens of that own entry (a concurrent change wins; it refreshes again on its own use).
-      await this.#update(sessionId, (cur) => {
-        const swap = (m: MailboxTokens): MailboxTokens =>
-          !m.delegated && m.username === own.username
-            ? { ...m, accessToken: fresh.accessToken, refreshToken: fresh.refreshToken, expiresAt: fresh.expiresAt }
-            : m;
-        return { ...cur, ...swap(cur), others: (cur.others ?? []).map(swap) };
-      }).catch((err: unknown) => {
-        log.warn("webmail: refreshed own tokens not kept", { component: "webmail", err });
-      });
-    }
     if (this.#viaProven.size > 10_000) this.#viaProven.clear();
     this.#viaProven.set(key, now + VIA_PROOF_MS);
   }
@@ -1051,12 +1081,18 @@ export class WebmailService {
       throw new WebmailDelegationRefusedError("not granted");
     }
     if (!opts.forceRefresh && s.expiresAt - this.#d.now() > this.#d.refreshSkewMs) return s;
-    // Per session, pin and entry: a pinned tab and the session's own tabs never share one refresh's view of the session.
-    const key = `${sessionId}\0${pinnedAddress() ?? ""}\0${s.username}`;
+    // One refresh per session, entry and shared pin: a request pinned to a shared mailbox refreshes that delegated
+    // entry under its own key. An own entry has one key whatever the pin (none, or an own pin: a mailbox-scoped tab's
+    // compose requests), the same one `#proveOwn` uses, so its refresh token is never used twice at once; whoever
+    // waits re-reads the session as its own request sees it.
+    const key = `${sessionId}\0${pinnedKind() === "own" ? "" : (pinnedAddress() ?? "")}\0${s.username}`;
     const pending = this.#refreshing.get(key);
     // Another request's refresh of this entry: wait for it, then read the session as this request sees it.
     if (pending) return (await pending) === null ? null : this.#d.store.read(sessionId);
-    const p = this.#refresh(sessionId, s).finally(() => this.#refreshing.delete(key));
+    const p: Promise<WebmailSession | null> = this.#refresh(sessionId, s).finally(() => {
+      // Only this refresh's own entry (a sign-out may have cleared it and another refresh taken the key since).
+      if (this.#refreshing.get(key) === p) this.#refreshing.delete(key);
+    });
     this.#refreshing.set(key, p);
     return p;
   }
@@ -1082,6 +1118,23 @@ export class WebmailService {
       // Compare-and-set: signed out meanwhile → nothing written; switched mailbox meanwhile → keep that change and
       // use what is stored now (it refreshes on its own next use).
       if (await this.#d.store.write(sessionId, next)) return { ...next, version: (s.version ?? 0) + 1 };
+      // Another write landed in between (another entry's refresh, a tab's change): the new tokens still go into this
+      // entry if it still holds the refresh token just used, else a refresh token already spent would be kept and
+      // used again (refused, ending the session). A concurrent change of this entry itself wins.
+      const used = s.refreshToken;
+      const delegated = s.delegated !== undefined;
+      const swap = (m: MailboxTokens): MailboxTokens =>
+        m.username === s.username && (m.delegated !== undefined) === delegated && m.refreshToken === used
+          ? { ...m, accessToken: t.accessToken, refreshToken: t.refreshToken, expiresAt: t.expiresAt }
+          : m;
+      try {
+        // Unpinned (the swap matches the entry itself): a pinned entry dropped meanwhile can't make it fail.
+        await withPinnedMailbox(null, () =>
+          this.#update(sessionId, (cur) => ({ ...cur, ...swap(cur), others: (cur.others ?? []).map(swap) })),
+        );
+      } catch (err) {
+        if (!(err instanceof WebmailSignedOutError) && !(err instanceof WebmailBusyError)) throw err;
+      }
       return await this.#d.store.read(sessionId);
     } catch (err) {
       if (err instanceof GrantRefusedError) {
