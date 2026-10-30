@@ -28,6 +28,8 @@ export type JmapEmail = {
   mailboxIds: Record<string, boolean>;
   keywords: Record<string, boolean>;
   from: Address[] | null;
+  /** The `Sender:` header (who sent it on the From's behalf), if any. */
+  sender?: Address[] | null;
   to: Address[] | null;
   cc: Address[] | null;
   bcc?: Address[] | null;
@@ -66,6 +68,11 @@ export type MessageView = {
   threadId: string;
   subject: string;
   from: Address[];
+  /**
+   * Who sent it for the From (the `Sender:` header) when that is someone else: "Sender on behalf of From". Only this
+   * standard header is read, never a tag header (ADR-0026 §8: received mail's tag means nothing). Empty otherwise.
+   */
+  sender: Address[];
   to: Address[];
   cc: Address[];
   /** Only your own drafts and sent mail carry Bcc. */
@@ -116,6 +123,7 @@ export const EMAIL_PROPERTIES = [
   "mailboxIds",
   "keywords",
   "from",
+  "sender",
   "to",
   "cc",
   "bcc",
@@ -267,6 +275,7 @@ export function buildMessageView(
     threadId: email.threadId,
     subject: email.subject ?? "",
     from: email.from ?? [],
+    sender: onBehalfSender(email.from ?? [], email.sender ?? []),
     to: email.to ?? [],
     cc: email.cc ?? [],
     bcc: email.bcc ?? [],
@@ -292,6 +301,17 @@ export function buildMessageView(
     senderVerified: false,
     attachments,
   };
+}
+
+/**
+ * The `Sender:` to show as "on behalf of": one address that isn't the (single) From's. A Sender equal to the From, or
+ * any odd shape (several From or Sender addresses), shows nothing extra.
+ */
+export function onBehalfSender(from: Address[], sender: Address[]): Address[] {
+  const [s] = sender;
+  const [f] = from;
+  if (sender.length !== 1 || from.length !== 1 || !s || !f) return [];
+  return s.email.trim().toLowerCase() === f.email.trim().toLowerCase() ? [] : [s];
 }
 
 /** A safe download filename: no paths, no control or quote characters, bounded length. */
