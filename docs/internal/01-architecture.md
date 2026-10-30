@@ -1,6 +1,6 @@
 # 01 — Architecture
 
-Last updated: 2026-10-30 (mailbox delegation, ADR-0026: writing from a shared mailbox's view through an own-mailbox pin; the webmail UI and tabs pinned to a shared mailbox per request, slice 14; sending as and on behalf of a delegated mailbox from the webmail BFF, slice 13; the webmail BFF opens delegated mailboxes behind the delegation gate; grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
+Last updated: 2026-10-30 (webmail: no "Shared with you" list or in-place switch, shared mailboxes open only in their own tab, maintainer decision; mailbox delegation, ADR-0026: writing from a shared mailbox's view through an own-mailbox pin; the webmail UI and tabs pinned to a shared mailbox per request, slice 14; sending as and on behalf of a delegated mailbox from the webmail BFF, slice 13; the webmail BFF opens delegated mailboxes behind the delegation gate; grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
 
 ## Overview
 
@@ -153,8 +153,8 @@ right" never). The opened tokens are a `delegated` entry in the delegate's seale
 delegated mailbox is active, and a route-file test pins the lists. `WebmailService.session()` checks the gate again on
 each use and drops only the entry (never the session) when the grant, the mailbox's state or its token is gone. Opening
 is `POST /api/webmail/mailboxes/delegated` (`webmailDelegatedOpen`, fail closed); every refusal is the same 404.
-Webmail UI (slice 14): "Shared with you" switches the session to a mailbox (as the mailbox switcher does); **Open another
-mailbox** opens `/mailbox/<address>` in a new tab, which opens the entry with `activate: false` and then **pins** it on
+Webmail UI (slice 14; no "Shared with you" list or in-place switch since the maintainer's 2026-10-30 decision, and a
+session left on a shared mailbox is switched back to its own by the webmail page): **Open another mailbox** opens `/mailbox/<address>` in a new tab, which opens the entry with `activate: false` and then **pins** it on
 every request (`X-Webmail-Shared`, `?shared=` on links; `server/webmail/pin.ts`): `route()` runs the request in that
 pin and the session store reads the session with the pinned entry as the active one and writes it back with the real
 active entry restored, so the gates and the service act on the pinned mailbox and the person's other tabs keep theirs.

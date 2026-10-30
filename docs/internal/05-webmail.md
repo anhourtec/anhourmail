@@ -1,6 +1,6 @@
 # 05 — Webmail
 
-Last updated: 2026-10-30 (forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
+Last updated: 2026-10-30 (mailboxes shared with you: no "Shared with you" list or in-place switch in the UI — they open only with Open another mailbox, in a tab named after the mailbox, with Your mailbox in its account menu; no banner; a session left on a shared mailbox goes back to the own one; the account menu tidied (maintainer decision); forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
 notifications; quoted replies; compose image placeholders; first-sign-in password step; sign-in links not pre-filled).
 
 **Status (2026-10-22): slice 1 is built** — webmail sign-in (OAuth code flow + PKCE, tokens sealed server-side), the
@@ -570,15 +570,17 @@ A person given **Read and manage** on another mailbox of their account opens it 
 its password and without signing in again (maintainer decision 2: no extra step). The BFF holds that mailbox's own
 token; the browser never does (rule 21).
 
-- **The list ("Shared with you").** `GET /api/webmail/mailboxes` now answers `{ active, activeShared, others, shared }`:
+- **The list.** `GET /api/webmail/mailboxes` now answers `{ active, activeShared, others, shared }`:
   `others` are the session's own signed-in mailboxes only; `shared` lists, from core `delegatedMailboxesFor`, every
   mailbox the session's people hold a right on now (`address`, `via` — the own mailbox it comes through —,
   `fullAccess`, `sendAs`, `sendOnBehalf`, `open`). The people are found from the session's own mailboxes'
   `mailbox.user_id` (a shared mailbox signed in by password maps nothing). Listing mints nothing; it also drops opened
   entries with no right left (an entry opened to send from stays while a send right does; each use is checked for
-  what it needs).
-- **Opening one.** `POST /api/webmail/mailboxes/delegated` `{ address }` (a "Shared with you" entry, or the address
-  typed in **Open another mailbox**; tier `webmailDelegatedOpen`, fail closed). Core `openDelegatedMailbox` checks
+  what it needs). The webmail UI doesn't render `shared` or `activeShared` (maintainer decision 2026-10-30, below);
+  a mailbox-scoped tab reads its own entry (`via`, rights) from it.
+- **Opening one.** `POST /api/webmail/mailboxes/delegated` `{ address }` (the address typed in **Open another
+  mailbox**, sent by its tab with `activate: false`; the default, which makes it the session's active mailbox, is no
+  longer used by the UI; tier `webmailDelegatedOpen`, fail closed). Core `openDelegatedMailbox` checks
   everything now under the account lock, then the web app mints a throwaway credential with the operations key,
   exchanges it once with the person's client address forwarded and destroys it (the handoff's `stalwartHandoffSignIn`,
   under the mailbox's credential lock, reserved slot, one retry when the slot was held, else 503), the BFF checks the
@@ -673,12 +675,24 @@ token; the browser never does (rule 21).
   `X-AnhourMail-On-Behalf` header on received mail is never read, shown or trusted by the webmail; "on behalf of"
   comes only from `Sender:`, like any other message.
 - **The webmail UI** (slice 14, `components/webmail/sidebar.tsx`, `shared-mailbox.tsx`, `composer.tsx`, `reader.tsx`):
-  - **Shared with you**: the sidebar section and the account menu (⋮) list the mailboxes with `fullAccess`; choosing
-    one runs the open (made active, the page reloads). While one is active a banner ("You're viewing …", **Back to
-    your mailbox** switches to `via`) runs across the top, and Contacts, blocking a sender and the reader's contact adds
-    are hidden (New email and replies: see "Writing from a shared mailbox's view" below); Settings opens a note that settings belong to the person's own mailbox. Preferences
-    change locally only there (the route refuses saving). The page reads preferences, the password step and the
-    console link for the own mailbox (`via`).
+  - **No "Shared with you" list, no in-place switch** (maintainer decision 2026-10-30): the person's own webmail
+    lists only their own mailboxes — the sidebar has no shared section and the account menu (⋮) holds **Mailboxes**
+    (the own sign-ins, mono, truncated with the full address as the tooltip, a check on the active one), then **Add
+    another mailbox**, **Open another mailbox** and **Sign out**. The menu starts at the sidebar header's left edge, is
+    at least its width and grows to 20rem (`Menu` `fill`). A mailbox shared with the person is shown only in a tab of
+    its own (below). No banner: in that tab the sidebar header shows the mailbox like an account (its tile, name and
+    address), the tab title is "<address> · <folder>" (`tabTitle(…, { mailbox })`), and its account menu has the
+    mailbox (checked), **Your mailbox** (to the person's own webmail) and **Open another mailbox**. Contacts, blocking
+    a sender and the reader's contact adds are hidden there (New email and replies: see "Writing from a shared
+    mailbox's view" below); Settings opens a note that settings belong to the person's own mailbox, with **Go to your
+    mailbox**. Preferences change locally only there (the route refuses saving).
+  - **A session left on a shared mailbox** (switched to one in place before this decision, or by an older page): the
+    webmail page switches the session back to the own mailbox it came through (`switchMailbox(id, via)`) before
+    rendering; if that fails it redirects to that mailbox's own tab. The client reloads if `GET …/mailboxes` still
+    reports `activeShared`. The server keeps accepting the switch (`PUT …/mailboxes/active` with a delegated entry)
+    unchanged.
+  - **Later (not built):** shared mailboxes as folder trees of their own under the person's mailbox in the sidebar,
+    each expandable to Inbox, Drafts, Sent, Deleted, Archive and Junk (09-roadmap.md).
   - **Open another mailbox** (account menu): a dialog asks for an address and opens `/mailbox/<address>` (on the bare
     dev host `/webmail/mailbox/<address>`; `/<folder>` adds a role or folder id) in a new tab
     (`app/webmail/mailbox/[address]/[[...folder]]`, skeleton `SharedMailboxSkeleton`). The page only reads the session
@@ -733,7 +747,7 @@ token; the browser never does (rule 21).
     (`aria-disabled`, the reason "You can read this mailbox but not send from it. Ask an admin for Send as or Send on
     behalf." under it; the shortcut shows it as a toast) and replies aren't offered; while the rights load it is
     disabled.
-  - **From picker**: `GET /api/webmail/senders` fills **From** with the person's identities, then a "Shared with you"
+  - **From picker**: `GET /api/webmail/senders` fills **From** with the person's identities, then a "Shared mailboxes"
     group with each label (the mailbox, or "<name> on behalf of <mailbox>"); sending passes `from` and undo passes
     `mailbox`. `503 send_unconfirmed` shows its message ("We couldn't confirm whether this was sent. Check Sent before
     sending it again."). The choice isn't stored with the draft (it is the person's own); reopening a draft starts
@@ -988,7 +1002,7 @@ Budgets are checked by Playwright performance tests with seeded mailboxes (Phase
 
 ### Shared and delegated mailboxes (`10-collaboration.md`)
 
-- The folder sidebar lists the personal mailbox's folders, then **Shared with you** (each mailbox shared with the person with Read and manage, from our grants — not the JMAP session's non-personal accounts, ADR-0026); one is opened in place or in a tab of its own ("Mailboxes shared with you" above).
+- The folder sidebar lists the personal mailbox's folders only; a mailbox shared with the person (Read and manage, from our grants — not the JMAP session's non-personal accounts, ADR-0026) opens with **Open another mailbox** in a tab of its own ("Mailboxes shared with you" above). Later: each shared mailbox as its own folder tree under the person's mailbox (09-roadmap.md).
 - The composer's **From** picker lists only identities the BFF says the actor may use: own addresses and aliases, shared mailboxes they belong to (send as), and send-on-behalf grants. The BFF re-checks on submit and audits send as / on behalf; it never trusts the picker.
 - Folder sharing: "Share folder…" on a folder opens a dialog with people from the same account only (no directory search across accounts), presets (read, read + organise, full), optional expiry; applies per folder ("include subfolders" applies to each child).
 - Lists: sending to a list the actor can't post to shows an inline error before send.

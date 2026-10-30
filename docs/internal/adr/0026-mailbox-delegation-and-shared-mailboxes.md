@@ -1,6 +1,7 @@
 # ADR-0026: Mailbox delegation (read and manage, send as, send on behalf) and shared mailboxes, through BFF-held mailbox tokens
 
-**Status:** Accepted 2026-10-30 (maintainer decisions below; slices 1–14 built, see the dated updates)
+**Status:** Accepted 2026-10-30 (maintainer decisions below; slices 1–14 built, see the dated updates; no auto-mapped
+"Shared with you" list in the UI for now, update of 2026-10-30)
 
 **Maintainer decisions (2026-10-30):** behaviour follows the conventional enterprise mailbox-delegation model exactly
 (design reference, gitignored: `../private/2026-10-30-delegation-reference.md`).
@@ -536,6 +537,21 @@ says why. Choices:
 - Replies treat the shown mailbox as "self"; `In-Reply-To` / `References` pass through the rebuild (unit test).
 - Console polish in the same change: the Delegation tab orders its lists Send as, Send on behalf, Read and manage,
   each heading with its count ("Send as (2)").
+
+**Update (2026-10-30, maintainer decision: no auto-mapped "Shared with you" list for now).** This amends decision 2
+and §6's auto-mapping in the UI only. The webmail no longer lists mailboxes shared with the person: the sidebar's and
+the account menu's "Shared with you" sections are gone, and so is choosing one to switch the session to it in place
+and the "You're viewing …" banner. A shared mailbox opens only with **Open another mailbox**, in a tab of its own
+(`/mailbox/<address>/`), whose sidebar header shows it like an account (tile, name, address), whose title is
+"<address> · <folder>", and whose account menu has **Your mailbox** back to the person's own webmail. A session still
+left on a shared mailbox from before (or an older page) is switched back to the own mailbox it came through when the
+webmail page loads; if that fails, the page opens the mailbox's own tab instead. The server is unchanged: `GET
+/api/webmail/mailboxes` still answers `shared` and `activeShared` (a scoped tab reads its own entry from it), and the
+in-place open and switch (`POST …/delegated` without `activate: false`, `PUT …/active` to a delegated entry) are still
+accepted and gated as before; the UI just doesn't use them. The From picker's group is named "Shared mailboxes".
+**Later (not built):** shared mailboxes as folder trees of their own under the person's mailbox in the sidebar, in the
+conventional enterprise layout (the mailbox's name, expandable to Inbox, Drafts, Sent, Deleted, Archive and Junk);
+recorded in `09-roadmap.md`.
 
 ## Consequences
 

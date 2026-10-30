@@ -54,9 +54,13 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
   "Give full access to …", Convert to shared mailbox and the grant cascades. **Also built 2026-10-30:** console
   routes and UI (slices 8–9), the send-on-behalf exception in the sender-identity script with a per-message,
   five-minute tag (slice 10), the webmail open/gate and Shared with you on the server (11–12), sending as and on
-  behalf (13). **Left:** the webmail screens (slice 14: built, review fixes in progress, uncommitted), the full
-  e2e/public docs/changelog pass (15–16), then password-less shared mailboxes and mail-app (IMAP) access to delegated
-  mailboxes (later ADRs).
+  behalf (13). The webmail screens (slice 14, Open another mailbox, writing from a shared mailbox) and their e2e, docs and
+  changelog are built too. **Left:** password-less shared mailboxes and mail-app (IMAP) access to delegated mailboxes
+  (later ADRs). **Maintainer decision 2026-10-30:** no auto-mapped "Shared with you" list in the webmail
+  for now; shared mailboxes open only with Open another mailbox, in a tab of their own (ADR-0026 update). **Delegation
+  follow-up (later):** show each shared mailbox as a folder tree of its own under the person's mailbox in the webmail
+  sidebar, in the conventional enterprise layout (the mailbox's name, expandable to Inbox, Drafts, Sent, Deleted,
+  Archive and Junk).
 - **Names:** the mailbox display name is the one source; a person's own mailbox follows their profile name unless an
   admin sets another; the webmail sender name shows the same value (CLAUDE.md rule 61).
 
