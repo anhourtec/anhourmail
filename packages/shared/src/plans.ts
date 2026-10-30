@@ -59,6 +59,11 @@ export type Plan = {
    */
   aliasCreationsPerYear: AliasCreationsPerDay | null;
   catchAll: boolean;
+  /**
+   * Mailbox delegation (ADR-0026): administrators give people in the account read and manage, send as or send on
+   * behalf on another mailbox, and shared mailboxes have members. Free accounts have one person, so nobody to grant to.
+   */
+  delegation: boolean;
   supporterBadge: boolean;
 };
 
@@ -137,6 +142,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     aliasCreationsPerDay: ALIAS_CREATIONS_PER_DAY.free,
     aliasCreationsPerYear: ALIAS_CREATIONS_PER_YEAR.free,
     catchAll: false,
+    delegation: false,
     supporterBadge: false,
   },
   plus: {
@@ -158,6 +164,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     aliasCreationsPerDay: ALIAS_CREATIONS_PER_DAY.paid,
     aliasCreationsPerYear: null,
     catchAll: true,
+    delegation: true,
     supporterBadge: false,
   },
   supporter: {
@@ -179,6 +186,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     aliasCreationsPerDay: ALIAS_CREATIONS_PER_DAY.paid,
     aliasCreationsPerYear: null,
     catchAll: true,
+    delegation: true,
     supporterBadge: true,
   },
 };
@@ -213,6 +221,14 @@ export const MAILBOX_DELETE_GRACE_DAYS = 30;
  * decided, like MAX_MAILBOXES). The docs render it (`<Value of="maxPeople" />`).
  */
 export const MAX_PEOPLE = 10;
+
+/**
+ * Mailbox delegation ceilings (ADR-0026; placeholders like `MAX_PEOPLE`, to confirm): distinct people with any right on
+ * one mailbox, and distinct mailboxes one person holds any right on. Checked in the grant's own transaction; the
+ * public docs import them from here, never typed by hand (rule 32).
+ */
+export const DELEGATES_PER_MAILBOX = 25;
+export const DELEGATED_MAILBOXES_PER_PERSON = 20;
 
 /** Days an invite link works. Resending it issues a new link with a fresh period (`<Value of="inviteDays" />`). */
 export const INVITE_TTL_DAYS = 7;
