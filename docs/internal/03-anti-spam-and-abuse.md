@@ -152,6 +152,21 @@ Lists multiply one message into many deliveries, so they are an abuse amplifier 
   server, but a JMAP client that ignores `deliveryStatus` shows the mail as sent: the webmail must read it after
   sending (or pre-check local recipients) and tell the sender. `stack:verify` pins this behaviour.
 
+## Platform reputation (CLAUDE.md rule 62)
+
+- **Nothing promotional from our domains.** The platform domains (`anhourmail.com`, `anhourtec.com`), the MX/HELO
+  hostname and the shared outbound IPs carry person-to-person mail and our own transactional mail only. Marketing,
+  newsletters and bulk sending (Phase 10 add-on) are allowed only from a customer's own verified domain, DKIM-signed
+  with that domain's keys, on a separate sending path (dedicated IPs or a separate subdomain and throttles), so a bulk
+  sender can never damage the reputation personal mail depends on. Free platform-domain addresses never get bulk
+  sending.
+- **Watch it:** blocklist checks for the platform domains and IPs, postmaster and feedback-loop dashboards, DMARC
+  aggregate and TLS-RPT reports, bounce codes that name a block (Phase 6 monitoring and alerts).
+- **When a receiving server blocks us:** occasionally a smaller or stricter mail server refuses our mail. Treat it as
+  an incident: read the bounce for the listing or the server's policy, request delisting or contact its postmaster the
+  same day, find and stop the cause (usually one abusive or compromised sender), and record it in the deliverability
+  runbook. Target: resolved within a day or two. Never rotate domains or IPs to get around a block.
+
 ## Events from Stalwart (Phase 1 prototype)
 
 `x:WebHook` (Community) posts batched events `{"events":[{id, createdAt, type, data}]}`, signed with

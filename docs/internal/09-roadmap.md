@@ -265,6 +265,9 @@ mailbox, resumable, with progress in the console and a summary email when done.
 
 ## Phase 10 — Newsletters and bulk sending add-on (post-launch)
 
+**Constraint (CLAUDE.md rule 62):** bulk and marketing mail only from the customer's own verified domain, on a separate
+sending path; never from `anhourmail.com`, `anhourtec.com` or the shared IPs personal mail uses.
+
 - Only after personal-mail deliverability is proven (≥ 8 weeks post-launch with complaints < 0.1 %). Separate bulk IP pool + warm-up, bulk subdomain onboarding, lists/consent/imports, campaign sender in the worker, RFC 8058 one-click unsubscribe, bounce/complaint processing and suppression, Trust & Safety review queue, pricing tiers (`11-bulk-sending.md`, ADR-0015).
 - **Exit:** a reviewed test sender reaches the big free mailbox providers' inboxes from the bulk pool with DMARC alignment; one-click unsubscribe suppresses within seconds; automatic pause triggers in staging at the configured thresholds; zero tracking pixels or rewritten links in sent mail (tested).
 

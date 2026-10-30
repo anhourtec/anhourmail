@@ -344,6 +344,24 @@ an app container direct access to Stalwart's management listener.
     edits it in one place and sees it in another. Avatars are images we host (never remote URLs), size-capped and
     re-encoded server-side.
 
+62. **No marketing or bulk mail from our own domains, ever.** `anhourmail.com`, `anhourtec.com` and every other
+    domain or hostname we own (including the MX/HELO name and the outbound IPs they sign and send from) carry only
+    person-to-person mail and our own transactional mail (sign-in, invites, exports, alerts). Whenever we build
+    newsletters, bulk or marketing sending (Phase 10), it sends only from the customer's **own verified domain**, with
+    its own DKIM, on a separate sending path (its own IPs or subdomain and throttles) so a bulk sender's reputation can
+    never touch the platform domains or the shared IPs people's personal mail goes out on. Free `@anhourmail.com`
+    addresses are never allowed bulk sending. Any change near sending, limits or abuse logic is checked against this
+    rule (with rule 27's `security-reviewer` pass).
+    - **Our reputation is a product requirement:** keep the platform domains and IPs off spam blocklists. Monitor the
+      major DNS blocklists, postmaster/feedback-loop dashboards and DMARC/TLS-RPT reports (Phase 6); stop abusive
+      senders before their mail reaches the queue (rule 27).
+    - **When a receiving server blocks us** (it happens occasionally with smaller or stricter mail servers): treat it
+      as an incident — find the block from the bounce text, request delisting or contact that server's postmaster the
+      same day, and record it in the runbook; the target is resolved within a day or two. Never work around a block by
+      rotating domains or IPs.
+    - Details live in `docs/internal/03-anti-spam-and-abuse.md` ("Platform reputation") and the deliverability
+      research; publish sending limits, never detection rules (rule 33).
+
 ## Project conventions
 
 - **Services hold the logic; route handlers only parse, call and map errors.** Services take the actor and check
@@ -378,3 +396,4 @@ an app container direct access to Stalwart's management listener.
 | 2026-10-29 | Nishchayjeet Singh (Nish) | Rule 60: sweep every Markdown doc against the code every session; bump `Last updated` on change                                    |
 | 2026-10-29 | Nishchayjeet Singh (Nish) | Rule 61: profile data (name, avatar, sender name) has one source and stays in sync across console and webmail                      |
 | 2026-10-30 | Nishchayjeet Singh (Nish) | "Where we are and what's next": pre-staging redeployed at 300440a; delegation's webmail side waits for the next deploy             |
+| 2026-10-30 | Nishchayjeet Singh (Nish) | Rule 62: no marketing or bulk mail from our own domains; bulk only from customers' verified domains; blocklist response            |
