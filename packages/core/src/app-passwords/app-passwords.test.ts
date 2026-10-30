@@ -3,7 +3,17 @@ import { describe, expect, it } from "vitest";
 
 import { APP_PASSWORDS_PER_MAILBOX, type AppPasswordProtocol } from "@anhourmail/shared/security";
 
-import { ACCOUNT_A, ACCOUNT_B, actAs, anonymous, deps as makeDeps, fixedClock, req, user } from "../__tests__/helpers";
+import {
+  ACCOUNT_A,
+  ACCOUNT_B,
+  actAs,
+  anonymous,
+  deps as makeDeps,
+  fakeHasher,
+  fixedClock,
+  req,
+  user,
+} from "../__tests__/helpers";
 import {
   EnrolmentRequiredError,
   ForbiddenError,
@@ -405,7 +415,7 @@ describe("revoking app passwords", () => {
     const { d } = setup();
     const issuer = fakeIssuer();
     await create(d, issuer, member);
-    await removeMember(d, owner, ACCOUNT_A, "member", req);
+    await removeMember(d, owner, ACCOUNT_A, "member", req, fakeHasher);
     expect(d.uow.state.appPasswords.map((p) => p.status)).toEqual(["revoking"]);
     expect(d.uow.state.jobs).toContainEqual(
       expect.objectContaining({ kind: "app_password.revoke", subjectId: MBX_MEMBER }),

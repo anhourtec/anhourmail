@@ -25,7 +25,10 @@ export const PATCH = route(
   { limit: "sensitive" },
 );
 
-/** Remove someone (`member.manage`; an Owner or admin needs an Owner). Their mailboxes stay. */
+/**
+ * Remove someone (`member.manage`; an Owner or admin needs an Owner). Their mailboxes stay, person-less, with their
+ * sign-in turned off (a new password nobody is shown, app passwords revoked).
+ */
 export const DELETE = route(
   async ({ req, meta }, params) =>
     ok(
@@ -35,6 +38,7 @@ export const DELETE = route(
         str(params.accountId),
         str(params.userId),
         meta,
+        container().passwords,
       ),
     ),
   { limit: "sensitive" },

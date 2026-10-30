@@ -3,7 +3,17 @@ import { describe, expect, it } from "vitest";
 
 import { INVITE_EMAILS_PER_DAY, MAX_PEOPLE } from "@anhourmail/shared/plans";
 
-import { ACCOUNT_A, ACCOUNT_B, BREACHED_PW, deps, fakeBreaches, fixedClock, req, user } from "../__tests__/helpers";
+import {
+  ACCOUNT_A,
+  ACCOUNT_B,
+  BREACHED_PW,
+  deps,
+  fakeBreaches,
+  fakeHasher,
+  fixedClock,
+  req,
+  user,
+} from "../__tests__/helpers";
 import type { Actor } from "../actor";
 import { ConflictError, ForbiddenError, NotFoundError, PlanLimitError, ValidationError } from "../errors";
 import { hashToken } from "../tokens";
@@ -318,48 +328,142 @@ describe("changeMemberRole", () => {
 });
 
 describe("removeMember", () => {
-  it("a User Admin removes a Member; their mailboxes stay, unassigned", async () => {
+  it("a User Admin removes a Member; their mailboxes stay, person-less, with sign-in off", async () => {
+    const { d, s, as } = world();
+    const base = {
+      accountId: ACCOUNT_A,
+      displayName: null,
+      quotaBytes: 1,
+      lastError: null,
+      purgeAfter: null,
+      createdAt: new Date(),
+    };
+    s.mailboxes.push(
+      // On the mail server: a new password is queued for the worker, with the proxy's grant.
+      {
+        ...base,
+        id: "11111111-aaaa-4aaa-8aaa-111111111111",
+        userId: "kid",
+        address: "kid@family.test",
+        status: "active",
+        stalwartId: "s1",
+        mustChangePassword: true,
+      },
+      // Suspended: the job applies it, and a resume waits for it.
+      {
+        ...base,
+        id: "22222222-aaaa-4aaa-8aaa-222222222222",
+        userId: "kid",
+        address: "kid2@family.test",
+        status: "suspended",
+        stalwartId: "s2",
+      },
+      // Being deleted: the new password waits for a restore.
+      {
+        ...base,
+        id: "33333333-aaaa-4aaa-8aaa-333333333333",
+        userId: "kid",
+        address: "kid3@family.test",
+        status: "deleting",
+        stalwartId: "s3",
+      },
+      // Someone else's: untouched.
+      {
+        ...base,
+        id: "44444444-aaaa-4aaa-8aaa-444444444444",
+        userId: "admin",
+        address: "admin@family.test",
+        status: "active",
+        stalwartId: "s4",
+      },
+    );
+    expect(await removeMember(d, as("admin"), ACCOUNT_A, "kid", req, fakeHasher)).toEqual({ userId: "kid" });
+    expect(s.memberships.some((m) => m.userId === "kid")).toBe(false);
+    expect(s.mailboxes).toHaveLength(4);
+    expect(s.mailboxes.filter((m) => m.userId === "kid")).toEqual([]);
+    expect(s.mailboxes.find((m) => m.address === "admin@family.test")?.userId).toBe("admin");
+    expect(s.mailboxes.find((m) => m.address === "kid@family.test")?.mustChangePassword).toBe(false);
+    const pending = Object.fromEntries(s.mailboxPasswords.map((p) => [p.mailboxId, p]));
+    expect(Object.keys(pending).sort()).toEqual([
+      "11111111-aaaa-4aaa-8aaa-111111111111",
+      "22222222-aaaa-4aaa-8aaa-222222222222",
+      "33333333-aaaa-4aaa-8aaa-333333333333",
+    ]);
+    expect(pending["11111111-aaaa-4aaa-8aaa-111111111111"]).toMatchObject({ grant: "grant-for-s1" });
+    expect(pending["22222222-aaaa-4aaa-8aaa-222222222222"]).toMatchObject({ grant: "grant-for-s2" });
+    expect(pending["11111111-aaaa-4aaa-8aaa-111111111111"]?.pendingHash).toMatch(/^\$argon2id\$/);
+    expect(s.jobs.filter((j) => j.kind === "mailbox.password").map((j) => j.subjectId)).toEqual([
+      "11111111-aaaa-4aaa-8aaa-111111111111",
+      "22222222-aaaa-4aaa-8aaa-222222222222",
+    ]);
+    const entry = audits(s, "account.member_removed")[0];
+    expect(entry).toMatchObject({
+      result: "success",
+      meta: { role: "member", mailboxesUnassigned: 3, mailboxesSignedOut: 3, appPasswordsRevoked: 0 },
+    });
+    // The generated password is never in the audit entry.
+    expect(JSON.stringify(entry)).not.toContain("argon2");
+  });
+
+  it("waits while one of their mailboxes is still being created (it could get the password they were given)", async () => {
     const { d, s, as } = world();
     s.mailboxes.push({
       id: "11111111-aaaa-4aaa-8aaa-111111111111",
       accountId: ACCOUNT_A,
       userId: "kid",
       address: "kid@family.test",
-      status: "active",
+      status: "provisioning",
       quotaBytes: 1,
       stalwartId: null,
       lastError: null,
       purgeAfter: null,
       createdAt: new Date(),
     });
-    expect(await removeMember(d, as("admin"), ACCOUNT_A, "kid", req)).toEqual({ userId: "kid" });
-    expect(s.memberships.some((m) => m.userId === "kid")).toBe(false);
-    expect(s.mailboxes).toHaveLength(1);
-    expect(audits(s, "account.member_removed")[0]).toMatchObject({
-      result: "success",
-      meta: { role: "member", mailboxesUnassigned: 1 },
+    await expect(removeMember(d, as("owner"), ACCOUNT_A, "kid", req, fakeHasher)).rejects.toThrow("still being set up");
+    expect(s.memberships.some((m) => m.userId === "kid")).toBe(true);
+    expect(s.mailboxes[0]?.userId).toBe("kid");
+    expect(s.mailboxPasswords).toEqual([]);
+  });
+
+  it("a denied removal changes no mailbox", async () => {
+    const { d, s, as } = world();
+    s.mailboxes.push({
+      id: "11111111-aaaa-4aaa-8aaa-111111111111",
+      accountId: ACCOUNT_A,
+      userId: "owner",
+      address: "owner@family.test",
+      status: "active",
+      quotaBytes: 1,
+      stalwartId: "s1",
+      lastError: null,
+      purgeAfter: null,
+      createdAt: new Date(),
     });
+    await expect(removeMember(d, as("admin"), ACCOUNT_A, "owner", req, fakeHasher)).rejects.toThrow(ForbiddenError);
+    expect(s.mailboxes[0]?.userId).toBe("owner");
+    expect(s.mailboxPasswords).toEqual([]);
+    expect(s.jobs).toEqual([]);
   });
 
   it("only an Owner removes an Owner or an admin (403 audited); never yourself; never the last Owner", async () => {
     const { d, s, as } = world();
-    await expect(removeMember(d, as("admin"), ACCOUNT_A, "owner", req)).rejects.toThrow(ForbiddenError);
-    await expect(removeMember(d, as("admin"), ACCOUNT_A, "auditor", req)).rejects.toThrow(ForbiddenError);
+    await expect(removeMember(d, as("admin"), ACCOUNT_A, "owner", req, fakeHasher)).rejects.toThrow(ForbiddenError);
+    await expect(removeMember(d, as("admin"), ACCOUNT_A, "auditor", req, fakeHasher)).rejects.toThrow(ForbiddenError);
     expect(audits(s, "account.member_removed").map((e) => e.result)).toEqual(["denied", "denied"]);
-    await expect(removeMember(d, as("admin"), ACCOUNT_A, "admin", req)).rejects.toThrow(ForbiddenError);
-    await expect(removeMember(d, as("owner"), ACCOUNT_A, "owner", req)).rejects.toThrow("remove yourself");
-    await removeMember(d, as("owner"), ACCOUNT_A, "admin", req);
+    await expect(removeMember(d, as("admin"), ACCOUNT_A, "admin", req, fakeHasher)).rejects.toThrow(ForbiddenError);
+    await expect(removeMember(d, as("owner"), ACCOUNT_A, "owner", req, fakeHasher)).rejects.toThrow("remove yourself");
+    await removeMember(d, as("owner"), ACCOUNT_A, "admin", req, fakeHasher);
     // The last Owner is never removed, even by a session that still thinks it's an Owner (a race).
     s.memberships.push({ userId: "ghost", accountId: ACCOUNT_A, role: "member" });
     const ghost = user({ id: "ghost", account: [[ACCOUNT_A, "owner"]] });
-    await expect(removeMember(d, ghost, ACCOUNT_A, "owner", req)).rejects.toThrow("at least one owner");
+    await expect(removeMember(d, ghost, ACCOUNT_A, "owner", req, fakeHasher)).rejects.toThrow("at least one owner");
   });
 
   it("is 403 for Members, 404 across accounts and for strangers", async () => {
     const { d, as } = world();
-    await expect(removeMember(d, as("kid"), ACCOUNT_A, "kid", req)).rejects.toThrow(ForbiddenError);
-    await expect(removeMember(d, as("owner-b"), ACCOUNT_A, "kid", req)).rejects.toThrow(NotFoundError);
-    await expect(removeMember(d, as("owner"), ACCOUNT_A, "owner-b", req)).rejects.toThrow(NotFoundError);
+    await expect(removeMember(d, as("kid"), ACCOUNT_A, "kid", req, fakeHasher)).rejects.toThrow(ForbiddenError);
+    await expect(removeMember(d, as("owner-b"), ACCOUNT_A, "kid", req, fakeHasher)).rejects.toThrow(NotFoundError);
+    await expect(removeMember(d, as("owner"), ACCOUNT_A, "owner-b", req, fakeHasher)).rejects.toThrow(NotFoundError);
   });
 });
 

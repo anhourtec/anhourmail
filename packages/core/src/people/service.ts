@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { INVITE_EMAILS_PER_DAY, INVITE_TTL_DAYS, MAX_PEOPLE, PLANS } from "@anhourmail/shared/plans";
 import { ACCOUNT_ROLES, type AccountRole } from "@anhourmail/shared/rbac";
+import { generateMailboxPassword } from "@anhourmail/shared/security";
 
 import { type Actor, authorize, can } from "../actor";
 import { maskEmail } from "../audit/record";
 import { ConflictError, ForbiddenError, NotFoundError, PlanLimitError, ValidationError } from "../errors";
+import { hashMailboxPassword, type PasswordHasher } from "../mailboxes/password-hash";
 import { mutation } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 import { assertNotBreached, type BreachedPasswords } from "../security/breached-passwords";
@@ -369,8 +371,12 @@ export async function changeMemberRole(
 
 /**
  * Removes someone from the account (`member.manage`; an Owner or an admin needs `account.admins.manage`). Not
- * yourself, and never the last Owner. Their mailboxes stay (unassigned) — suspend or delete them separately — but
- * the app passwords on those mailboxes are revoked (the worker takes them off the mail server).
+ * yourself, and never the last Owner. Their mailboxes stay, as person-less mailboxes (shared addresses: mail keeps
+ * arriving and admins decide what happens next — a new password, "Make this a user", or deletion), with the removed
+ * person's sign-in turned off in the same unit of work: the owner link is released, a new generated password that
+ * nobody is shown replaces theirs (the worker's `mailbox.password` job; the mail server ends every webmail session
+ * and OAuth token derived from the old one), and the app passwords on those mailboxes are revoked
+ * (`app_password.revoke`). The generated password is never returned, stored, logged or audited (rule 23).
  */
 export async function removeMember(
   deps: Deps,
@@ -378,6 +384,7 @@ export async function removeMember(
   accountId: string,
   userId: string,
   req: RequestMeta,
+  hasher: PasswordHasher,
 ): Promise<{ userId: string }> {
   const out = await mutation<{ userId: string } | null>(
     deps,
@@ -404,23 +411,41 @@ export async function removeMember(
       if (target.role === "owner" && ownerCount(members) <= 1) throw new ConflictError(LAST_OWNER);
       if (!(await repos.people.remove(accountId, target.userId))) throw new NotFoundError();
       const mailboxes = (await repos.mailboxes.listByAccount(accountId)).filter((m) => m.userId === target.userId);
-      // The app passwords they made for those mailboxes go with them: they're credentials the removed person holds.
+      // A mailbox the worker may be creating right now could still get the password they were given: wait for it.
+      const settingUp = mailboxes.find((m) => m.stalwartId === null && m.status !== "deleting");
+      if (settingUp) {
+        throw new ConflictError(
+          `Their mailbox ${settingUp.address} is still being set up on the mail server. Try again in a minute, or delete it first.`,
+        );
+      }
+      const now = deps.clock.now();
       let appPasswordsRevoked = 0;
+      let mailboxesSignedOut = 0;
       for (const m of mailboxes) {
+        if (!(await repos.mailboxes.releaseOwner(m.id, target.userId))) continue;
+        // Sign-in off: a password they don't know replaces theirs. Not a first-sign-in change: nobody signs in with
+        // it. A mailbox being deleted (or deleted before the job runs) keeps it waiting for a restore, which applies
+        // it before the account comes back on (`restoreMailbox`, `mailbox.ensure`).
+        const phc = await hashMailboxPassword(hasher, generateMailboxPassword());
+        const grant =
+          m.stalwartId === null ? null : (hasher.grant?.({ externalId: m.stalwartId, passwordHash: phc }) ?? null);
+        await repos.mailboxPasswords.setPending(m.id, phc, grant);
+        await repos.mailboxes.setPasswordChangeRequired(m.id, false);
+        if (m.stalwartId !== null && m.status !== "deleting") {
+          await repos.provisioning.enqueue({ kind: "mailbox.password", subjectId: m.id, runAfter: now });
+        }
+        mailboxesSignedOut += 1;
+        // App passwords don't depend on the mailbox password: they're credentials the removed person holds.
         const moved = await repos.appPasswords.markRevoking(m.id, null);
         appPasswordsRevoked += moved.length;
         if (moved.length > 0) {
-          await repos.provisioning.enqueue({
-            kind: "app_password.revoke",
-            subjectId: m.id,
-            runAfter: deps.clock.now(),
-          });
+          await repos.provisioning.enqueue({ kind: "app_password.revoke", subjectId: m.id, runAfter: now });
         }
       }
       return {
         result: { userId: target.userId },
         target: { label: target.email },
-        meta: { role: target.role, mailboxesUnassigned: mailboxes.length, appPasswordsRevoked },
+        meta: { role: target.role, mailboxesUnassigned: mailboxes.length, mailboxesSignedOut, appPasswordsRevoked },
       };
     },
   );
