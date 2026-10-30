@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { z } from "zod";
 
+import { forwardingGuard, GUARD_EXTENSIONS } from "@anhourmail/core/webmail";
 import { MANAGED_SIEVE_SCRIPT, MANAGED_SIEVE_SETTINGS_PREFIX } from "@anhourmail/shared/webmail";
 
 /**
@@ -174,12 +175,26 @@ const SUPPRESS = `anyof (
 const SETTINGS_PREFIX = MANAGED_SIEVE_SETTINGS_PREFIX;
 
 /**
+ * The forwarding rule's guard (`forwardingGuard` in `@anhourmail/core/webmail`, one source with the upgrade and the
+ * reconciler): no redirect for mail our server found failing DMARC, nor for mail claiming the mailbox's own domain
+ * (or a subdomain) without our top-most results saying DMARC passed. Re-exported for the tests and `stack:verify`.
+ */
+export { dmarcPassRegex, forwardingGuard } from "@anhourmail/core/webmail";
+
+/**
  * Builds the managed script. `identities`: the mailbox's own addresses (automatic replies answer mail to any of
  * them). `contacts`: addresses from the address book, used only by "contacts only" rules (already capped).
  */
 export function buildScript(
   rules: MailRules,
-  ctx: { identities: readonly string[]; contacts: readonly string[] },
+  ctx: {
+    identities: readonly string[];
+    contacts: readonly string[];
+    /** Our mail server's authserv-ids (`trustedAuthservIds`), for the forwarding guard. */
+    authservIds: readonly string[];
+    /** The mailbox's own domain (its address's), for the forwarding guard's own-domain part. */
+    mailboxDomain: string | null;
+  },
 ): string {
   const r = MailRules.parse(rules);
   const requires = new Set(["fileinto", "special-use", "mailbox"]);
@@ -231,7 +246,12 @@ export function buildScript(
     // 3. Forwarding (the BFF only writes a confirmed target).
     if (r.forwarding.enabled && r.forwarding.address) {
       if (r.forwarding.keepCopy) requires.add("copy");
-      quiet.push(`redirect${r.forwarding.keepCopy ? " :copy" : ""} ${sieveString(r.forwarding.address)};`);
+      const redirect = `redirect${r.forwarding.keepCopy ? " :copy" : ""} ${sieveString(r.forwarding.address)};`;
+      // Not for mail that failed DMARC by our own checks, nor own-domain mail our checks didn't pass: it stays in the
+      // mailbox (implicit keep), never forwarded.
+      const guard = forwardingGuard(ctx.authservIds, ctx.mailboxDomain);
+      if (guard?.includes(":index") === true) for (const ext of GUARD_EXTENSIONS) requires.add(ext);
+      quiet.push(guard === null ? redirect : `if not ${guard} {\n  ${redirect}\n}`);
     }
 
     const indented = quiet
@@ -254,6 +274,57 @@ export function buildScript(
     ...body,
     "",
   ].join("\n");
+}
+
+/**
+ * The exact upgrade of a managed forwarding script to today's guard (`forwardingGuard(authservIds, mailboxDomain)`):
+ * the same text with the one redirect block replaced and the guard's extensions appended to `require`, which is what
+ * `buildScript` writes today for the same settings (unit-tested). Accepts only what a generator wrote: the bare
+ * redirect (before 2026-10-30), or the redirect inside a guard that is exactly `forwardingGuard` for some ids and
+ * domain (so a change of authserv-id or a guard from an earlier build is replaced too). Null when there is nothing to
+ * do or the text is anything else: not ours, forwarding off, no usable id, the redirect not found exactly once.
+ */
+export function upgradeManagedScript(
+  text: string,
+  authservIds: readonly string[],
+  mailboxDomain: string | null,
+): string | null {
+  const rules = parseScript(text);
+  const guard = forwardingGuard(authservIds, mailboxDomain);
+  if (!rules?.forwarding.enabled || !rules.forwarding.address || guard === null) return null;
+  const redirect = `redirect${rules.forwarding.keepCopy ? " :copy" : ""} ${sieveString(rules.forwarding.address)};`;
+  const wanted = `\n  if not ${guard} {\n    ${redirect}\n  }\n`;
+  if (text.includes(wanted) || text.split(redirect).length !== 2) return null;
+  const blocks = [`\n  ${redirect}\n`, ...olderGuards(text).map((g) => `\n  if not ${g} {\n    ${redirect}\n  }\n`)];
+  const found = blocks.filter((b) => text.split(b).length === 2);
+  const block = found[0];
+  if (found.length !== 1 || block === undefined) return null;
+  let out = text.replace(block, wanted);
+  if (guard.includes(":index")) {
+    const m = /^require \[(.*)\];$/m.exec(out);
+    if (!m) return null;
+    let have: string[];
+    try {
+      have = (m[1] ?? "").split(", ").map((x) => JSON.parse(x) as string);
+    } catch {
+      return null; // not a require line we wrote: leave the script alone
+    }
+    const next = [...have, ...GUARD_EXTENSIONS.filter((e) => !have.includes(e))];
+    out = out.replace(m[0], `require ${list(next)};`);
+  }
+  return out;
+}
+
+/** Guards in `text` that are exactly what `forwardingGuard` writes for the ids and domain they name. */
+function olderGuards(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/\n {2}if not (.+) \{\n {4}redirect/g)) {
+    const g = m[1] ?? "";
+    const ids = [...g.matchAll(/"([a-z0-9.-]+);\*dmarc=fail\*"/g)].map((x) => x[1] ?? "");
+    const domain = /address :domain :is "from" "([a-z0-9.-]+)"/.exec(g)?.[1] ?? null;
+    if (forwardingGuard(ids, domain) === g || forwardingGuard(ids, null) === g) out.push(g);
+  }
+  return out;
 }
 
 /** The settings stored in a managed script, or null when it isn't one of ours (or was edited into something else). */

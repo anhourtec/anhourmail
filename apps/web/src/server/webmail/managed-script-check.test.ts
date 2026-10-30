@@ -5,7 +5,12 @@ import { inspectManagedScript } from "@anhourmail/core/webmail";
 
 import { buildScript, DEFAULT_RULES } from "./sieve";
 
-const ctx = { identities: ["me@family.test"], contacts: ["friend@example.test"] };
+const ctx = {
+  identities: ["me@family.test"],
+  contacts: ["friend@example.test"],
+  authservIds: ["mx1.family.test"],
+  mailboxDomain: "family.test",
+};
 
 describe("the reconciler's view of the scripts the webmail writes", () => {
   it("sees our settings and no redirect when forwarding is off, whatever the auto-reply says", () => {
@@ -29,6 +34,7 @@ describe("the reconciler's view of the scripts the webmail writes", () => {
       forwarding: { enabled: false, address: null },
       redirects: [],
       foreign: [],
+      unguardedRedirect: false,
     });
   });
 
@@ -42,7 +48,14 @@ describe("the reconciler's view of the scripts the webmail writes", () => {
       forwarding: { enabled: true, address: "copy@example.test" },
       redirects: ["copy@example.test"],
       foreign: [],
+      // Today's generator checks our results for a DMARC failure; one written without ids doesn't.
+      unguardedRedirect: false,
     });
+    const older = buildScript(
+      { ...DEFAULT_RULES, forwarding: { enabled: true, address: "copy@example.test", keepCopy: true } },
+      { ...ctx, authservIds: [] },
+    );
+    expect(inspectManagedScript(older).unguardedRedirect).toBe(true);
   });
 
   it("flags a script that isn't ours, extra redirects, and extensions the webmail never writes", () => {
