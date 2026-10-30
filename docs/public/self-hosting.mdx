@@ -47,11 +47,16 @@ pinned in `docker-compose.yml`, and we run it unmodified, configured only throug
 Production needs more than this guide covers: a server whose provider allows outbound mail, reverse DNS, TLS
 certificates, DNS records and a warm-up period for a new IP address. A production guide will follow.
 
-Three things apply from the first day:
+Four things apply from the first day:
 
 - Set `PLATFORM_DOMAIN` in `.env` to your own domain. The console builds every server name it shows your users
   (incoming mail, sending, mail apps, the DNS records for their domains) under it, and checks their DNS against
   the same names.
+- The images run in production mode, which needs to know the name your mail server writes into the authentication
+  results it adds to incoming mail. By default that is `mx1.` under `PLATFORM_DOMAIN`. If your mail server uses another
+  hostname, set `MAIL_AUTHSERV_ID` to it (several, comma-separated, if you have more than one), for the console and
+  the background worker alike. The console won't start with a value that isn't a hostname. The webmail uses it to show
+  sender checks and to decide which mail forwarding may pass on.
 - Give each part of AnhourMail its own mail-server key, limited to its job: the console and webmail get a key that
   can't create or change mail accounts, and the background worker gets one that can't open a mailbox. Each part
   refuses to start with a key that isn't its own. One job (creating accounts) can still set an account's password, so

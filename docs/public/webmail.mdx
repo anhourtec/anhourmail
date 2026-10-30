@@ -85,9 +85,15 @@ to show.
   again each time it opens. If you follow a link to it from another website, the page asks you to choose **Open**
   first. If you don't have access, or the address doesn't exist, the tab says "You don't have
   access to this mailbox" and links back to your own.
-- **What stays with your own mailbox.** Writing and sending, replies, contacts, blocking a sender, settings and
-  signatures always belong to your own mailbox, so they aren't offered while a shared one is shown. To send from a
-  shared mailbox, write from your own (see [Sending as or on behalf of a mailbox](#sending-as-or-on-behalf-of-a-mailbox)).
+- **Writing from it.** If you also have **Send as** or **Send on behalf** on the mailbox, **New email**, **Reply**,
+  **Reply all** and **Forward** work while it's shown, and **From** starts as that mailbox (see
+  [Sending as or on behalf of a mailbox](#sending-as-or-on-behalf-of-a-mailbox)). You can still pick one of your own
+  addresses in **From**. A forward copies the message's attachments into your draft. With **Read and manage** only,
+  **New email** is off and says "You can read this mailbox but not send from it. Ask an admin for Send as or Send on
+  behalf."
+- **What stays with your own mailbox.** Contacts, blocking a sender, settings and signatures always belong to your own
+  mailbox, so they aren't offered while a shared one is shown. Your drafts stay in your own Drafts, even when you
+  write them from a shared mailbox.
 - **When access ends.** If your access is taken away, the mailbox leaves **Shared with you** and an open tab of it says
   you don't have access any more.
 - Mailboxes shared with you open in the webmail only, not in mail apps. You can have up to
@@ -157,8 +163,11 @@ If you've been given **Send as** or **Send on behalf** on a mailbox (see
   behalf of" the mailbox.
 - If you have both, only **send as** is offered.
 
-Write the message from your own mailbox as usual; your draft stays in your Drafts. When you send, it goes from the
-shared mailbox, and its copy is kept in **that mailbox's** Sent folder, so everyone with access sees what was sent.
+You can also open the mailbox (under **Shared with you**, or in a tab of its own with **Open another mailbox**) and
+choose **New email**, or **Reply**, **Reply all** or **Forward** on one of its messages: **From** then starts as the
+mailbox, as send as or on its behalf, whichever you have. Replies keep the conversation together.
+
+Either way, your draft stays in your own Drafts. When you send, it goes from the shared mailbox, and its copy is kept in **that mailbox's** Sent folder, so everyone with access sees what was sent.
 **Undo** works the same way. It counts toward the shared mailbox's sending limits as well as yours. If your access
 was taken away in the meantime, the message isn't sent.
 
@@ -311,6 +320,9 @@ your cookies or the page you're on.
 - When we can't confirm the message really comes from the sender's domain (it didn't pass the domain's sender
   checks), **Load images** loads them this once and the note says so: we'll ask again next time, because a message
   that only pretends to be from someone mustn't be able to tell when you open it.
+- Mail sent to you from another mailbox on AnhourMail, and our own messages to you, count as confirmed when they were
+  sent through our servers by the account that owns the From address. A forwarded copy only counts if the original
+  did.
 - In **Settings → Reading → Remote images** you can also load images from people in your contacts, or always.
 - Images load by themselves for a remembered sender or a contact only when the message really comes from that
   sender's domain. A message that only pretends to be from them asks first.
