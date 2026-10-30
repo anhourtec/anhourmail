@@ -177,6 +177,7 @@ describe("webmail delegation gate", () => {
       "PUT drafts/route.ts",
       "POST upload/route.ts",
       "GET identities/route.ts",
+      "GET senders/route.ts",
       "GET settings/route.ts",
       "POST settings/password/route.ts",
       "PUT settings/forwarding/route.ts",

@@ -791,6 +791,7 @@ export const ROUTES: readonly RouteSpec[] = [
   { method: "POST", path: "/api/webmail/send/undo", file: "app/api/webmail/send/undo/route.ts", guard: "webmail" },
   { method: "POST", path: "/api/webmail/upload", file: "app/api/webmail/upload/route.ts", guard: "webmail" },
   { method: "GET", path: "/api/webmail/identities", file: "app/api/webmail/identities/route.ts", guard: "webmail" },
+  { method: "GET", path: "/api/webmail/senders", file: "app/api/webmail/senders/route.ts", guard: "webmail" },
   { method: "GET", path: "/api/webmail/mailboxes", file: "app/api/webmail/mailboxes/route.ts", guard: "webmail" },
   { method: "POST", path: "/api/webmail/mailboxes", file: "app/api/webmail/mailboxes/route.ts", guard: "webmail" },
   {
