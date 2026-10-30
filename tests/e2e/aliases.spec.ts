@@ -24,7 +24,7 @@ test("an owner adds, turns off and deletes aliases; the member sees only their o
   await (await openNav(page)).getByRole("link", { name: "Mailboxes" }).click();
   await expect(page.getByRole("heading", { name: "Mailboxes", level: 1 })).toBeVisible();
   await page.getByRole("button", { name: "More actions" }).click();
-  await page.getByRole("menuitem", { name: "Add a shared address" }).click();
+  await page.getByRole("menuitem", { name: "Add a shared mailbox" }).click();
   for (const [local, owner] of [
     ["boss", u.users.owner],
     ["kid", u.users.member],
@@ -34,7 +34,7 @@ test("an owner adds, turns off and deletes aliases; the member sees only their o
     await page.getByLabel("Belongs to").selectOption({ label: owner });
     await page.getByLabel("Storage (GB)").fill("1");
     await page.getByLabel("Password", { exact: true }).fill("e2e mailbox password");
-    await page.getByRole("button", { name: "Create shared address" }).click();
+    await page.getByRole("button", { name: "Create shared mailbox" }).click();
     await expect(page.getByRole("row", { name: new RegExp(`${local}@${domain}`) })).toBeVisible();
   }
   await page.keyboard.press("Escape");

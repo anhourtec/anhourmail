@@ -53,14 +53,14 @@ test("removing someone keeps their mailbox and turns their sign-in to it off", a
     .click();
   await page.getByRole("menuitem", { name: "Remove…" }).click();
   const confirm = page.getByRole("alertdialog", { name: `Remove ${address}?` });
-  await expect(confirm.getByText("shared addresses with their sign-in turned off")).toBeVisible();
+  await expect(confirm.getByText(/shared mailbox(es)? with their sign-in turned off/)).toBeVisible();
   await confirm.getByRole("button", { name: "Remove", exact: true }).click();
   await expect(page.getByRole("row", { name: new RegExp(address) })).toHaveCount(0);
 
   // Their mailbox stays and belongs to nobody.
   await (await openNav(page)).getByRole("link", { name: "Mailboxes" }).click();
   await page.getByRole("link", { name: address }).click();
-  await expect(panel(page, new RegExp(address)).getByText("Nobody yet")).toBeVisible();
+  await expect(panel(page, new RegExp(address)).getByText("Nobody: it's a shared mailbox")).toBeVisible();
 
   // Their webmail session ends once the new password reaches the mail server, and their password is refused.
   await expect(async () => {

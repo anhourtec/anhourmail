@@ -27,6 +27,14 @@ export type E2eUsers = {
   data: Record<string, { accountName: string; owner: string; member: string; leaver: string }>;
   /** Per browser project: the alias limits journey's Free account (its Owner, mailbox, and the day its year filled). */
   aliasLimits: Record<string, { owner: string; mailbox: string; day: string }>;
+  /**
+   * Per browser project: the delegation journey's account (ADR-0026) — its Owner, the person given access, a colleague
+   * whose mailbox is converted to shared, a leaver who is removed, the verified domain and a shared mailbox on it.
+   */
+  delegation: Record<
+    string,
+    { owner: string; delegate: string; colleague: string; leaver: string; domain: string; shared: string }
+  >;
   security: Record<
     string,
     { totp: string; passkey: string; owner: string; member: string; pkOwner: string; pkMember: string }

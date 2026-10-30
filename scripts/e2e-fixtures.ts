@@ -71,6 +71,10 @@ if (mode === "create") {
   const aliasLimits: Record<string, { owner: string; mailbox: string; day: string }> = {};
   const actAs: Record<string, { accountName: string; accountId: string; owner: string; member: string }> = {};
   const data: Record<string, { accountName: string; owner: string; member: string; leaver: string }> = {};
+  const delegation: Record<
+    string,
+    { owner: string; delegate: string; colleague: string; leaver: string; domain: string; shared: string }
+  > = {};
   const mgmt = stalwartDevAdmin();
   for (const project of ["desktop", "mobile"]) {
     const [secAccount] = await db
@@ -236,6 +240,63 @@ if (mode === "create") {
       quotaBytes: 50 * 1024 * 1024,
     });
     avatars[project] = { person: avPerson.email, mailbox: `me@${avDomain}`, mailboxPassword: avPassword };
+    // Delegation journey (ADR-0026): a Plus account with a verified domain and mailboxes on the mail server — a shared
+    // mailbox (nobody's), a colleague's mailbox to convert to shared and a leaver's mailbox to hand over on removal —
+    // and the person who gets access (the delegate).
+    const [dlAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} Delegation ${project}`, plan: "plus" })
+      .returning();
+    if (!dlAccount) throw new Error("delegation account not created");
+    const dl = {
+      owner: await addLogin(`dl-${project}-owner`),
+      delegate: await addLogin(`dl-${project}-delegate`),
+      colleague: await addLogin(`dl-${project}-colleague`),
+      leaver: await addLogin(`dl-${project}-leaver`),
+    };
+    await db.insert(schema.accountMembership).values([
+      { accountId: dlAccount.id, userId: dl.owner.id, role: "owner" },
+      { accountId: dlAccount.id, userId: dl.delegate.id, role: "member" },
+      { accountId: dlAccount.id, userId: dl.colleague.id, role: "member" },
+      { accountId: dlAccount.id, userId: dl.leaver.id, role: "member" },
+    ]);
+    const dlDomain = `${run}-dl-${project}.test`;
+    await db.insert(schema.customerDomain).values({
+      accountId: dlAccount.id,
+      name: dlDomain,
+      status: "active",
+      verifyToken: `${run}-dl-${project}`,
+      stalwartId: await mgmt.upsertDomain({ name: dlDomain }),
+    });
+    for (const [name, userId] of [
+      ["desk", null],
+      ["colleague", dl.colleague.id],
+      ["leaver", dl.leaver.id],
+    ] as const) {
+      const stalwartId = await mgmt.upsertUser({
+        name,
+        domain: dlDomain,
+        password: await hashPassword(`${randomBytes(12).toString("base64url")}-E2e`),
+        quotaBytes: 50 * 1024 * 1024,
+      });
+      await db.insert(schema.mailbox).values({
+        accountId: dlAccount.id,
+        userId,
+        address: `${name}@${dlDomain}`,
+        stalwartId,
+        passwordCredentialId: await mgmt.passwordCredentialId(stalwartId),
+        status: "active",
+        quotaBytes: 50 * 1024 * 1024,
+      });
+    }
+    delegation[project] = {
+      owner: dl.owner.email,
+      delegate: dl.delegate.email,
+      colleague: dl.colleague.email,
+      leaver: dl.leaver.email,
+      domain: dlDomain,
+      shared: `desk@${dlDomain}`,
+    };
     // Alias limits journey: a Free account whose yearly alias and masked alias creations are used up today (counted in
     // the control plane only). Nothing is created, so its mailbox isn't on the mail server: it stays `provisioning`, so
     // the reconciler doesn't report it missing.
@@ -315,6 +376,7 @@ if (mode === "create") {
         avatars,
         data,
         aliasLimits,
+        delegation,
       },
       null,
       2,
