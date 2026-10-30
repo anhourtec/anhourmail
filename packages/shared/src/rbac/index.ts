@@ -182,14 +182,17 @@ export const PERMISSIONS = {
   },
   "distribution_list.read": { scope: "account", description: "See distribution lists, members and allowed senders" },
   "distribution_list.manage": { scope: "account", description: "Create and delete lists; manage members and senders" },
-  "delegation.read": { scope: "account", description: "See who has delegated access to which mailbox" },
-  "delegation.manage.own": {
+  // ADR-0026: read and manage, send as and send on behalf, granted per mailbox by an administrator.
+  "delegation.read": {
     scope: "account",
-    description: "Share own folders and grant send-on-behalf for own mailbox",
+    description: "See who can read and manage, send as or send on behalf of each mailbox",
   },
+  // Reserved for owner-granted folder permissions (later); nothing checks it in v1.
+  "delegation.manage.own": { scope: "account", description: "Share own folders (later)" },
   "delegation.manage.any": {
     scope: "account",
-    description: "Grant or revoke full access, send as and folder access on any mailbox in the account",
+    description:
+      "Give or remove read and manage, send as and send on behalf on any mailbox in the account (step-up; an Owner's or admin's mailbox: Owners only; never while acting as)",
     critical: true,
   },
   "forwarding.manage.own": { scope: "account", description: "Set forwarding and auto-replies on own mailbox" },
@@ -369,6 +372,7 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
     "distribution_list.manage",
     "delegation.read",
     "delegation.manage.own",
+    "delegation.manage.any",
     "forwarding.manage.own",
     "mail_rule.read",
     "message_trace.read",

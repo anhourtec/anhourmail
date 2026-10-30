@@ -1,6 +1,6 @@
 # Roles and permissions
 
-Last updated: 2026-10-29 (data export and account deletion, ADR-0025; staff support access / act-as, ADR-0023; profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
+Last updated: 2026-10-30 (mailbox delegation, ADR-0026: `delegation.manage.any` for User Administrators with guard rail 8; data export and account deletion, ADR-0025; staff support access / act-as, ADR-0023; profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
 
 **Source of truth: `packages/shared/src/rbac`.** That code is canonical: the permission list, the role → permission matrix, critical-permission flags and guard rails. The UI (what to show), the API (what to allow) and the RBAC harness (`npm run test:rbac`) all derive from it. This document explains the matrix for people. If the two disagree, the code wins, and this file is updated in the same change (rule 35).
 
@@ -44,29 +44,34 @@ without the permission is **404** (`requirePlatformPermission`). The services ch
 
 Plus and Supporter accounts can add people (family, a small group). Free accounts have one Owner and nobody else.
 
-| Role                                    | Can                                                                                                                                                                                                                                                                                                               | Cannot                                               |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| **Owner** (global admin of the account) | Everything in the account, including exporting its data and deleting it (grace period, cancellable), managing admins, transferring ownership and requiring a second sign-in step                                                                                                                                  | Remove or demote the last Owner                      |
-| **Domain Administrator**                | Add, verify and remove domains; see DNS records and checks; set catch-all                                                                                                                                                                                                                                         | Billing, people management, delete account           |
-| **User Administrator**                  | Create mailboxes (with a password); suspend, delete, restore and set the password of Members', unassigned and their own mailboxes (an Owner's or another admin's: Owner only); invite and remove Members (`member.manage`); reset Member passwords/2FA; manage anyone's aliases and masked aliases in the account | Change admin roles, billing, domains, delete account |
-| **Billing Administrator** (account)     | Plan changes, payment method, invoices, refunds request                                                                                                                                                                                                                                                           | Domains, people, mailboxes                           |
-| **Member**                              | Their own mailbox, own aliases and masked aliases, own settings, own Security activity, app passwords, export own mailbox                                                                                                                                                                                         | Anything account-wide                                |
-| **Read-only (Auditor)**                 | View settings, people, domains, mailboxes (metadata), and the account audit log; export the audit log                                                                                                                                                                                                             | Any change                                           |
+| Role                                    | Can                                                                                                                                                                                                                                                                                                                                                                                                                                | Cannot                                               |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| **Owner** (global admin of the account) | Everything in the account, including exporting its data and deleting it (grace period, cancellable), managing admins, transferring ownership and requiring a second sign-in step                                                                                                                                                                                                                                                   | Remove or demote the last Owner                      |
+| **Domain Administrator**                | Add, verify and remove domains; see DNS records and checks; set catch-all                                                                                                                                                                                                                                                                                                                                                          | Billing, people management, delete account           |
+| **User Administrator**                  | Create mailboxes (with a password); suspend, delete, restore and set the password of Members', unassigned and their own mailboxes (an Owner's or another admin's: Owner only); invite and remove Members (`member.manage`); reset Member passwords/2FA; manage anyone's aliases and masked aliases in the account; give people read and manage, send as or send on behalf on mailboxes (an Owner's or another admin's: Owner only) | Change admin roles, billing, domains, delete account |
+| **Billing Administrator** (account)     | Plan changes, payment method, invoices, refunds request                                                                                                                                                                                                                                                                                                                                                                            | Domains, people, mailboxes                           |
+| **Member**                              | Their own mailbox, own aliases and masked aliases, own settings, own Security activity, app passwords, export own mailbox                                                                                                                                                                                                                                                                                                          | Anything account-wide                                |
+| **Read-only (Auditor)**                 | View settings, people, domains, mailboxes (metadata), and the account audit log; export the audit log                                                                                                                                                                                                                                                                                                                              | Any change                                           |
 
 A person can hold several account roles. Permissions are the union.
 
 ### Collaboration (`10-collaboration.md`)
 
-| Role                  | Shared mailboxes & lists                           | Delegation & forwarding                                                         | Mail rules & trace  |
-| --------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------- |
-| Owner                 | Manage                                             | Own + **any mailbox** (full access, send as, forwarding — critical, Owner only) | Manage, trace       |
-| Domain Administrator  | See lists                                          | Own mailbox only                                                                | Manage rules, trace |
-| User Administrator    | Manage shared mailboxes, lists, resource mailboxes | Own mailbox; sees all grants                                                    | See rules, trace    |
-| Billing Administrator | —                                                  | Own mailbox only                                                                | —                   |
-| Member                | — (uses shared mailboxes they belong to)           | Own mailbox: folder sharing, send on behalf, forwarding, auto-reply             | —                   |
-| Read-only (Auditor)   | See                                                | See all grants                                                                  | See rules, trace    |
+| Role                  | Shared mailboxes & lists                           | Delegation & forwarding                                                                                                        | Mail rules & trace  |
+| --------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------- |
+| Owner                 | Manage                                             | **Any mailbox**: read and manage, send as, send on behalf (critical); forwarding any mailbox (critical, Owner only)            | Manage, trace       |
+| Domain Administrator  | See lists                                          | Own forwarding and auto-reply only                                                                                             | Manage rules, trace |
+| User Administrator    | Manage shared mailboxes, lists, resource mailboxes | **Any mailbox** except an Owner's or another admin's (guard rail 8): read and manage, send as, send on behalf; sees all grants | See rules, trace    |
+| Billing Administrator | —                                                  | Own forwarding and auto-reply only                                                                                             | —                   |
+| Member                | — (uses shared mailboxes they belong to)           | Uses what an administrator gave them; own forwarding and auto-reply                                                            | —                   |
+| Read-only (Auditor)   | See                                                | See all grants                                                                                                                 | See rules, trace    |
 
-Guard rail: granting access to **someone else's** mailbox (full access, send as, forwarding of another mailbox) is critical and Owner-only, always audited, and shown to the mailbox's owner.
+Guard rail: granting access to **someone else's** mailbox (read and manage, send as, send on behalf; ADR-0026) is
+critical (`delegation.manage.any`): Owners and User Administrators, with guard rail 8 applied per mailbox (an Owner's or
+an administrator's mailbox: Owners only, 403 audited), a fresh step-up per change, never while acting as (403), on plans
+with `delegation`. A User Administrator can already remove Members and set their mailbox passwords, so this adds no
+reach. Every grant and revoke is audited in the account's log, and the mailbox's person is told. Forwarding any mailbox
+stays Owner-only. `delegation.manage.own` is reserved for owner-granted folder sharing (later) and checked nowhere yet.
 
 ### Folders, signatures and bulk sending (ADR-0014, ADR-0015)
 
@@ -270,6 +275,24 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
     lifts it by turning it on (meta `adminLockLifted`), and may delete it. Out-of-scope aliases stay **404**. No new
     permission, so the matrix keeps its shape; the RBAC harness probes the refusals (Member 403, another account's
     Owner 404, alias unchanged) and `tests/e2e/aliases.spec.ts` walks owner lock → member view → owner lift.
+19. **Mailbox delegation** (`packages/core/src/delegation`, ADR-0026): `delegation.read` (Owner, User Administrator,
+    Auditor) sees a mailbox's three lists — read and manage, send as, send on behalf — and a person's grants;
+    `delegation.manage.any` ★ (Owner, User Administrator) adds and removes people on them in one batch. Checked in the
+    service, in this order: never while acting as (**403** `act_as`, before anything is looked up); the mailbox is in
+    the account (**404**); guard rail 8 (an Owner's or another admin's mailbox: Owners only, **403** audited); the plan
+    has `delegation` (**403** `plan_limit`); the mailbox isn't being deleted (**409**); a fresh step-up (**403**
+    `step_up_required`); every person is a member of the account (**404**); nobody is a delegate of their own mailbox
+    (**409**); at most `DELEGATES_PER_MAILBOX` people per mailbox and `DELEGATED_MAILBOXES_PER_PERSON` mailboxes per
+    person (**409**). One audit entry per change (`delegation.granted` / `delegation.revoked`, reason `admin`). Removing
+    someone with "Give full access to …" (`removeMember` `delegateTo`) and **Convert to shared mailbox**
+    (`mailboxes/convert-to-shared.ts`, `mailbox.manage`, step-up, guard rail 8) need `delegation.manage.any` as well for
+    the grant part (403 for the whole request without it). Grants go with the person (removal), the mailbox (deletion,
+    purge) and "Make this a user" (the new person's own), each audited. Guard rail 8 survives a promotion: when someone
+    becomes an Owner, or a Member gets an admin role (`changeMemberRole`, or "Make this a user" with a role other than
+    Member), the grants on their mailboxes that weren't made by a current Owner are revoked in the same transaction
+    (`delegation.revoked`, reason `role_changed`); an Owner's grants stay. The batch and the conversion take the account
+    lock before reading the mailbox and members. No route yet, so the RBAC harness has no rows
+    for it; unit tests cover every refusal.
 
 ## Webmail
 

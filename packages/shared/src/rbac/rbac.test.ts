@@ -87,16 +87,30 @@ describe("permission matrix invariants", () => {
     }
   });
 
-  it("only Owner can reach other people's mail: full-access delegation and forwarding any mailbox", () => {
+  it("delegation on any mailbox is Owner and User Admin (critical; guard rail 8 in the service); forwarding any is Owner", () => {
     for (const r of ACCOUNT_ROLES) {
-      expect(accountRoleCan(r, "delegation.manage.any")).toBe(r === "owner");
+      expect(accountRoleCan(r, "delegation.manage.any")).toBe(r === "owner" || r === "user_admin");
       expect(accountRoleCan(r, "forwarding.manage.any")).toBe(r === "owner");
     }
     expect(isCritical("delegation.manage.any")).toBe(true);
     expect(isCritical("forwarding.manage.any")).toBe(true);
+    // A User Administrator can already remove Members and set their mailbox passwords: granting adds no reach.
+    for (const r of ACCOUNT_ROLES.filter((x) => accountRoleCan(x, "delegation.manage.any"))) {
+      expect(accountRoleCan(r, "member.manage")).toBe(true);
+      expect(accountRoleCan(r, "mailbox.password.reset")).toBe(true);
+      expect(accountRoleCan(r, "delegation.read")).toBe(true);
+    }
+    // Act-as never grants it (ADR-0023), and no staff role holds it.
+    expect(accountRoleCan(ACT_AS_ACCOUNT_ROLE, "delegation.manage.any")).toBe(false);
+    for (const r of PLATFORM_ROLES) expect(platformRoleCan(r, "delegation.manage.any")).toBe(false);
   });
 
-  it("everyone who can write manages their own delegation and forwarding; the Auditor cannot", () => {
+  it("delegation lists are read by Owner, User Admin and Auditor only", () => {
+    const readers = ACCOUNT_ROLES.filter((r) => accountRoleCan(r, "delegation.read")).sort();
+    expect(readers).toEqual(["auditor", "owner", "user_admin"]);
+  });
+
+  it("everyone who can write holds the reserved own-folder sharing and own forwarding; the Auditor cannot", () => {
     for (const r of ACCOUNT_ROLES) {
       expect(accountRoleCan(r, "delegation.manage.own")).toBe(r !== "auditor");
       expect(accountRoleCan(r, "forwarding.manage.own")).toBe(r !== "auditor");
