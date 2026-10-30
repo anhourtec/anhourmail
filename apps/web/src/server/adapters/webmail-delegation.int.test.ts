@@ -13,7 +13,15 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { MemoryUnitOfWork } from "@anhourmail/adapters/memory";
 import { hashPassword } from "@anhourmail/adapters/auth";
 import type { Deps } from "@anhourmail/core";
-import { delegatedMailboxesFor, delegationCheck, DelegationGate, openDelegatedMailbox } from "@anhourmail/core/webmail";
+import {
+  authorizeDelegatedSend,
+  delegatedMailboxesFor,
+  delegatedSendCheck,
+  delegationCheck,
+  DelegationGate,
+  openDelegatedMailbox,
+  recordDelegatedSendOutcome,
+} from "@anhourmail/core/webmail";
 import { createKeyRing } from "@anhourmail/server/keyring";
 import { memorySlidingQuota } from "@anhourmail/server/rate-limit";
 import { runWithRequestContext } from "@anhourmail/server/request-context";
@@ -116,6 +124,9 @@ function world() {
       list: (owners) => delegatedMailboxesFor(deps, owners),
       open: (input, signIn, req) => openDelegatedMailbox(deps, access, input, signIn, req),
       gate: new DelegationGate(delegationCheck(deps, access), { now }),
+      authorizeSend: (input, r) => authorizeDelegatedSend(deps, access, input, r),
+      checkSend: (input) => delegatedSendCheck(deps, access, input),
+      sendOutcome: (input, outcome, r) => recordDelegatedSendOutcome(deps, input, outcome, r),
     },
     stalwartUrl: STALWART_URL,
     access,

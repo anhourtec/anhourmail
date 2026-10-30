@@ -15,6 +15,7 @@ import {
   WebmailDelegationRefusedError,
   WebmailOwnMailboxOnlyError,
   WebmailQuotaError,
+  WebmailSendUnconfirmedError,
   WebmailRefusedError,
   WebmailSignedOutError,
   WebmailSignInError,
@@ -96,6 +97,13 @@ export function webmailErrorResponse(err: unknown): Response | null {
   if (err instanceof WebmailDelegationRefusedError) return body("not_found", DELEGATION_REFUSED, 404);
   if (err instanceof WebmailOwnMailboxOnlyError) return body("own_mailbox_only", OWN_MAILBOX_ONLY, 403);
   if (err instanceof WebmailQuotaError) return body("rate_limited", err.message, 429);
+  if (err instanceof WebmailSendUnconfirmedError) {
+    return body(
+      "send_unconfirmed",
+      "We couldn't confirm whether this was sent. Check Sent before sending it again.",
+      503,
+    );
+  }
   if (err instanceof WebmailSignInError) {
     return body("invalid_credentials", "Mailbox address or password is wrong.", 401);
   }

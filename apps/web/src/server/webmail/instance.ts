@@ -3,12 +3,15 @@ import "server-only";
 
 import { db, pgMailboxStatusLookup } from "@anhourmail/adapters/postgres";
 import {
+  authorizeDelegatedSend,
   delegatedMailboxesFor,
+  delegatedSendCheck,
   delegationCheck,
   DelegationGate,
   MailboxAccessGate,
   openDelegatedMailbox,
   PasswordChangeGate,
+  recordDelegatedSendOutcome,
   webmailAccess,
   WebmailSettingsService,
   WebmailSignaturesService,
@@ -20,7 +23,7 @@ import { redis } from "@anhourmail/server/redis";
 import { managedSieve } from "../adapters/stalwart";
 import { stalwartHandoffSignIn, stalwartOAuthPort } from "../adapters/stalwart-oauth";
 import { container } from "../container";
-import { env } from "../env";
+import { env, senderDelegationKey } from "../env";
 import { platform } from "../platform";
 import { type SessionKv, WebmailSessionStore } from "./session-store";
 import { WebmailService } from "./service";
@@ -155,7 +158,28 @@ export function webmail(): WebmailService {
           );
         },
         gate: delegationGate(),
+        // Sending from one (ADR-0026 §6, §8): the send right checked now and audited before the submission.
+        authorizeSend: (input, req) => {
+          const lookup = pgMailboxStatusLookup(db());
+          return authorizeDelegatedSend(
+            container().deps,
+            { state: async (address) => webmailAccess(await lookup(address)) },
+            input,
+            req,
+          );
+        },
+        checkSend: (input) => {
+          const lookup = pgMailboxStatusLookup(db());
+          return delegatedSendCheck(
+            container().deps,
+            { state: async (address) => webmailAccess(await lookup(address)) },
+            input,
+          );
+        },
+        sendOutcome: (input, outcome, req) => recordDelegatedSendOutcome(container().deps, input, outcome, req),
       },
+      // The send-on-behalf key, read at use (production requires it at start-up; never in the worker).
+      onBehalfKey: senderDelegationKey,
       stalwartUrl,
       access: mailboxAccessGate(),
       quota: redisSlidingQuota(redis()),

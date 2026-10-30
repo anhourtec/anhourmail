@@ -23,6 +23,24 @@ export function sendingTier(_mailbox: string): TrustTier {
 
 export const sendingLimits = (mailbox: string): SendLimits => TRUST_TIERS[sendingTier(mailbox)].limits;
 
+/**
+ * The limits of a send from a mailbox shared with the person (ADR-0026 §6): the stricter of the shared mailbox's tier
+ * and the sender's own mailbox's tier, field by field — a `restricted` sender can't send through a shared mailbox, and
+ * a shared mailbox's tier is never loosened by who sends from it.
+ */
+export function delegatedSendingLimits(mailbox: string, sender: string): SendLimits {
+  return stricterLimits(sendingLimits(mailbox), sendingLimits(sender));
+}
+
+/** Field by field, the lower of two sets of limits. */
+export function stricterLimits(a: SendLimits, b: SendLimits): SendLimits {
+  return {
+    messagesPerDay: Math.min(a.messagesPerDay, b.messagesPerDay),
+    messagesPerHour: Math.min(a.messagesPerHour, b.messagesPerHour),
+    recipientsPerMessage: Math.min(a.recipientsPerMessage, b.recipientsPerMessage),
+  };
+}
+
 /** The most recipients any tier allows on one message (input validation; the tier check is stricter). */
 export const MAX_RECIPIENTS = Math.max(...Object.values(TRUST_TIERS).map((t) => t.limits.recipientsPerMessage));
 

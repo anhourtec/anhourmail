@@ -1,13 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
-import type { RequestMeta } from "@anhourmail/core";
+import { DelegatedMailboxRefusedError, type RequestMeta } from "@anhourmail/core";
 import {
   type ConsoleBinding,
   CredentialSlotTakenError,
   type DelegatedEntry,
   type DelegatedMailbox,
+  type DelegatedSendAuthorization,
+  type DelegatedSendInput,
+  type DelegatedSendMode,
+  type DelegatedSendOutcome,
   type DelegatedTarget,
+  type DelegationNeed,
+  ON_BEHALF_EXPIRES_HEADER,
+  ON_BEHALF_HEADER,
+  onBehalfExpires,
+  onBehalfTag,
+  OnBehalfTagError,
+  sendMode,
   type WebmailAccess,
   type WebmailRefusal,
 } from "@anhourmail/core/webmail";
@@ -17,11 +28,18 @@ import { DELEGATED_MAILBOXES_PER_PERSON } from "@anhourmail/shared/plans";
 
 import {
   COMPOSED_KEYWORD,
+  DraftInput as DraftInputSchema,
   type DraftInput,
   draftEmail,
   draftProblem,
   type Identity,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS,
+  MAX_TEXT_CHARS,
+  MAX_UPLOAD_BYTES,
+  delegatedSendingLimits,
   sendCheck,
+  senderName,
   sendingLimits,
   sendWindows,
   type StoredDraft,
@@ -135,6 +153,14 @@ export class WebmailOwnMailboxOnlyError extends Error {
   override readonly name = "WebmailOwnMailboxOnlyError";
 }
 
+/**
+ * A delegated send whose submission answer was lost and whose state the mail server couldn't be asked about: it may
+ * have been sent. → 503 `send_unconfirmed` ("Check Sent before sending it again."), never a plain failure.
+ */
+export class WebmailSendUnconfirmedError extends Error {
+  override readonly name = "WebmailSendUnconfirmedError";
+}
+
 /** The OAuth port refused the credentials or the grant (wrong password, revoked refresh token). */
 export class GrantRefusedError extends Error {
   override readonly name = "GrantRefusedError";
@@ -170,12 +196,41 @@ export type OAuthPort = {
 export type WebmailDelegation = {
   list(owners: readonly string[]): Promise<DelegatedMailbox[]>;
   open(
-    input: { owners: readonly string[]; address: string; console: ConsoleBinding | null },
+    input: { owners: readonly string[]; address: string; console: ConsoleBinding | null; need?: DelegationNeed },
     signIn: (target: DelegatedTarget) => Promise<MailboxTokens>,
     req: RequestMeta,
   ): Promise<{ value: MailboxTokens; mailbox: DelegatedMailbox }>;
   gate: { allowed(session: string, entry: DelegatedEntry): Promise<boolean>; forget(session: string): void };
+  /**
+   * The send right checked now (uncached) and the send audited before anything is submitted (core
+   * `authorizeDelegatedSend`): which right is used, send as winning. Refusals throw (404, act-as 403).
+   */
+  authorizeSend(input: DelegatedSendInput, req: RequestMeta): Promise<DelegatedSendAuthorization>;
+  /** The send right now, uncached and read-only (the last check before the submission); null when refused. */
+  checkSend(input: Omit<DelegatedSendInput, "recipientCount">): Promise<DelegatedSendMode | null>;
+  /**
+   * Records what became of an audited send (core `recordDelegatedSendOutcome`): undone (`delegation.send_cancelled`),
+   * never submitted (`delegation.send_failed`), or its tagged temporary copy left behind (`delegation.tagged_copy_left`).
+   */
+  sendOutcome(
+    input: { mailboxId: string; granteeUserId: string; via: string },
+    outcome: DelegatedSendOutcome,
+    req: RequestMeta,
+  ): Promise<void>;
 };
+
+/** One entry of the From picker beyond the person's own identities (ADR-0026 §6): a mailbox shared with them. */
+export type DelegatedSender = {
+  /** The mailbox's address: the From of the message. */
+  mailbox: string;
+  /** Which right is used (send as wins when both are held). */
+  mode: "send_as" | "send_on_behalf";
+  /** "desk@…" for send as, "<you> on behalf of desk@…" for send on behalf. */
+  label: string;
+};
+
+/** What `send` answers. `from` is the delegated mailbox a message went from (absent for the person's own). */
+export type SendResult = { submissionId: string; sendAt: string; holdSeconds: number; from?: string };
 
 /** A mailbox shared with the session's people, for the switcher, the sidebar and (later) the From picker. */
 export type SharedMailboxView = {
@@ -207,6 +262,11 @@ export type WebmailDeps = {
   consoleSessionAlive?: (userId: string, sessionId: string) => Promise<boolean>;
   /** Delegated mailboxes (ADR-0026). Absent: nothing is shared, and a session never holds a delegated entry. */
   delegation?: WebmailDelegation;
+  /**
+   * `SENDER_DELEGATION_KEY` (ADR-0026 §8), read when a send on behalf is made (web app only, never the worker). Absent
+   * or throwing: sends on behalf are refused (send as and the person's own mail still work).
+   */
+  onBehalfKey?: () => string;
   /** Stalwart's HTTP base URL (internal network). */
   stalwartUrl: string;
   /** Control-plane gate: may this mailbox use the webmail now, and if not why? (core `MailboxAccessGate`, ≤ 30 s) */
@@ -256,6 +316,33 @@ export type ManagedSieve = {
 
 /** How long a proof that the session's own mailbox still signs in (for delegated use) holds: the gate's cache, 10 s. */
 const VIA_PROOF_MS = 10_000;
+
+/** A delegated send in its undo hold (`#heldSends`). */
+type HeldSend = {
+  /** The delegated entry it went from. */
+  mailbox: string;
+  mailboxId: string;
+  granteeUserId: string;
+  via: string;
+  /** The copy kept in that mailbox's Sent (destroyed by undo). */
+  storedId: string;
+  /** The person's own draft it was built from (destroyed once the hold is over; kept, and answered, by undo). */
+  ownDraftId: string;
+  ownAccount: string;
+  /** Epoch ms after which it is forgotten. */
+  until: number;
+};
+
+/** A saved draft with what rebuilding it in another mailbox needs (`#sendDelegated`). */
+type FullDraft = StoredDraft & {
+  subject: string | null;
+  inReplyTo: string[] | null;
+  references: string[] | null;
+  textBody: { partId?: string | null; type: string }[] | null;
+  htmlBody: { partId?: string | null; type: string }[] | null;
+  bodyValues: Record<string, { value: string; isTruncated?: boolean }> | null;
+  attachments: { blobId: string | null; name: string | null; type: string; size: number }[] | null;
+};
 
 /** At most this many recipients of one message are saved to Other contacts. */
 const MAX_AUTO_SAVE = 100;
@@ -313,8 +400,10 @@ function delegatedEntries(s: WebmailSession): MailboxTokens[] {
 }
 
 export class WebmailService {
-  readonly #d: Required<Omit<WebmailDeps, "sleep" | "handoffSignIn" | "consoleSessionAlive" | "delegation">> &
-    Pick<WebmailDeps, "sleep" | "handoffSignIn" | "consoleSessionAlive" | "delegation">;
+  readonly #d: Required<
+    Omit<WebmailDeps, "sleep" | "handoffSignIn" | "consoleSessionAlive" | "delegation" | "onBehalfKey">
+  > &
+    Pick<WebmailDeps, "sleep" | "handoffSignIn" | "consoleSessionAlive" | "delegation" | "onBehalfKey">;
   /** Console sessions seen alive recently (handoff-born webmail sessions), until when. */
   readonly #consoleAlive = new Map<string, number>();
   readonly #base: string;
@@ -324,6 +413,12 @@ export class WebmailService {
   readonly #identities = new Map<string, { at: number; list: Identity[] }>();
   /** Own mailboxes of a session proven against the mail server for delegated use (ADR-0026), until when. */
   readonly #viaProven = new Map<string, number>();
+  /**
+   * Delegated sends still in their undo hold, by session, mailbox and submission: what undo needs (the stored copy
+   * in that mailbox, the person's own draft) and what the end of the hold cleans up. In this process only, like the
+   * contacts auto-save (a restart in those seconds leaves the own draft behind; the message is sent).
+   */
+  readonly #heldSends = new Map<string, HeldSend>();
 
   constructor(deps: WebmailDeps) {
     this.#d = {
@@ -521,7 +616,9 @@ export class WebmailService {
         log.warn("webmail: delegated mailboxes not listed", { component: "webmail", err });
         return this.#list(s, [], opened);
       }
-      const keep = new Set(shared.filter((m) => m.rights.includes("full_access")).map((m) => m.address));
+      // An entry stays while any right on its mailbox does (one opened to send from has a send right only); each use
+      // is still checked for what it needs (reading needs full access, sending a send right).
+      const keep = new Set(shared.map((m) => m.address));
       const gone = opened.filter((m) => !keep.has(m.username.toLowerCase()));
       if (gone.length > 0) {
         const next = await this.#dropDelegated(sessionId, new Set(gone.map((m) => m.username)));
@@ -615,6 +712,35 @@ export class WebmailService {
     const want = address.trim().toLowerCase();
     const already = [s, ...(s.others ?? [])].find((m) => m.username.toLowerCase() === want);
     if (already) return this.switchMailbox(sessionId, already.username);
+    const entry = await this.#openEntry(sessionId, s, want, "full_access", req);
+    return this.#update(sessionId, (cur) => {
+      // Opened (and made active) by a concurrent request meanwhile: already where it should be.
+      if (cur.delegated && cur.username.toLowerCase() === entry.username.toLowerCase()) return cur;
+      const { others = [], createdAt, version, console: bound, ...active } = cur;
+      const t = others.find((m) => m.delegated && m.username.toLowerCase() === entry.username.toLowerCase());
+      if (!t) throw new WebmailRefusedError("Your active mailbox changed. Try again.");
+      return {
+        ...t,
+        createdAt,
+        version,
+        ...(bound ? { console: bound } : {}),
+        others: [active, ...others.filter((m) => m !== t)],
+      };
+    });
+  }
+
+  /**
+   * Mints a delegated entry for `want` (core `openDelegatedMailbox` with `need`: audited, the grant checked now) and
+   * seals it into the session's others, without making it active. Refused when the session's own sign-ins no longer
+   * hold, at the per-person cap, or when the mailbox it came through left the session meanwhile.
+   */
+  async #openEntry(
+    sessionId: string,
+    s: WebmailSession,
+    want: string,
+    need: DelegationNeed,
+    req: RequestMeta,
+  ): Promise<MailboxTokens> {
     const delegation = this.#d.delegation;
     const signIn = this.#d.handoffSignIn;
     if (!delegation || !signIn) throw new WebmailDelegationRefusedError("delegation not configured");
@@ -627,7 +753,7 @@ export class WebmailService {
     // Every own sign-in the open may go through must still hold at the mail server, checked now (not cached).
     for (const own of ownEntries(s)) await this.#proveOwn(sessionId, s, own.username.toLowerCase(), true);
     const { value, mailbox } = await delegation.open(
-      { owners: ownEntries(s).map((m) => m.username), address: want, console: s.console ?? null },
+      { owners: ownEntries(s).map((m) => m.username), address: want, console: s.console ?? null, need },
       async (target) => {
         let tokens: OAuthTokens;
         try {
@@ -653,16 +779,20 @@ export class WebmailService {
       ...value,
       delegated: { mailboxId: mailbox.mailboxId, granteeUserId: mailbox.granteeUserId, via: mailbox.via },
     };
-    return this.#update(sessionId, (cur) => {
-      const { others = [], createdAt, version, console: bound, ...active } = cur;
-      const rest = [active, ...others].filter((m) => m.username.toLowerCase() !== entry.username.toLowerCase());
-      if (!rest.some((m) => !m.delegated && m.username.toLowerCase() === mailbox.via)) {
+    await this.#update(sessionId, (cur) => {
+      const { others = [] } = cur;
+      const all = [cur, ...others];
+      if (!all.some((m) => !m.delegated && m.username.toLowerCase() === mailbox.via)) {
         throw new WebmailRefusedError("Your active mailbox changed. Try again.");
       }
+      // The active entry is this mailbox already (a concurrent open): keep that one.
+      if (cur.username.toLowerCase() === entry.username.toLowerCase()) return cur;
+      const rest = others.filter((m) => m.username.toLowerCase() !== entry.username.toLowerCase());
       // Counted again on the record being written: concurrent opens can't pass the cap together.
-      if (rest.filter((m) => m.delegated).length >= DELEGATED_MAILBOXES_PER_PERSON) throw tooMany();
-      return { ...entry, createdAt, version, ...(bound ? { console: bound } : {}), others: rest };
+      if ([cur, ...rest].filter((m) => m.delegated).length >= DELEGATED_MAILBOXES_PER_PERSON) throw tooMany();
+      return { ...cur, others: [...rest, entry] };
     });
+    return entry;
   }
 
   /** The gate key for a session: a hash of its id (never the id itself). */
@@ -671,10 +801,16 @@ export class WebmailService {
   }
 
   /**
-   * Whether a delegated entry of this session may be used now for reading and managing: the mailbox it came through is
-   * still one of the session's own, and core's `DelegationGate` says yes. Failures throw (unavailable, nothing dropped).
+   * Whether a delegated entry of this session may be used now for `need` (reading and managing unless said): the
+   * mailbox it came through is still one of the session's own and still signs in, and core's `DelegationGate` says
+   * yes. Failures throw (unavailable, nothing dropped).
    */
-  async #delegatedOk(sessionId: string, s: WebmailSession, entry: MailboxTokens): Promise<boolean> {
+  async #delegatedOk(
+    sessionId: string,
+    s: WebmailSession,
+    entry: MailboxTokens,
+    need: DelegationNeed = "full_access",
+  ): Promise<boolean> {
     const d = entry.delegated;
     const gate = this.#d.delegation?.gate;
     if (!d || !gate) return false;
@@ -686,7 +822,7 @@ export class WebmailService {
         mailboxId: d.mailboxId,
         granteeUserId: d.granteeUserId,
         via: d.via,
-        need: "full_access",
+        need,
         console: s.console ?? null,
       });
     } catch (err) {
@@ -1471,6 +1607,833 @@ export class WebmailService {
     return out;
   }
 
+  // ---- sending from a mailbox shared with the person (ADR-0026 §6 and §8, slice 13) ----------------------------
+  //
+  // A message is always submitted from the mailbox it says it is from, with that mailbox's own token, identity and
+  // envelope sender, so its Sent copy lands in that mailbox and DKIM aligns (P5, P10). The person composes in their
+  // own mailbox; at send time the draft is rebuilt in the shared one (attachments copied with the two tokens), and the
+  // own draft is removed once the undo hold is over (undo hands it back). These are the only paths that use a
+  // delegated entry's token for submission; `#withSession` and `#call` keep refusing it (default-deny).
+
+  /**
+   * The From picker (ADR-0026 §6): the active mailbox's own identities, then every mailbox shared with its person that
+   * they may send from, as "desk@…" (send as) or "<their name> on behalf of desk@…" (send on behalf); send as wins
+   * when both are held. Listing mints nothing; each send checks the right again.
+   */
+  async senders(sessionId: string): Promise<{ identities: Identity[]; shared: DelegatedSender[] }> {
+    const s = await this.#ownActive(sessionId);
+    const identities = await this.identities(sessionId);
+    const delegation = this.#d.delegation;
+    if (!delegation) return { identities, shared: [] };
+    let list: DelegatedMailbox[];
+    try {
+      list = await delegation.list(ownEntries(s).map((m) => m.username));
+    } catch (err) {
+      // A convenience list; each send checks the grant itself.
+      log.warn("webmail: delegated senders not listed", { component: "webmail", err });
+      return { identities, shared: [] };
+    }
+    const me = s.username.toLowerCase();
+    const own = identities.find((i) => i.email.toLowerCase() === me);
+    const who = (own ? senderName(own) : null) ?? me;
+    const shared = list.flatMap((m): DelegatedSender[] => {
+      // Sent on behalf of a mailbox, the Sender is the active mailbox's person: only what comes through it.
+      const mode = m.via === me ? sendMode(m.rights) : null;
+      if (!mode) return [];
+      return [{ mailbox: m.address, mode, label: mode === "send_as" ? m.address : `${who} on behalf of ${m.address}` }];
+    });
+    return { identities, shared };
+  }
+
+  /**
+   * The session's delegated entry for `want`, usable for `need` now: the one already open, or one minted now (core
+   * `openDelegatedMailbox`, audited; `beforeOpen` runs first, the route's fail-closed open limit). It must come through
+   * the active own mailbox `via`. Refused (dropped, 404) when the gate says no.
+   */
+  async #delegatedFor(
+    sessionId: string,
+    via: string,
+    want: string,
+    need: DelegationNeed,
+    req: RequestMeta,
+    beforeOpen?: () => Promise<void>,
+  ): Promise<MailboxTokens> {
+    const read = async () => {
+      const s = await this.#d.store.read(sessionId);
+      if (!s) throw new WebmailSignedOutError("signed out");
+      return s;
+    };
+    let s = await read();
+    const find = (x: WebmailSession) =>
+      [x, ...(x.others ?? [])].find((m) => m.delegated !== undefined && m.username.toLowerCase() === want);
+    let entry = find(s);
+    if (!entry) {
+      if ([s, ...(s.others ?? [])].some((m) => m.username.toLowerCase() === want)) {
+        throw new WebmailRefusedError("You can only send from your own addresses.");
+      }
+      await beforeOpen?.();
+      await this.#openEntry(sessionId, s, want, need, req);
+      s = await read();
+      entry = find(s);
+      if (!entry) throw new WebmailRefusedError("Your active mailbox changed. Try again.");
+    }
+    if (entry.delegated?.via !== via || !(await this.#delegatedOk(sessionId, s, entry, need))) {
+      if (entry.delegated?.via === via) await this.#dropDelegated(sessionId, new Set([entry.username]));
+      throw new WebmailDelegationRefusedError("not granted");
+    }
+    return entry;
+  }
+
+  /**
+   * One request with a delegated entry's own token (not the active mailbox): refreshed first when due (and kept in the
+   * session), retried once with a refreshed token on 401; a refused token or refresh, or the mail server's 403, drops
+   * the entry (404). Only the send paths below call this, after the gate for a send right.
+   */
+  async #delegatedRequest<T>(
+    sessionId: string,
+    entry: MailboxTokens,
+    send: (t: MailboxTokens) => Promise<{ status: number; limited: boolean; value: T }>,
+  ): Promise<{ status: number; value: T }> {
+    if (!entry.delegated) throw new WebmailOwnMailboxOnlyError("not a delegated entry");
+    const drop = async (why: string): Promise<never> => {
+      await this.#dropDelegated(sessionId, new Set([entry.username]));
+      throw new WebmailDelegationRefusedError(why);
+    };
+    let tokens = entry;
+    const refresh = async (): Promise<MailboxTokens> => {
+      if (!tokens.refreshToken) return drop("no refresh token");
+      let t: OAuthTokens;
+      try {
+        t = await this.#d.oauth.refresh(tokens.refreshToken);
+      } catch (err) {
+        if (err instanceof GrantRefusedError) return drop("token revoked");
+        log.warn("webmail: delegated refresh failed", { component: "webmail", err });
+        throw new WebmailUnavailableError("mail server unavailable");
+      }
+      const next: MailboxTokens = {
+        ...tokens,
+        accessToken: t.accessToken,
+        refreshToken: t.refreshToken,
+        expiresAt: t.expiresAt,
+      };
+      await this.#update(sessionId, (cur) => {
+        const swap = (m: MailboxTokens): MailboxTokens =>
+          m.delegated && m.username === entry.username
+            ? { ...m, accessToken: next.accessToken, refreshToken: next.refreshToken, expiresAt: next.expiresAt }
+            : m;
+        return { ...cur, ...swap(cur), others: (cur.others ?? []).map(swap) };
+      }).catch((err: unknown) => {
+        log.warn("webmail: refreshed delegated tokens not kept", { component: "webmail", err });
+      });
+      return next;
+    };
+    if (tokens.expiresAt - this.#d.now() <= this.#d.refreshSkewMs) tokens = await refresh();
+    for (let attempt = 0; ; attempt++) {
+      const current = tokens;
+      let result: { status: number; value: T } | null;
+      try {
+        result = await this.#d.queue.run(entry.username, () =>
+          withLimitRetry(
+            async () => {
+              const r = await send(current);
+              return r.limited ? { retry: true as const } : { retry: false as const, value: r };
+            },
+            this.#d.sleep ? { sleep: this.#d.sleep } : {},
+          ),
+        );
+      } catch (err) {
+        if (err instanceof QueueFullError) throw new WebmailBusyError("busy");
+        throw err;
+      }
+      if (result === null) throw new WebmailBusyError("busy");
+      if (result.status === 401 && attempt === 0) {
+        tokens = await refresh();
+        continue;
+      }
+      if (result.status === 401 || result.status === 403) return drop("mailbox refused the token");
+      return result;
+    }
+  }
+
+  /**
+   * Server-built calls on a delegated entry (`#delegatedRequest`). Responses by call id, and by `<id>#<method>` for
+   * every response (implicit ones, like the `Email/set` an `onSuccessDestroyEmail` makes, share their call's id).
+   */
+  async #callDelegated(
+    sessionId: string,
+    entry: MailboxTokens,
+    build: (t: MailboxTokens) => [string, Record<string, unknown>, string][],
+    using: string[],
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const { status, value } = await this.#delegatedRequest(sessionId, entry, async (t) => {
+      const res = await this.#upstream(`${this.#base}/jmap/`, {
+        method: "POST",
+        headers: { ...this.#auth(t.accessToken), "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ using, methodCalls: build(t) }),
+      });
+      const json: unknown = await res.json().catch(() => null);
+      return { status: res.status, limited: isLimitError(res.status, json), value: json };
+    });
+    if (status !== 200) {
+      log.warn("webmail upstream error", { component: "webmail", status });
+      throw new WebmailUnavailableError("mail server error");
+    }
+    const out = new Map<string, Record<string, unknown>>();
+    const body = value as { methodResponses?: [string, Record<string, unknown>, string][] } | null;
+    for (const [name, args, id] of body?.methodResponses ?? []) {
+      if (name === "error") {
+        log.warn("webmail method error", { component: "webmail", type: String(args.type) });
+        throw new WebmailUnavailableError("mail server error");
+      }
+      if (!out.has(id)) out.set(id, args);
+      if (!out.has(`${id}#${name}`)) out.set(`${id}#${name}`, args);
+    }
+    return out;
+  }
+
+  /** Uploads bytes to a delegated entry's account (an attachment copied into it). */
+  async #uploadDelegated(
+    sessionId: string,
+    entry: MailboxTokens,
+    bytes: Uint8Array<ArrayBuffer>,
+    type: string,
+  ): Promise<string> {
+    const { status, value } = await this.#delegatedRequest(sessionId, entry, async (t) => {
+      const res = await this.#upstream(`${this.#base}/jmap/upload/${encodeURIComponent(t.accountId)}/`, {
+        method: "POST",
+        headers: { ...this.#auth(t.accessToken), "Content-Type": type },
+        body: bytes,
+      });
+      const json: unknown = await res.json().catch(() => null);
+      return { status: res.status, limited: isLimitError(res.status, json), value: json };
+    });
+    const blobId = (value as { blobId?: unknown } | null)?.blobId;
+    if (status === 413) throw new WebmailRefusedError("That file is too large.");
+    if (status >= 300 || typeof blobId !== "string") {
+      log.warn("webmail upload failed", { component: "webmail", status });
+      throw new WebmailUnavailableError("upload failed");
+    }
+    return blobId;
+  }
+
+  /** The person's own draft with everything rebuilding it needs; null when it isn't in this mailbox. */
+  async #fullDraft(sessionId: string, draftId: string, account: string): Promise<FullDraft | null> {
+    const r = await this.#call(
+      sessionId,
+      (x) => [
+        [
+          "Email/get",
+          {
+            accountId: x.accountId,
+            ids: [draftId],
+            properties: [
+              "mailboxIds",
+              "keywords",
+              "from",
+              "to",
+              "cc",
+              "bcc",
+              "size",
+              "subject",
+              "inReplyTo",
+              "references",
+              "textBody",
+              "htmlBody",
+              "bodyValues",
+              "attachments",
+            ],
+            bodyProperties: ["partId", "blobId", "type", "name", "size"],
+            fetchTextBodyValues: true,
+            fetchHTMLBodyValues: true,
+            maxBodyValueBytes: MAX_FULL_BODY_BYTES,
+          },
+          "g",
+        ],
+      ],
+      USING,
+      account,
+    );
+    return ((r.get("g")?.list ?? []) as FullDraft[])[0] ?? null;
+  }
+
+  /**
+   * The draft's structured fields again (what `draftEmail` builds a message from), with its attachments' blobs still
+   * in the person's own account. Refused when a body is cut short or anything is out of the compose caps.
+   */
+  #rebuild(draft: FullDraft, identityId: string): DraftInput {
+    const value = (parts: FullDraft["textBody"], type: string): string | undefined => {
+      const part = (parts ?? []).find((p) => p.type.toLowerCase() === type);
+      const v = part?.partId ? draft.bodyValues?.[part.partId] : undefined;
+      if (v?.isTruncated === true) throw new WebmailRefusedError("This message is too large to send.");
+      return v?.value;
+    };
+    const parsed = DraftInputSchema.safeParse({
+      identityId,
+      to: draft.to ?? [],
+      cc: draft.cc ?? [],
+      bcc: draft.bcc ?? [],
+      subject: draft.subject ?? "",
+      text: (value(draft.textBody, "text/plain") ?? "").slice(0, MAX_TEXT_CHARS),
+      ...(value(draft.htmlBody, "text/html") === undefined ? {} : { html: value(draft.htmlBody, "text/html") }),
+      ...(draft.inReplyTo?.length ? { inReplyTo: draft.inReplyTo } : {}),
+      ...(draft.references?.length ? { references: draft.references } : {}),
+      attachments: (draft.attachments ?? []).map((a) => ({
+        blobId: a.blobId ?? "",
+        name: a.name ?? "attachment",
+        type: a.type,
+        size: a.size,
+      })),
+    });
+    if (!parsed.success) throw new WebmailRefusedError("This draft can't be sent from that mailbox.");
+    const problem = draftProblem(parsed.data);
+    if (problem) throw new WebmailRefusedError(problem.message);
+    return parsed.data;
+  }
+
+  /** Copies the draft's attachments into the delegated mailbox (own token down, its token up), within the caps. */
+  async #copyAttachments(
+    sessionId: string,
+    ownAccount: string,
+    entry: MailboxTokens,
+    list: DraftInput["attachments"],
+  ): Promise<DraftInput["attachments"]> {
+    if (list.length > MAX_ATTACHMENTS) throw new WebmailRefusedError("This message has too many attachments.");
+    let total = 0;
+    const out: DraftInput["attachments"] = [];
+    for (const a of list) {
+      const res = await this.download(sessionId, ownAccount, a.blobId, "attachment");
+      if (!res.ok || !res.body) {
+        await res.body?.cancel();
+        throw new WebmailRefusedError("An attachment couldn't be read. Remove it and try again.");
+      }
+      const reader = res.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > MAX_UPLOAD_BYTES || total + size > MAX_ATTACHMENT_BYTES) {
+          await reader.cancel();
+          throw new WebmailRefusedError("Attachments are too large for one message.");
+        }
+        chunks.push(value);
+      }
+      total += size;
+      const bytes = new Uint8Array(new ArrayBuffer(size));
+      let at = 0;
+      for (const c of chunks) {
+        bytes.set(c, at);
+        at += c.byteLength;
+      }
+      const blobId = await this.#uploadDelegated(sessionId, entry, bytes, a.type);
+      out.push({ ...a, blobId, size });
+    }
+    return out;
+  }
+
+  #heldKey(sessionId: string, mailbox: string, submissionId: string): string {
+    return `${this.#gateKey(sessionId)}\0${mailbox}\0${submissionId}`;
+  }
+
+  /** Destroys emails in a delegated entry's account, retried once; true when the mail server confirmed every one. */
+  async #destroyDelegated(sessionId: string, entry: MailboxTokens, ids: string[]): Promise<boolean> {
+    if (ids.length === 0) return true;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const r = await this.#callDelegated(
+          sessionId,
+          entry,
+          (t) => [["Email/set", { accountId: t.accountId, destroy: ids }, "d"]],
+          USING,
+        );
+        const destroyed = new Set((r.get("d")?.destroyed as string[] | undefined) ?? []);
+        const notDestroyed = (r.get("d")?.notDestroyed as Record<string, { type?: string }> | undefined) ?? {};
+        // Gone already counts as removed.
+        if (ids.every((i) => destroyed.has(i) || notDestroyed[i]?.type === "notFound")) return true;
+      } catch (err) {
+        log.warn("webmail: delegated send copies not removed", { component: "webmail", err });
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The copies of one delegated send in a mailbox (by the Message-ID the BFF made), for when the request that created
+   * them failed without saying what it made: the latest messages of its Drafts and Sent, matched by Message-ID. Not an
+   * `Email/query` `header: ["Message-ID", id]` filter: on the pinned v0.16.27 it never matched a just-created message
+   * (bare or bracketed id, still nothing after 2 s; probed 2026-10-30), while the folder listing is immediate. The
+   * copies were created moments before, so they are among the newest 50 of their folder.
+   */
+  async #findCopies(sessionId: string, entry: MailboxTokens, folders: string[], messageId: string): Promise<string[]> {
+    const r = await this.#callDelegated(
+      sessionId,
+      entry,
+      (t) => [
+        ...folders.map((f, i): [string, Record<string, unknown>, string] => [
+          "Email/query",
+          {
+            accountId: t.accountId,
+            filter: { inMailbox: f },
+            sort: [{ property: "receivedAt", isAscending: false }],
+            limit: 50,
+          },
+          `q${String(i)}`,
+        ]),
+      ],
+      USING,
+    );
+    const ids = folders.flatMap((_, i) => (r.get(`q${String(i)}`)?.ids as string[] | undefined) ?? []);
+    if (ids.length === 0) return [];
+    const g = await this.#callDelegated(
+      sessionId,
+      entry,
+      (t) => [["Email/get", { accountId: t.accountId, ids, properties: ["messageId"] }, "g"]],
+      USING,
+    );
+    return ((g.get("g")?.list ?? []) as { id: string; messageId: string[] | null }[])
+      .filter((e) => (e.messageId ?? []).includes(messageId))
+      .map((e) => e.id);
+  }
+
+  /** Whether a submission of `emailId` exists in a delegated entry's account (after an answer was lost); its id. */
+  async #submissionOf(sessionId: string, entry: MailboxTokens, emailId: string): Promise<string | null> {
+    const r = await this.#callDelegated(
+      sessionId,
+      entry,
+      (t) => [["EmailSubmission/query", { accountId: t.accountId, filter: { emailIds: [emailId] } }, "q"]],
+      USING_SUBMISSION,
+    );
+    return ((r.get("q")?.ids as string[] | undefined) ?? [])[0] ?? null;
+  }
+
+  /**
+   * Sends a saved draft of the person's own mailbox **from a mailbox shared with them** (`from`), as that mailbox (send
+   * as) or on its behalf (`Sender:` the person), ADR-0026 §6 and §8:
+   *
+   * 1. the draft (in the active own mailbox, from identity `identityId`) passes the usual checks against the stricter
+   *    of the shared mailbox's and the sender's own sending tier; the shared mailbox's entry is opened for sending (or
+   *    reused) and passes the gate;
+   * 2. the right is checked **now** (uncached) and the send audited (`authorizeSend`) before any work is done in that
+   *    mailbox — no blob copied, no quota charged without it (review L4);
+   * 3. its attachments are copied into the shared mailbox; its quota windows (the mailbox's and this session's) are
+   *    charged, failing closed; the right is checked once more, uncached, and `Sender:` and the tag are built right
+   *    after (requirement 2);
+   * 4. the copies are created, then submitted in a second request (so their ids are known whatever happens next).
+   *    Send as: created in that mailbox's Drafts, submitted from its own identity, moved to its Sent by
+   *    `onSuccessUpdateEmail`. Send on behalf: a kept copy in its Sent **without** a tag, and a temporary copy carrying
+   *    `Sender:`, the tag and its expiry, submitted with `onSuccessDestroyEmail` — so no stored message ever holds a
+   *    tag (requirement 1). Both copies share the Message-ID made here;
+   * 5. anything that stops it after the audit entry — a refusal, a method error, a lost answer (then the mail server is
+   *    asked what was made or submitted) — destroys every copy that wasn't sent and records `delegation.send_failed`;
+   *    a tagged copy that outlives a sent message is destroyed (retried once) or recorded `delegation.tagged_copy_left`;
+   * 6. the own draft stays until the undo hold is over, then is removed; undo (`undoSend` with `mailbox`) cancels the
+   *    submission, removes the stored copy and hands the own draft back.
+   */
+  async #sendDelegated(
+    sessionId: string,
+    draftId: string,
+    identityId: string,
+    from: string,
+    shown: string | undefined,
+    req: RequestMeta,
+    beforeOpen?: () => Promise<void>,
+  ): Promise<SendResult> {
+    const delegation = this.#d.delegation;
+    if (!delegation) throw new WebmailDelegationRefusedError("delegation not configured");
+    const s = await this.#pin(sessionId, shown);
+    const ownAccount = s.accountId;
+    const via = s.username.toLowerCase();
+    const want = from.trim().toLowerCase();
+    // The stricter of the shared mailbox's tier and the sender's own (ADR-0026 §6): neither loosens the other.
+    const limits = delegatedSendingLimits(want, s.username);
+    const chosen = await this.#d.holdSeconds(s.username).catch(() => UNDO_SECONDS);
+    const hold = Number.isInteger(chosen) && chosen >= 1 && chosen <= 60 ? chosen : UNDO_SECONDS;
+    const [identity, roles, ownIdentities] = await Promise.all([
+      this.#identity(sessionId, identityId),
+      this.roles(sessionId),
+      this.identities(sessionId),
+    ]);
+    if (!roles.drafts) throw new WebmailUnavailableError("no Drafts folder");
+    const draft = await this.#fullDraft(sessionId, draftId, ownAccount);
+    if (!draft) throw new WebmailRefusedError("Only a saved draft can be sent.");
+    const check = sendCheck(draft, identity, roles.drafts, limits);
+    if (!check.ok) throw new WebmailRefusedError(check.message);
+    const input = this.#rebuild(draft, identityId);
+    // The Sender is the active mailbox's own address, named as the From picker names it (its own identity's name).
+    const viaIdentity = ownIdentities.find((i) => i.email.toLowerCase() === via) ?? identity;
+
+    const entry = await this.#delegatedFor(sessionId, via, want, "send", req, beforeOpen);
+    const d = entry.delegated;
+    if (!d) throw new WebmailDelegationRefusedError("not granted");
+    const who = { mailboxId: d.mailboxId, granteeUserId: d.granteeUserId, via: d.via };
+    const refused = async (): Promise<never> => {
+      await this.#dropDelegated(sessionId, new Set([entry.username]));
+      throw new WebmailDelegationRefusedError("not granted");
+    };
+
+    // The right now, uncached, and the audit entry — before any work in that mailbox (requirement 2, review L4).
+    let auth: DelegatedSendAuthorization;
+    try {
+      auth = await delegation.authorizeSend(
+        { ...who, console: s.console ?? null, recipientCount: check.rcptTo.length },
+        req,
+      );
+    } catch (err) {
+      if (err instanceof DelegatedMailboxRefusedError) return refused();
+      throw err;
+    }
+    if (auth.address !== want || auth.via !== via) return refused();
+
+    /** Audited as sent but stopped before a submission: what was made goes, and the stop is recorded. */
+    const made: string[] = [];
+    let submittedAt: { id: string; sendAt?: string } | null = null;
+    /** Settled otherwise (sent, or unknown whether it was): nothing more to clean up or record on the way out. */
+    let settled = false;
+    const failed = async (reason: string) => {
+      if (submittedAt || settled) return;
+      if (made.length > 0 && !(await this.#destroyDelegated(sessionId, entry, made))) {
+        log.error("webmail: unsent delegated copies left", { component: "webmail", count: made.length });
+      }
+      await this.#recordOutcome(who, { kind: "failed", reason }, req);
+    };
+    try {
+      const meta = await this.#callDelegated(
+        sessionId,
+        entry,
+        (t) => [
+          ["Mailbox/get", { accountId: t.accountId, ids: null, properties: ["role"] }, "m"],
+          ["Identity/get", { accountId: t.accountId, ids: null, properties: ["name", "email"] }, "i"],
+        ],
+        USING_SUBMISSION,
+      );
+      const boxes = (meta.get("m")?.list ?? []) as { id: string; role: string | null }[];
+      const theirDrafts = boxes.find((b) => b.role === "drafts")?.id;
+      const theirSent = boxes.find((b) => b.role === "sent")?.id;
+      if (!theirDrafts || !theirSent) throw new WebmailUnavailableError("no Drafts or Sent folder");
+      // Its own address, never one of its aliases: the From is the mailbox itself.
+      const theirs = ((meta.get("i")?.list ?? []) as Identity[]).find((i) => i.email.toLowerCase() === want);
+      if (!theirs) throw new WebmailUnavailableError("the mailbox has no sending identity");
+      const attachments = await this.#copyAttachments(sessionId, ownAccount, entry, input.attachments);
+
+      // Charged to the stricter limits, per mailbox sent from and per session, failing closed (rule 27).
+      const sessionKey = createHash("sha256").update(sessionId).digest("base64url").slice(0, 22);
+      let allowed: boolean;
+      try {
+        allowed = await this.#d.quota.take(
+          sendWindows(want, sessionKey, limits),
+          check.rcptTo.length,
+          this.#d.now(),
+          randomBytes(8).toString("hex"),
+        );
+      } catch (err) {
+        log.warn("webmail send quota unavailable", { component: "webmail", err });
+        throw new WebmailUnavailableError("sending is unavailable right now");
+      }
+      if (!allowed) {
+        throw new WebmailQuotaError(
+          `This mailbox has reached its sending limit for now (${String(limits.messagesPerHour)} recipients an hour, ${String(limits.messagesPerDay)} a day). Try again later.`,
+        );
+      }
+
+      // Once more, uncached, right before Sender and the tag are built: a revoke since the audit stops it here.
+      const mode = await delegation.checkSend({ ...who, console: s.console ?? null });
+      if (mode !== auth.mode) throw new WebmailDelegationRefusedError("not granted");
+
+      const domain = want.split("@")[1] ?? "";
+      const messageId = `${randomUUID()}@${domain}`;
+      const base = draftEmail({ ...input, attachments }, theirs, theirDrafts);
+      let creates: Record<string, Record<string, unknown>>;
+      if (mode === "send_as") {
+        creates = { e: { ...base, keywords: { $draft: true, $seen: true }, messageId: [messageId] } };
+      } else {
+        // Sender and the tag are built here only, right after the check (requirement 2); never from the client.
+        let tag: string;
+        const expires = onBehalfExpires(this.#d.now());
+        try {
+          if (!this.#d.onBehalfKey) throw new Error("no key");
+          tag = onBehalfTag(this.#d.onBehalfKey(), want, via, messageId, expires);
+        } catch (err) {
+          log.warn("webmail send on behalf unavailable", {
+            component: "webmail",
+            error: err instanceof OnBehalfTagError ? "address" : "key",
+          });
+          throw err instanceof OnBehalfTagError
+            ? new WebmailRefusedError("This message can't be sent on behalf of that mailbox.")
+            : new WebmailUnavailableError("sending on behalf is unavailable right now");
+        }
+        const sender = [{ name: senderName(viaIdentity), email: via }];
+        creates = {
+          // The copy kept in the mailbox's Sent: no tag, no expiry, the same Message-ID (threads hold).
+          kept: {
+            ...base,
+            mailboxIds: { [theirSent]: true },
+            keywords: { $seen: true },
+            messageId: [messageId],
+            sender,
+          },
+          // The copy submitted and destroyed by the submission itself; not a draft, so nothing else sends it.
+          temp: {
+            ...base,
+            keywords: { $seen: true },
+            messageId: [messageId],
+            sender,
+            [`header:${ON_BEHALF_EXPIRES_HEADER}:asText`]: expires,
+            [`header:${ON_BEHALF_HEADER}:asText`]: tag,
+          },
+        };
+      }
+
+      // 1. The copies. A lost answer: ask the mail server what it made (by our Message-ID) so it goes too.
+      let createdIds: Record<string, { id: string }>;
+      try {
+        const r = await this.#callDelegated(
+          sessionId,
+          entry,
+          (t) => [["Email/set", { accountId: t.accountId, create: creates }, "e"]],
+          USING,
+        );
+        createdIds = (r.get("e")?.created as Record<string, { id: string }> | undefined) ?? {};
+      } catch (err) {
+        try {
+          made.push(...(await this.#findCopies(sessionId, entry, [theirDrafts, theirSent], messageId)));
+        } catch (lookup) {
+          log.error("webmail: delegated copies not looked up after a failed send", { component: "webmail", lookup });
+        }
+        throw err;
+      }
+      made.push(...Object.values(createdIds).map((m) => m.id));
+      const submitted = (mode === "send_as" ? createdIds.e : createdIds.temp)?.id;
+      const stored = (mode === "send_as" ? createdIds.e : createdIds.kept)?.id;
+      if (!submitted || !stored || made.length !== Object.keys(creates).length) {
+        log.warn("webmail delegated copies not created", { component: "webmail" });
+        throw new WebmailRefusedError("The mail server didn't accept this message.");
+      }
+
+      // 2. The submission of exactly that copy. A lost answer: ask whether it was submitted.
+      const envelope = {
+        mailFrom: { email: theirs.email, parameters: { HOLDFOR: String(hold) } },
+        rcptTo: check.rcptTo.map((email) => ({ email })),
+      };
+      const after =
+        mode === "send_as"
+          ? {
+              onSuccessUpdateEmail: {
+                "#send": {
+                  [`mailboxIds/${theirDrafts}`]: null,
+                  [`mailboxIds/${theirSent}`]: true,
+                  "keywords/$draft": null,
+                },
+              },
+            }
+          : { onSuccessDestroyEmail: ["#send"] };
+      let destroyedBySubmission: string[] = [];
+      try {
+        const r = await this.#callDelegated(
+          sessionId,
+          entry,
+          (t) => [
+            [
+              "EmailSubmission/set",
+              {
+                accountId: t.accountId,
+                create: { send: { identityId: theirs.id, emailId: submitted, envelope } },
+                ...after,
+              },
+              "s",
+            ],
+          ],
+          USING_SUBMISSION,
+        );
+        const created = (r.get("s")?.created as Record<string, { id: string; sendAt?: string }> | undefined)?.send;
+        if (!created) {
+          const why = (r.get("s")?.notCreated as Record<string, { type?: string }> | undefined)?.send?.type;
+          log.warn("webmail delegated submission refused", { component: "webmail", type: why ?? "unknown" });
+          throw new WebmailRefusedError("The mail server didn't accept this message.");
+        }
+        submittedAt = created;
+        destroyedBySubmission = (r.get("s#Email/set")?.destroyed as string[] | undefined) ?? [];
+      } catch (err) {
+        if (err instanceof WebmailRefusedError) throw err;
+        let found: string | null;
+        try {
+          found = await this.#submissionOf(sessionId, entry, submitted);
+        } catch (lookup) {
+          // Unknown is not "not submitted": it may still be delivered. Keep the stored copy (it is the record of a
+          // message that may have gone), remove only the tagged one, and tell the person to check before resending.
+          log.error("webmail: delegated submission not looked up after a lost answer", {
+            component: "webmail",
+            lookup,
+          });
+          settled = true;
+          if (mode === "send_on_behalf" && !(await this.#destroyDelegated(sessionId, entry, [submitted]))) {
+            log.error("webmail: tagged copy left after an unconfirmed delegated send", { component: "webmail" });
+          }
+          await this.#recordOutcome(who, { kind: "failed", reason: "unknown" }, req).catch(() => undefined);
+          throw new WebmailSendUnconfirmedError("unconfirmed");
+        }
+        if (!found) throw err;
+        submittedAt = { id: found };
+      }
+
+      // Sent: undo and the end of the hold come first, whatever happens to the cleanup and its record below.
+      this.#holdDelegated(sessionId, {
+        key: this.#heldKey(sessionId, want, submittedAt.id),
+        mailbox: want,
+        ...who,
+        storedId: stored,
+        ownDraftId: draftId,
+        ownAccount,
+        hold,
+      });
+      // The tagged copy must not outlive it (requirement 1). A record that can't be written is logged (by
+      // `#recordOutcome`), never turned into a failure of a message that was sent.
+      if (mode === "send_on_behalf" && !destroyedBySubmission.includes(submitted)) {
+        if (!(await this.#destroyDelegated(sessionId, entry, [submitted]))) {
+          log.error("webmail: tagged copy left after a delegated send", { component: "webmail" });
+          await this.#recordOutcome(who, { kind: "tagged_copy_left" }, req).catch(() => undefined);
+        }
+      }
+      return {
+        submissionId: submittedAt.id,
+        sendAt: submittedAt.sendAt ?? new Date(this.#d.now() + hold * 1000).toISOString(),
+        holdSeconds: hold,
+        from: want,
+      };
+    } catch (err) {
+      await failed(
+        err instanceof Error
+          ? err.name
+              .replace(/^Webmail/, "")
+              .replace(/Error$/, "")
+              .toLowerCase()
+          : "unknown",
+      );
+      if (err instanceof WebmailDelegationRefusedError) await this.#dropDelegated(sessionId, new Set([entry.username]));
+      throw err;
+    }
+  }
+
+  /**
+   * Records a delegated send's outcome, retried once; a record that can't be written is an error (logged), never
+   * silent. Throws when both attempts fail, so the caller can say so.
+   */
+  async #recordOutcome(
+    who: { mailboxId: string; granteeUserId: string; via: string },
+    outcome: DelegatedSendOutcome,
+    req: RequestMeta,
+  ): Promise<void> {
+    const delegation = this.#d.delegation;
+    if (!delegation) return;
+    try {
+      await delegation.sendOutcome(who, outcome, req);
+    } catch {
+      try {
+        await delegation.sendOutcome(who, outcome, req);
+      } catch (err) {
+        log.error("webmail: delegated send outcome not audited", { component: "webmail", outcome: outcome.kind, err });
+        throw new WebmailUnavailableError("delegated send outcome not recorded");
+      }
+    }
+  }
+
+  /** Keeps what undo and the end of the hold need for a delegated send (`#heldSends`) and schedules the end. */
+  #holdDelegated(sessionId: string, h: Omit<HeldSend, "until"> & { key: string; hold: number }): void {
+    const { key, hold, ...rest } = h;
+    if (this.#heldSends.size > 1_000) {
+      const now = this.#d.now();
+      for (const [k, v] of this.#heldSends) if (v.until < now) this.#heldSends.delete(k);
+    }
+    this.#heldSends.set(key, { ...rest, until: this.#d.now() + (hold + 60) * 1000 });
+    this.#d.defer(
+      () => {
+        this.#afterDelegatedHold(sessionId, key).catch((err: unknown) => {
+          log.warn("webmail: own draft not removed after a delegated send", {
+            component: "webmail",
+            error: err instanceof Error ? err.name : "unknown",
+          });
+        });
+      },
+      (hold + 2) * 1000,
+    );
+  }
+
+  /** The undo hold of a delegated send is over (not undone): the person's own draft it came from goes. */
+  async #afterDelegatedHold(sessionId: string, key: string): Promise<void> {
+    const held = this.#heldSends.get(key);
+    if (!held) return; // Undone: the draft is the person's again.
+    this.#heldSends.delete(key);
+    const r = await this.#call(
+      sessionId,
+      (x) => [["Email/get", { accountId: x.accountId, ids: [held.ownDraftId], properties: ["keywords"] }, "g"]],
+      USING,
+      held.ownAccount,
+      { inactive: true },
+    );
+    const found = ((r.get("g")?.list ?? []) as { keywords: Record<string, boolean> }[])[0];
+    // Only the draft the BFF built, still a draft: never a message the person moved or changed since.
+    if (found?.keywords.$draft !== true || found.keywords[COMPOSED_KEYWORD] !== true) return;
+    await this.#call(
+      sessionId,
+      (x) => [["Email/set", { accountId: x.accountId, destroy: [held.ownDraftId] }, "d"]],
+      USING,
+      held.ownAccount,
+      { inactive: true },
+    );
+  }
+
+  /**
+   * Undo of a delegated send (`undoSend` with `mailbox`): see `#sendDelegated`. Only with the entry the send used,
+   * still in this session — undo never opens a mailbox (no credential is minted for it, review L3). It does **not**
+   * re-check the send right: cancelling the BFF's own held submission only reduces what is sent, so a revoke during the
+   * hold doesn't stop it (decision recorded in ADR-0026 slice 13). The person's own sign-in is still proven first, and
+   * an entry the gate or the mail server dropped meanwhile is gone (then "It has already been sent.": the message goes).
+   * The cancel is recorded (`delegation.send_cancelled`, retried once); a record that can't be written answers an error
+   * after the cancel, so a missing audit row is never silent.
+   */
+  async #undoDelegated(
+    sessionId: string,
+    submissionId: string,
+    account: string | undefined,
+    mailbox: string,
+    req: RequestMeta,
+  ): Promise<{ draftId: string }> {
+    const s = await this.#pin(sessionId, account);
+    const want = mailbox.trim().toLowerCase();
+    const key = this.#heldKey(sessionId, want, submissionId);
+    const held = this.#heldSends.get(key);
+    const already = () => new WebmailRefusedError("It has already been sent.");
+    if (held?.ownAccount !== s.accountId || held.until < this.#d.now()) throw already();
+    const cur = await this.#d.store.read(sessionId);
+    const entry = cur
+      ? [cur, ...(cur.others ?? [])].find(
+          (m) => m.delegated?.mailboxId === held.mailboxId && m.username.toLowerCase() === want,
+        )
+      : undefined;
+    if (!cur || entry?.delegated?.via !== held.via) throw already();
+    await this.#proveOwn(sessionId, cur, held.via);
+    const r = await this.#callDelegated(
+      sessionId,
+      entry,
+      (t) => [
+        [
+          "EmailSubmission/set",
+          { accountId: t.accountId, update: { [submissionId]: { undoStatus: "canceled" } } },
+          "u",
+        ],
+      ],
+      USING_SUBMISSION,
+    );
+    const updated = r.get("u")?.updated as Record<string, unknown> | undefined;
+    if (!updated || !(submissionId in updated)) throw already();
+    this.#heldSends.delete(key);
+    if (!(await this.#destroyDelegated(sessionId, entry, [held.storedId]))) {
+      log.warn("webmail: undone delegated copy not removed", { component: "webmail" });
+    }
+    await this.#recordOutcome(held, { kind: "cancelled" }, req);
+    return { draftId: held.ownDraftId };
+  }
+
   /**
    * Refuses when the browser tab shows another mailbox than the session's active one (switched in another tab):
    * drafts, sending, undo and uploads must never act on a mailbox the person isn't looking at. `account` undefined =
@@ -1631,7 +2594,23 @@ export class WebmailService {
     draftId: string,
     identityId: string,
     shown?: string,
-  ): Promise<{ submissionId: string; sendAt: string; holdSeconds: number }> {
+    /**
+     * Send from a mailbox shared with the person (`from`, its address) instead of the draft's own identity: see
+     * `#sendDelegated`. `req` is for the audit; `beforeOpen` runs before a delegated entry is minted for it.
+     */
+    delegated?: { from: string; req: RequestMeta; beforeOpen?: () => Promise<void> },
+  ): Promise<SendResult> {
+    if (delegated) {
+      return this.#sendDelegated(
+        sessionId,
+        draftId,
+        identityId,
+        delegated.from,
+        shown,
+        delegated.req,
+        delegated.beforeOpen,
+      );
+    }
     // Everything below runs against this mailbox — the one the tab shows: the quota is charged to it, and every call
     // refuses if the active mailbox changes meanwhile.
     const s = await this.#pin(sessionId, shown);
@@ -1733,7 +2712,14 @@ export class WebmailService {
   }
 
   /** Cancels a held submission and puts its message back in Drafts. "Already sent" when it is too late. */
-  async undoSend(sessionId: string, submissionId: string, account?: string): Promise<{ draftId: string }> {
+  async undoSend(
+    sessionId: string,
+    submissionId: string,
+    account?: string,
+    /** A send from a mailbox shared with the person: its address, and the request for the audit. */
+    delegated?: { mailbox: string; req: RequestMeta },
+  ): Promise<{ draftId: string }> {
+    if (delegated) return this.#undoDelegated(sessionId, submissionId, account, delegated.mailbox, delegated.req);
     const pinned = (await this.#pin(sessionId, account)).accountId;
     const roles = await this.roles(sessionId);
     if (!roles.drafts || !roles.sent) throw new WebmailUnavailableError("no Drafts or Sent folder");

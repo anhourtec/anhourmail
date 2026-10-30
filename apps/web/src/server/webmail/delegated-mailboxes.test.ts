@@ -8,10 +8,13 @@ import { DelegatedMailboxRefusedError, type Deps, ForbiddenError } from "@anhour
 import type { DelegationRight } from "@anhourmail/core/delegation";
 import type { Mailbox } from "@anhourmail/core/mailboxes";
 import {
+  authorizeDelegatedSend,
   delegatedMailboxesFor,
+  delegatedSendCheck,
   delegationCheck,
   DelegationGate,
   openDelegatedMailbox,
+  recordDelegatedSendOutcome,
   type WebmailAccess,
 } from "@anhourmail/core/webmail";
 import { createKeyRing } from "@anhourmail/server/keyring";
@@ -148,6 +151,9 @@ function setup() {
       open: (input, signIn, r) => openDelegatedMailbox(deps, access, input, signIn, r),
       // Never cached here, so every revoke shows at once (the cache is core's, tested there).
       gate: new DelegationGate(delegationCheck(deps, access), { ttlMs: 0, now: () => now }),
+      authorizeSend: (input, r) => authorizeDelegatedSend(deps, access, input, r),
+      checkSend: (input) => delegatedSendCheck(deps, access, input),
+      sendOutcome: (input, outcome, r) => recordDelegatedSendOutcome(deps, input, outcome, r),
     },
     consoleSessionAlive: async () => true,
     stalwartUrl: "http://stalwart:8080",
