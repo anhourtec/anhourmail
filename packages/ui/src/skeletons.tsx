@@ -143,6 +143,47 @@ export function DetailPanelSkeleton({ fields = 6 }: { fields?: number }) {
   );
 }
 
+/**
+ * Mirrors a mailbox's Delegation tab: the explanation, then three sections (heading, one line on what the right allows,
+ * "Add people" at the right) each with a short list of people (photo, name, address, Remove).
+ */
+export function DelegationTabSkeleton({ sections = 3, rows = 1 }: { sections?: number; rows?: number }) {
+  return (
+    <div role="status" aria-live="polite" aria-busy="true" className="flex flex-col gap-8">
+      <span className="sr-only">Loading who has access</span>
+      <div className="flex max-w-prose flex-col gap-2">
+        <Bone className="h-3.5 w-full" />
+        <Bone className="h-3.5 w-9/12" />
+      </div>
+      {Array.from({ length: sections }, (_, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
+        <div key={i} className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex flex-col gap-2">
+              <Bone className="h-4 w-32" />
+              <Bone className="h-3.5 w-72 max-w-full" />
+            </div>
+            <Bone className="h-9 w-32" />
+          </div>
+          <div className="flex flex-col border-y">
+            {Array.from({ length: rows }, (_, j) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
+              <div key={j} className="flex items-center gap-3 py-2.5">
+                <Bone className="size-7 shrink-0 rounded-full" />
+                <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                  <Bone className="h-3.5 w-28" />
+                  <Bone className="h-3 w-44 max-w-full" />
+                </div>
+                <Bone className="h-8 w-20" />
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** Four KPI cards. */
 export function KpiSkeleton({ count = 4 }: { count?: number }) {
   return (
