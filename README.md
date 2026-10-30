@@ -52,12 +52,16 @@ built in the open; billing, abuse controls and the production deployment come ne
   given out again.
 - **Console** — custom domains with guided DNS and live checks (DKIM published as TXT keys and checked against
   DNS); "Add a user" in four steps, creating the mailbox, the person's sign-in and their role together, with a
-  password change at first sign-in; shared addresses (such as support@) that can later be made a user; mailboxes
+  password change at first sign-in; shared mailboxes (such as support@) that can later be made a user; mailboxes
   with a password set at creation (or generated), owner resets with step-up, storage, suspend, resume and delete
   with a 30-day restore window; aliases and masked aliases; people, invites, roles, editable profile details and profile photos; an
   audit log; global search; staff pages for customer accounts, including suspending an account or a person; app
   passwords for mail apps (scoped to IMAP, SMTP, contacts or mail over HTTPS, shown once); catch-all addresses on
   custom domains.
+- **Mailbox delegation** — owners and admins give people Read and manage, Send as or Send on behalf on a mailbox;
+  shared mailboxes with no sign-in of their own (a person's mailbox can be converted and back, and a leaver's handed
+  over on removal); in the webmail, mailboxes shared with you appear under "Shared with you", open by address in a
+  tab of their own, and can be chosen in From (the copy lands in their Sent).
 - **Sign-in security** — two-factor sign-in with an authenticator app, recovery codes and passkeys; owners can
   require a second factor; a Security page with sessions and recent activity.
 - **Webmail** — sign in with a mailbox, folders and threads, a safe reader (plain text, markdown, invitations,
