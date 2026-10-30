@@ -25,6 +25,8 @@ import {
   Users,
 } from "lucide-react";
 
+import { useId } from "react";
+
 import { FolderTreeSkeleton } from "@anhourmail/ui/skeletons";
 
 import { PersonPhoto } from "@/components/person-photo";
@@ -167,6 +169,8 @@ export function Sidebar({
   onOpenAnother,
   scoped = false,
   ownHref,
+  compose = "ready",
+  composeBlockedReason,
 }: {
   folders: Folder[] | null;
   view: View | null;
@@ -193,8 +197,15 @@ export function Sidebar({
    */
   scoped?: boolean;
   ownHref?: string;
+  /**
+   * New email: "ready"; in a mailbox shared with the person "loading" until their send rights are known, and "blocked"
+   * (off, with `composeBlockedReason` shown) when they hold Read and manage only.
+   */
+  compose?: "ready" | "loading" | "blocked";
+  composeBlockedReason?: string;
 }) {
   const shared = mailboxes.activeShared || scoped;
+  const blockedId = useId();
   // The tiles: the session's own mailboxes, plus the shared one while it is the active one (never in a scoped tab).
   const all = scoped ? [mailboxes.active] : [mailboxes.active, ...mailboxes.others];
   // "Shared with you": the mailboxes the person may open (read and manage), not the one shown now.
@@ -288,14 +299,37 @@ export function Sidebar({
             </Tooltip>
           </div>
         )}
-        {/* A mailbox shared with the person: sending is from their own mailbox (choose it in From there). */}
-        {!shared && (
+        {/* In a mailbox shared with the person, New email writes from it (with a send right; off, with why, without). */}
+        {compose === "blocked" ? (
+          <>
+            <Tooltip label={collapsed ? (composeBlockedReason ?? "New email") : "New email"} side="right">
+              <button
+                type="button"
+                aria-disabled="true"
+                aria-label="New email"
+                {...(!collapsed && composeBlockedReason ? { "aria-describedby": blockedId } : {})}
+                className={`inline-flex h-9 cursor-not-allowed items-center justify-center gap-2 rounded-lg border bg-background font-medium text-[13.5px] text-muted-foreground opacity-60 ${
+                  collapsed ? "w-9" : "w-full"
+                }`}
+              >
+                <PenLine className="size-4" aria-hidden />
+                {!collapsed && "New email"}
+              </button>
+            </Tooltip>
+            {!collapsed && composeBlockedReason && (
+              <p id={blockedId} className="am-micro">
+                {composeBlockedReason}
+              </p>
+            )}
+          </>
+        ) : (
           <Tooltip label="New email" shortcut="c" side={collapsed ? "right" : "bottom"}>
             <button
               type="button"
               onClick={onCompose}
+              disabled={compose === "loading"}
               aria-label="New email"
-              className={`inline-flex h-9 items-center justify-center gap-2 rounded-lg border bg-background font-medium text-[13.5px] shadow-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${
+              className={`inline-flex h-9 items-center justify-center gap-2 rounded-lg border bg-background font-medium text-[13.5px] shadow-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 ${
                 collapsed ? "w-9" : "w-full"
               }`}
             >

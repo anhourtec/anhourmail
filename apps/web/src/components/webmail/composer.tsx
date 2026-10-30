@@ -54,6 +54,17 @@ export type ComposeSeed = {
   draftId?: string;
   /** Preferred sender (e.g. the address a reply was sent to). */
   fromEmail?: string;
+  /**
+   * Start with From set to this mailbox shared with the person (written in a shared mailbox's own view): sent as it, or
+   * on its behalf, when it is among `senders`. The person can still choose another From.
+   */
+  fromMailbox?: string;
+  /**
+   * Attachments of a message in a mailbox shared with the person (a forward written there): each is fetched from that
+   * mailbox (`url`, read with its access) and uploaded to the person's own draft like a file they add, so neither
+   * mailbox's access ever reaches the other's files.
+   */
+  copyAttachments?: { name: string; type: string; size: number; url: string }[];
   /** Where the caret starts: the top of the body (replies) or the To field. */
   focus: "to" | "body";
   /**
@@ -347,7 +358,10 @@ export function Composer({
     () => identities.find((i) => i.email === seed.fromEmail)?.id ?? identities[0]?.id ?? "",
   );
   /** A mailbox shared with the person chosen in From (sent as or on its behalf), or null for an own address. */
-  const [sharedFrom, setSharedFrom] = useState<string | null>(null);
+  const [sharedFrom, setSharedFrom] = useState<string | null>(() => {
+    const preset = seed.fromMailbox?.toLowerCase();
+    return preset !== undefined && senders.some((m) => m.mailbox === preset) ? preset : null;
+  });
   const kind = seed.signature;
   const [format, setFormat] = useState<ComposeFormat>(seed.mode ?? "rich");
   /** The chosen signature's id; null for none; undefined until the signatures have loaded (new messages and replies). */
@@ -605,7 +619,7 @@ export function Composer({
     }
   };
 
-  const addFiles = async (files: FileList | null) => {
+  const addFiles = async (files: FileList | File[] | null) => {
     if (!files) return;
     for (const f of Array.from(files)) {
       if (f.size > MAX_UPLOAD) {
@@ -623,6 +637,36 @@ export function Composer({
       }
     }
   };
+
+  // A forward written in a mailbox shared with the person: its attachments are copied into this draft once.
+  const copied = useRef(false);
+  useEffect(() => {
+    const list = seed.copyAttachments;
+    if (copied.current || !list || list.length === 0) return;
+    copied.current = true;
+    void (async () => {
+      for (const a of list) {
+        if (a.size > MAX_UPLOAD) {
+          setError(`${a.name} is larger than ${String(WEBMAIL_ATTACHMENTS.perFileMb)} MB.`);
+          continue;
+        }
+        setUploading((n) => n + 1);
+        let file: File | null = null;
+        try {
+          const res = await fetch(a.url);
+          if (res.ok) file = new File([await res.blob()], a.name, { type: a.type });
+        } catch {
+          // Reported below.
+        } finally {
+          setUploading((n) => n - 1);
+        }
+        if (file) await addFiles([file]);
+        else setError(`${a.name} couldn't be attached. Download it and add it again.`);
+      }
+    })();
+    // Once, when the composer opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the seed's attachments are copied once
+  }, []);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {

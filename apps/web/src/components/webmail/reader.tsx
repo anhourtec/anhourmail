@@ -176,6 +176,7 @@ function MessageCard({
   collapsible,
   images,
   canAnswer = true,
+  canReply = canAnswer,
 }: {
   summary: Summary;
   view: MessageView | "missing" | undefined;
@@ -193,8 +194,10 @@ function MessageCard({
   onViewFull: () => void;
   collapsible: boolean;
   images?: ImageOptions | undefined;
-  /** False in a mailbox shared with the person: no reply or contacts from here (they stay with their own mailbox). */
+  /** False in a mailbox shared with the person: no contacts from here (they stay with their own mailbox). */
   canAnswer?: boolean;
+  /** Whether Reply is offered (in a shared mailbox, only with a right to send from it). */
+  canReply?: boolean;
 }) {
   const [details, setDetails] = useState(false);
   const from = summary.from?.[0];
@@ -280,7 +283,7 @@ function MessageCard({
               />
             </button>
           </Tooltip>
-          {canAnswer && (
+          {canReply && (
             <Tooltip label="Reply">
               <button type="button" onClick={onReply} disabled={!loaded} aria-label="Reply" className={iconButtonClass}>
                 <Reply className="size-4" aria-hidden />
@@ -423,6 +426,7 @@ export function Reader({
   imagePolicy,
   onRememberImages,
   canAnswer = true,
+  canReply = canAnswer,
 }: {
   client: MailClient;
   threadId: string;
@@ -450,6 +454,11 @@ export function Reader({
    * sender and adding contacts act on the person's own mailbox, so they aren't offered here.
    */
   canAnswer?: boolean;
+  /**
+   * Whether Reply, Reply all and Forward are offered (default: `canAnswer`). In a mailbox shared with the person they
+   * are, when the person may send from it: the answer goes from that mailbox (written in their own, sent from it).
+   */
+  canReply?: boolean;
   folders: Folder[];
   /** The folder being viewed (null in Priority or search). */
   currentFolder: Folder | null;
@@ -660,7 +669,7 @@ export function Reader({
         if (current) setKeyword([current.id], "$seen", r);
       },
       reply: (mode) => {
-        if (canAnswer) reply(mode === "reply" ? defaultReply : mode);
+        if (canReply) reply(mode === "reply" ? defaultReply : mode);
       },
     });
     return () => {
@@ -674,7 +683,7 @@ export function Reader({
     const view = v && v !== "missing" ? v : null;
     const sender = e.from?.[0];
     const blockable = canAnswer && sender && !isMine(sender, mine) ? sender.email.toLowerCase() : null;
-    const answers: MenuEntry[] = canAnswer
+    const answers: MenuEntry[] = canReply
       ? [
           {
             label: "Reply",
@@ -953,7 +962,7 @@ export function Reader({
         </Tooltip>
         <span className="hidden items-center gap-0.5 md:flex">
           {primaryMove("size-4", true)}
-          {canAnswer && (
+          {canReply && (
             <Tooltip label={defaultReply === "replyAll" ? "Reply all" : "Reply"} shortcut="r">
               <button
                 type="button"
@@ -1047,6 +1056,7 @@ export function Reader({
                     onAddContact={onAddContact}
                     images={images}
                     canAnswer={canAnswer}
+                    canReply={canReply}
                     collapsible={thread.length > 1}
                     onCollapse={() => {
                       setExpanded((s) => {
@@ -1088,7 +1098,7 @@ export function Reader({
           {/* Reply buttons stay at the bottom of the pane while the conversation scrolls under them. */}
           <div className="sticky bottom-0 z-10 -mx-4 mt-auto shrink-0 bg-gradient-to-t from-background from-70% to-transparent px-4 pt-4 pb-1 sm:-mx-6 sm:px-6">
             {inlineComposer ??
-              (!canAnswer ? null : (
+              (!canReply ? null : (
                 <div
                   role="group"
                   aria-label={`Answer ${senderLabel(last?.from?.[0], mine)}`}
@@ -1139,7 +1149,7 @@ export function Reader({
       >
         {primaryMove("size-5", false)}
         {deleteButton}
-        {canAnswer && (
+        {canReply && (
           <button
             type="button"
             onClick={() => {

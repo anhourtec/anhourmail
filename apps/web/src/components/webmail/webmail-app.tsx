@@ -66,6 +66,7 @@ import {
   type SyncState,
   type View,
   type ContactsData,
+  type SharedMailbox,
 } from "./mail-client";
 import { iconButtonClass, Menu, type MenuEntry } from "./menu";
 import { MessageList } from "./message-list";
@@ -104,6 +105,9 @@ type ListState = { key: string; total: number | null; rows: (ListRow | undefined
 type Narrow = Omit<ListFilter, "search">;
 type Confirm = { title: string; body: string; confirm: string; run: () => void };
 type ComposerState = { seed: ComposeSeed; variant: "panel" | "inline"; key: number };
+
+/** Why New email is off in a mailbox shared with the person who holds Read and manage only. */
+const NO_SEND_RIGHT = "You can read this mailbox but not send from it. Ask an admin for Send as or Send on behalf.";
 
 const EMPTY_COPY: Record<string, string> = {
   inbox: "New mail lands here.",
@@ -245,11 +249,40 @@ function Mailroom({
   useEffect(() => {
     sharedModeRef.current = sharedMode;
   });
+  /** A mailbox-scoped tab's mailbox as the server lists it (the mailbox it comes through, the rights held). */
+  const [scopedEntry, setScopedEntry] = useState<SharedMailbox | null>(null);
   /** The person's own mailbox a shared one comes through ("Back to your mailbox"). */
-  const via = mailboxes.shared.find((m) => m.address === mailboxes.active.toLowerCase())?.via ?? sharedVia ?? undefined;
+  const via = scoped
+    ? scopedEntry?.via
+    : (mailboxes.shared.find((m) => m.address === mailboxes.active.toLowerCase())?.via ?? sharedVia ?? undefined);
+  /**
+   * Writing mail while a shared mailbox is shown (ADR-0026 §6, "Sending from one"): the draft lives in the person's own
+   * mailbox (`via`), so drafts, uploads, the From picker, send and undo go there — pinned to it per request, without
+   * switching what other tabs show — and the server sends the message from the shared mailbox. Otherwise the app's own
+   * client.
+   */
+  const writer = useMemo(
+    () => (sharedMode ? (via === undefined ? null : createMailClient("", { own: via })) : client),
+    [sharedMode, via, client],
+  );
   const [identities, setIdentities] = useState<Identity[]>([]);
-  /** Mailboxes shared with the person they may send from (the From picker). */
-  const [senders, setSenders] = useState<DelegatedSender[]>([]);
+  /** Mailboxes shared with the person they may send from (the From picker); null until loaded. */
+  const [sendersList, setSenders] = useState<DelegatedSender[] | null>(null);
+  const senders = useMemo(() => sendersList ?? [], [sendersList]);
+  /**
+   * Whether mail can be written here: always in the person's own mailbox; in a shared one only with Send as or Send on
+   * behalf on it (null while that is being found out).
+   */
+  const shownAddress = mailboxes.active.toLowerCase();
+  const canWrite: boolean | null = !sharedMode
+    ? true
+    : sendersList === null
+      ? null
+      : sendersList.some((m) => m.mailbox === shownAddress);
+  const canWriteRef = useRef(canWrite);
+  useEffect(() => {
+    canWriteRef.current = canWrite;
+  });
   /** The mailbox's named signatures and defaults (null until loaded; the composer then adds the default). */
   const [signatures, setSignatures] = useState<SignatureSet | null>(null);
   /** Your own addresses (lowercase): the mailbox and its sender identities. */
@@ -484,8 +517,20 @@ function Mailroom({
         .mailboxes()
         .then(setMailboxes)
         .catch(() => undefined);
+    } else {
+      // Which own mailbox this one comes through, and whether the person may send from it.
+      client
+        .mailboxes()
+        .then((m) => {
+          const entry = m.shared.find((x) => x.address === username.toLowerCase()) ?? null;
+          setScopedEntry(entry);
+          if (!entry) setSenders([]);
+        })
+        .catch(() => {
+          setSenders([]);
+        });
     }
-    // The person's own mailbox only (refused while a shared one is shown, so not asked for then).
+    // The person's own mailbox only (refused while a shared one is shown, so not asked for then: see below).
     if (!scoped && sharedVia === null) {
       client
         .senders()
@@ -514,6 +559,39 @@ function Mailroom({
     // First paint only.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once
   }, []);
+
+  // A shared mailbox shown: the From picker, signatures and own Trash (where a discarded draft goes) come from the
+  // person's own mailbox it comes through, once that is known.
+  const [writerTrash, setWriterTrash] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (!sharedMode || !writer) return;
+    let live = true;
+    writer
+      .senders()
+      .then((r) => {
+        if (!live) return;
+        setIdentities(r.identities);
+        setSenders(r.shared);
+      })
+      .catch(() => {
+        if (live) setSenders([]);
+      });
+    writer
+      .signatures()
+      .then((x) => {
+        if (live) setSignatures(x);
+      })
+      .catch(() => undefined);
+    writer
+      .folders()
+      .then((f) => {
+        if (live) setWriterTrash(f.find((x) => x.role === "trash")?.id);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [sharedMode, writer]);
 
   const onRange = useCallback(
     (start: number, end: number) => {
@@ -1028,7 +1106,8 @@ function Mailroom({
     if (contacts.length > 0) return;
     void Promise.all([
       client.recentCorrespondents(roles.sent).catch(() => []),
-      client.contacts().catch(() => null),
+      // The person's own address books (in a shared mailbox, read through their own mailbox).
+      writer ? writer.contacts().catch(() => null) : null,
     ]).then(([recent, saved]) => {
       const all = new Map<string, Address & { score: number }>();
       for (const r of recent) all.set(r.email, { ...r });
@@ -1045,15 +1124,16 @@ function Mailroom({
           .map(({ name, email }) => ({ name, email })),
       );
     });
-  }, [contacts.length, client, roles.sent]);
+  }, [contacts.length, client, writer, roles.sent]);
 
   const loadBook = useCallback(async () => {
+    if (!writer) return;
     try {
-      setBook(await client.contacts());
+      setBook(await writer.contacts());
     } catch (err) {
       fail(err, "Couldn't load your contacts. Try again.");
     }
-  }, [client, fail]);
+  }, [writer, fail]);
 
   const known = useMemo(
     () => new Set((book?.contacts ?? []).flatMap((c) => c.emails.map((e) => e.address.toLowerCase()))),
@@ -1066,12 +1146,14 @@ function Mailroom({
       const email = person.email.toLowerCase();
       void (async () => {
         try {
-          // The account the contacts belong to (loaded with them); changes refuse another active mailbox.
-          const current = book ?? (await client.contacts());
+          // The account the contacts belong to (loaded with them); changes refuse another active mailbox. In a
+          // shared mailbox, the person's own contacts (through their own mailbox).
+          if (!writer) return;
+          const current = book ?? (await writer.contacts());
           const existing = current.contacts.find((c) => c.emails.some((e) => e.address === email));
-          if (existing) await client.moveContacts(current.accountId, [existing.id], "mine");
+          if (existing) await writer.moveContacts(current.accountId, [existing.id], "mine");
           else
-            await client.createContact(current.accountId, {
+            await writer.createContact(current.accountId, {
               given: "",
               surname: "",
               name: (person.name ?? "").trim().slice(0, 200),
@@ -1089,7 +1171,7 @@ function Mailroom({
         }
       })();
     },
-    [book, client, loadBook, toasts, fail],
+    [book, writer, loadBook, toasts, fail],
   );
 
   const openContacts = () => {
@@ -1102,13 +1184,19 @@ function Mailroom({
 
   const openComposer = useCallback(
     (seed: ComposeSeed, variant: "panel" | "inline" = "panel") => {
-      // Sending is from the person's own mailbox (they choose the shared one in From there).
-      if (sharedModeRef.current) return;
+      // In a shared mailbox, only with a right to send from it; From starts as that mailbox.
+      if (sharedModeRef.current) {
+        if (canWriteRef.current !== true) {
+          if (canWriteRef.current === false) toasts.show({ message: NO_SEND_RIGHT, tone: "error" });
+          return;
+        }
+        seed = { fromMailbox: shownAddress, ...seed };
+      }
       ensureContacts();
       composerKey.current += 1;
       setComposer({ seed, variant: variant === "inline" && wide() ? "inline" : "panel", key: composerKey.current });
     },
-    [ensureContacts],
+    [ensureContacts, shownAddress, toasts],
   );
 
   const compose = useCallback(() => {
@@ -1127,7 +1215,8 @@ function Mailroom({
 
   const replyTo = useCallback(
     (m: MessageView, mode: Exclude<ComposeMode, "new">, inline: boolean) => {
-      const self = identities.map((i) => i.email);
+      // In a shared mailbox the answer is that mailbox's: it is "self" (the person's own addresses are not).
+      const self = sharedModeRef.current ? [mailboxes.active] : identities.map((i) => i.email);
       const { to, cc } = replyRecipients(m, mode, self.length > 0 ? self : [mailboxes.active]);
       const toMe = [...m.to, ...m.cc].map((a) => a.email.toLowerCase()).find((e) => self.includes(e));
       openComposer(
@@ -1142,7 +1231,19 @@ function Mailroom({
           ...(mode !== "forward" && m.messageId.length > 0
             ? { inReplyTo: m.messageId, references: [...m.references, ...m.messageId].slice(-50) }
             : {}),
-          attachments: mode === "forward" ? m.attachments : [],
+          // Forwarded from a shared mailbox, its attachments are copied into the own draft (read with that mailbox's
+          // access, uploaded with the person's own), never referenced across mailboxes.
+          attachments: mode === "forward" && !sharedModeRef.current ? m.attachments : [],
+          ...(mode === "forward" && sharedModeRef.current && m.attachments.length > 0
+            ? {
+                copyAttachments: m.attachments.map((a) => ({
+                  name: a.name,
+                  type: a.type,
+                  size: a.size,
+                  url: client.downloadUrl(a.blobId),
+                })),
+              }
+            : {}),
           ...(toMe ? { fromEmail: toMe } : {}),
           focus: mode === "forward" ? "to" : "body",
           signature: "reply",
@@ -1150,13 +1251,14 @@ function Mailroom({
         inline ? "inline" : "panel",
       );
     },
-    [identities, mailboxes.active, openComposer],
+    [identities, mailboxes.active, openComposer, client],
   );
 
   const openDraft = useCallback(
-    async (emailId: string) => {
+    async (emailId: string, opts: { undone?: boolean; from?: string } = {}) => {
       try {
-        const m = await client.message(emailId);
+        // An undone send hands back the person's own draft: in a shared mailbox's view, read through their own.
+        const m = await (opts.undone === true && writer ? writer : client).message(emailId);
         if (!m) return;
         openComposer({
           title: "Draft",
@@ -1170,13 +1272,14 @@ function Mailroom({
           attachments: m.attachments,
           draftId: m.id,
           ...(m.from[0] ? { fromEmail: m.from[0].email } : {}),
+          ...(opts.from !== undefined ? { fromMailbox: opts.from } : {}),
           focus: "body",
         });
       } catch (err) {
         fail(err);
       }
     },
-    [client, openComposer, fail],
+    [client, writer, openComposer, fail],
   );
 
   const onSent = useCallback(
@@ -1191,11 +1294,12 @@ function Mailroom({
         action: {
           label: "Undo",
           onClick: () => {
-            void client
+            if (!writer) return;
+            void writer
               .undoSend(submissionId, from)
               .then(({ draftId }) => {
                 refresh();
-                void openDraft(draftId);
+                void openDraft(draftId, { undone: true, ...(from === undefined ? {} : { from }) });
               })
               .catch((err: unknown) => {
                 fail(err);
@@ -1204,7 +1308,7 @@ function Mailroom({
         },
       });
     },
-    [refresh, toasts, client, openDraft, fail],
+    [refresh, toasts, writer, openDraft, fail],
   );
 
   // ---- navigation ---------------------------------------------------------------------------------------
@@ -1486,6 +1590,8 @@ function Mailroom({
       }}
       scoped={scoped}
       {...(scope ? { ownHref: scope.ownHref } : {})}
+      compose={canWrite === true ? "ready" : canWrite === false ? "blocked" : "loading"}
+      composeBlockedReason={NO_SEND_RIGHT}
     />
   );
 
@@ -1621,7 +1727,7 @@ function Mailroom({
     composer?.variant === "inline" ? (
       <Composer
         key={composer.key}
-        client={client}
+        client={writer ?? client}
         identities={identities}
         senders={senders}
         signatures={signatures}
@@ -1630,7 +1736,7 @@ function Mailroom({
         onAddContact={addContact}
         seed={composer.seed}
         variant="inline"
-        trashId={roles.trash}
+        trashId={sharedMode ? writerTrash : roles.trash}
         alwaysCcBcc={prefs.showCcBcc}
         onClose={({ savedDraft }) => {
           setComposer(null);
@@ -1933,7 +2039,7 @@ function Mailroom({
               </div>
               {/* Phones and tablets have no sidebar: New email floats over the list (not while selecting or with the
                 folders drawer open, which has its own). */}
-              {composer === null && checked.size === 0 && !drawer && !sharedMode && (
+              {composer === null && checked.size === 0 && !drawer && canWrite === true && (
                 <button
                   type="button"
                   onClick={compose}
@@ -1959,6 +2065,7 @@ function Mailroom({
                   authservIds={authservIds}
                   defaultReply={prefs.defaultReply}
                   canAnswer={!sharedMode}
+                  canReply={canWrite === true}
                   imagePolicy={imagePolicy}
                   onRememberImages={rememberImages}
                   folders={folders ?? []}
@@ -2007,7 +2114,7 @@ function Mailroom({
                   </span>
                   <p className="am-h3">No message selected</p>
                   <p className="am-small max-w-72">
-                    {sharedMode ? (
+                    {canWrite !== true ? (
                       <>
                         Pick a conversation to read it. Press <kbd className="font-mono">?</kbd> for all shortcuts.
                       </>
@@ -2027,7 +2134,7 @@ function Mailroom({
         {composer?.variant === "panel" && (
           <Composer
             key={composer.key}
-            client={client}
+            client={writer ?? client}
             identities={identities}
             senders={senders}
             signatures={signatures}
@@ -2036,7 +2143,7 @@ function Mailroom({
             onAddContact={addContact}
             seed={composer.seed}
             variant="panel"
-            trashId={roles.trash}
+            trashId={sharedMode ? writerTrash : roles.trash}
             alwaysCcBcc={prefs.showCcBcc}
             onClose={({ savedDraft }) => {
               setComposer(null);
