@@ -75,6 +75,10 @@ export const LIMITS = {
   // mailbox". Each needs a fresh step-up and changes nothing on the mail server but the conversion's password job, so
   // it fails open like other console writes.
   delegationManage: { limit: 30, windowSec: 600, by: "caller", failMode: "open" },
+  // Opening a mailbox shared with the person in the webmail (ADR-0026 §6: a "Shared with you" entry or "Open another
+  // mailbox" by address). Each one mints and destroys a mail-server credential, and a typed address is a probe: fail
+  // closed, so a Redis outage refuses opens (the person's own mailbox still works).
+  webmailDelegatedOpen: { limit: 20, windowSec: 600, by: "caller", failMode: "closed" },
 } as const satisfies Record<string, RateLimit>;
 
 export type LimitName = keyof typeof LIMITS;
