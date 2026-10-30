@@ -1,6 +1,6 @@
 ---
 title: Webmail
-description: Read and write mail in the browser — signing in, several mailboxes, writing and undoing a send, organising, searching, shortcuts, and how remote images stay blocked until you load them. Contacts have their own guide.
+description: Read and write mail in the browser — signing in, several mailboxes, mailboxes shared with you, writing and undoing a send, organising, searching, shortcuts, and how remote images stay blocked until you load them. Contacts have their own guide.
 ---
 
 The webmail is AnhourMail in your browser, at <Value of="webmailHost" />. It's a separate address from the console
@@ -68,6 +68,31 @@ If you use more than one mailbox, open the menu (⋮) at the top of the sidebar 
 sign in to it with its own address and password. Each mailbox gets a square tile at the top of the sidebar; choose a
 tile to switch. You can have up to five open at once. **Sign out** signs out of all of them.
 
+## Mailboxes shared with you
+
+When an owner or admin gives you access to another mailbox in your account (see
+[Give people access to a mailbox](/docs/mailboxes#give-people-access-to-a-mailbox)), it shows up in your webmail by
+itself. You don't need its password or a second sign-in: your own sign-in is enough. Changes can take up to a minute
+to show.
+
+- **Shared with you.** Mailboxes you have **Read and manage** on are listed under **Shared with you** in the sidebar
+  and in the menu (⋮) at the top of it. Choose one to open it: a line across the top says "You're viewing" that
+  mailbox, and **Back to your mailbox** returns to yours. You can read, move, flag and delete its mail in all its
+  folders.
+- **Open another mailbox.** In the menu (⋮) at the top of the sidebar, choose **Open another mailbox**, type the
+  mailbox's address and choose **Open**. It opens in a new tab at its own address (`/mailbox/` followed by the address),
+  which shows that mailbox only; your other tabs stay on your own mailbox. You can bookmark it: access is checked
+  again each time it opens. If you follow a link to it from another website, the page asks you to choose **Open**
+  first. If you don't have access, or the address doesn't exist, the tab says "You don't have
+  access to this mailbox" and links back to your own.
+- **What stays with your own mailbox.** Writing and sending, replies, contacts, blocking a sender, settings and
+  signatures always belong to your own mailbox, so they aren't offered while a shared one is shown. To send from a
+  shared mailbox, write from your own (see [Sending as or on behalf of a mailbox](#sending-as-or-on-behalf-of-a-mailbox)).
+- **When access ends.** If your access is taken away, the mailbox leaves **Shared with you** and an open tab of it says
+  you don't have access any more.
+- Mailboxes shared with you open in the webmail only, not in mail apps. You can have up to
+  <Value of="delegatedMailboxesPerPerson" /> of them open at once.
+
 ## Reading mail
 
 - On a computer you see your folders, the list of conversations and the open message side by side. On a phone you
@@ -120,6 +145,29 @@ tile to switch. You can have up to five open at once. **Sign out** signs out of 
   drafts and nothing is delivered.
 - You can send to up to <Value of="recipientsPerMessage" /> people per message, and each person counts toward your
   [sending limits](/docs/sending-limits).
+
+### Sending as or on behalf of a mailbox
+
+If you've been given **Send as** or **Send on behalf** on a mailbox (see
+[Give people access to a mailbox](/docs/mailboxes#give-people-access-to-a-mailbox)), **From** lists it under
+**Shared with you**, after your own addresses:
+
+- **The mailbox's address** sends as the mailbox. Recipients see only the mailbox, not you.
+- **"You on behalf of the mailbox"** sends from the mailbox and names you as the sender. Recipients see "You on
+  behalf of" the mailbox.
+- If you have both, only **send as** is offered.
+
+Write the message from your own mailbox as usual; your draft stays in your Drafts. When you send, it goes from the
+shared mailbox, and its copy is kept in **that mailbox's** Sent folder, so everyone with access sees what was sent.
+**Undo** works the same way. It counts toward the shared mailbox's sending limits as well as yours. If your access
+was taken away in the meantime, the message isn't sent.
+
+Rarely, the connection drops just as a message is sent and we can't tell whether it went. You'll see "We couldn't
+confirm whether this was sent. Check Sent before sending it again." Look in the shared mailbox's Sent folder before
+you try again.
+
+When you read a message sent on behalf of a mailbox, the line under the sender says "On behalf of" the mailbox,
+"sent by" the person who sent it. That comes from the message itself, like the rest of its header details.
 
 ## Rich text and HTML email
 
