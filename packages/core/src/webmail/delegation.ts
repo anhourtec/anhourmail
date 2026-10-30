@@ -413,3 +413,224 @@ export async function openDelegatedMailbox<T extends { username: string }>(
   if (typeof out === "string") throw new DelegatedMailboxRefusedError();
   return out;
 }
+
+/** Which send right a delegated send uses (ADR-0026 §6): mail as the mailbox, or "delegate on behalf of mailbox". */
+export type DelegatedSendMode = "send_as" | "send_on_behalf";
+
+/** The send right used from these rights: send as wins when both are held; null without either. */
+export function sendMode(rights: readonly DelegationRight[]): DelegatedSendMode | null {
+  if (rights.includes("send_as")) return "send_as";
+  return rights.includes("send_on_behalf") ? "send_on_behalf" : null;
+}
+
+/** A delegated send the grant table allowed just now (`authorizeDelegatedSend`). */
+export type DelegatedSendAuthorization = {
+  mode: DelegatedSendMode;
+  accountId: string;
+  mailboxId: string;
+  /** The mailbox sent from (lowercase): the From, the envelope sender. */
+  address: string;
+  /** The delegate's own address (lowercase): the Sender of a send on behalf. */
+  via: string;
+};
+
+/** A delegated entry being sent from, and what the audit may record about the message (a count, never addresses). */
+export type DelegatedSendInput = {
+  mailboxId: string;
+  granteeUserId: string;
+  via: string;
+  console?: ConsoleBinding | null;
+  /** Envelope recipients (deduplicated): only the count is recorded (rule 24). */
+  recipientCount: number;
+};
+
+type SendRefusal = Refusal;
+
+const sendAction = (mode: DelegatedSendMode) =>
+  mode === "send_as" ? ("delegation.sent_as" as const) : ("delegation.sent_on_behalf" as const);
+
+/**
+ * The right to send from a delegated mailbox, checked **now** (uncached, never a page-load answer) immediately before
+ * the submission, and audited before anything is submitted (ADR-0026 §6 and §8, slice 13 requirement 2): if the audit
+ * append fails, the caller sends nothing.
+ *
+ * Inside one unit of work: act-as refused first; the account lock (a removal or revoke and a send serialise); every
+ * check of `DelegationGate` for a send right (the person still a member, not suspended, the plan, the right, the
+ * mailbox active and usable, their own mailbox still theirs); then the right used — send as wins over send on behalf.
+ * Audited `delegation.sent_as` / `delegation.sent_on_behalf` in the account (the delegate's and the mailbox's), actor
+ * = the delegate, target = the mailbox, meta `mailboxId`, `recipientCount` and `need` only — never addresses, a
+ * subject or content (rule 24). Refusals are `denied` (`not_granted`, `mailbox_unavailable`, `act_as`) and answer
+ * like the gate (404; act-as 403); a right that changed between the read and the lock is `failed` ("try again").
+ */
+export async function authorizeDelegatedSend(
+  deps: Deps,
+  access: DelegationAccess,
+  input: DelegatedSendInput,
+  req: RequestMeta,
+): Promise<DelegatedSendAuthorization> {
+  const now = deps.clock.now();
+  const pre = await deps.uow.run(async (r) => {
+    const via = await ownMailbox(r, input.via);
+    if (!via?.userId || via.userId !== input.granteeUserId) return null;
+    const mailbox = await r.mailboxes.get(via.accountId, input.mailboxId);
+    const rights = mailbox ? await r.delegation.rightsOf(via.accountId, mailbox.id, input.granteeUserId) : [];
+    const member = (await r.people.list(via.accountId)).find((p) => p.userId === via.userId);
+    const actor = await delegateActor(r, via.userId, member?.email ?? "");
+    return { via, mailbox, mode: sendMode(rights) ?? "send_as", actor };
+  });
+  if (!pre) throw new DelegatedMailboxRefusedError();
+  const accountId = pre.via.accountId;
+  const meta = { mailboxId: input.mailboxId, recipientCount: input.recipientCount, need: "send" as const };
+  let out: DelegatedSendAuthorization | SendRefusal;
+  try {
+    out = await mutation(
+      deps,
+      pre.actor,
+      req,
+      {
+        action: sendAction(pre.mode),
+        // As for opening one (ADR-0026 §4): the grant is the authorisation, checked below; the matrix check is the
+        // self-level one (a person, not suspended).
+        permission: "self.profile.read",
+        accountId,
+        target: { type: "mailbox", id: pre.mailbox?.id ?? null },
+      },
+      async (repos): Promise<MutationOutcome<DelegatedSendAuthorization | SendRefusal>> => {
+        const refuse = (code: SendRefusal, mailbox: Mailbox | null, extra: Record<string, unknown> = {}) => ({
+          result: code,
+          target: { id: mailbox?.id ?? null, label: mailbox?.address ?? null },
+          denied: { code },
+          meta: { ...meta, ...extra },
+        });
+        if (input.console && (await repos.actAs.active(input.console.userId, input.console.sessionId, now))) {
+          return refuse("act_as", null);
+        }
+        await repos.accounts.lock(accountId);
+        const mailbox = await repos.mailboxes.get(accountId, input.mailboxId);
+        const checked = await check(
+          repos,
+          access,
+          { accountId, mailbox, granteeUserId: input.granteeUserId, via: input.via, need: "send" },
+          now,
+          input.console,
+        );
+        if (!checked.ok) return refuse(checked.code, checked.mailbox, checked.meta);
+        const mode = sendMode(checked.rights);
+        // Changed between the read above and the lock (a grant or revoke just committed): recorded as failed.
+        if (mode !== pre.mode) throw new TryAgainError("Your sending rights for this mailbox changed. Try again.");
+        return {
+          result: {
+            mode,
+            accountId,
+            mailboxId: checked.mailbox.id,
+            address: lower(checked.mailbox.address),
+            via: lower(input.via),
+          },
+          target: { id: checked.mailbox.id, label: checked.mailbox.address },
+          meta,
+        };
+      },
+    );
+  } catch (err) {
+    if (err instanceof ForbiddenError || err instanceof NotFoundError) throw new DelegatedMailboxRefusedError();
+    throw err;
+  }
+  if (out === "act_as") throw new ForbiddenError("Other mailboxes can't be used while staff act as someone.");
+  if (typeof out === "string") throw new DelegatedMailboxRefusedError();
+  return out;
+}
+
+/**
+ * The send right used now, uncached and read-only (no lock, no audit): the last check right before the submission, after
+ * `authorizeDelegatedSend` was audited and the attachments copied. Null for any refusal (the caller sends nothing and
+ * records `delegation.send_failed`).
+ */
+export async function delegatedSendCheck(
+  deps: Deps,
+  access: DelegationAccess,
+  input: Omit<DelegatedSendInput, "recipientCount">,
+): Promise<DelegatedSendMode | null> {
+  return deps.uow.run(async (r) => {
+    const via = await ownMailbox(r, input.via);
+    if (!via) return null;
+    const mailbox = await r.mailboxes.get(via.accountId, input.mailboxId);
+    const out = await check(
+      r,
+      access,
+      { accountId: via.accountId, mailbox, granteeUserId: input.granteeUserId, via: input.via, need: "send" },
+      deps.clock.now(),
+      input.console,
+    );
+    return out.ok ? sendMode(out.rights) : null;
+  });
+}
+
+/**
+ * What happened to a delegated send after its `delegation.sent_*` entry: undone in the hold, never submitted, or sent
+ * but its temporary tagged copy couldn't be removed (twice) — the tag in it expires within minutes.
+ */
+export type DelegatedSendOutcome =
+  { kind: "cancelled" } | { kind: "failed"; reason: string } | { kind: "tagged_copy_left" };
+
+const OUTCOME_ACTION = {
+  cancelled: "delegation.send_cancelled",
+  failed: "delegation.send_failed",
+  tagged_copy_left: "delegation.tagged_copy_left",
+} as const;
+
+/**
+ * Records what became of a delegated send after it was audited as sent (ADR-0026 §6): `delegation.send_cancelled` (an
+ * undo in the hold cancelled it at the mail server) or `delegation.send_failed` (nothing was submitted after all: the
+ * mail server refused or couldn't be reached, the quota or the right refused, so a `sent_*` row with no submission is
+ * visible; meta `reason`, a short code) or `delegation.tagged_copy_left` (sent, but the temporary copy holding the tag
+ * couldn't be destroyed; it is useless once its expiry passes). Actor = the delegate, target = the mailbox, meta `mailboxId`. Refuses (404) a
+ * delegate no longer behind their own mailbox or a mailbox outside their account; it refuses nothing else (the right
+ * may be gone by now: recording that a send was stopped is never withheld).
+ */
+export async function recordDelegatedSendOutcome(
+  deps: Deps,
+  input: { mailboxId: string; granteeUserId: string; via: string },
+  outcome: DelegatedSendOutcome,
+  req: RequestMeta,
+): Promise<void> {
+  const pre = await deps.uow.run(async (r) => {
+    const via = await ownMailbox(r, input.via);
+    if (!via?.userId || via.userId !== input.granteeUserId) return null;
+    const mailbox = await r.mailboxes.get(via.accountId, input.mailboxId);
+    const member = (await r.people.list(via.accountId)).find((p) => p.userId === via.userId);
+    return { via, mailbox, actor: await delegateActor(r, via.userId, member?.email ?? "") };
+  });
+  if (!pre?.mailbox) throw new DelegatedMailboxRefusedError();
+  const mailbox = pre.mailbox;
+  const meta =
+    outcome.kind === "failed"
+      ? {
+          mailboxId: mailbox.id,
+          reason: outcome.reason
+            .toLowerCase()
+            .replace(/[^a-z_]/g, "")
+            .slice(0, 40),
+        }
+      : { mailboxId: mailbox.id };
+  await mutation(
+    deps,
+    pre.actor,
+    req,
+    {
+      action: OUTCOME_ACTION[outcome.kind],
+      permission: "self.profile.read",
+      accountId: pre.via.accountId,
+      target: { type: "mailbox", id: mailbox.id },
+    },
+    async () => ({ result: undefined, target: { id: mailbox.id, label: mailbox.address }, meta }),
+  );
+}
+
+/** A delegated send undone in its hold (`recordDelegatedSendOutcome` with `cancelled`). */
+export function recordDelegatedSendCancelled(
+  deps: Deps,
+  input: { mailboxId: string; granteeUserId: string; via: string },
+  req: RequestMeta,
+): Promise<void> {
+  return recordDelegatedSendOutcome(deps, input, { kind: "cancelled" }, req);
+}

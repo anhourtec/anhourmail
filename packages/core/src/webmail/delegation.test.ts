@@ -7,12 +7,17 @@ import { DelegatedMailboxRefusedError, ForbiddenError, TryAgainError } from "../
 import type { Mailbox, MailboxStatus } from "../mailboxes/entity";
 import type { WebmailAccess } from "./access";
 import {
+  authorizeDelegatedSend,
   CredentialSlotTakenError,
   type DelegatedTarget,
   delegatedMailboxesFor,
+  delegatedSendCheck,
   delegationCheck,
   DelegationGate,
   openDelegatedMailbox,
+  recordDelegatedSendCancelled,
+  recordDelegatedSendOutcome,
+  sendMode,
 } from "./delegation";
 
 const DESK = "aaaaaaaa-0000-4000-8000-000000000001";
@@ -379,5 +384,169 @@ describe("DelegationGate", () => {
     gate.forget("s1");
     expect(await gate.allowed("s1", entry)).toBe(true);
     expect(asked).toBe(7);
+  });
+});
+
+describe("sendMode", () => {
+  it("uses send as when both send rights are held, else send on behalf, else none", () => {
+    expect(sendMode(["send_on_behalf", "send_as"])).toBe("send_as");
+    expect(sendMode(["full_access", "send_on_behalf"])).toBe("send_on_behalf");
+    expect(sendMode(["full_access"])).toBeNull();
+    expect(sendMode([])).toBeNull();
+  });
+});
+
+describe("authorizeDelegatedSend (ADR-0026 §6, slice 13)", () => {
+  const send = (t: ReturnType<typeof world>, extra: Partial<Parameters<typeof authorizeDelegatedSend>[2]> = {}) =>
+    authorizeDelegatedSend(
+      t.d,
+      t.access,
+      { mailboxId: DESK, granteeUserId: "kim", via: "kim@family.test", recipientCount: 3, ...extra },
+      req,
+    );
+  const sends = (t: ReturnType<typeof world>, accountId = ACCOUNT_A) =>
+    t.s.audit.filter(
+      (e) =>
+        e.scope === `account:${accountId}` &&
+        (e.action === "delegation.sent_as" || e.action === "delegation.sent_on_behalf"),
+    );
+
+  it("answers send as (winning over on behalf) and audits it before the caller submits, with a count only", async () => {
+    const t = world();
+    t.grant(DESK, "kim", "send_on_behalf");
+    t.grant(DESK, "kim", "send_as");
+    const out = await send(t);
+    expect(out).toEqual({
+      mode: "send_as",
+      accountId: ACCOUNT_A,
+      mailboxId: DESK,
+      address: "desk@family.test",
+      via: "kim@family.test",
+    });
+    const [entry] = sends(t);
+    expect(entry).toMatchObject({
+      action: "delegation.sent_as",
+      result: "success",
+      actor: { userId: "kim" },
+      target: { type: "mailbox", id: DESK, label: "desk@family.test" },
+      meta: { mailboxId: DESK, recipientCount: 3, need: "send" },
+    });
+    // Never addresses of recipients, a subject or a body (rule 24).
+    expect(Object.keys(entry?.meta ?? {}).sort()).toEqual(["mailboxId", "need", "recipientCount"]);
+  });
+
+  it("answers send on behalf with that right only, audited as such", async () => {
+    const t = world();
+    t.grant(DESK, "kim", "send_on_behalf");
+    expect((await send(t)).mode).toBe("send_on_behalf");
+    expect(sends(t)[0]).toMatchObject({ action: "delegation.sent_on_behalf", result: "success" });
+  });
+
+  it("refuses read-and-manage only, no right, a revoke and another account's mailbox the same way, audited denied", async () => {
+    const t = world();
+    t.grant(DESK, "kim", "full_access");
+    await expect(send(t)).rejects.toBeInstanceOf(DelegatedMailboxRefusedError);
+    expect(sends(t)[0]).toMatchObject({ result: "denied", errorCode: "not_granted" });
+    await expect(send(t, { mailboxId: LEE_BOX })).rejects.toBeInstanceOf(DelegatedMailboxRefusedError);
+    await expect(send(t, { mailboxId: B_DESK })).rejects.toBeInstanceOf(DelegatedMailboxRefusedError);
+    // Another account's mailbox is never named in this account's log.
+    expect(sends(t)[2]).toMatchObject({ result: "denied", target: { id: null, label: null } });
+    expect(sends(t, ACCOUNT_B)).toEqual([]);
+    t.grant(DESK, "kim", "send_as");
+    await send(t);
+    t.s.delegations = t.s.delegations.filter((g) => g.right !== "send_as");
+    await expect(send(t)).rejects.toBeInstanceOf(DelegatedMailboxRefusedError);
+  });
+
+  it("refuses a suspended or deleting mailbox, a plan without delegation and a removed person", async () => {
+    const t = world();
+    t.grant(DESK, "kim", "send_as");
+    t.states["desk@family.test"] = "suspended";
+    await expect(send(t)).rejects.toBeInstanceOf(DelegatedMailboxRefusedError);
+    expect(sends(t).at(-1)).toMatchObject({ result: "denied", errorCode: "mailbox_unavailable" });
+    delete t.states["desk@family.test"];
+    const a = t.s.accounts.find((x) => x.id === ACCOUNT_A);
+    if (a) a.plan = "free";
+    await expect(send(t)).rejects.toBeInstanceOf(DelegatedMailboxRefusedError);
+    if (a) a.plan = "plus";
+    t.s.memberships = t.s.memberships.filter((m) => m.userId !== "kim");
+    await expect(send(t)).rejects.toBeInstanceOf(DelegatedMailboxRefusedError);
+  });
+
+  it("refuses a delegate no longer behind the own mailbox, without auditing anywhere", async () => {
+    const t = world();
+    t.grant(DESK, "kim", "send_as");
+    await expect(send(t, { via: "lee@family.test" })).rejects.toBeInstanceOf(DelegatedMailboxRefusedError);
+    await expect(send(t, { via: "nobody@family.test" })).rejects.toBeInstanceOf(DelegatedMailboxRefusedError);
+    expect(sends(t)).toEqual([]);
+  });
+
+  it("refuses with 403 while act-as is open on the console session, audited denied", async () => {
+    const t = world();
+    t.grant(DESK, "kim", "send_as");
+    t.s.actAsSessions.push({
+      id: "aa",
+      staffUserId: "kim",
+      staffRole: "support_admin",
+      authSessionId: "cs-1",
+      accountId: ACCOUNT_B,
+      reason: "ticket",
+      startedAt: new Date("2026-10-30T11:00:00Z"),
+      expiresAt: new Date("2026-10-30T13:00:00Z"),
+      endedAt: null,
+      endReason: null,
+    });
+    await expect(send(t, { console: { userId: "kim", sessionId: "cs-1" } })).rejects.toBeInstanceOf(ForbiddenError);
+    expect(sends(t)[0]).toMatchObject({ result: "denied", errorCode: "act_as" });
+  });
+
+  it("records an undone delegated send in the account, and refuses one for someone else's mailbox", async () => {
+    const t = world();
+    await recordDelegatedSendCancelled(t.d, { mailboxId: DESK, granteeUserId: "kim", via: "kim@family.test" }, req);
+    const cancelled = t.s.audit.filter((e) => e.action === "delegation.send_cancelled");
+    expect(cancelled[0]).toMatchObject({
+      scope: `account:${ACCOUNT_A}`,
+      result: "success",
+      actor: { userId: "kim" },
+      target: { id: DESK, label: "desk@family.test" },
+      meta: { mailboxId: DESK },
+    });
+    await expect(
+      recordDelegatedSendCancelled(t.d, { mailboxId: B_DESK, granteeUserId: "kim", via: "kim@family.test" }, req),
+    ).rejects.toBeInstanceOf(DelegatedMailboxRefusedError);
+    await expect(
+      recordDelegatedSendCancelled(t.d, { mailboxId: DESK, granteeUserId: "lee", via: "kim@family.test" }, req),
+    ).rejects.toBeInstanceOf(DelegatedMailboxRefusedError);
+  });
+});
+
+describe("delegatedSendCheck and recordDelegatedSendOutcome", () => {
+  const who = { mailboxId: DESK, granteeUserId: "kim", via: "kim@family.test" };
+
+  it("answers the right used now, uncached and without writing anything; null for any refusal", async () => {
+    const t = world();
+    expect(await delegatedSendCheck(t.d, t.access, who)).toBeNull();
+    t.grant(DESK, "kim", "send_on_behalf");
+    expect(await delegatedSendCheck(t.d, t.access, who)).toBe("send_on_behalf");
+    t.grant(DESK, "kim", "send_as");
+    expect(await delegatedSendCheck(t.d, t.access, who)).toBe("send_as");
+    t.states["desk@family.test"] = "suspended";
+    expect(await delegatedSendCheck(t.d, t.access, who)).toBeNull();
+    expect(await delegatedSendCheck(t.d, t.access, { ...who, via: "nobody@family.test" })).toBeNull();
+    expect(t.s.audit).toEqual([]);
+  });
+
+  it("records a send stopped after its audit entry, with a short reason code, and a tagged copy left behind", async () => {
+    const t = world();
+    await recordDelegatedSendOutcome(t.d, who, { kind: "failed", reason: "Quota <x>" }, req);
+    await recordDelegatedSendOutcome(t.d, who, { kind: "tagged_copy_left" }, req);
+    expect(t.s.audit.find((e) => e.action === "delegation.send_failed")).toMatchObject({
+      result: "success",
+      target: { id: DESK },
+      meta: { mailboxId: DESK, reason: "quotax" },
+    });
+    expect(t.s.audit.find((e) => e.action === "delegation.tagged_copy_left")).toMatchObject({
+      meta: { mailboxId: DESK },
+    });
   });
 });
