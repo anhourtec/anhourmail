@@ -1,6 +1,6 @@
 # Audit
 
-Last updated: 2026-10-29 (data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
+Last updated: 2026-10-30 (`account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
 
 Every meaningful action is recorded, tamper-evident, searchable and visible to the right people. Audit is a core module, not a logging side effect.
 
@@ -220,7 +220,8 @@ People: `account.invite_sent`, `account.invite_resent`, `account.invite_revoked`
 address, meta = role; never the token), `account.invite_accepted` (meta: role, `newLogin`, the user id; the actor is
 the signed-in person, or `system`/`invite` when the link created the login), `account.role_changed` (meta:
 `previousRole`, `newRole` — `from`/`to` are redacted keys) and `account.member_removed` (meta: role, how many of their
-mailboxes became unassigned, `appPasswordsRevoked`). A User Administrator's attempt on an Owner, an admin or an admin-role invite is recorded as
+mailboxes became unassigned, `mailboxesSignedOut` — mailboxes given a new generated password so the person's sign-in
+is off, never the password — and `appPasswordsRevoked`). A User Administrator's attempt on an Owner, an admin or an admin-role invite is recorded as
 `denied` in the account. An invite opened by a different signed-in address is recorded as `denied` in the
 **platform** scope with the invited address masked, so a non-member's address and id never land in the inviting
 account's log. `staff.account_viewed` is written in the viewed account's scope each time staff open its summary;

@@ -1,6 +1,6 @@
 # 01 — Architecture
 
-Last updated: 2026-10-29 (data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
+Last updated: 2026-10-30 (removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
 
 ## Overview
 
@@ -107,6 +107,17 @@ cleared by `afterPasswordChange`) and `mailbox.must_change_password` gates the w
 before the inbox, and 403 `password_change_required` from every webmail API route but the change and sign-out; cleared
 by the worker once the person's own password is applied, `07-security.md` "Mailbox passwords"). The two passwords then diverge as usual. The mailbox's
 display name is sent to Stalwart as the account `description`, which seeds the sending identity's name.
+
+**Removing someone** (`people/service.ts` `removeMember`) is the reverse, for leavers: in the same audited
+transaction as the membership delete, each of their mailboxes in the account is released (`mailboxes.releaseOwner`,
+conditional on that owner) and becomes a shared address, given a new generated password nobody is shown (queued as a
+`mailbox.password` job with the grant), and its app passwords revoked. The mail server ends the old password's webmail
+sessions and tokens when the new one lands. Guards (07-security.md "Leavers"): removal waits (409) while one of their
+mailboxes is still being created; the password job keeps an administrator's hash on a deleting mailbox instead of
+dropping it, a resume or restore re-signs its grant and queues it (`queueWaitingPassword`), a job that gives up on
+a person-less mailbox suspends it (fails closed), and `mailbox.ensure` refuses to turn an
+existing account back on until it has landed; the console → webmail handoff takes the account lock before checking
+ownership, so it can't mint tokens for someone being removed.
 
 **"Make this a user"** (`mailboxes/make-user.ts`) does the same for an existing unassigned mailbox (a shared address):
 login, membership, profile, owner link (`mailboxes.assignOwner`, conditional on no owner) and display name in one

@@ -1,6 +1,6 @@
 # 07 — Security
 
-Last updated: 2026-10-29 (data export and account deletion; staff support access; profile photos).
+Last updated: 2026-10-30 (leavers lose mailbox sign-in; data export and account deletion; staff support access; profile photos).
 
 ## Threat model
 
@@ -266,6 +266,18 @@ sha256(phc) | expiry)>`, expiry ≤ 1 h, stored beside the waiting hash and sent
   **Residual (accepted):** Stalwart has no "must change" state, so IMAP, POP3 and SMTP submission keep accepting the
   administrator-set password until the person changes it. We don't disable the mailbox's protocols for it; the
   wizard says so ("Until they change it, the password also works in mail apps").
+- **Leavers (2026-10-30):** removing someone from an account (`removeMember`) gives each of their mailboxes there a
+  new generated password nobody is shown and revokes its app passwords, so a person who knew the password loses
+  webmail, IMAP, POP3 and SMTP access once the worker applies it. Removal answers 409 while one of their mailboxes is
+  still being created (the create could still use the password they were given). An administrator's waiting hash is
+  never dropped because a mailbox is being deleted (the job and its give-up keep it); a resume or restore queues it,
+  and `mailbox.ensure` keeps an existing account off while one waits, so turning it back on never revives the old
+  password; the resume or restore signs the proxy grant again, since the stored one only lasts a short while. If an
+  administrator's password job gives up on a person-less mailbox (a leaver's, or a shared address), the mailbox is
+  suspended rather than left open with the old password (audit meta `suspended`); setting a password again and
+  resuming brings it back. The handoff redemption takes the account lock, which removal holds. **Needs checking on the pinned
+  server:** whether Stalwart closes IMAP IDLE / SMTP / EventSource connections already authenticated when the
+  password changes (OAuth tokens are revoked; open connections may last until they disconnect).
 - **Detection:** the worker records the Password `credentialId` after every create/reset/change
   (`mailbox.password_credential_id`); the hourly reconciler reports a mailbox whose credential differs
   (`passwordReplaced`) or was never recorded (`passwordUntracked`) as `platform.reconciler_drift`, never fixes it.
