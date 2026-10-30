@@ -1,7 +1,7 @@
 ---
 title: Give people access to a mailbox, and shared mailboxes
 date: 2026-10-30
-summary: Owners and admins can let people read a mailbox, send as it or send on its behalf. It shows up in their webmail by itself, and a person's mailbox can become a shared one.
+summary: Owners and admins can let people read a mailbox, send as it or send on its behalf. They open it in their webmail with their own sign-in, and a person's mailbox can become a shared one.
 ---
 
 - **Three kinds of access.** On a mailbox's **Delegation** tab in the console, owners and User Administrators choose
@@ -9,9 +9,9 @@ summary: Owners and admins can let people read a mailbox, send as it or send on 
   only) and **Send on behalf** (mail from the mailbox that names who sent it). Any combination works; if someone has
   both send rights, send as is used. Every change is in the audit log. Plus and Supporter plans. See
   [Give people access to a mailbox](/docs/mailboxes#give-people-access-to-a-mailbox).
-- **Shared with you.** A mailbox you can read appears under **Shared with you** in your webmail, without its password
-  or a second sign-in. **Open another mailbox** opens one by address in a tab of its own, and your other tabs stay on
-  your mailbox. See [Mailboxes shared with you](/docs/webmail#mailboxes-shared-with-you).
+- **Open another mailbox.** Open a mailbox you can read by its address, without its password or a second sign-in. It
+  opens in a tab of its own, named after the mailbox, and your other tabs stay on your mailbox; **Your mailbox** in
+  that tab's menu takes you back. See [Mailboxes shared with you](/docs/webmail#mailboxes-shared-with-you).
 - **Send from it.** Choose the mailbox in **From** when you write, or open it and use **New email**, **Reply** or
   **Forward** there: **From** starts as the mailbox. Its copy goes to that mailbox's Sent folder, and messages sent on
   its behalf read "Name on behalf of" the mailbox. With **Read and manage** only, **New email** says why it's off. See
