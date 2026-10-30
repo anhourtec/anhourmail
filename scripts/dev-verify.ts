@@ -140,7 +140,7 @@ try {
 check("Stalwart container has no internet egress", egressBlocked);
 
 // Protocols: dev certificates are self-signed, so TLS verification is off here (dev only).
-type Wire = { send(line: string): void; read(until: RegExp): Promise<string>; close(): void };
+type Wire = { send(line: string): void; read(until: RegExp, timeoutMs?: number): Promise<string>; close(): void };
 function wire(port: number, secure: boolean): Promise<Wire> {
   return new Promise((resolve, reject) => {
     let buf = "";
@@ -155,8 +155,8 @@ function wire(port: number, secure: boolean): Promise<Wire> {
         send: (line) => {
           socket.write(`${line}\r\n`);
         },
-        read: async (until) => {
-          for (let i = 0; i < 100; i++) {
+        read: async (until, timeoutMs = 5000) => {
+          for (let i = 0; i < timeoutMs / 50; i++) {
             if (until.test(buf)) {
               const out = buf;
               buf = "";
@@ -1008,7 +1008,9 @@ async function rcptReply(to: string, opts: { submission?: boolean } = {}): Promi
     w.send(`MAIL FROM:<${opts.submission ? user : `verify@sender-${token}.example`}>`);
     await w.read(/^\d{3} /m);
     w.send(`RCPT TO:<${to}>`);
-    const reply = await w.read(/^\d{3} /m);
+    // Stalwart waits before answering after repeated refused recipients from one address (it slows address
+    // harvesting); earlier checks in this run refuse several, so the reply can take longer than the default 5 s.
+    const reply = await w.read(/^\d{3} /m, 30_000);
     w.send("QUIT");
     return reply.trim().split("\r\n").at(-1) ?? "";
   } finally {
