@@ -35,6 +35,7 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 | #    | Migration                           | Commit    | Date       | Change                                                                                                            | Rollback        |
 | ---- | ----------------------------------- | --------- | ---------- | ----------------------------------------------------------------------------------------------------------------- | --------------- |
+| 0029 | `0029_mailbox_delegation`           | —         | 2026-10-30 | `mailbox_delegation` table: read and manage, send as, send on behalf per mailbox and person (ADR-0026)            | Safe            |
 | 0028 | `0028_alias_creation_year`          | —         | 2026-10-29 | Seed `alias_creation_day` for the rolling year from live aliases (Free yearly cap)                                | Safe            |
 | 0027 | `0027_data_export_account_deletion` | —         | 2026-10-29 | `data_export` (sealed control-plane archives, 7 days) and `account_deletion` (grace period); ADR-0025             | Safe            |
 | 0026 | `0026_act_as_session`               | —         | 2026-10-29 | `act_as_session` table: staff support access sessions (read-only, time-boxed; ADR-0023)                           | Safe            |
@@ -92,6 +93,27 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0029_mailbox_delegation · — · 2026-10-30 · Safe
+
+- Added: `mailbox_delegation` (id uuid, account_id → customer_account cascade, mailbox_id, grantee_user_id text,
+  `right` text, granted_by text — no foreign key, kept as recorded —, created_at) with a unique index on (mailbox_id,
+  grantee_user_id, right), an index on (account_id, grantee_user_id), two composite foreign keys, both cascade:
+  `mailbox_delegation_mailbox_fk` (account_id, mailbox_id) → mailbox (account_id, id) (the mailbox is in the row's
+  account) and `mailbox_delegation_membership_fk` (account_id, grantee_user_id) → account_membership (account_id,
+  user_id) (the person is in it); and `CHECK mailbox_delegation_right`: `right` is one of
+  `full_access`, `send_as`, `send_on_behalf` (ADR-0026 §2). A text column with a `CHECK` rather than the ADR's
+  Postgres enum, following `schema.ts` (every other state column is text). No mail content (rule 24).
+- Changed: `mailbox` gains the unique constraint `mailbox_account_id_unique` on (account_id, id), the target of the
+  mailbox foreign key (always true already, since `id` is the primary key; created first in the file).
+- Removed: —
+- Data: none. A grant changes nothing on the mail server, so there is no status column and no job.
+- Amended before commit (2026-10-30, review): the first version had a plain `mailbox_id → mailbox` key. It was applied
+  only to local dev and test databases, which were brought to the amended DDL by hand (unique constraint added, the
+  old key swapped for the composite one, `drizzle.__drizzle_migrations.hash` updated; `created_at` unchanged, so the
+  migrator doesn't run it again). A fresh database migrated from the file ends with the same constraints.
+- Rollback: drop the table and the `mailbox_account_id_unique` constraint. Every grant is lost (people lose delegated access at once); the audit log keeps every
+  grant and revoke, so they can be re-entered.
 
 ### 0028_alias_creation_year · — · 2026-10-29 · Safe
 

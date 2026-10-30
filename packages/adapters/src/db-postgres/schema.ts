@@ -10,6 +10,7 @@ import {
   check,
   customType,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -17,6 +18,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  unique,
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
@@ -351,6 +353,8 @@ export const mailbox = pgTable(
   },
   (t) => [
     index("mailbox_account_idx").on(t.accountId),
+    // The target of composite foreign keys that tie a row to a mailbox of the same account (`mailbox_delegation`).
+    unique("mailbox_account_id_unique").on(t.accountId, t.id),
     index("mailbox_purge_idx")
       .on(t.purgeAfter)
       .where(sql`status = 'deleting'`),
@@ -602,6 +606,49 @@ export const appPassword = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("app_password_mailbox_idx").on(t.mailboxId)],
+);
+
+// --- mailbox delegation (ADR-0026) --------------------------------------------------------------------------------
+
+/**
+ * One right one person holds on one mailbox of the same account: `full_access` (read and manage), `send_as` or
+ * `send_on_behalf`. Nothing on the mail server changes with a grant, so there is no status or mail-server id: it takes
+ * effect when it commits, and a revoke deletes the row (the history is the audit log). The mailbox and the person must
+ * both be in the row's account (composite foreign keys); the services delete and audit rows themselves, the cascades
+ * are a backstop.
+ */
+export const mailboxDelegation = pgTable(
+  "mailbox_delegation",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    /** A mailbox of the same account (composite foreign key below). */
+    mailboxId: uuid("mailbox_id").notNull(),
+    /** A person in the same account (`auth_user.id`). */
+    granteeUserId: text("grantee_user_id").notNull(),
+    /** full_access | send_as | send_on_behalf (shared/delegation.ts DELEGATION_RIGHTS) */
+    right: text("right").notNull(),
+    /** The console user who granted it; null when the system wrote it. No foreign key: kept as recorded. */
+    grantedBy: text("granted_by"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("mailbox_delegation_unique_idx").on(t.mailboxId, t.granteeUserId, t.right),
+    index("mailbox_delegation_grantee_idx").on(t.accountId, t.granteeUserId),
+    foreignKey({
+      name: "mailbox_delegation_mailbox_fk",
+      columns: [t.accountId, t.mailboxId],
+      foreignColumns: [mailbox.accountId, mailbox.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "mailbox_delegation_membership_fk",
+      columns: [t.accountId, t.granteeUserId],
+      foreignColumns: [accountMembership.accountId, accountMembership.userId],
+    }).onDelete("cascade"),
+    check("mailbox_delegation_right", sql`${t.right} in ('full_access', 'send_as', 'send_on_behalf')`),
+  ],
 );
 
 // --- profile photos (ADR-0022) -------------------------------------------------------------------------------------

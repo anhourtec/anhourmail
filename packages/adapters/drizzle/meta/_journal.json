@@ -204,6 +204,13 @@
       "when": 1793291677973,
       "tag": "0028_alias_creation_year",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1793337703697,
+      "tag": "0029_mailbox_delegation",
+      "breakpoints": true
     }
   ]
 }
