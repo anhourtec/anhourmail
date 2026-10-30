@@ -1,6 +1,6 @@
 # Audit
 
-Last updated: 2026-10-30 (mailbox delegation, ADR-0026: `delegation.mailbox_opened` for opening a delegated mailbox in the webmail; `delegation.granted` / `delegation.revoked` per change, `mailbox.converted_to_shared`, `MutationOutcome.also`; `account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
+Last updated: 2026-10-30 (mailbox delegation, ADR-0026: `delegation.sent_as`, `delegation.sent_on_behalf`, `delegation.send_failed`, `delegation.send_cancelled` and `delegation.tagged_copy_left` for sending from a delegated mailbox, slice 13; `delegation.mailbox_opened` for opening a delegated mailbox in the webmail; `delegation.granted` / `delegation.revoked` per change, `mailbox.converted_to_shared`, `MutationOutcome.also`; `account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
 
 Every meaningful action is recorded, tamper-evident, searchable and visible to the right people. Audit is a core module, not a logging side effect.
 
@@ -38,7 +38,7 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `audit` | `audit.exported` |
 | `shared_mailbox` | `shared_mailbox.created`, `shared_mailbox.deleted`, `shared_mailbox.member_added`, `shared_mailbox.member_removed` |
 | `distribution_list` | `distribution_list.created`, `distribution_list.deleted`, `distribution_list.member_added`, `distribution_list.member_removed`, `distribution_list.senders_changed` |
-| `delegation` | `delegation.granted`, `delegation.revoked`, `delegation.mailbox_opened` |
+| `delegation` | `delegation.granted`, `delegation.revoked`, `delegation.mailbox_opened`, `delegation.sent_as`, `delegation.sent_on_behalf`, `delegation.send_cancelled`, `delegation.send_failed`, `delegation.tagged_copy_left` |
 | `folder_share` | `folder_share.granted`, `folder_share.revoked` |
 | `send_as` | `send_as.granted`, `send_as.revoked` |
 | `send_on_behalf` | `send_on_behalf.granted`, `send_on_behalf.revoked` |
@@ -188,6 +188,21 @@ act-as open) or the matrix's `forbidden` (a suspended person); `failed` `unavail
 credential twice (the reserved slot was held) or named another mailbox, `server_error` when it couldn't be reached.
 Every refusal looks the same to the person (404). Never the tokens or the throwaway credential. The per-request gate
 (`DelegationGate`) is a read and writes nothing.
+**Sending from a delegated mailbox** (ADR-0026 §6, slice 13; `authorizeDelegatedSend` in the same file):
+`delegation.sent_as` or `delegation.sent_on_behalf` (the right used; send as wins when both are held), written
+**before any work in the shared mailbox** (no blob copied, no quota charged, nothing submitted), right after the right
+was checked uncached under the account lock — if the append fails, nothing is done. Actor = the delegate (rebuilt from the database), in their account (the mailbox's); target =
+the mailbox (label its address); meta `mailboxId`, `recipientCount` (envelope recipients, a number) and `need`
+(`send`) — never recipient addresses, a subject, a Message-ID or content (rule 24). `denied` with `not_granted`,
+`mailbox_unavailable` (meta `state`) or `act_as`, like the open; `failed` `unavailable` when the right changed between
+the read and the lock ("try again"). The open a first delegated send needs is its own `delegation.mailbox_opened` with
+meta `need: "send"`. What became of the send afterwards (`recordDelegatedSendOutcome`; same actor and target, meta
+`mailboxId`): `delegation.send_failed` — nothing was submitted after all (meta `reason`, a short lowercase code from
+the error kind: `quota`, `refused`, `unavailable`, `delegationrefused`…), written after the copies made for it were
+destroyed, so a `sent_*` entry without a submission is always followed by one; `delegation.send_cancelled` — an undo in
+the hold cancelled it (after the mail server cancelled it; retried once, and the undo answers an error if it still can't
+be written); `delegation.tagged_copy_left` — sent, but the temporary copy holding the on-behalf tag couldn't be destroyed
+(twice); its tag expires within minutes.
 
 Profile details: `account.profile_changed` (target = the person, label their sign-in email; meta: `fields` — the names
 of the optional profile fields that changed, never their values — and `self`). An admin's edit is written to that
