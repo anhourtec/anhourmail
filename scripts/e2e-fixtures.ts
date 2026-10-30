@@ -71,6 +71,10 @@ if (mode === "create") {
   const aliasLimits: Record<string, { owner: string; mailbox: string; day: string }> = {};
   const actAs: Record<string, { accountName: string; accountId: string; owner: string; member: string }> = {};
   const data: Record<string, { accountName: string; owner: string; member: string; leaver: string }> = {};
+  const delegationWebmail: Record<
+    string,
+    { owner: string; delegate: string; mailbox: string; mailboxPassword: string; shared: string; team: string }
+  > = {};
   const delegation: Record<
     string,
     { owner: string; delegate: string; colleague: string; leaver: string; domain: string; shared: string }
@@ -297,6 +301,57 @@ if (mode === "create") {
       domain: dlDomain,
       shared: `desk@${dlDomain}`,
     };
+    // Webmail delegation journey (ADR-0026 §6): a Plus account with a verified domain, a person (the delegate) with a
+    // mailbox of their own on the mail server and its password, a shared mailbox the Owner gives them Read and manage
+    // and Send as on (desk@), and one they get Send on behalf on (team@).
+    const [dwAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} Shared webmail ${project}`, plan: "plus" })
+      .returning();
+    if (!dwAccount) throw new Error("webmail delegation account not created");
+    const dw = { owner: await addLogin(`dw-${project}-owner`), delegate: await addLogin(`dw-${project}-delegate`) };
+    await db.insert(schema.accountMembership).values([
+      { accountId: dwAccount.id, userId: dw.owner.id, role: "owner" },
+      { accountId: dwAccount.id, userId: dw.delegate.id, role: "member" },
+    ]);
+    const dwDomain = `${run}-dw-${project}.test`;
+    await db.insert(schema.customerDomain).values({
+      accountId: dwAccount.id,
+      name: dwDomain,
+      status: "active",
+      verifyToken: `${run}-dw-${project}`,
+      stalwartId: await mgmt.upsertDomain({ name: dwDomain }),
+    });
+    const dwPassword = `${randomBytes(12).toString("base64url")}-E2e`;
+    for (const [name, userId, mailboxPassword] of [
+      ["me", dw.delegate.id, dwPassword],
+      ["desk", null, `${randomBytes(12).toString("base64url")}-E2e`],
+      ["team", null, `${randomBytes(12).toString("base64url")}-E2e`],
+    ] as const) {
+      const stalwartId = await mgmt.upsertUser({
+        name,
+        domain: dwDomain,
+        password: await hashPassword(mailboxPassword),
+        quotaBytes: 50 * 1024 * 1024,
+      });
+      await db.insert(schema.mailbox).values({
+        accountId: dwAccount.id,
+        userId,
+        address: `${name}@${dwDomain}`,
+        stalwartId,
+        passwordCredentialId: await mgmt.passwordCredentialId(stalwartId),
+        status: "active",
+        quotaBytes: 50 * 1024 * 1024,
+      });
+    }
+    delegationWebmail[project] = {
+      owner: dw.owner.email,
+      delegate: dw.delegate.email,
+      mailbox: `me@${dwDomain}`,
+      mailboxPassword: dwPassword,
+      shared: `desk@${dwDomain}`,
+      team: `team@${dwDomain}`,
+    };
     // Alias limits journey: a Free account whose yearly alias and masked alias creations are used up today (counted in
     // the control plane only). Nothing is created, so its mailbox isn't on the mail server: it stays `provisioning`, so
     // the reconciler doesn't report it missing.
@@ -377,6 +432,7 @@ if (mode === "create") {
         data,
         aliasLimits,
         delegation,
+        delegationWebmail,
       },
       null,
       2,

@@ -35,6 +35,15 @@ export type E2eUsers = {
     string,
     { owner: string; delegate: string; colleague: string; leaver: string; domain: string; shared: string }
   >;
+  /**
+   * Per browser project: the webmail delegation journey's account (ADR-0026 §6) — its Owner, the person given access
+   * and their own mailbox (address and password), a shared mailbox (Read and manage, Send as) and one for Send on
+   * behalf.
+   */
+  delegationWebmail: Record<
+    string,
+    { owner: string; delegate: string; mailbox: string; mailboxPassword: string; shared: string; team: string }
+  >;
   security: Record<
     string,
     { totp: string; passkey: string; owner: string; member: string; pkOwner: string; pkMember: string }
