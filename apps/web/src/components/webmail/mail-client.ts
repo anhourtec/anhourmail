@@ -5,6 +5,7 @@ import type { SignatureDefaults, SignatureSet } from "@anhourmail/shared/signatu
 import type { WebmailPreferences } from "@anhourmail/shared/webmail";
 
 import type { BookView, ContactInput, ContactView } from "@/server/webmail/contacts";
+import type { DelegatedSender, MailboxList, SendResult } from "@/server/webmail/service";
 import type { Junk, Vacation } from "@/server/webmail/sieve";
 import type { SettingsOverview, SignatureResult } from "@/server/webmail/settings";
 import type { Address, MessageView } from "@/server/webmail/view";
@@ -167,9 +168,47 @@ export async function imageDataUrl(blob: Blob): Promise<string | null> {
 
 /** The account the app is showing, sent with contacts changes (the BFF refuses another active mailbox). */
 const ACCOUNT = "X-Webmail-Account";
+/**
+ * A tab scoped to a mailbox shared with the person pins it on every request (`server/webmail/pin.ts`): the header on
+ * fetches, the query parameter on links. The BFF answers its refusal with `REFUSED` set.
+ */
+const PIN_HEADER = "X-Webmail-Shared";
+const PIN_QUERY = "shared";
+const REFUSED = "x-webmail-refused";
+
+export type { DelegatedSender, MailboxList, SendResult };
+export type SharedMailbox = MailboxList["shared"][number];
 
 /** The browser's fetch, called plainly (browsers throw "Illegal invocation" when it is called with another `this`). */
 const plainFetch: typeof fetch = (input, init) => fetch(input, init);
+
+/** `POST …/mailboxes/delegated`: a 404 is the one refusal ("You don't have access to this mailbox."). */
+async function openMailbox(
+  path: string,
+  body: { address: string; activate?: boolean },
+): Promise<{ active: string; activeShared: boolean }> {
+  const res = await plainFetch(path, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 404) {
+    const json = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+    throw new MailboxRefusedError(json?.error?.message ?? "You don't have access to this mailbox.");
+  }
+  if (res.status === 401) throw new SignedOutError("signed out");
+  const json = (await res.json().catch(() => null)) as {
+    data?: { active: string; activeShared: boolean };
+    error?: { message?: string };
+  } | null;
+  if (!res.ok || !json?.data) {
+    if (res.status === 403 || res.status === 429 || res.status === 503 || res.status === 400) {
+      throw new RefusedError(json?.error?.message ?? "That didn't work. Try again.");
+    }
+    throw new Error(`HTTP ${String(res.status)}`);
+  }
+  return json.data;
+}
 
 async function api<T>(path: string, init: RequestInit = {}, go: typeof fetch = plainFetch): Promise<T> {
   const res = await go(path, {
@@ -189,7 +228,12 @@ async function api<T>(path: string, init: RequestInit = {}, go: typeof fetch = p
   if (!res.ok) {
     // An administrator's new password not in use yet: the own password change says so (409 with its own code).
     const pending = res.status === 409 && body?.error?.code === "password_change_pending";
-    if (res.status === 400 || res.status === 413 || res.status === 429 || pending) {
+    // Not available in a mailbox shared with the person (its own-mailbox-only routes), and a send whose outcome the
+    // server couldn't confirm: both say what to do in their message.
+    const explained =
+      (res.status === 403 && body?.error?.code === "own_mailbox_only") ||
+      (res.status === 503 && body?.error?.code === "send_unconfirmed");
+    if (res.status === 400 || res.status === 413 || res.status === 429 || pending || explained) {
       throw new RefusedError(body?.error?.message ?? "That didn't work. Try again.");
     }
     throw new Error(`HTTP ${String(res.status)}`);
@@ -202,8 +246,21 @@ const asState = (v: unknown): string => (typeof v === "string" ? v : "");
 /** Where automatic refresh is: the mail server's `Email` and `Mailbox` states after the last check. */
 export type SyncState = { email: string; mailbox: string };
 
-/** `origin` "" (the default) means same-origin relative URLs, which is what the browser app uses. */
-export function createMailClient(origin = "") {
+/** Thrown for a 404 that is the one "You don't have access to this mailbox" refusal (ADR-0026 §6). */
+export class MailboxRefusedError extends Error {
+  override readonly name = "MailboxRefusedError";
+}
+
+/**
+ * `origin` "" (the default) means same-origin relative URLs, which is what the browser app uses. `shared` scopes the
+ * client to a mailbox shared with the person (a tab opened with Open another mailbox): every request pins it, and
+ * `onRefused` runs when the BFF answers that it can't be used (any more).
+ */
+export function createMailClient(origin = "", opts: { shared?: string; onRefused?: () => void } = {}) {
+  const shared = opts.shared?.toLowerCase();
+  /** `url` with the pin for links that can't carry headers (downloads, print, raw source, previews). */
+  const pinned = (url: string) =>
+    shared === undefined ? url : `${url}${url.includes("?") ? "&" : "?"}${PIN_QUERY}=${encodeURIComponent(shared)}`;
   /** Rows are conversations (keys are thread ids) or single messages (keys are email ids). */
   let grouping: Grouping = "conversations";
 
@@ -269,7 +326,15 @@ export function createMailClient(origin = "") {
     }
   }
 
-  const net: typeof fetch = (input, init) => gated(() => fetch(input, init));
+  const net: typeof fetch = (input, init) =>
+    gated(async () => {
+      if (shared === undefined) return fetch(input, init);
+      const headers = new Headers(init?.headers);
+      headers.set(PIN_HEADER, shared);
+      const res = await fetch(input, { ...init, headers });
+      if (res.status === 404 && res.headers.get(REFUSED) === "mailbox") opts.onRefused?.();
+      return res;
+    });
   const bff = <T>(path: string, init: RequestInit = {}) => api<T>(path, init, net);
 
   const jmap = new JmapClient({
@@ -803,16 +868,23 @@ export function createMailClient(origin = "") {
       return { text: text.slice(0, max), cut: text.length > max };
     },
 
-    rawDownloadUrl: (emailId: string) => `${origin}/api/webmail/messages/${encodeURIComponent(emailId)}/raw?download=1`,
-    printUrl: (emailId: string) => `${origin}/api/webmail/messages/${encodeURIComponent(emailId)}/print`,
+    rawDownloadUrl: (emailId: string) =>
+      pinned(`${origin}/api/webmail/messages/${encodeURIComponent(emailId)}/raw?download=1`),
+    printUrl: (emailId: string) => pinned(`${origin}/api/webmail/messages/${encodeURIComponent(emailId)}/print`),
+    /** The "Show original" page for a message (`pagesBase` is where the webmail's pages live on this host). */
+    originalUrl: (pagesBase: string, emailId: string) =>
+      pinned(`${pagesBase}/message/${encodeURIComponent(emailId)}/original`),
     /** Inline preview of a raster image attachment (served only as that image type). */
     previewUrl: (blobId: string, type: string) =>
-      `${origin}/api/webmail/preview/${encodeURIComponent(blobId)}?type=${encodeURIComponent(type)}`,
+      pinned(`${origin}/api/webmail/preview/${encodeURIComponent(blobId)}?type=${encodeURIComponent(type)}`),
 
     /** The attachment's URL. Its name goes on the link's `download` attribute, never in the URL. */
     downloadUrl(blobId: string): string {
-      return `${origin}/api/webmail/download/${encodeURIComponent(blobId)}`;
+      return pinned(`${origin}/api/webmail/download/${encodeURIComponent(blobId)}`);
     },
+
+    /** The mailbox this client is scoped to (a mailbox-scoped tab), or undefined for the session's active one. */
+    shared,
 
     identities: () => bff<Identity[]>(`${origin}/api/webmail/identities`),
     // Drafts, sending, undo and uploads carry the account this tab shows: if another tab switched the session to a
@@ -824,24 +896,30 @@ export function createMailClient(origin = "") {
         bff<{ id: string }>(`${origin}/api/webmail/drafts`, { method: "PUT", headers, body: JSON.stringify(d) });
       return d.replaces ? save() : mutating(save);
     },
-    // Sending moves the draft from Drafts to Sent; undoing puts it back.
-    send: async (draftId: string, identityId: string) => {
+    /**
+     * The From picker: this mailbox's own identities, then every mailbox shared with the person they may send from
+     * (send as, or on behalf; the label says which). Each send checks the right again.
+     */
+    senders: () => bff<{ identities: Identity[]; shared: DelegatedSender[] }>(`${origin}/api/webmail/senders`),
+    // Sending moves the draft from Drafts to Sent; undoing puts it back. With `from`, the message goes from that
+    // mailbox shared with the person (its copy in that mailbox's Sent); undo then names it.
+    send: async (draftId: string, identityId: string, from?: string) => {
       const headers = { [ACCOUNT]: await accountId() };
       return mutating(() =>
-        bff<{ submissionId: string; sendAt: string; holdSeconds: number }>(`${origin}/api/webmail/send`, {
+        bff<SendResult>(`${origin}/api/webmail/send`, {
           method: "POST",
           headers,
-          body: JSON.stringify({ draftId, identityId }),
+          body: JSON.stringify({ draftId, identityId, ...(from === undefined ? {} : { from }) }),
         }),
       );
     },
-    undoSend: async (submissionId: string) => {
+    undoSend: async (submissionId: string, mailbox?: string) => {
       const headers = { [ACCOUNT]: await accountId() };
       return mutating(() =>
         bff<{ draftId: string }>(`${origin}/api/webmail/send/undo`, {
           method: "POST",
           headers,
-          body: JSON.stringify({ submissionId }),
+          body: JSON.stringify({ submissionId, ...(mailbox === undefined ? {} : { mailbox }) }),
         }),
       );
     },
@@ -851,11 +929,28 @@ export function createMailClient(origin = "") {
         headers: { "Content-Type": file.type || "application/octet-stream", [ACCOUNT]: await accountId() },
         body: file,
       }),
-    mailboxes: () => bff<{ active: string; others: string[] }>(`${origin}/api/webmail/mailboxes`),
+    /** The session's mailboxes: the active one, its own others, and every mailbox shared with the person. */
+    mailboxes: () => bff<MailboxList>(`${origin}/api/webmail/mailboxes`),
+    /**
+     * Opens a mailbox shared with the person ("Shared with you") and makes it the session's active one; reload the
+     * page on success (other requests stay held). Refused: `MailboxRefusedError`.
+     */
+    openShared: (address: string) =>
+      changeMailbox(() =>
+        openMailbox(`${origin}/api/webmail/mailboxes/delegated`, { address }).catch((err: unknown) => {
+          throw err instanceof MailboxRefusedError ? new RefusedError(err.message) : err;
+        }),
+      ),
+    /**
+     * For a mailbox-scoped tab: opens its mailbox (or checks its grant, if open already) without changing what the
+     * session's other tabs show. Sent unpinned (the mailbox may not be open yet). Refused: `MailboxRefusedError`.
+     */
+    openScoped: (address: string) =>
+      openMailbox(`${origin}/api/webmail/mailboxes/delegated`, { address, activate: false }),
     /** Signs another mailbox in and makes it active; reload the page on success (other requests stay held). */
     addMailbox: (address: string, password: string) =>
       changeMailbox(() =>
-        api<{ active: string; others: string[] }>(`${origin}/api/webmail/mailboxes`, {
+        api<{ active: string; activeShared: boolean; others: string[] }>(`${origin}/api/webmail/mailboxes`, {
           method: "POST",
           body: JSON.stringify({ address, password }),
         }),
@@ -863,7 +958,7 @@ export function createMailClient(origin = "") {
     /** Makes another signed-in mailbox active; reload the page on success (other requests stay held). */
     switchMailbox: (address: string) =>
       changeMailbox(() =>
-        api<{ active: string; others: string[] }>(`${origin}/api/webmail/mailboxes/active`, {
+        api<{ active: string; activeShared: boolean; others: string[] }>(`${origin}/api/webmail/mailboxes/active`, {
           method: "PUT",
           body: JSON.stringify({ address }),
         }),
