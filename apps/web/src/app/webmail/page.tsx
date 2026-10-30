@@ -16,6 +16,7 @@ import { trustedAuthservIds } from "@/server/webmail/original";
 import { webmailBasePath } from "@/server/webmail/paths";
 import { platform } from "@/server/platform";
 import { WebmailBlockedError } from "@/server/webmail/service";
+import { mailboxTabHref } from "@/components/webmail/tab-paths";
 
 export const metadata: Metadata = { title: "Webmail" };
 
@@ -40,16 +41,23 @@ export default async function WebmailPage() {
     // outage: sign in again later.
     if (err instanceof WebmailBlockedError) blocked = err.reason;
   }
-  if (!session) {
+  if (!session || !id) {
     const reason = blocked ? `?reason=${signedNoticeReason(env().BETTER_AUTH_SECRET, blocked)}` : "";
     redirect(`${base}/sign-in${reason}`);
   }
-  // A mailbox shared with the person may be the active one (ADR-0026 §6): preferences, the password step and the
-  // console link are the person's own mailbox's.
-  const own = session.delegated?.via ?? session.username;
-  // That mailbox's own entry (its JMAP account), when a shared one is active.
-  const ownEntry =
-    [session, ...(session.others ?? [])].find((m) => !m.delegated && m.username.toLowerCase() === own) ?? session;
+  // A mailbox shared with the person opens only in a tab of its own (Open another mailbox, `/mailbox/<address>/`;
+  // ADR-0026 §6). A session still left on one (switched to it before) goes back to the person's own mailbox here, the
+  // one it came through; if that can't be done, the shared mailbox is shown in its own tab instead.
+  if (session.delegated) {
+    const { via } = session.delegated;
+    const shared = session.username;
+    try {
+      session = await webmail().switchMailbox(id, via);
+    } catch {
+      redirect(mailboxTabHref(base, shared));
+    }
+  }
+  const own = session.username;
   // Display preferences only (no mail): read here so the first paint already has the chosen layout.
   const [preferences, mailbox] = await Promise.all([
     settingsService()
@@ -66,7 +74,7 @@ export default async function WebmailPage() {
     return (
       <FirstPasswordStep
         address={own}
-        account={ownEntry.accountId}
+        account={session.accountId}
         signInHref={`${base}/sign-in`}
         lastFailed={lastFailed}
       />
@@ -81,7 +89,6 @@ export default async function WebmailPage() {
       consoleHref={mailbox ? `${app}/accounts/${mailbox.accountId}/aliases` : app}
       initialCollapsed={jar.get(SIDEBAR_COOKIE)?.value === "collapsed"}
       initialPreferences={preferences}
-      sharedVia={session.delegated?.via ?? null}
       authservIds={trustedAuthservIds(env().MAIL_AUTHSERV_ID, platform().hosts.mx, env().NODE_ENV === "production")}
     />
   );

@@ -688,8 +688,10 @@ export class WebmailService {
   async switchMailbox(sessionId: string, username: string): Promise<WebmailSession> {
     const current = await this.#sessionOrOwn(sessionId);
     if (!current) throw new WebmailSignedOutError("signed out");
-    if (current.username === username) return current;
-    const target = (current.others ?? []).find((m) => m.username === username);
+    // Addresses compare case-insensitively: the stored and requested forms may differ only in case.
+    const wanted = username.toLowerCase();
+    if (current.username.toLowerCase() === wanted) return current;
+    const target = (current.others ?? []).find((m) => m.username.toLowerCase() === wanted);
     if (!target) throw new WebmailRefusedError("That mailbox isn't signed in here.");
     if (target.delegated) {
       if (!(await this.#delegatedOk(sessionId, current, target))) {
