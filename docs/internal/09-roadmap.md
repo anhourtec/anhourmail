@@ -51,8 +51,12 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
   (ADR-0026, accepted: per-person grants, BFF-held mailbox tokens, shared mailbox = person-less mailbox with members).
   **Control-plane part built 2026-10-30** (ADR-0026 slices 1–7): plan flag and limits, `delegation.manage.any` for
   User Administrators (guard rail 8), `mailbox_delegation` (migration 0029), the delegation service, the removal's
-  "Give full access to …", Convert to shared mailbox and the grant cascades; console routes and UI, the webmail side
-  and the send-on-behalf script are the next slices.
+  "Give full access to …", Convert to shared mailbox and the grant cascades. **Also built 2026-10-30:** console
+  routes and UI (slices 8–9), the send-on-behalf exception in the sender-identity script with a per-message,
+  five-minute tag (slice 10), the webmail open/gate and Shared with you on the server (11–12), sending as and on
+  behalf (13). **Left:** the webmail screens (slice 14: built, review fixes in progress, uncommitted), the full
+  e2e/public docs/changelog pass (15–16), then password-less shared mailboxes and mail-app (IMAP) access to delegated
+  mailboxes (later ADRs).
 - **Names:** the mailbox display name is the one source; a person's own mailbox follows their profile name unless an
   admin sets another; the webmail sender name shows the same value (CLAUDE.md rule 61).
 
