@@ -1,19 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Suspense } from "react";
 
 import { can } from "@anhourmail/core";
 import { listMailboxAppPasswords } from "@anhourmail/core/app-passwords";
 import { accountAvatars, avatarPath } from "@anhourmail/core/avatars";
+import { delegationAvailability } from "@anhourmail/core/delegation";
 import { getMailbox, listMailboxes, mailboxOptions, mailboxStoragePool } from "@anhourmail/core/mailboxes";
 import { addUserAvailability, grantableRoles, listPeople } from "@anhourmail/core/people";
 import { MAILBOX_DELETE_GRACE_DAYS, MAX_MAILBOXES } from "@anhourmail/shared/plans";
 import { storageCheckedAgo } from "@anhourmail/shared/storage";
 import { PageHeader } from "@anhourmail/ui/page-header";
+import { DelegationTabSkeleton } from "@anhourmail/ui/skeletons";
 
 import { UrlFlyout } from "@/components/console/flyout";
 import { ClaimPlatformAddress } from "@/components/mailboxes/claim-platform-address";
 import { CreateMailboxForm } from "@/components/mailboxes/create-mailbox-form";
+import { DelegationSection } from "@/components/mailboxes/delegation-section";
 import { MailboxList } from "@/components/mailboxes/mailbox-list";
 import { MailboxPanel } from "@/components/mailboxes/mailbox-panel";
 import { StoragePoolSummary } from "@/components/mailboxes/storage-usage";
@@ -30,10 +34,9 @@ const dateFmt = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium" });
 
 /**
  * Mailboxes (console page template). "Add a user" is its own page (`/mailboxes/new`). The details panel
- * (`?mailbox=<id>`, optional `&tab=`) and the "Add a shared address" panel (`?new=1`, opened from the ⋯ menu: an
- * address that isn't one person's sign-in, like support@) live in the URL so they can be linked, reloaded and closed
- * with Back. The old
- * `/mailboxes/<id>` address redirects here.
+ * (`?mailbox=<id>`, optional `&tab=`; its Delegation tab streams in behind a skeleton) and the "Add a shared mailbox"
+ * panel (`?new=1`, opened from the ⋯ menu: a mailbox that isn't one person's sign-in, like support@) live in the URL so
+ * they can be linked, reloaded and closed with Back. The old `/mailboxes/<id>` address redirects here.
  */
 export default async function MailboxesPage({
   params,
@@ -56,6 +59,8 @@ export default async function MailboxesPage({
     open: openId ? await getMailbox(deps, actor, accountId, openId) : null,
     appPasswords: openId ? await listMailboxAppPasswords(deps, actor, accountId, openId) : null,
     photos: openId ? await accountAvatars(deps, actor, accountId) : null,
+    delegation:
+      openId && can(actor, "delegation.read", accountId) ? await delegationAvailability(deps, actor, accountId) : null,
     // When the page was read, for "Updated 5 minutes ago" (storage is measured every ~10 minutes).
     now: new Date(),
   }));
@@ -68,7 +73,7 @@ export default async function MailboxesPage({
       </>
     );
   }
-  const { mailboxes, pool, options, open, appPasswords, photos } = data;
+  const { mailboxes, pool, options, open, appPasswords, photos, delegation } = data;
   // The open mailbox's photo: its person's when it has one, else its own (ADR-0022).
   const openPhoto = (() => {
     if (!open || !photos) return null;
@@ -82,13 +87,23 @@ export default async function MailboxesPage({
   })();
   const path = `/accounts/${accountId}/mailboxes`;
   const canAdd = options !== null && options.remaining > 0 && (options.domains.length > 0 || options.platform.allowed);
-  // The "Add a shared address" panel stays open (with what it just created) once the account is full; it then says so.
+  /** Profile photo URLs by person id, for the Delegation tab's lists. */
+  const personPhotos: Record<string, string> = Object.fromEntries(
+    Object.entries(photos?.people ?? {}).map(([id, version]) => [
+      id,
+      avatarPath("/api/avatars", { kind: "person", id, version }),
+    ]),
+  );
+  const members = data.people?.members.map((p) => ({ userId: p.userId, name: p.name, email: p.email })) ?? null;
+  // "Convert to shared mailbox" may give people access in the same change when this viewer may grant on this plan.
+  const grantOnConvert = delegation?.plan && delegation.canManage ? (members ?? []) : null;
+  // The "Add a shared mailbox" panel stays open (with what it just created) once the account is full; it then says so.
   const creating = options !== null && param(sp, "new") === "1" ? options : null;
   const createUnavailable = canAdd
     ? null
     : options !== null && options.remaining <= 0
       ? "This account now has all the mailboxes its plan includes."
-      : "Shared addresses need one of your own domains, or the plan's free address.";
+      : "Shared mailboxes need one of your own domains, or the plan's free address.";
   const addUser = addUserAvailability({
     permitted: canManage && grantableRoles(actor, accountId).length > 0,
     people: data.people?.limits ?? null,
@@ -172,6 +187,7 @@ export default async function MailboxesPage({
         }
         docsHref={`${env().SITE_URL.replace(/\/$/, "")}/docs/mailboxes`}
         graceDays={MAILBOX_DELETE_GRACE_DAYS}
+        canSeeDelegation={can(actor, "delegation.read", accountId)}
       />
 
       {open && (
@@ -194,6 +210,23 @@ export default async function MailboxesPage({
             appPasswords={appPasswords}
             storageCheckedAgo={storageCheckedAgo(open.storageCheckedAt, data.now)}
             photoUrl={openPhoto}
+            delegation={
+              delegation ? (
+                <Suspense fallback={<DelegationTabSkeleton />}>
+                  <DelegationSection
+                    actor={actor}
+                    accountId={accountId}
+                    mailboxId={open.id}
+                    ownerUserId={open.owner?.userId ?? null}
+                    deleting={open.status === "deleting"}
+                    availability={delegation}
+                    people={members}
+                    photos={personPhotos}
+                  />
+                </Suspense>
+              ) : null
+            }
+            convert={canManage ? { grant: grantOnConvert } : null}
             tab={param(sp, "tab")}
           />
         </UrlFlyout>
@@ -219,19 +252,20 @@ export default async function MailboxesPage({
         </UrlFlyout>
       )}
       {creating && (
-        <UrlFlyout label="Add a shared address" closeHref={path} size="md">
+        <UrlFlyout label="Add a shared mailbox" closeHref={path} size="md">
           <div className="flex flex-col gap-6">
             <div className="flex flex-col gap-1.5">
-              <h2 className="am-h2">Add a shared address</h2>
+              <h2 className="am-h2">Add a shared mailbox</h2>
               <p className="am-small">
-                An address that isn&apos;t one person&apos;s sign-in, like support@ or info@, on one of your domains
+                A mailbox that isn&apos;t one person&apos;s sign-in, like support@ or info@, on one of your domains
                 {creating.platform.allowed ? (
                   <>
                     {" "}
                     or at <span className="am-code">{creating.platform.domain}</span>
                   </>
                 ) : null}
-                , with its own storage and password. To add a person with their own sign-in, use Add a user instead.
+                , with its own storage and password. Once it&apos;s created, give people access on its Delegation tab.
+                To add a person with their own sign-in, use Add a user instead.
               </p>
             </div>
             <CreateMailboxForm accountId={accountId} options={creating} unavailable={createUnavailable} />

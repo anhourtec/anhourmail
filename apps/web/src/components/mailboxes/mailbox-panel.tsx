@@ -10,6 +10,7 @@ import { CopyValue } from "../copy-value";
 import { ActionLink, DetailHeader, DetailTabs, Field, FieldGrid, PanelSection, TabLink } from "../console/flyout";
 import { initialsOf } from "../console/initials";
 import { ProfilePhoto } from "../people/profile-photo";
+import { type ConvertCandidate, ConvertToShared } from "./convert-to-shared";
 import { EditMailboxName } from "./edit-mailbox-name";
 import { DeleteMailbox, RestoreMailbox, SuspendMailbox } from "./mailbox-lifecycle";
 import { MailboxStatus } from "./mailbox-status";
@@ -41,9 +42,10 @@ type Detail = MailboxView & {
 
 /**
  * The mailbox details panel: header (photo or initials, address, status, inline actions) and tabs — Overview (label / value
- * / manage grid), Storage (used and quota as lined rows; the quota form for people who manage mailboxes) and Access for
- * people who manage mailboxes. What's offered follows the same rules the
- * server enforces (an admin's or owner's mailbox needs an owner to suspend, delete or restore).
+ * / manage grid), Storage (used and quota as lined rows; the quota form for people who manage mailboxes), Delegation
+ * (who can read and manage, send as and send on behalf of it; streamed in by the page) and Access for people who manage
+ * mailboxes (suspend, delete, and "Convert to shared mailbox" for a person's mailbox). What's offered follows the same
+ * rules the server enforces (an admin's or owner's mailbox needs an owner to suspend, delete, restore or convert).
  */
 export function MailboxPanel({
   m,
@@ -55,6 +57,8 @@ export function MailboxPanel({
   appPasswords,
   storageCheckedAgo,
   photoUrl = null,
+  delegation = null,
+  convert = null,
   tab,
 }: {
   m: Detail;
@@ -71,6 +75,10 @@ export function MailboxPanel({
   storageCheckedAgo: string | null;
   /** The photo shown for it (its person's, or its own when it has none), on this origin; null for initials. */
   photoUrl?: string | null;
+  /** The Delegation tab's content (a streamed section), for people who can see delegation; null hides the tab. */
+  delegation?: React.ReactNode;
+  /** "Convert to shared mailbox" for a person's mailbox: who can be given access with it (null: nobody, by this viewer). */
+  convert?: { grant: ConvertCandidate[] | null } | null;
   tab?: string | null;
 }) {
   const deleting = m.status === "deleting";
@@ -133,7 +141,7 @@ export function MailboxPanel({
                 ) : undefined
               }
             >
-              {m.owner ? <span className="break-all">{m.owner.email}</span> : "Nobody yet"}
+              {m.owner ? <span className="break-all">{m.owner.email}</span> : "Nobody: it's a shared mailbox"}
             </Field>
             <Field label="Photo">
               {m.owner ? (
@@ -303,6 +311,15 @@ export function MailboxPanel({
           },
         ]
       : []),
+    ...(delegation
+      ? [
+          {
+            id: "delegation",
+            label: "Delegation",
+            content: delegation,
+          },
+        ]
+      : []),
     ...(canManage
       ? [
           {
@@ -331,6 +348,17 @@ export function MailboxPanel({
                     applyFailed={m.applyFailed}
                   />
                 </PanelSection>
+                {m.owner && convert && (m.status === "active" || m.status === "suspended") && (
+                  <PanelSection title="Convert to shared mailbox">
+                    <ConvertToShared
+                      accountId={accountId}
+                      mailboxId={m.id}
+                      address={m.address}
+                      ownerLabel={m.owner.email}
+                      grant={convert.grant?.filter((p) => p.userId !== m.owner?.userId) ?? null}
+                    />
+                  </PanelSection>
+                )}
                 <PanelSection title="Delete this mailbox">
                   <DeleteMailbox accountId={accountId} mailboxId={m.id} address={m.address} graceDays={graceDays} />
                 </PanelSection>

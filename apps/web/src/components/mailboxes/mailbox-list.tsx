@@ -2,7 +2,19 @@
 "use client";
 
 import type { MailboxStatus as Status } from "@anhourmail/core/mailboxes";
-import { AtSign, BookOpen, HardDrive, Info, Pause, Play, RefreshCw, Trash2, UserPlus } from "lucide-react";
+import {
+  AtSign,
+  BookOpen,
+  HardDrive,
+  Info,
+  Pause,
+  Play,
+  RefreshCw,
+  Trash2,
+  UserPlus,
+  Users,
+  UsersRound,
+} from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
@@ -61,9 +73,10 @@ const bulkAction =
 
 /**
  * The mailboxes list (console page template): command bar with "Add a user" (the one primary action), refresh,
- * search and the ⋯ menu ("Add a shared address": an address that isn't one person's sign-in, like support@); status
+ * search and the ⋯ menu ("Add a shared mailbox": a mailbox that isn't one person's sign-in, like support@); status
  * chips; a sortable list with a checkbox column and bulk suspend / resume / delete for people who manage
- * mailboxes, and a ⋮ menu per row. The address opens the details panel (`?mailbox=`).
+ * mailboxes, and a ⋮ menu per row (details, storage, delegation, convert to shared, suspend, delete). The address opens
+ * the details panel (`?mailbox=`).
  */
 export function MailboxList({
   accountId,
@@ -74,12 +87,13 @@ export function MailboxList({
   addUser,
   docsHref,
   graceDays,
+  canSeeDelegation = false,
 }: {
   accountId: string;
   rows: MailboxRow[];
   canManage: boolean;
   openId: string | null;
-  /** Where "Add a shared address" (⋯ menu) goes, or null when one can't be added now. */
+  /** Where "Add a shared mailbox" (⋯ menu) goes, or null when one can't be added now. */
   createHref: string | null;
   /**
    * "Add a user" (a person with their own mailbox): where it goes, or why it's disabled (the account is full), or null
@@ -88,6 +102,8 @@ export function MailboxList({
   addUser: { href: string } | { reason: string } | null;
   docsHref: string;
   graceDays: number;
+  /** The viewer can see mailboxes' Delegation tabs (`delegation.read`). */
+  canSeeDelegation?: boolean;
 }) {
   const router = useRouter();
   const [refreshing, startRefresh] = useTransition();
@@ -151,7 +167,7 @@ export function MailboxList({
             <ListSearch label="Search mailboxes" value={query} onChange={setQuery} placeholder="Search this list" />
             <OverflowMenu
               items={[
-                ...(createHref ? [{ label: "Add a shared address", href: createHref, icon: <AtSign /> }] : []),
+                ...(createHref ? [{ label: "Add a shared mailbox", href: createHref, icon: <AtSign /> }] : []),
                 { label: "Mailbox guide", href: docsHref, icon: <BookOpen />, external: true },
               ]}
             />
@@ -294,9 +310,21 @@ export function MailboxList({
                           label={`Actions for ${m.address}`}
                           items={[
                             { label: "Open details", href: open, icon: <Info /> },
+                            ...(canSeeDelegation
+                              ? [{ label: "Delegation", href: `${open}&tab=delegation`, icon: <UsersRound /> }]
+                              : []),
                             ...(canManage && !deleting
                               ? [
                                   { label: "Change storage", href: `${open}&tab=storage`, icon: <HardDrive /> },
+                                  ...(m.ownerEmail && (m.status === "active" || m.status === "suspended")
+                                    ? [
+                                        {
+                                          label: "Convert to shared mailbox…",
+                                          href: `${open}&tab=access`,
+                                          icon: <Users />,
+                                        },
+                                      ]
+                                    : []),
                                   m.status === "suspended"
                                     ? { label: "Resume", onSelect: () => void single(m.id, "resume"), icon: <Play /> }
                                     : {
