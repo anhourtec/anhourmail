@@ -456,6 +456,23 @@ These defaults live on the `Jmap` singleton [S38]:
   (`member+tag@` shares `member@`'s allowance). Tests that send therefore use a fresh recipient per run (integration:
   a throwaway `dev.test` account; e2e: a run-scoped mailbox from `scripts/e2e-fixtures.ts`) instead of the demo
   mailboxes, which repeated runs exhaust.
+- **A throttled submission never reaches DATA** (verified 2026-10-30): with every recipient refused at `RCPT` (452),
+  the DATA-stage system script (our `sender-identity`) doesn't run, and nothing is queued or delivered. So a probe
+  that sees a JMAP submission *created* while the throttle is hit has not shown a bypass: check `deliveryStatus` and
+  the recipient's mailbox (the unsent draft stays in the sender's own Drafts when the submission fails outright).
+- **Sieve at DATA, for the keyed send-on-behalf check** (verified 2026-10-30 on v0.16.27, ADR-0026 P8 and the
+  security-review follow-up): `require "vnd.stalwart.expressions"`, `let "v" "hash('…' + to_lowercase(envelope.from) +
+  …, 'sha256')"` gives lowercase hex SHA-256 and nests (`hash('k|' + hash(…, 'sha256'), 'sha256')`), comparable with
+  `header :is "<name>" "${v}"`; `deleteheader` removes the header before delivery and signing. `header.message-id`
+  reads the id without angle brackets, case kept (the **last** one when there are several; JMAP fills one in when the
+  client sets none); `header :count` counts `Message-ID:` headers. **A failed expression leaves the variable empty**
+  (`hash(x, 'nosuchalgo')`, `to_lowercase(header.nosuch.addr)`), so check the shape (`string :regex "${v}"
+  "^[0-9a-f]{64}$"`, extension `regex`) before comparing. `address :count` over `"sender"` counts addresses across
+  every `Sender:` header (group syntax and `<>` count 0), while `address :is` is true when any one matches;
+  `header.sender.addr` keeps a source route (`@relay:bob@…`). Field names with a space or tab before the colon, or in
+  mixed case, are parsed as the real header. A compile error's `SetError.description` quotes the script text.
+  `x:MemoryLookupKey` + `key_exists` was not readable from Sieve (P9). `x:SieveSystemScript.contents` is stored without
+  its final newline.
 
 ### JMAP Contacts (verified on the pinned v0.16.27, 2026-10-22)
 Probed with a demo mailbox; the webmail's contacts (05-webmail.md "Contacts") are built on these results.

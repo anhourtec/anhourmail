@@ -1,6 +1,6 @@
 # 03 — Anti-spam and abuse
 
-Last updated: 2026-10-29. Research: `research/deliverability.md` §6–8, `research/market-and-legal.md` §4.
+Last updated: 2026-10-30. Research: `research/deliverability.md` §6–8, `research/market-and-legal.md` §4.
 
 Outbound abuse is the priority. One spammer on a shared IP hurts every user's inbox placement, and under CASL a host that knowingly helps spammers can be liable.
 
@@ -135,7 +135,9 @@ Lists multiply one message into many deliveries, so they are an abuse amplifier 
   script). Stops users showing another address — ours or anyone's — in mail we DKIM-sign. The same script deletes
   every `Authentication-Results` header from submitted mail (2026-10-28), so a sender can't plant passing results
   for a recipient's webmail to show (`02-mail-infrastructure.md`, `07-security.md` "Authentication results in the
-  webmail"); `stack:verify` checks it.
+  webmail"); `stack:verify` checks it. Since 2026-10-30 a `Sender:` must be exactly one address, and one that
+  differs from the envelope sender passes only with the web app's keyed send-on-behalf tag (ADR-0019 update,
+  ADR-0026 §8); mail-app (SMTP) users can't send on behalf.
 - **Outbound spam scanning:** `MtaStageData.enableSpamFilter` defaults to `is_empty(authenticated_as)` (inbound
   only). Enabling it for authenticated mail (`true`) in dev let a GTUBE message through with no verdict and no
   headers — inconclusive, because dev Stalwart has no internet and the spam rule set

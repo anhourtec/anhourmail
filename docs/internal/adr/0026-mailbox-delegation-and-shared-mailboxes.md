@@ -221,6 +221,15 @@ replace the lists), and the removal route is the existing `DELETE /api/accounts/
 grants for the People panel are read with `GET /api/accounts/:accountId/people/:userId/delegation` (`delegation.read`).
 The `delegationManage` tier (§9) covers `PATCH …/delegation` and `POST …/convert-to-shared`.
 
+**Update (2026-10-30, slice 9):** the console UI is built: the Delegation tab (`delegation-tab.tsx`, streamed in behind
+`DelegationTabSkeleton`), "Convert to shared mailbox" on the Access tab and in the ⋮ menu, the removal dialog's
+"Give full access to …" (one person at a time; bulk removal doesn't offer it), "Mailboxes they can open" on the People
+panel and the people with access listed in the "Make this a user" review. Core gained a read, `delegationAvailability`
+(plan flag and whether the viewer may grant), for the plan-gated and read-only states. The tab's help text doesn't say
+"in their webmail" until slices 11–14 ship. Not in this slice: the **Members** field on the "Add a shared mailbox" form
+(people are added on the new mailbox's Delegation tab instead) and dropping that form's password field (decision 3);
+the console now says "shared mailbox" everywhere, code identifiers keep their names.
+
 ### 6. Webmail BFF
 
 **Session shape** (`apps/web/src/server/webmail/session-store.ts`): `MailboxTokens` gains an optional
@@ -330,33 +339,48 @@ removed in every case (`deleteheader`), so it is never delivered. The `require` 
 bootstrap (private ops repository) — never committed. `npm run stack:verify` gains: right tag accepted and stripped;
 wrong, missing and cross-pair tags refused; forged `From` with a tag refused (P8 cases).
 
-### 9. Rate limits (`rate-limits.md`)
+**Built 2026-10-30 (slice 10), amended the same day after the security review.** Differences from the text above:
 
-| Tier                   | Limit       | Key               | Redis down | Covers                                                                                     |
-| ---------------------- | ----------- | ----------------- | ---------- | ------------------------------------------------------------------------------------------ |
-| `delegationManage`     | 30 / 10 min | console session   | open       | `PUT …/delegation`, `POST …/convert-to-shared`                                             |
-| `webmailDelegatedOpen` | 20 / 10 min | webmail session   | **closed** | minting a delegated mailbox's token (each one mints and destroys a mail-server credential) |
-| existing send tiers    | unchanged   | mailbox + session | **closed** | delegated sends count against the delegated mailbox and the delegate's session             |
+- The tag is **bound to the message**: `tag = hex sha256(K | hex sha256(K | mailbox | delegate | Message-ID))`
+  (addresses lowercased, the Message-ID without angle brackets, case kept), and the script requires exactly **one**
+  `Message-ID:` on an on-behalf message. The per-pair tag above could be replayed: it was stored in Drafts and Sent,
+  so anyone signed in as the mailbox (mail app, app password, export) could copy it and keep sending "D on behalf of
+  M" after D's grant was revoked. The nested form also rules out length extension.
+- The script first requires exactly **one** `Sender:` address over every `Sender:` header (a second one used to pass
+  next to a matching one), and refuses unless the computed tag is 64 lowercase hex (a failed expression yields an
+  empty variable). ADR-0019 update 2026-10-30 has the probe results.
+- `K` is 64 lowercase hex (`openssl rand -hex 32`; enforced because the key is written into the script text). Dev
+  leaves `SENDER_DELEGATION_KEY` unset: the dev plan and the web app derive the same key from `BETTER_AUTH_SECRET`
+  (`resolveSenderDelegationKey`); production requires it (web env check) and the worker refuses it. It is in the log
+  redaction list (`senderDelegationKey`, `onBehalfKey`, `onBehalfTag`, the header name).
 
-### 10. Audit events (`packages/core/src/audit/catalogue.ts`, `audit.md`)
+**Slice 13 must ship with all of these (security review 2026-10-30; not optional):**
 
-`delegation.granted`, `delegation.revoked` (meta: `mailboxId`, `granteeUserId`, `right`, `reason`
-`admin`/`member_removed`/`mailbox_deleted`/`became_owner`), `delegation.mailbox_opened`, `delegation.sent_as`,
-`delegation.sent_on_behalf`, `delegation.send_cancelled`, `mailbox.converted_to_shared` (meta `appPasswordsRevoked`,
-`grants`), plus `account.member_removed` meta `delegated` (how many grants the removal wrote). Denied attempts audited
-as usual. All land in the mailbox's account log, so the account's admins see them (rule 49 for staff is unaffected:
-staff never delegate).
+1. **No stored message ever holds a tag.** The BFF submits from a temporary copy that carries the tag and the
+   Message-ID it was made for, with `onSuccessDestroyEmail` for that copy; the stored Sent copy is created separately
+   without the tag (same Message-ID, so threading holds). If the submission fails, the temporary copy is destroyed as
+   well. Decision 4 ("tag left in stored Sent/Drafts copies", residual 1 below) no longer applies.
+2. **`Sender` and the tag are built server-side only**, by `onBehalfTag(senderDelegationKey(), mailbox, delegate,
+messageId)` with a Message-ID the BFF generates, **immediately after re-checking the send-on-behalf right** inside
+   the send (never from a cached page-load answer).
+3. **The client can't supply them:** the webmail JMAP proxy and the send input strip or refuse any client-supplied
+   `sender` property, any `header:*` property and the `X-AnhourMail-On-Behalf` header (in drafts, `Email/set`,
+   `Email/import` and uploads parsed as messages), so a delegate's own session can't attach a tag or a `Sender:`.
+4. **Received mail's tag means nothing:** inbound MX mail doesn't run the script, so an `X-AnhourMail-On-Behalf`
+   header on received mail is never shown or trusted by the webmail ("via" comes only from `Sender:` like any other
+   message).
 
-## Where the mail server can't match the model exactly (and the closest option chosen)
+**Leftover gap to decide in slice 13 (re-review 2026-10-30, low):** the tag is bound to a Message-ID, not to the body.
+The mailbox's own person (the only one who can send as it over SMTP; a shared mailbox has nobody) could reuse a tag
+seen during the short window the temporary tagged copy exists (a mail app syncing that folder) or left by a crash,
+with the same Message-ID and any body or recipients, even after the delegate's grant ends. Slice 13 picks one: a short
+expiry in the inner hash checked by the script (probe the pinned server's time functions first), keeping the
+temporary copy out of synced folders plus a cleanup of leftovers, or accepting it as documented (owner-only, needs a
+race, ended by key rotation). Also probe that a failed `header.message-id` read fails the whole `let`, so the inner
+hash can never become the constant `sha256(K|)`.
 
-| Model behaviour                                   | Stalwart v0.16.27                                                                                                                                                            | What we do                                                                                                                                                                               |
-| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Delegated mailbox in the delegate's **mail apps** | Possible only through folder ACLs written with a key holding `jmapMailbox*` (P3); IMAP then shows it as a shared namespace. Send as / on behalf from mail apps: no (P5, P6). | Webmail only in v1. Later option, its own ADR: a fourth, web-only key (`impersonate` + `jmapMailbox{Get,Update}`) applying `shareWith` from the same grant table, reconciled per folder. |
-| Read and manage **without** send                  | A mailbox token can always submit                                                                                                                                            | The BFF refuses submission and identities without a send right; the token never leaves the server.                                                                                       |
-| Shared mailbox "sign-in blocked"                  | No "disabled sign-in but openable" flag; `authenticate` off would also stop our own opens                                                                                    | A password nobody is shown + no app passwords (built); removing the password outright works (P7) and is a follow-up needing a proxy rule.                                                |
-| Convert a person's mailbox to shared and back     | Account type is fixed (P1)                                                                                                                                                   | Shared = person-less individual account; conversion is a control-plane change plus a password replacement.                                                                               |
-| Server-side attribution of delegated actions      | Stalwart sees the mailbox itself                                                                                                                                             | Our audit records opens and every delegated send; reads, moves and deletes inside the mailbox are not audited per message (no content in audit).                                         |
-| Send on behalf enforced for every client          | `Sender` ≠ envelope is our own refusal; no grant list the Sieve can read (P9)                                                                                                | A keyed tag only the web app can make (P8); webmail only.                                                                                                                                |
+`onBehalfTag` (`@anhourmail/core/webmail`) also refuses addresses or ids containing `|`, `"`, `<`, `>`, whitespace or
+control characters (`OnBehalfTagError`); the send refuses rather than falling back.
 
 ## Consequences
 

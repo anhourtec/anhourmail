@@ -125,7 +125,9 @@ send as or send on behalf on any mailbox to people in the account (`mailbox_dele
 the webmail BFF opens a delegated mailbox with that mailbox's own token (a throwaway credential minted, used once and
 destroyed, as in the handoff), seals it into the delegate's session, and checks the grant on every request; delegated
 mail is submitted from the mailbox itself so its Sent folder gets the copy. Send on behalf passes the sender-identity
-script only with a keyed tag the web app adds. A shared mailbox is a person-less mailbox whose members hold read and
+script only with a keyed tag the web app adds (the mail-server side is built: `SENDER_DELEGATION_KEY` in the script and
+the web app's env, `onBehalfTag` in `packages/core/src/webmail/on-behalf.ts`; ADR-0019 update 2026-10-30). A shared
+mailbox is a person-less mailbox whose members hold read and
 manage plus send as; "Convert to shared" reuses the leaver release. Built so far: the grant table
 (`mailbox_delegation`, `DelegationRepository`), `packages/core/src/delegation` (lists; the batch with guard rail 8,
 step-up, plan gate, membership, own-mailbox and limit rules, one audit entry per change through `MutationOutcome.also`),

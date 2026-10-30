@@ -1,6 +1,6 @@
 # 02 — Mail infrastructure
 
-Last updated: 2026-10-29. Research: `research/stalwart.md`, `research/deliverability.md`.
+Last updated: 2026-10-30. Research: `research/stalwart.md`, `research/deliverability.md`.
 
 ## URL and hostname map
 
@@ -219,6 +219,18 @@ and 175 more`. Without `impersonate` these permissions apply to its own account 
   `deleteheader "Authentication-Results"` (`editheader`) on every authenticated submission, so locally sent mail
   can't carry results our server never produced; the webmail trusts only the results header directly below our own
   topmost `Received` (`07-security.md` "Authentication results in the webmail"). `stack:verify` checks the strip.
+- **Sender identity script and send on behalf** (ADR-0019, update 2026-10-30; ADR-0026 §8): authenticated mail needs
+  exactly one `From:` equal to the envelope sender and, if a `Sender:` is present, exactly one `Sender:` address equal
+  to it — except the keyed send-on-behalf case: a `Sender:` that differs passes only with exactly one `Message-ID:` and
+  `X-AnhourMail-On-Behalf: hex sha256(K | hex sha256(K | mailbox | delegate | Message-ID))`, which only the web app can
+  make and which is good for that one message. `K` is
+  `SENDER_DELEGATION_KEY` (64 lowercase hex), compiled into the `sender-identity` system script by the dev plan
+  (derived from `BETTER_AUTH_SECRET` when unset) and by the production bootstrap (private ops repository); the web app
+  holds the same value, the worker never. The tag header is removed from every submission. Changing the key = re-run
+  the plan (or `applySenderIdentityPolicy` + `ReloadSettings`, no restart) and redeploy the web app together.
+  `stack:verify` checks the accepted, refused and stripped cases (Mailpit and a local mailbox's stored copy) and that a forged From to the sender's own mailbox is
+  refused (it is: a JMAP submission whose every recipient is throttled at `RCPT` is created as "not delivered" and
+  never reaches DATA, so it is no bypass).
 - Outbound spam scanning of authenticated mail is **off by default** in Stalwart (`MtaStageData.enableSpamFilter`). We turn it on and pair it with control-plane limits (`03-anti-spam-and-abuse.md`).
 - **Transport security** (ADR-0016, ADR-0018; verified 2026-10-21): listeners allow only TLS 1.2/1.3 (`TlsVersion` has
   no older values; 993 negotiated TLS 1.2 ECDHE-ECDSA-AES256-GCM and 587 STARTTLS negotiated TLS 1.3); set

@@ -1,6 +1,6 @@
 # ADR-0019: Sender identity enforcement for authenticated mail
 
-**Status:** Accepted 2026-10-21
+**Status:** Accepted 2026-10-21 · Updated 2026-10-30 (send-on-behalf exception, one Sender address; below)
 
 ## Context
 
@@ -50,6 +50,69 @@ non-member as group, two From addresses, forged Sender, missing From: refused wi
   the results header directly below our own topmost `Received` (`02-mail-infrastructure.md`).
 - Stalwart-specific detail: Sieve match variables (`${1}`) are empty in this context, so the script compares with
   `${envelope.from}` directly. Re-verify on every Stalwart upgrade (rule 22) — `stack:verify` does.
+
+## Update 2026-10-30: one keyed exception (send on behalf), one Sender address, self-addressed mail
+
+Built with ADR-0026 slice 10 (§8 there is the design). The decision above stands; three changes to the script
+(`senderIdentitySieve` in `packages/stalwart-client/src/sender.ts`):
+
+1. **Exactly one `Sender:` address.** Rule 4 used Sieve's `address :is`, which is true when _any_ address matches, so
+   a second `Sender:` header (or a `Sender:` listing two addresses) rode along with a matching one — verified on
+   v0.16.27 (accepted with 250 before this change). When a `Sender:` is present the script now counts its addresses
+   over every `Sender:` header first and refuses anything but one ("Use exactly one address in the Sender header",
+   5.5.3). This only tightens the rule.
+2. **Send on behalf.** When that one `Sender:` differs from the envelope sender, the message must have exactly one
+   `Message-ID:` and carry `X-AnhourMail-On-Behalf` equal to hex `sha256(K | inner)` with
+   `inner = hex sha256(K | lowercase envelope sender | lowercase Sender | Message-ID)` (the id as Stalwart reads it:
+   without angle brackets, case kept). Binding the tag to the Message-ID means a tag copied from a stored message is
+   useless with any other Message-ID; reusing the same Message-ID with a new body still passes (ADR-0026 §8). (security review 2026-10-30: the first, per-pair tag could be replayed by anyone signed in as
+   the mailbox, even after the grant was revoked); the outer hash rules out length extension. The computed tag must be
+   64 lowercase hex before it is compared, because a failed Stalwart expression leaves the `let` variable **empty**
+   (verified on v0.16.27: `hash(x, 'nosuchalgo')` and `to_lowercase(header.nosuch.addr)` both give `""`), and an
+   empty tag header would otherwise match. `From` must still equal the envelope sender (checked first, unchanged), so
+   the mailbox's own sign-in is needed — in practice the web app holding the mailbox's token. `K` is
+   `SENDER_DELEGATION_KEY` (64 lowercase hex, web app and this script only; the worker refuses to start with it); the
+   bootstrap writes it into the script text, which is why the key format is enforced (nothing in it can end the Sieve
+   or expression string), and why `applySenderIdentityPolicy` never passes Stalwart's error descriptions on (a compile
+   error quotes the script text — verified). The tag header is removed from **every** authenticated submission
+   (`deleteheader`), so it is never delivered. Without a key the exception isn't compiled in at all (every differing
+   `Sender:` refused, as before). The tag is computed by `onBehalfTag` (`packages/core/src/webmail/on-behalf.ts`, which
+   also refuses addresses or ids with `|`, `"`, `<`, `>`, whitespace or control characters); a unit test pins the two
+   formulas to each other.
+3. **Self-addressed mail is not a bypass** (investigated 2026-10-30 after a probe "delivered" a forged-From message
+   from a mailbox to itself while the recipient throttle was being hit). Clean probes on throwaway accounts: a
+   forged From to the sender's own mailbox is refused at DATA with 5.5.3 over SMTP 465 and JMAP, exactly like any
+   other recipient. When the per-recipient throttle (`senderDomain` + `rcpt`, 25 / hour) refuses every recipient at
+   `RCPT` (452), a JMAP `EmailSubmission` is still _created_ (`undoStatus: final`, `deliveryStatus` "not delivered,
+   452"), but DATA never runs and nothing is queued or delivered (re-checked after 90 s). What looked like delivery
+   was that created submission and the unsent draft, with its forged From, left in the sender's own Drafts. No script
+   change was needed; `stack:verify` now checks it with a throwaway mailbox (own From to itself delivered, forged
+   From to itself refused at DATA), so the throttle can never answer first.
+
+4. **Odd field names are not a way round** (probed 2026-10-30 over SMTP 465 as a mailbox): `Sender : x`,
+   `Sender<TAB>: x`, `sEnDeR: x`, `Sender:x`, and the same tricks on `From` (alone, or next to a correct `From:` in
+   either order) are all read by Stalwart's parser as the real header, so the checks see them: every variant was
+   refused (forged address, or "exactly one address") and none reached Mailpit. No extra rule was needed;
+   `stack:verify` keeps six of them as regression cases. Odd `Sender:` forms: group syntax and `<>` count as zero
+   addresses (refused by the count); an encoded word and a source route parse to one address that needs a tag like any
+   other (`header.sender.addr` keeps the route, `@relay:bob@…`), so nothing is accepted without the web app's tag.
+
+Verification (`npm run stack:verify`, all on the pinned v0.16.27): the right tag is accepted over SMTP and JMAP and
+delivered with `Sender:` and without the tag header, to Mailpit and to a local mailbox (stored copy checked); refused:
+wrong, missing, empty, another pair's and another Message-ID's tag, no Message-ID, two Message-IDs, the four odd Sender
+forms with no or an empty tag, a delegate putting the mailbox in `From:` even with the tag, a second `Sender:`, the
+odd field names, and a forged From to another mailbox or to the sender's own. Run with a different
+`SENDER_DELEGATION_KEY` than the server's, the three acceptance checks fail (negative control). The probes on throwaway
+accounts also covered mixed-case addresses (accepted), a reversed pair (refused) and two tag headers with one right
+(accepted: a right tag can only stand for the same message). Stalwart stores a system script without its final
+newline, so the policy compares texts without trailing space (it used to rewrite the script on every run).
+
+**Open probe item (not changed):** `Resent-From:` / `Resent-Sender:` are not checked, and a display name that itself
+contains an address (`From: "ceo@bank.example" <alice@…>`) passes because only the address is compared. Both are
+rendering questions for recipients' clients and our webmail; probe them and decide before launch.
+
+The first bullet of "Consequences" is superseded by this update: send on behalf is the keyed exception above,
+webmail only, audited by the web app (ADR-0026 §6).
 
 ## Alternatives
 
