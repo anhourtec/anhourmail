@@ -3,6 +3,7 @@ import "server-only";
 
 import { z } from "zod";
 
+import { isSenderDelegationKey, resolveSenderDelegationKey } from "@anhourmail/core/webmail";
 import { isPlatformDomain, parsePlatformDomain, productionPlatformProblems } from "@anhourmail/shared/platform";
 
 import { stalwartSettingsProblems } from "./adapters/stalwart-settings";
@@ -46,6 +47,10 @@ const schema = z.object({
   // accepts the worker's replacement of an existing account's password only with a grant made here. Never in the
   // worker. Required in production (32+ characters); unset in dev (no proxy).
   MAILBOX_PASSWORD_GRANT_KEY: z.string().optional(),
+  // Send on behalf (ADR-0026 §6, §8): the key behind the X-AnhourMail-On-Behalf tag, shared only with the mail server's
+  // sender-identity script. 64 lowercase hex characters (32 random bytes). Never in the worker. Required in production;
+  // unset in dev, where a key is derived from BETTER_AUTH_SECRET (the dev plan derives the same one).
+  SENDER_DELEGATION_KEY: z.string().optional(),
   // New console and mailbox passwords are checked against the breached-password corpus (k-anonymity range API;
   // 07-security.md "Breached-password check"): on | off | fake (dev/CI: a fixed list, no network). Unset = on, except
   // under NODE_ENV=test (off). Production refuses `fake`.
@@ -61,7 +66,22 @@ const checked = schema.superRefine((e, ctx) => {
   for (const message of stalwartSettingsProblems({ ...process.env, NODE_ENV: e.NODE_ENV })) {
     ctx.addIssue({ code: "custom", path: ["STALWART"], message });
   }
+  const delegationKey = (e.SENDER_DELEGATION_KEY ?? "").trim();
+  if (delegationKey !== "" && !isSenderDelegationKey(delegationKey)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["SENDER_DELEGATION_KEY"],
+      message: "SENDER_DELEGATION_KEY must be 64 lowercase hex characters (openssl rand -hex 32)",
+    });
+  }
   if (e.NODE_ENV !== "production") return;
+  if (delegationKey === "") {
+    ctx.addIssue({
+      code: "custom",
+      path: ["SENDER_DELEGATION_KEY"],
+      message: "Set SENDER_DELEGATION_KEY in production (the same value as the mail server's sender-identity script)",
+    });
+  }
   if (e.BREACHED_PASSWORD_CHECK === "fake") {
     ctx.addIssue({
       code: "custom",
@@ -114,6 +134,19 @@ export type Env = z.infer<typeof schema>;
 export function breachedPasswordMode(e: Pick<Env, "NODE_ENV" | "BREACHED_PASSWORD_CHECK">): "on" | "off" | "fake" {
   return e.BREACHED_PASSWORD_CHECK ?? (e.NODE_ENV === "test" ? "off" : "on");
 }
+/**
+ * The send-on-behalf key in effect (`onBehalfTag` in `@anhourmail/core/webmail`): SENDER_DELEGATION_KEY, else outside
+ * production the dev key derived from BETTER_AUTH_SECRET. Never log it.
+ */
+export function senderDelegationKey(): string {
+  const e = env();
+  return resolveSenderDelegationKey({
+    NODE_ENV: e.NODE_ENV,
+    SENDER_DELEGATION_KEY: e.SENDER_DELEGATION_KEY,
+    BETTER_AUTH_SECRET: e.BETTER_AUTH_SECRET,
+  });
+}
+
 let cached: Env | null = null;
 
 /** Validated environment, read lazily so builds don't need runtime secrets. */

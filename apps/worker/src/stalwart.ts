@@ -36,6 +36,11 @@ export function checkStalwartSettings(
   if ((env.MAILBOX_PASSWORD_GRANT_KEY ?? "") !== "") {
     problems.push("MAILBOX_PASSWORD_GRANT_KEY must not be given to this process (web app and management proxy only)");
   }
+  // The send-on-behalf key makes tags that let a mailbox's mail name someone else as Sender (ADR-0026 §6): web app and
+  // the mail server's script only. Refused everywhere, dev included (dev derives it; nothing to set).
+  if ((env.SENDER_DELEGATION_KEY ?? "") !== "") {
+    problems.push("SENDER_DELEGATION_KEY must not be given to this process (web app and mail server only)");
+  }
   if (problems.length > 0) throw new Error(`Worker configuration refused: ${problems.join("; ")}`);
 }
 

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { breachedPasswordMode, env, resetEnvForTests } from "./env";
+import { onBehalfTag } from "@anhourmail/core/webmail";
+
+import { breachedPasswordMode, env, resetEnvForTests, senderDelegationKey } from "./env";
 import { platform } from "./platform";
 
 /** A production configuration that passes every check, on the product domain. */
@@ -19,6 +21,7 @@ function production(overrides: Record<string, string | undefined> = {}) {
     TRUST_PROXY: "true",
     SECRETS_KEYRING: `k1:${Buffer.alloc(32, 1).toString("base64")}`,
     MAILBOX_PASSWORD_GRANT_KEY: "g".repeat(48),
+    SENDER_DELEGATION_KEY: "d".repeat(64),
     PLATFORM_DOMAIN: undefined,
     STALWART_OPERATIONS_KEY: "operations-key",
     STALWART_PROVISIONING_KEY: undefined,
@@ -120,6 +123,25 @@ describe("Stalwart credentials (ADR-0020 credential split)", () => {
       production({ ...onDomain, MAILBOX_PASSWORD_GRANT_KEY: key });
       expect(() => env()).toThrow(/MAILBOX_PASSWORD_GRANT_KEY/);
     }
+  });
+
+  it("requires a well-formed sender delegation key in production", () => {
+    for (const key of [undefined, "", "short", "D".repeat(64), "d".repeat(63)]) {
+      production({ ...onDomain, SENDER_DELEGATION_KEY: key });
+      expect(() => env()).toThrow(/SENDER_DELEGATION_KEY/);
+    }
+    production({ ...onDomain, SENDER_DELEGATION_KEY: "e".repeat(64) });
+    expect(senderDelegationKey()).toBe("e".repeat(64));
+    expect(onBehalfTag(senderDelegationKey(), "box@example.org", "me@example.org", "id.1@example.org")).toMatch(
+      /^[0-9a-f]{64}$/,
+    );
+  });
+
+  it("derives the dev sender delegation key when unset outside production, and checks a set one", () => {
+    production({ NODE_ENV: "development", APP_URL: "http://localhost:43200", SENDER_DELEGATION_KEY: undefined });
+    expect(senderDelegationKey()).toMatch(/^[0-9a-f]{64}$/);
+    production({ NODE_ENV: "development", APP_URL: "http://localhost:43200", SENDER_DELEGATION_KEY: "nope" });
+    expect(() => env()).toThrow(/SENDER_DELEGATION_KEY must be 64 lowercase hex/);
   });
 
   it("refuses the legacy single key in any mode", () => {
