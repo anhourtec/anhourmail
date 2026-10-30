@@ -22,7 +22,14 @@ import {
 } from "@/server/webmail/original";
 import { signedNoticeReason } from "@/server/webmail/http";
 import { webmailBasePath } from "@/server/webmail/paths";
-import { WebmailBlockedError } from "@/server/webmail/service";
+import {
+  isPinAddress,
+  PIN_QUERY,
+  pinLinkAllowed,
+  PinnedMailboxMissingError,
+  withPinnedMailbox,
+} from "@/server/webmail/pin";
+import { WebmailBlockedError, WebmailDelegationRefusedError } from "@/server/webmail/service";
 import type { Address } from "@/server/webmail/view";
 import { isJmapId } from "@/server/webmail/view";
 
@@ -47,8 +54,29 @@ function Row({ label, children, mono = false }: { label: string; children: React
  * plain text. The source is fetched here, server-side, with the session's token for the signed-in mailbox only;
  * any other id is a 404. It is never rendered as HTML.
  */
-export default async function OriginalMessagePage({ params }: { params: Promise<{ emailId: string }> }) {
+export default async function OriginalMessagePage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ emailId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { emailId } = await params;
+  // Opened from a tab scoped to a mailbox shared with the person (`?shared=<address>`): that mailbox, pinned for this
+  // request only (`server/webmail/pin.ts`); anything else about it is refused like the API refuses it.
+  const shared = (await searchParams)[PIN_QUERY];
+  if (Array.isArray(shared)) notFound();
+  let pin: string | null = null;
+  if (shared !== undefined) {
+    // Only from this origin: a link from another site can't pin a mailbox (`pinLinkAllowed`).
+    if (!pinLinkAllowed((await headers()).get("sec-fetch-site"))) notFound();
+    pin = shared.trim().toLowerCase();
+    if (!isPinAddress(pin)) notFound();
+  }
+  return withPinnedMailbox(pin, () => renderOriginal(emailId, pin));
+}
+
+async function renderOriginal(emailId: string, pin: string | null) {
   const h = await headers();
   const production = env().NODE_ENV === "production";
   const base = webmailBasePath(h.get("host"), production, process.env.WEBMAIL_DEV_PORT);
@@ -59,6 +87,8 @@ export default async function OriginalMessagePage({ params }: { params: Promise<
         .session(sessionId)
         .catch((err: unknown) => {
           if (err instanceof WebmailBlockedError) return err;
+          // The shared mailbox isn't open here, or its grant is gone: nothing to show.
+          if (err instanceof PinnedMailboxMissingError || err instanceof WebmailDelegationRefusedError) notFound();
           throw err;
         })
     : null;
@@ -66,8 +96,10 @@ export default async function OriginalMessagePage({ params }: { params: Promise<
     redirect(`${base}/sign-in?reason=${signedNoticeReason(env().BETTER_AUTH_SECRET, session.reason)}`);
   }
   if (!session || !sessionId) redirect(`${base}/sign-in`);
-  // The first-sign-in password change comes before any mail (the webmail page shows that step).
-  if (await passwordChangeGate().required(session.username)) redirect(base === "" ? "/" : base);
+  // The first-sign-in password change comes before any mail (the webmail page shows that step); the person's own.
+  if (await passwordChangeGate().required(session.delegated?.via ?? session.username)) {
+    redirect(base === "" ? "/" : base);
+  }
   if (!isJmapId(emailId)) notFound();
 
   const limit = LIMITS.webmailDownload;
@@ -88,7 +120,12 @@ export default async function OriginalMessagePage({ params }: { params: Promise<
     );
   }
 
-  const original = await webmail().original(sessionId, emailId, MAX_SOURCE_BYTES);
+  const original = await webmail()
+    .original(sessionId, emailId, MAX_SOURCE_BYTES)
+    .catch((err: unknown) => {
+      if (err instanceof PinnedMailboxMissingError || err instanceof WebmailDelegationRefusedError) notFound();
+      throw err;
+    });
   if (!original) notFound();
 
   const auth = authResults(
@@ -130,7 +167,9 @@ export default async function OriginalMessagePage({ params }: { params: Promise<
         </Row>
       </dl>
       <OriginalActions
-        downloadHref={`/api/webmail/messages/${encodeURIComponent(emailId)}/raw?download=1`}
+        downloadHref={`/api/webmail/messages/${encodeURIComponent(emailId)}/raw?download=1${
+          pin === null ? "" : `&${PIN_QUERY}=${encodeURIComponent(pin)}`
+        }`}
         sourceId="original-source"
       />
       {original.cut && (
