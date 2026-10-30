@@ -81,9 +81,15 @@ mailbox in the webmail ([Settings, Account](/docs/webmail-settings#account)).
 ## Change a role or remove someone
 
 Choose someone's name to open their details panel. Owners change a role on its **Role** tab (or with **Change role**
-in the ⋮ menu beside the name). User Administrators can remove Members. Removing someone asks you to confirm, and they lose access to the account in the console straight away. Their mailboxes
-and mail are kept; suspend or delete a mailbox from the **Mailboxes** page if you need to. The
-[app passwords](/docs/clients/app-passwords) on their mailboxes are revoked, so their mail apps stop signing in.
+in the ⋮ menu beside the name). User Administrators can remove Members. Removing someone asks you to confirm, and they
+lose access to the account in the console straight away.
+
+Their mailboxes and mail are kept, and mail keeps arriving. Each of their mailboxes becomes a
+[shared address](/docs/mailboxes#add-a-shared-address) that belongs to nobody, and their sign-in to it is turned off:
+we give it a new password that nobody is shown, so they are signed out of the webmail, and the
+[app passwords](/docs/clients/app-passwords) on it are revoked, so their mail apps stop signing in. Then decide what
+happens to it on the **Mailboxes** page: set a new password for whoever takes it over,
+[make it someone's mailbox](/docs/mailboxes#make-a-shared-address-a-user), or suspend or delete it.
 
 Some changes are never allowed, so an account can't lock itself out:
 
