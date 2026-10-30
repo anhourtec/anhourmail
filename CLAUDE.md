@@ -228,9 +228,10 @@ an app container direct access to Stalwart's management listener.
       GitHub Actions, on a clean local clone of the commits being pushed, in its own Compose project and ports so
       the dev stack is untouched; `--apply <path>` tests uncommitted fixes). Push only when every job is green locally; after pushing, check the Actions run and
       fix any failure in the same session.
-    - CI files may name the open-source stack (Postgres, Redis, Stalwart, Mailpit, Node, Playwright) — the stack is
-      public in the README — but never secrets, hostnames, IPs, server addresses or anything private (rule 44);
-      secrets come only from the CI secret store.
+    - CI job and step names shown in GitHub Actions stay generic ("integration tests", "build apps + images"): they
+      don't list the services behind them (maintainer preference, 2026-10-30). CI files themselves may name the
+      open-source stack where a command needs it — the stack is public in the README — but never secrets, hostnames,
+      IPs, server addresses or anything private (rule 44); secrets come only from the CI secret store.
 
 ### Open source and licensing
 

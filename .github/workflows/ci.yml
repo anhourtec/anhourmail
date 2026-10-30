@@ -41,7 +41,7 @@ jobs:
         with: { name: coverage, path: coverage/, if-no-files-found: ignore }
 
   integration:
-    name: integration (Postgres, Redis, Stalwart, Mailpit)
+    name: integration tests
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
