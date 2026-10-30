@@ -343,10 +343,12 @@ if (demo) {
 }
 
 const passwords = new Map<string, string>();
+const userIds = new Map<string, string>();
 for (const p of people) {
   const password = newPassword();
   passwords.set(p.email, password);
   const userId = await upsertConsoleUser(db, p, password);
+  userIds.set(p.email, userId);
   let accountId: string | undefined;
   if (p.account) {
     accountId = accountIds.get(p.account.key);
@@ -567,7 +569,8 @@ if (demo) {
 
   // Mailbox lifecycle states (console Mailboxes page): one suspended, one deleted and waiting out its grace period.
   // Written as intent and applied by the worker's mailbox.ensure job, like the console does (CLAUDE.md rule 26).
-  // FAMILY_LIFECYCLE_MAILBOXES in ./quota counts these when checking the demo fits the Family pool.
+  // FAMILY_EXTRA_MAILBOXES in ./quota counts these (and the shared mailbox below) when checking the demo fits the
+  // Family pool.
   const lifecycleBoxes = [
     { address: `paused@${fam}`, status: "suspended" as const, purgeAfter: null },
     {
@@ -590,6 +593,41 @@ if (demo) {
       .where(eq(schema.mailbox.id, id));
     await enqueueProvisioning(deps, { kind: "mailbox.ensure", subjectId: id });
   }
+
+  // A shared mailbox with members (ADR-0026): nobody signs in to it (a password nobody is shown); the Member can read
+  // and manage it and send as it, the User Admin can read and manage it. Grants change nothing on the mail server.
+  const familyId = accountIds.get("family") ?? "";
+  const deskId = await upsertMailbox(db, mgmt, {
+    address: `desk@${fam}`,
+    password: newPassword(),
+    accountId: familyId,
+    userId: null,
+    quotaBytes: quota("plus"),
+  });
+  const deskGrants: [string, "full_access" | "send_as"][] = [
+    [`member@${fam}`, "full_access"],
+    [`member@${fam}`, "send_as"],
+    [`users@${fam}`, "full_access"],
+  ];
+  await db
+    .insert(schema.mailboxDelegation)
+    .values(
+      deskGrants.flatMap(([email, right]) => {
+        const granteeUserId = userIds.get(email);
+        return granteeUserId
+          ? [
+              {
+                accountId: familyId,
+                mailboxId: deskId,
+                granteeUserId,
+                right,
+                grantedBy: userIds.get(`owner@${fam}`) ?? null,
+              },
+            ]
+          : [];
+      }),
+    )
+    .onConflictDoNothing();
 
   // A profile photo for the family owner (ADR-0022): drawn here, then checked and re-encoded exactly like an upload, so
   // the console app bar, People page and the owner's webmail show a photo rather than initials.
@@ -633,6 +671,10 @@ if (demo) {
     {
       label: "Profile photo",
       detail: `\`owner@${fam}\` has one (console app bar and People page, their webmail); everyone else shows initials`,
+    },
+    {
+      label: "Shared mailbox",
+      detail: `\`desk@${fam}\` on Demo Family belongs to nobody: \`member@${fam}\` has Read and manage and Send as, \`users@${fam}\` Read and manage (Mailboxes → desk@ → Delegation)`,
     },
     {
       label: "Suspended mailbox",

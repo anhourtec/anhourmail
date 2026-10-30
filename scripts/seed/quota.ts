@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { PLANS, type PlanId } from "@anhourmail/shared";
 
-/** Mailboxes the demo adds to the Family account besides its people: one suspended, one being deleted. */
-export const FAMILY_LIFECYCLE_MAILBOXES = 2;
+/**
+ * Mailboxes the demo adds to the Family account besides its people: one suspended, one being deleted, and the shared
+ * mailbox with members (`desk@`, ADR-0026).
+ */
+export const FAMILY_EXTRA_MAILBOXES = 3;
 
 /**
  * Each demo mailbox's share of its account's storage pool: the pool split evenly over the plan's included

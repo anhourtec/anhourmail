@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { PLANS } from "@anhourmail/shared";
 
 import { type AccountKey, ACCOUNTS, demoPeople } from "./people";
-import { demoQuotaBytes, FAMILY_LIFECYCLE_MAILBOXES } from "./quota";
+import { demoQuotaBytes, FAMILY_EXTRA_MAILBOXES } from "./quota";
 
 const GiB = 1024 ** 3;
 
@@ -15,7 +15,7 @@ describe("demo mailbox quotas", () => {
       const plan = ACCOUNTS[key].plan;
       const boxes =
         people.filter((p) => p.mailbox && p.account?.key === key).length +
-        (key === "family" ? FAMILY_LIFECYCLE_MAILBOXES : 0);
+        (key === "family" ? FAMILY_EXTRA_MAILBOXES : 0);
       expect(boxes * demoQuotaBytes(plan)).toBeLessThanOrEqual(PLANS[plan].storagePoolGb * GiB);
     }
   });
