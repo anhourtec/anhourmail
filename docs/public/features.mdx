@@ -1,0 +1,153 @@
+---
+title: All features
+description: Everything AnhourMail does today — custom domain email, aliases and masked aliases, private webmail, IMAP, SMTP and JMAP, shared mailboxes and data export.
+---
+
+AnhourMail is private, low-cost email hosting: a free address at <Value of="productDomain" />, or your own domain on
+the paid plans, with fast open-source webmail and every standard mail protocol. This page lists what works today,
+grouped the way people look for it, with a link to the guide for each. What isn't built yet is listed at the end.
+
+## Email on your own domain
+
+- **Custom domain email** on Plus and Supporter: add a domain you own and keep it with your registrar; you only add
+  DNS records.
+- **Guided DNS setup.** The console shows every record with a copy button and checks each one live, so you can see
+  what's left. It works with any DNS provider.
+- **Signed mail.** We create DKIM keys for your domain (an RSA key and an Ed25519 key) and show them as
+  ready-to-paste records, alongside SPF and DMARC.
+- **Catch-all** sends mail for addresses that don't exist at your domain to one mailbox.
+- **Automatic setup records** (optional) let many mail apps fill in the server settings from your address.
+
+Guides: [Use your own domain](/docs/custom-domain) · [Catch-all](/docs/custom-domain/catch-all)
+
+## A free email address
+
+Every account can claim one free address at <Value of="productDomain" /> with <Value of="freeStorage" /> of storage,
+once it has confirmed its email address. Names that would pass for system or staff addresses are reserved, and a name
+is never handed out again.
+
+Guide: [Your free address](/docs/free-address)
+
+## Email aliases and masked aliases
+
+- **Aliases** are extra addresses that deliver to your mailbox, such as hello@ or shop@ on your domain.
+- **Masked aliases** are random addresses you give to one site each, so the site never learns your real address.
+- **Switch any alias off** when it starts getting spam, and back on later. A note on each reminds you where you used
+  it. Reply from whichever address the mail came to.
+- **Plus addressing:** add `+anything` after your name, with no setup.
+- **How many:** on Free, <Value of="aliasesFree" /> aliases and <Value of="maskedAliasesFree" /> masked aliases at a
+  time; on the paid plans, up to <Value of="aliasesPerMailbox" /> per mailbox, both kinds together.
+
+Guide: [Aliases and masked aliases](/docs/aliases)
+
+## Private by default
+
+- **No ads, no tracking, no profiling.** Paid plans fund the service, and there's no analytics in the product or on
+  this site.
+- **Remote images are blocked** until you choose to load them, so tracking pixels can't report when you open a
+  message. When you do load them, they come through our privacy proxy, so the sender never sees your IP address.
+- **Every message opens in a sandboxed frame** with scripts off, after its HTML has been cleaned.
+- **Your mail stays out of our logs.** Subjects, bodies and recipients never go into logs, analytics or the audit
+  log.
+
+Guides: [Remote images](/docs/webmail#remote-images-are-blocked-until-you-load-them) ·
+[How messages are kept safe](/docs/webmail#how-messages-are-kept-safe)
+
+## Fast, open-source webmail
+
+The webmail at <Value of="webmailHost" /> talks JMAP to the mail server, so it fetches only what changed instead of
+downloading whole folders.
+
+- **Conversations and folders:** threads, archive, junk, move, pin favourite folders, and search with filters.
+- **Writing:** rich text (sent with a plain-text copy), drafts, undo send, attachments, and named signatures.
+- **Several mailboxes in one session,** and shared mailboxes opened by address in a tab of their own.
+- **Keyboard shortcuts** for everything you do often.
+- **Settings that run on the server:** automatic replies, confirmed forwarding, and blocked and safe senders, so they
+  apply in every app you use.
+- **Your look:** light and dark themes, density, reading pane, your photo and sender name.
+
+Guides: [Webmail](/docs/webmail) · [Webmail settings](/docs/webmail-settings) ·
+[Folders and signatures](/docs/folders-and-signatures)
+
+## Contacts that sync
+
+An address book beside your mail: add, edit and group contacts, import and export vCard files, and people you email
+are saved for you. Contacts sync to your phone and computer over CardDAV.
+
+Guide: [Contacts](/docs/contacts)
+
+## IMAP, SMTP and JMAP for any mail app
+
+Use the webmail, the mail app you already like on your computer or phone, or both. Connections are always encrypted.
+
+<ClientSettingsTable />
+
+- **App passwords:** each mail app signs in with its own password, scoped to what it needs and shown once. Lose a
+  phone, revoke its password, and nothing else changes.
+
+Guides: [Mail app settings](/docs/clients/imap-smtp-settings) · [App passwords](/docs/clients/app-passwords)
+
+## Families and small teams
+
+On Plus and Supporter, one account holds everyone, for one yearly price.
+
+- **People and roles:** invite up to <Value of="maxPeople" /> people and give each a role (owner, domain, user or
+  billing administrator, member, or read-only).
+- **Mailboxes:** <Value of="includedMailboxes" /> included, sharing the account's <Value of="plusStorage" />. Add a
+  user and their mailbox in one go, set storage per mailbox, and suspend, delete or restore mailboxes.
+- **Shared mailboxes** for addresses like support@ or family@, on your own domain or ours.
+- **Delegation:** give someone **Read and manage**, **Send as** or **Send on behalf** on a mailbox, and convert a
+  person's mailbox to a shared one when they leave, so no mail is lost.
+
+Guides: [People and roles](/docs/people-and-roles) · [Mailboxes](/docs/mailboxes)
+
+## Sign-in security
+
+Two-factor sign-in with an authenticator app, recovery codes, and passkeys or security keys. Owners can require a
+second factor for everyone in the account, and you can see and end your sessions.
+
+Guide: [Sign-in security](/docs/sign-in-security)
+
+## Accountability
+
+An append-only, tamper-evident audit log records every change in your account and who made it. When Anhourtec support
+needs to look at your console, it's read-only, short, explained and shown in your audit log.
+
+Guide: [Audit log](/docs/audit-log)
+
+## Your data, and leaving
+
+- **Export your mail and contacts** whenever you like: one `.mbox` file per folder and a vCard file, straight from
+  your mailbox. Account owners can also export the account's settings and audit log.
+- **Delete your account** with a <Value of="accountDeletionGraceDays" />-day grace period you can cancel.
+
+Guide: [Export your data and delete your account](/docs/export-and-deletion)
+
+## Open source and self-hosting
+
+The webmail, console and this site are open source (AGPL-3.0), the reusable libraries MIT. The mail server is
+Stalwart, run unmodified. You can read the code, and run the stack yourself.
+
+Guide: [Self-hosting](/docs/self-hosting) · [Credits](/credits)
+
+## Pricing
+
+A free plan, and low-cost yearly plans priced per account rather than per person:
+
+<PlanTable />
+
+Full details, including storage and extra mailboxes, are on the [pricing page](/pricing).
+
+## Not built yet
+
+We list these so nothing here reads as a promise:
+
+- **Paying for a plan.** Billing opens with the beta; until then the prices above are planned prices.
+- **Importing mail and contacts** from another provider. Until it arrives, any mail app can copy mail over IMAP (see
+  [switching](/switch)).
+- **<Value of="bulkAddOnName" />**, a paid add-on for <Value of="bulkAddOnPlans" /> (<Value of="bulkAddOnStatus" />).
+- **Instant push in the webmail.** Today it checks for new mail while it's open.
+
+<Callout title="Not live yet">
+  AnhourMail is being built in the open and isn't open for sign-ups yet. Follow the [changelog](/changelog) for updates.
+</Callout>
