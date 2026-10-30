@@ -49,6 +49,10 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
   built 2026-10-30:** removing someone releases their mailboxes as shared addresses with a new password nobody is
   shown and their app passwords revoked (07-security.md "Leavers"); delegation is next — **designed 2026-10-30**
   (ADR-0026, accepted: per-person grants, BFF-held mailbox tokens, shared mailbox = person-less mailbox with members).
+  **Control-plane part built 2026-10-30** (ADR-0026 slices 1–7): plan flag and limits, `delegation.manage.any` for
+  User Administrators (guard rail 8), `mailbox_delegation` (migration 0029), the delegation service, the removal's
+  "Give full access to …", Convert to shared mailbox and the grant cascades; console routes and UI, the webmail side
+  and the send-on-behalf script are the next slices.
 - **Names:** the mailbox display name is the one source; a person's own mailbox follows their profile name unless an
   admin sets another; the webmail sender name shows the same value (CLAUDE.md rule 61).
 

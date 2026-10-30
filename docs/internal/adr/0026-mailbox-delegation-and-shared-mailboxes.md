@@ -175,6 +175,16 @@ userId)`, `grant`, `revoke`, `revokeAllForMailbox`, `revokeAllForGrantee`), Post
 - Rule 35 work in the same change: matrix, `roles.md` (permission table + guard rail 69 rewritten: "granting access to
   someone else's mailbox is critical, Owner and User Administrator, guard rail 8"), RBAC harness, e2e role journeys.
 
+**Update (2026-10-30, review):** guard rail 8 also holds after a promotion. When `changeMemberRole` makes someone an
+Owner, or gives a Member an admin role, and when "Make this a user" creates a person with any role but Member, the
+grants on that person's mailboxes in the account whose `granted_by` isn't a current Owner are deleted in the same
+transaction, one `delegation.revoked` entry each (reason `role_changed`); grants an Owner made stay. Otherwise a User
+Administrator's grant on a Member's or a shared mailbox would outlive it becoming an admin's or Owner's mailbox. The
+batch and "Convert to shared mailbox" take the account lock before reading the mailbox and the members, so these checks
+always run on current rows. The grant table also has a composite foreign key `(account_id, mailbox_id)` →
+`mailbox (account_id, id)` (a unique constraint on `mailbox` added for it), so a row can't tie one account to another
+account's mailbox even outside the services.
+
 ### 5. Console
 
 - **Mailbox panel → "Delegation" tab** (`components/mailboxes/delegation-tab.tsx`): three sections, "Read and manage",
@@ -241,6 +251,11 @@ lock, then answers 503 "Try again".
 asks core for the person's current rights on that mailbox. "Has the right" is cached at most 10 s per (session,
 mailbox); "no right" is never cached. No right → the entry is dropped from the session and the route answers 404
 (the mailbox is out of their scope now). Refreshing a delegated token goes through the same gate first.
+
+**Update (2026-10-30, review):** the gate (to build, slice 11) must also check the mailbox account's plan flag
+(`Plan.delegation`) on every request and in `openDelegatedMailbox`, so a downgrade to a plan without delegation stops
+the use of existing grants at once (they stay on record, unused, until an administrator removes them or the plan comes
+back).
 
 **What each right allows** (enforced in the BFF; the token itself could do everything):
 

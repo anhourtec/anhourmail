@@ -1,6 +1,6 @@
 # 07 — Security
 
-Last updated: 2026-10-30 (leavers lose mailbox sign-in; data export and account deletion; staff support access; profile photos).
+Last updated: 2026-10-30 (delegation grants and Convert to shared mailbox, ADR-0026; leavers lose mailbox sign-in; data export and account deletion; staff support access; profile photos).
 
 ## Threat model
 
@@ -277,7 +277,11 @@ sha256(phc) | expiry)>`, expiry ≤ 1 h, stored beside the waiting hash and sent
   suspended rather than left open with the old password (audit meta `suspended`); setting a password again and
   resuming brings it back. The handoff redemption takes the account lock, which removal holds. **Needs checking on the pinned
   server:** whether Stalwart closes IMAP IDLE / SMTP / EventSource connections already authenticated when the
-  password changes (OAuth tokens are revoked; open connections may last until they disconnect).
+  password changes (OAuth tokens are revoked; open connections may last until they disconnect). The same release
+  (`mailboxes/release.ts`) backs **Convert to shared mailbox** (ADR-0026: `mailbox.manage`, step-up, guard rail 8). The
+  leaver's own delegation grants go with the removal, audited one by one; "Give full access to …" (`delegateTo`) grants
+  in the same transaction and needs `delegation.manage.any`, the plan flag and a fresh step-up, or the whole removal is
+  refused.
 - **Detection:** the worker records the Password `credentialId` after every create/reset/change
   (`mailbox.password_credential_id`); the hourly reconciler reports a mailbox whose credential differs
   (`passwordReplaced`) or was never recorded (`passwordUntracked`) as `platform.reconciler_drift`, never fixes it.

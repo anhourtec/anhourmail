@@ -139,7 +139,7 @@ recipients created, so no abuse amplification beyond normal sending limits).
 ## Permissions (matrix: `packages/shared/src/rbac`, human view: `roles.md`)
 
 `shared_mailbox.read|manage`, `distribution_list.read|manage`, `delegation.read`, `delegation.manage.own`,
-`delegation.manage.any` (**critical**, Owner only), `forwarding.manage.own`, `forwarding.manage.any`
+`delegation.manage.any` (**critical**; Owner and User Administrator with guard rail 8 since ADR-0026), `forwarding.manage.own`, `forwarding.manage.any`
 (**critical**, Owner only), `mail_rule.read|manage`, `message_trace.read`, `resource_mailbox.manage`.
 
 ## Provisioning order (from the probe)
