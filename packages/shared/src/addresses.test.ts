@@ -184,8 +184,122 @@ describe("reserved names can't be imitated", () => {
   });
 
   it("leaves ordinary names alone, including ones that merely contain a reserved word", () => {
-    for (const name of ["jane.doe", "newsroom.fan", "rootbeer", "helpful", "accounting"]) {
+    for (const name of [
+      "jane.doe",
+      "newsroom.fan",
+      "rootbeer",
+      "helpful",
+      "accountant.jo",
+      "carefree",
+      "testudo",
+      "teamwork.fan",
+      "securely.yours",
+      "the-admiral",
+      "insecure",
+      "kim.official.fan",
+      "jane.billings",
+      "loginov",
+      "loginova.k",
+      "cats.supporter.fan",
+    ]) {
       expect(isReservedPlatformLocalPart(name)).toBe(false);
+    }
+  });
+
+  it("reserves company role addresses", () => {
+    for (const name of [
+      "contact",
+      "hello",
+      "careers",
+      "jobs",
+      "press",
+      "legal",
+      "compliance",
+      "gdpr",
+      "investors",
+      "partners",
+      "accounting",
+      "payroll",
+      "invoices",
+      "refunds",
+      "founders",
+      "employees",
+      "everyone",
+      "customerservice",
+      "customer.care",
+    ]) {
+      expect(isReservedPlatformLocalPart(name)).toBe(true);
+    }
+  });
+
+  it("reserves infrastructure names and our hostnames", () => {
+    for (const name of [
+      "webmail",
+      "autoconfig",
+      "autodiscover",
+      "mta-sts",
+      "localhost",
+      "smtp",
+      "imap",
+      "pop3",
+      "status",
+    ]) {
+      expect(isReservedPlatformLocalPart(name)).toBe(true);
+    }
+  });
+
+  it("reserves automated senders and placeholder names", () => {
+    for (const name of [
+      "donotreply",
+      "do-not-reply",
+      "notifications",
+      "newsletter",
+      "mailer",
+      "daemon",
+      "test1",
+      "nobody",
+      "undefined",
+      "anonymous",
+      "user2",
+    ]) {
+      expect(isReservedPlatformLocalPart(name)).toBe(true);
+    }
+  });
+
+  it("reserves account-security words a phishing message would use, at the start, the end or anywhere", () => {
+    for (const name of [
+      "password-reset",
+      "your.passwordreset",
+      "account-security",
+      "trust.and.safety",
+      "signin-alert",
+      "signin.help",
+      "confirm.now",
+      "official-news",
+      "bank.security",
+      "team-support",
+      "mail-official",
+      "it.helpdesk",
+      "site-admin",
+      "verified",
+      "recovery",
+      "wallet",
+      "2fa",
+      "wallet-verify",
+      "bank-alerts",
+      "account-notifications",
+      "my.accounts",
+      "mail-service",
+      "adrnin",
+      "rnailer-daemon",
+    ]) {
+      expect(isReservedPlatformLocalPart(name)).toBe(true);
+    }
+  });
+
+  it("reserves mail report and mailing list conventions", () => {
+    for (const name of ["rua", "ruf", "fbl", "unsubscribe", "listserv", "majordomo", "listmaster", "complaints"]) {
+      expect(isReservedPlatformLocalPart(name)).toBe(true);
     }
   });
 });
