@@ -10,48 +10,6 @@ import { createMailClient, MailboxRefusedError, SignedOutError } from "./mail-cl
 import { SharedMailboxSkeleton } from "./mailbox-skeleton";
 import { WebmailApp } from "./webmail-app";
 
-const backClass =
-  "inline-flex h-8 shrink-0 items-center justify-center whitespace-nowrap rounded-lg border bg-background px-3 font-medium text-[13px] transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring";
-
-/**
- * The line across the top while a mailbox shared with the person is shown (ADR-0026 §6): which mailbox it is, and the
- * way back to their own (a switch in this tab, or a link from a mailbox-scoped tab).
- */
-export function SharedBanner({
-  address,
-  onBack,
-  backHref,
-}: {
-  address: string;
-  onBack?: () => void;
-  backHref?: string;
-}) {
-  return (
-    <div
-      role="region"
-      aria-label="Shared mailbox"
-      className="flex min-h-11 shrink-0 items-center gap-3 border-b bg-accent px-4 py-1.5 text-[13px]"
-    >
-      <Mailbox className="size-4 shrink-0 text-primary" aria-hidden />
-      <p className="min-w-0 flex-1 truncate">
-        You're viewing <span className="font-mono">{address}</span>
-        <span className="hidden sm:inline">, a mailbox shared with you</span>
-      </p>
-      {backHref ? (
-        <a href={backHref} className={backClass}>
-          <span className="sm:hidden">Your mailbox</span>
-          <span className="hidden sm:inline">Go to your mailbox</span>
-        </a>
-      ) : (
-        <button type="button" onClick={onBack} className={backClass}>
-          <span className="sm:hidden">Your mailbox</span>
-          <span className="hidden sm:inline">Back to your mailbox</span>
-        </button>
-      )}
-    </div>
-  );
-}
-
 /**
  * The one answer for a mailbox-scoped page that can't be opened (ADR-0026 §6): no grant, an address that doesn't exist
  * or belongs to another account, or access that was taken away. It never says which, so it confirms nothing.
@@ -82,7 +40,7 @@ export function MailboxRefused({ address, ownHref }: { address?: string | undefi
   );
 }
 
-type AppProps = Omit<ComponentProps<typeof WebmailApp>, "username" | "scope" | "sharedVia">;
+type AppProps = Omit<ComponentProps<typeof WebmailApp>, "username" | "scope">;
 
 /**
  * A tab scoped to one mailbox shared with the person (Open another mailbox, `/mailbox/<address>/`). It opens the

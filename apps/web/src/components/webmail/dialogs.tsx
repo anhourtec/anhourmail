@@ -227,40 +227,32 @@ export function OpenMailboxDialog({ onClose }: { onClose: () => void }) {
 }
 
 /**
- * Settings while a mailbox shared with the person is shown: they belong to the person's own mailbox (ADR-0026 §6), so
- * this says so and offers the way back.
+ * Settings in a tab showing a mailbox shared with the person: they belong to the person's own mailbox (ADR-0026 §6), so
+ * this says so and links to it.
  */
 export function OwnSettingsDialog({
   address,
-  onBack,
   backHref,
   onClose,
 }: {
   address: string;
-  onBack?: (() => void) | undefined;
-  backHref?: string | undefined;
+  backHref: string;
   onClose: () => void;
 }) {
   return (
     <Modal title="Settings" onClose={onClose} wide>
       <p className="am-small mb-5">
-        Settings, signatures, contacts and sending belong to your own mailbox. You're viewing{" "}
-        <span className="font-mono text-foreground">{address}</span>, a mailbox shared with you. Go back to your mailbox
-        to change them.
+        Settings, signatures and contacts belong to your own mailbox. This tab shows{" "}
+        <span className="font-mono text-foreground">{address}</span>, a mailbox shared with you. Go to your mailbox to
+        change them.
       </p>
       <div className="flex justify-end gap-2">
         <button type="button" autoFocus onClick={onClose} className={secondaryButtonClass}>
           Close
         </button>
-        {backHref ? (
-          <a href={backHref} className={primaryButtonClass}>
-            Go to your mailbox
-          </a>
-        ) : (
-          <button type="button" onClick={onBack} className={primaryButtonClass}>
-            Back to your mailbox
-          </button>
-        )}
+        <a href={backHref} className={primaryButtonClass}>
+          Go to your mailbox
+        </a>
       </div>
     </Modal>
   );

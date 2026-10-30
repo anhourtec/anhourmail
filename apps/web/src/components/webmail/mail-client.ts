@@ -946,16 +946,6 @@ export function createMailClient(
     /** The session's mailboxes: the active one, its own others, and every mailbox shared with the person. */
     mailboxes: () => bff<MailboxList>(`${origin}/api/webmail/mailboxes`),
     /**
-     * Opens a mailbox shared with the person ("Shared with you") and makes it the session's active one; reload the
-     * page on success (other requests stay held). Refused: `MailboxRefusedError`.
-     */
-    openShared: (address: string) =>
-      changeMailbox(() =>
-        openMailbox(`${origin}/api/webmail/mailboxes/delegated`, { address }).catch((err: unknown) => {
-          throw err instanceof MailboxRefusedError ? new RefusedError(err.message) : err;
-        }),
-      ),
-    /**
      * For a mailbox-scoped tab: opens its mailbox (or checks its grant, if open already) without changing what the
      * session's other tabs show. Sent unpinned (the mailbox may not be open yet). Refused: `MailboxRefusedError`.
      */

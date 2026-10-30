@@ -82,7 +82,6 @@ import {
   tabTitle,
 } from "./sync";
 import { Reader, type ReaderAction, type ReaderActions } from "./reader";
-import { SharedBanner } from "./shared-mailbox";
 import { type Mailboxes, Sidebar } from "./sidebar";
 import { FOLDER_ROLES, mailboxTabHref, pagesBase } from "./tab-paths";
 import { ToastHost, useToasts } from "./toasts";
@@ -161,11 +160,6 @@ type AppProps = {
   /** Our mail server's authserv-ids (only its Authentication-Results are trusted in message details). */
   authservIds?: string[];
   /**
-   * The active mailbox is one shared with the person (ADR-0026 §6): the person's own mailbox it comes through. Reading
-   * and managing only; sending, contacts and settings stay with their own mailbox.
-   */
-  sharedVia?: string | null;
-  /**
    * A tab scoped to one mailbox shared with the person (Open another mailbox, `/mailbox/<address>/`): `username` is
    * that mailbox, every request pins it, and the session's active mailbox (other tabs) is left alone. `folder` is the
    * folder named in the URL (a role or an id); `ownHref` leads to the person's own webmail; `onRefused` runs when
@@ -190,7 +184,6 @@ function Mailroom({
   initialCollapsed,
   initialPreferences,
   authservIds = [],
-  sharedVia = null,
   scope,
 }: AppProps) {
   const scoped = scope !== undefined;
@@ -235,26 +228,24 @@ function Mailroom({
   const [priorityCount, setPriorityCount] = useState(0);
   const [mailboxes, setMailboxes] = useState<Mailboxes>({
     active: username,
-    activeShared: scoped || sharedVia !== null,
+    activeShared: scoped,
     others: [],
     shared: [],
   });
   /**
-   * A mailbox shared with the person is shown (this tab is scoped to one, or it is the session's active mailbox):
-   * reading and managing only (ADR-0026 §6). Composing, contacts, blocking senders and settings stay with the person's
-   * own mailbox, and the server refuses them here (403), so they aren't offered.
+   * A mailbox shared with the person is shown (only ever in a tab scoped to it, Open another mailbox): reading and
+   * managing (ADR-0026 §6). Contacts, blocking senders and settings stay with the person's own mailbox, and the server
+   * refuses them here (403), so they aren't offered.
    */
-  const sharedMode = scoped || mailboxes.activeShared;
+  const sharedMode = scoped;
   const sharedModeRef = useRef(sharedMode);
   useEffect(() => {
     sharedModeRef.current = sharedMode;
   });
   /** A mailbox-scoped tab's mailbox as the server lists it (the mailbox it comes through, the rights held). */
   const [scopedEntry, setScopedEntry] = useState<SharedMailbox | null>(null);
-  /** The person's own mailbox a shared one comes through ("Back to your mailbox"). */
-  const via = scoped
-    ? scopedEntry?.via
-    : (mailboxes.shared.find((m) => m.address === mailboxes.active.toLowerCase())?.via ?? sharedVia ?? undefined);
+  /** The person's own mailbox a shared one comes through (its drafts and uploads go there). */
+  const via = scopedEntry?.via;
   /**
    * Writing mail while a shared mailbox is shown (ADR-0026 §6, "Sending from one"): the draft lives in the person's own
    * mailbox (`via`), so drafts, uploads, the From picker, send and undo go there — pinned to it per request, without
@@ -515,7 +506,12 @@ function Mailroom({
     if (!scoped) {
       client
         .mailboxes()
-        .then(setMailboxes)
+        .then((m) => {
+          // A session left on a shared mailbox (switched to one before they opened only in tabs of their own): the
+          // page hands it back to the person's own mailbox, so load it again.
+          if (m.activeShared) window.location.reload();
+          else setMailboxes(m);
+        })
         .catch(() => undefined);
     } else {
       // Which own mailbox this one comes through, and whether the person may send from it.
@@ -531,7 +527,7 @@ function Mailroom({
         });
     }
     // The person's own mailbox only (refused while a shared one is shown, so not asked for then: see below).
-    if (!scoped && sharedVia === null) {
+    if (!scoped) {
       client
         .senders()
         .then((r) => {
@@ -720,8 +716,8 @@ function Mailroom({
   const inboxUnread = folders?.find((f) => f.role === "inbox")?.unreadEmails ?? 0;
   const viewName = currentFolder ? folderLabel(currentFolder) : view?.kind === "priority" ? "Priority" : null;
   useEffect(() => {
-    document.title = tabTitle(viewName, inboxUnread);
-  }, [viewName, inboxUnread]);
+    document.title = tabTitle(viewName, inboxUnread, scoped ? { mailbox: username } : {});
+  }, [viewName, inboxUnread, scoped, username]);
 
   // ---- preferences --------------------------------------------------------------------------------------
 
@@ -1505,30 +1501,6 @@ function Mailroom({
       });
   };
 
-  /** Opens a "Shared with you" mailbox here: it becomes the session's active one (the page reloads to show it). */
-  const openShared = (address: string) => {
-    setDrawer(false);
-    client
-      .openShared(address)
-      .then(() => {
-        window.location.reload();
-      })
-      .catch((err: unknown) => {
-        fail(err);
-        // Its grant may be gone: the list says what is still shared.
-        client
-          .mailboxes()
-          .then(setMailboxes)
-          .catch(() => undefined);
-      });
-  };
-
-  /** Back from a shared mailbox to the person's own (the one it came through). */
-  const backToOwn = () => {
-    const own = via ?? mailboxes.others[0];
-    if (own) switchMailbox(own);
-  };
-
   const signOut = async () => {
     try {
       // "Empty Trash when I sign out" (a setting the person turned on).
@@ -1583,7 +1555,6 @@ function Mailroom({
         setAdding(true);
       }}
       onSwitchMailbox={switchMailbox}
-      onOpenShared={openShared}
       onOpenAnother={() => {
         setDrawer(false);
         setOpeningAnother(true);
@@ -1748,9 +1719,6 @@ function Mailroom({
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden">
-      {sharedMode && (
-        <SharedBanner address={mailboxes.active} {...(scope ? { backHref: scope.ownHref } : { onBack: backToOwn })} />
-      )}
       <div
         className={`grid min-h-0 flex-1 grid-cols-1 overflow-hidden ${
           collapsed ? "lg:grid-cols-[3.5rem_minmax(0,1fr)]" : "lg:grid-cols-[15rem_minmax(0,1fr)]"
@@ -2161,10 +2129,10 @@ function Mailroom({
             }}
           />
         )}
-        {settingsOpen && sharedMode && (
+        {settingsOpen && scope && (
           <OwnSettingsDialog
             address={mailboxes.active}
-            {...(scope ? { backHref: scope.ownHref } : { onBack: backToOwn })}
+            backHref={scope.ownHref}
             onClose={() => {
               setSettingsOpen(false);
             }}
