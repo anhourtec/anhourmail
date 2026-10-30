@@ -1048,7 +1048,7 @@ describe("mailbox passwords (worker)", () => {
     expect(d.uow.state.mailboxPasswords[0]).toMatchObject({ pendingHash: PHC(4), credentialId: "b" });
   });
 
-  it("retries while the account isn't on the mail server, drops the hash for a deleting mailbox", async () => {
+  it("retries while the account isn't on the mail server; for a deleting mailbox keeps an admin's hash, drops the person's", async () => {
     const { d } = setup();
     const mail = fakeMailServer();
     d.uow.state.mailboxPasswords.push({ mailboxId: "m1", pendingHash: PHC(5), credentialId: null });
@@ -1063,11 +1063,47 @@ describe("mailbox passwords (worker)", () => {
     d.uow.state.jobs = [];
     await enqueueProvisioning(d, { kind: "mailbox.password", subjectId: "m1" });
     await runNextJob(d, mail);
+    // An administrator's (or a leaver's cut-off) waits for a restore, so a restore never brings the old one back.
+    expect(d.uow.state.mailboxPasswords[0]?.pendingHash).toBe(PHC(5));
+    d.uow.state.mailboxPasswords[0]!.byOwner = true;
+    await enqueueProvisioning(d, { kind: "mailbox.password", subjectId: "m1" });
+    await runNextJob(d, mail);
     expect(d.uow.state.mailboxPasswords[0]?.pendingHash).toBeNull();
+  });
+
+  it("turning an account back on waits for an administrator's password still waiting (a leaver's cut-off)", async () => {
+    const { d } = setup();
+    const mail = fakeMailServer();
+    await provision(d, mail);
+    // Suspended, with a new password waiting; then resumed: the account stays off until the password lands.
+    d.uow.state.mailboxes[0]!.status = "suspended";
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    while (await runNextJob(d, mail));
+    expect(mail.boxes[0]?.suspended).toBe(true);
+    await d.uow.run((r) => r.mailboxPasswords.setPending("m1", PHC(20), "grant-20"));
+    d.uow.state.mailboxes[0]!.status = "provisioning";
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(d.uow.state.jobs.at(-1)).toMatchObject({
+      kind: "mailbox.ensure",
+      status: "queued",
+      lastError: "Error: waiting for a new password to reach the mail server",
+    });
+    expect(mail.boxes[0]?.suspended).toBe(true);
+    // Once it is applied, the retry turns the account on.
+    await enqueueProvisioning(d, { kind: "mailbox.password", subjectId: "m1" });
+    d.uow.state.jobs.find((j) => j.kind === "mailbox.ensure" && j.status === "queued")!.runAfter = new Date(8.64e15);
+    await runNextJob(d, mail);
+    expect(mail.boxes[0]?.passwordHash).toBe(PHC(20));
+    d.uow.state.jobs.find((j) => j.kind === "mailbox.ensure" && j.status === "queued")!.runAfter = new Date(0);
+    await runNextJob(d, mail);
+    expect(mail.boxes[0]?.suspended).toBe(false);
+    expect(d.uow.state.mailboxes[0]?.status).toBe("active");
   });
 
   it("gives up after the last attempt: an administrator's password is kept (marked failed), status untouched, audited", async () => {
     const { d, clock } = setup();
+    d.uow.state.mailboxes[0]!.userId = "u1"; // someone's own mailbox (a person-less one is suspended, below)
     const ok = fakeMailServer();
     await provision(d, ok);
     const failing = { ...ok, setMailboxPassword: () => Promise.reject(new Error("mail server unavailable")) };
@@ -1095,7 +1131,29 @@ describe("mailbox passwords (worker)", () => {
     expect(d.uow.state.mailboxPasswords[0]).toMatchObject({ pendingHash: null });
   });
 
-  it("gives up on a deleting mailbox's password without keeping it", async () => {
+  it("gives up on a person-less mailbox's admin password by suspending it (fails closed), audited", async () => {
+    const { d, clock } = setup();
+    const ok = fakeMailServer();
+    await provision(d, ok);
+    const failing = { ...ok, setMailboxPassword: () => Promise.reject(new Error("mail server unavailable")) };
+    await d.uow.run((r) => r.mailboxPasswords.setPending("m1", PHC(14), "grant-14"));
+    await enqueueProvisioning(d, { kind: "mailbox.password", subjectId: "m1" });
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      await runNextJob(d, failing);
+      clock.set(new Date(clock.now().getTime() + backoffMs(i + 1)));
+    }
+    expect(d.uow.state.mailboxes[0]?.status).toBe("suspended");
+    expect(d.uow.state.mailboxPasswords[0]).toMatchObject({ pendingHash: PHC(14) });
+    expect(d.uow.state.audit.at(-1)).toMatchObject({
+      action: "platform.provisioning_failed",
+      meta: { adminPasswordKept: true, suspended: true },
+    });
+    // The queued ensure takes the account off the mail server's sign-in.
+    while (await runNextJob(d, ok));
+    expect(ok.boxes[0]?.suspended).toBe(true);
+  });
+
+  it("gives up on a deleting mailbox's admin password and keeps it for a restore", async () => {
     const { d, clock } = setup();
     const ok = fakeMailServer();
     await provision(d, ok);
@@ -1116,7 +1174,7 @@ describe("mailbox passwords (worker)", () => {
     };
     await runNextJob(d, failingLast);
     expect(d.uow.state.jobs.find((j) => j.kind === "mailbox.password")?.status).toBe("failed");
-    expect(d.uow.state.mailboxPasswords[0]?.pendingHash).toBeNull();
+    expect(d.uow.state.mailboxPasswords[0]?.pendingHash).toBe(PHC(13));
   });
 
   describe("first-sign-in password change", () => {

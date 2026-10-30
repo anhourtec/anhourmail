@@ -68,8 +68,10 @@ async function apply(deps: Deps, mail: MailServer, job: ClaimedJob): Promise<voi
     const m = await held((r) => r.directory.getMailbox(job.subjectId));
     if (!m?.pendingPasswordHash) return; // gone, or already applied by an earlier run
     if (m.status === "deleting") {
-      // Going away: nobody can sign in to it, so the waiting hash is simply dropped.
-      await held((r) => r.directory.clearPendingPassword(m.id));
+      // Going away: nobody can sign in to it now. The person's own change is dropped; an administrator's password
+      // (or a leaver's sign-in cut-off, `removeMember`) is kept for a restore to apply, so restoring never brings an
+      // old password back.
+      if (m.pendingPasswordByOwner) await held((r) => r.directory.clearPendingPassword(m.id));
       return;
     }
     if (m.stalwartId === null) throw new Error("mailbox is not on the mail server yet");
@@ -177,6 +179,16 @@ async function apply(deps: Deps, mail: MailServer, job: ClaimedJob): Promise<voi
   // ended belongs to the purge, which may be removing it right now.
   if (deleting && (mailbox.stalwartId === null || isDue(mailbox.purgeAfter, deps.clock.now()))) return;
   const creating = mailbox.stalwartId === null;
+  // Turning an existing account back on (a resume or restore) waits for an administrator's password that is still
+  // waiting, e.g. one that cut a leaver's sign-in off: the account stays off until the old password no longer works.
+  if (
+    !creating &&
+    mailbox.status === "provisioning" &&
+    mailbox.pendingPasswordHash &&
+    !mailbox.pendingPasswordByOwner
+  ) {
+    throw new Error("waiting for a new password to reach the mail server");
+  }
   const ensured = await mail.ensureMailbox({
     externalId: mailbox.stalwartId,
     // A new account gets the password chosen at creation; an existing one keeps its own (a reset has its own job).
@@ -269,6 +281,7 @@ export async function runClaimedJob(deps: Deps, mail: MailServer, job: ClaimedJo
           }
           let catchAllOff: string[] = [];
           let adminPasswordKept = false;
+          let suspendedClosed = false;
           if (job.kind === "mailbox.password") {
             // The new password never reached the mail server, so the old one still works. The person's own change is
             // dropped (they keep the password they had). An administrator's password is kept, marked by this failed
@@ -276,12 +289,20 @@ export async function runClaimedJob(deps: Deps, mail: MailServer, job: ClaimedJo
             // own password and its login gets no console reset email (mustChangePassword stays as it is), so
             // whoever knew the old password can't take it over (docs/internal/07-security.md "Mailbox passwords").
             const current = await repos.directory.getMailbox(job.subjectId);
-            adminPasswordKept =
-              current !== null &&
-              current.status !== "deleting" &&
-              current.pendingPasswordHash !== null &&
-              !current.pendingPasswordByOwner;
+            adminPasswordKept = typeof current?.pendingPasswordHash === "string" && !current.pendingPasswordByOwner;
             if (!adminPasswordKept) await repos.directory.clearPendingPassword(job.subjectId);
+            // A person-less mailbox (a shared address, or a leaver's whose sign-in this password was cutting off)
+            // fails closed: it is suspended rather than left open with the old password. An admin sets a password
+            // again and resumes it; the resume waits for that password (`mailbox.ensure`).
+            if (adminPasswordKept && current?.status === "active") {
+              const row = await repos.mailboxes.get(current.accountId, current.id);
+              if (row?.userId === null) {
+                await repos.directory.markMailbox(current.id, { status: "suspended", lastError: error });
+                await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: current.id, runAfter: now });
+                catchAllOff = await turnOffCatchAllFor(deps, repos, current.id);
+                suspendedClosed = true;
+              }
+            }
           } else if (job.kind === "mailbox.ensure") {
             // A suspension or a scheduled deletion stays in force; only the error is recorded. A password waiting
             // for a create that never happened isn't kept either (a reset sets a new one once it exists).
@@ -304,6 +325,7 @@ export async function runClaimedJob(deps: Deps, mail: MailServer, job: ClaimedJo
               error,
               ...(catchAllOff.length > 0 ? { catchAllOff } : {}),
               ...(adminPasswordKept ? { adminPasswordKept } : {}),
+              ...(suspendedClosed ? { suspended: true } : {}),
             },
           };
         },
