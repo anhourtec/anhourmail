@@ -111,6 +111,8 @@ expiry), run `scripts/deploy.sh --bootstrap-stalwart` once. On-behalf tags expir
 compares against the mail server's clock, so the web and mail hosts must run NTP (skew well under five minutes).
 Undo for delegated sends is held in one web process: a multi-instance web tier needs a shared store first.
 
+**Deploy step for the internal-mail marker and the forwarding guard (2026-10-30):** run `scripts/deploy.sh --bootstrap-stalwart` once after the deploy: it installs the new submission script (marker), the `inbound-headers` script (strips the marker from port-25 mail) and the DATA expression. The web app needs a usable authserv id in production (`MAIL_AUTHSERV_ID`, a hostname; unset defaults to `mx1.<PLATFORM_DOMAIN>`, which must be what Stalwart stamps in Authentication-Results) and refuses to start without one; set the same value for the web app and the scheduler. About 30 s after the web app starts it upgrades existing forwarding scripts to the guard (audited `platform.mail_rules_upgraded`; at most once a day); the reconciler reports `unguardedForwarding`. Checks that need real DNS are in ADR-0019's "forwarding and DMARC" note.
+
 **Server access to the private ops repo:** the server pulls it with a read-only deploy key (an SSH key added under the
 repo's Deploy keys, write access off, `~/.ssh/config` host alias), not a personal token cached on the box.
 

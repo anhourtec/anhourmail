@@ -64,6 +64,8 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
 - **Names:** the mailbox display name is the one source; a person's own mailbox follows their profile name unless an
   admin sets another; the webmail sender name shows the same value (CLAUDE.md rule 61).
 
+**Also built 2026-10-30 (maintainer reports from pre-staging):** writing from a shared mailbox's own tab, "Shared with you" removed from the webmail (shared mailboxes open only with Open another mailbox; sidebar folder trees per shared mailbox are a future item), remote images treat mail submitted on our own server as a verified sender (keyed `X-AnhourMail-Internal` marker, stripped from port-25 mail; ADR-0019), and the forwarding guard: managed forwarding skips mail failing DMARC and own-domain mail without a pass for that domain (maintainer decision; ADR-0019 "forwarding and DMARC").
+
 **Next session, in order** (details: the two paragraphs above and the handoff's "Next phases" 0–0f):
 
 1. ~~The remote-image proxy~~ — done 2026-10-29 (signed links per session and mailbox, SSRF-guarded fetch; auto-load
