@@ -1,6 +1,6 @@
 # 01 — Architecture
 
-Last updated: 2026-10-30 (removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
+Last updated: 2026-10-30 (mailbox delegation designed, ADR-0026; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
 
 ## Overview
 
@@ -118,6 +118,14 @@ dropping it, a resume or restore re-signs its grant and queues it (`queueWaiting
 a person-less mailbox suspends it (fails closed), and `mailbox.ensure` refuses to turn an
 existing account back on until it has landed; the console → webmail handoff takes the account lock before checking
 ownership, so it can't mint tokens for someone being removed.
+
+**Delegation and shared mailboxes (designed 2026-10-30, ADR-0026; not built):** administrators grant read and manage,
+send as or send on behalf on any mailbox to people in the account (`mailbox_delegation`). No mail-server state changes:
+the webmail BFF opens a delegated mailbox with that mailbox's own token (a throwaway credential minted, used once and
+destroyed, as in the handoff), seals it into the delegate's session, and checks the grant on every request; delegated
+mail is submitted from the mailbox itself so its Sent folder gets the copy. Send on behalf passes the sender-identity
+script only with a keyed tag the web app adds. A shared mailbox is a person-less mailbox whose members hold read and
+manage plus send as; "Convert to shared" reuses the leaver release.
 
 **"Make this a user"** (`mailboxes/make-user.ts`) does the same for an existing unassigned mailbox (a shared address):
 login, membership, profile, owner link (`mailboxes.assignOwner`, conditional on no owner) and display name in one

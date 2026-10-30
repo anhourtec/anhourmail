@@ -47,7 +47,8 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
   sign-in off; admins grant Full access, Send as or Send on behalf on any mailbox to chosen people, and delegated
   mailboxes open in the delegate's webmail (pulls the `10-collaboration.md` delegation work forward). **Sign-in part
   built 2026-10-30:** removing someone releases their mailboxes as shared addresses with a new password nobody is
-  shown and their app passwords revoked (07-security.md "Leavers"); delegation is next.
+  shown and their app passwords revoked (07-security.md "Leavers"); delegation is next — **designed 2026-10-30**
+  (ADR-0026, accepted: per-person grants, BFF-held mailbox tokens, shared mailbox = person-less mailbox with members).
 - **Names:** the mailbox display name is the one source; a person's own mailbox follows their profile name unless an
   admin sets another; the webmail sender name shows the same value (CLAUDE.md rule 61).
 

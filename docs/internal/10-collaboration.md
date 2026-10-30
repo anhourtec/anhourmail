@@ -1,6 +1,6 @@
 # Collaboration features (a familiar business-mail feature set)
 
-Date: 2026-10-21 · Last updated: 2026-10-29 · Status: design accepted (ADR-0013); build phases in `09-roadmap.md`.
+Date: 2026-10-21 · Last updated: 2026-10-30 · Status: design accepted (ADR-0013); build phases in `09-roadmap.md`.
 
 AnhourMail aims for the **mail collaboration** feature set people know from mainstream business mail suites,
 sized for families and small groups: shared mailboxes, distribution lists, groups, delegated access (full access,
@@ -25,6 +25,12 @@ people reach it by signing in with its password, and **Make this a user** later 
 (`mailboxes/make-user.ts`, new password, app passwords revoked; 01-architecture.md). The shared mailbox in this doc —
 a Stalwart group with no login of its own, members' full access and send as — is still not built; when it ships,
 the public guides must tell the two apart.
+
+**Update (2026-10-30): ADR-0026 replaces the Group-based shared mailbox and the ACL-based delegation below.** Live
+probes showed a person's mailbox can't become a Group and a User can't be a member of a User, and that a folder-shared
+delegate can't send. Delegation (read and manage, send as, send on behalf) is now granted per person and opened by the
+webmail BFF with the mailbox's own token; a shared mailbox is the person-less mailbox ("shared address") with members.
+Probe results P1–P10 are in the ADR. The mapping table below is kept as the 2026-10-21 record.
 
 ## Feature set and placement
 
