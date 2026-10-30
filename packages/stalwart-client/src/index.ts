@@ -99,6 +99,8 @@ export {
   SENDER_IDENTITY_DATA_SCRIPT_EXPRESSION,
   SENDER_IDENTITY_SCRIPT,
   SENDER_IDENTITY_SIEVE,
+  SENDER_ON_BEHALF_HEADER,
+  senderIdentitySieve,
 } from "./sender";
 
 const globalForStalwart = globalThis as unknown as {
