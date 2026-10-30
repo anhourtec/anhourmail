@@ -31,6 +31,7 @@ import { loadOutgoing, type Outgoing, RichEditor, useOutgoing } from "./rich-edi
 import { hasFormatting, SIGNATURE_ATTR, signatureHtml, signatureInner, textToHtml } from "./rich-text";
 import {
   type Attachment,
+  type DelegatedSender,
   type DraftPayload,
   type Identity,
   type MailClient,
@@ -285,6 +286,9 @@ function AddressField({
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
+/** From-picker values for a mailbox shared with the person (identity ids never contain ":"). */
+const SHARED_FROM = "shared:";
+
 /**
  * Writing mail: To/Cc/Bcc with suggestions, From (own identities only — the BFF re-checks), subject, a rich-text
  * body (plain text is a mode in "More options"), attachments (uploaded through the BFF, 20 MB each). Drafts autosave
@@ -296,6 +300,7 @@ type SaveState = "idle" | "saving" | "saved" | "error";
 export function Composer({
   client,
   identities,
+  senders = [],
   signatures,
   contacts,
   knownAddresses,
@@ -310,6 +315,12 @@ export function Composer({
 }: {
   client: MailClient;
   identities: Identity[];
+  /**
+   * Mailboxes shared with the person they may send from (ADR-0026 §6): offered in From after their own addresses, as
+   * the mailbox (send as) or "<them> on behalf of <mailbox>". The draft stays in their own mailbox; the server sends it
+   * from the chosen one.
+   */
+  senders?: DelegatedSender[];
   /** The mailbox's signatures and defaults; null while they load. */
   signatures: SignatureSet | null;
   contacts: Address[];
@@ -321,7 +332,8 @@ export function Composer({
   /** Where a discarded draft goes. */
   trashId: string | undefined;
   onClose: (opts: { savedDraft: boolean }) => void;
-  onSent: (submissionId: string, draftId: string, holdSeconds: number) => void;
+  /** `from`: the shared mailbox it went from (undo names it), absent for the person's own. */
+  onSent: (submissionId: string, draftId: string, holdSeconds: number, from?: string) => void;
   onSavedDraft?: () => void;
   /** Show the Cc and Bcc fields from the start (a setting). */
   alwaysCcBcc?: boolean;
@@ -334,6 +346,8 @@ export function Composer({
   const [identityId, setIdentityId] = useState(
     () => identities.find((i) => i.email === seed.fromEmail)?.id ?? identities[0]?.id ?? "",
   );
+  /** A mailbox shared with the person chosen in From (sent as or on its behalf), or null for an own address. */
+  const [sharedFrom, setSharedFrom] = useState<string | null>(null);
   const kind = seed.signature;
   const [format, setFormat] = useState<ComposeFormat>(seed.mode ?? "rich");
   /** The chosen signature's id; null for none; undefined until the signatures have loaded (new messages and replies). */
@@ -581,8 +595,8 @@ export function Composer({
     try {
       const id = dirty.current || !draftId.current ? await saveNow() : draftId.current;
       if (!id) return;
-      const { submissionId, holdSeconds } = await client.send(id, identityId);
-      onSent(submissionId, id, holdSeconds);
+      const { submissionId, holdSeconds } = await client.send(id, identityId, sharedFrom ?? undefined);
+      onSent(submissionId, id, holdSeconds, sharedFrom ?? undefined);
     } catch (err) {
       if (err instanceof SignedOutError) throw err;
       setError(err instanceof RefusedError ? err.message : "Couldn't send. Check your connection and try again.");
@@ -670,24 +684,45 @@ export function Composer({
         </Tooltip>
       </header>
 
-      {identities.length > 1 ? (
+      {identities.length > 1 || (identities.length > 0 && senders.length > 0) ? (
         <div className="flex h-10 items-center gap-2 border-b px-4">
           <label htmlFor="compose-from" className="w-10 shrink-0 text-[13px] text-muted-foreground">
             From
           </label>
           <select
             id="compose-from"
-            value={identityId}
+            value={sharedFrom === null ? identityId : `${SHARED_FROM}${sharedFrom}`}
             onChange={(e) => {
-              setIdentityId(e.target.value);
+              const v = e.target.value;
+              setSharedFrom(v.startsWith(SHARED_FROM) ? v.slice(SHARED_FROM.length) : null);
+              if (!v.startsWith(SHARED_FROM)) setIdentityId(v);
             }}
             className="h-8 min-w-0 flex-1 rounded-md bg-transparent font-mono text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            {identities.map((i) => (
-              <option key={i.id} value={i.id}>
-                {i.email}
-              </option>
-            ))}
+            {senders.length > 0 ? (
+              <>
+                <optgroup label="Your addresses">
+                  {identities.map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.email}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Shared with you">
+                  {senders.map((m) => (
+                    <option key={m.mailbox} value={`${SHARED_FROM}${m.mailbox}`}>
+                      {m.label}
+                    </option>
+                  ))}
+                </optgroup>
+              </>
+            ) : (
+              identities.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.email}
+                </option>
+              ))
+            )}
           </select>
         </div>
       ) : (

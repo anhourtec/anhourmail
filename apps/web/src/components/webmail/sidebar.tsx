@@ -9,10 +9,13 @@ import {
   Flag,
   Folder as FolderIcon,
   Inbox,
+  ExternalLink,
+  House,
   Keyboard,
   LifeBuoy,
   LogOut,
   type LucideIcon,
+  Mailbox as MailboxIcon,
   PenLine,
   Send,
   Settings,
@@ -30,7 +33,7 @@ import { Tooltip } from "@/components/tooltip";
 
 import { useOwnPhoto } from "./avatars";
 import { folderLabel, folderTree } from "./format";
-import type { Folder, View } from "./mail-client";
+import type { Folder, SharedMailbox, View } from "./mail-client";
 import { Menu } from "./menu";
 
 const ROLE_ICON: Record<string, LucideIcon> = {
@@ -42,7 +45,11 @@ const ROLE_ICON: Record<string, LucideIcon> = {
   trash: Trash2,
 };
 
-export type Mailboxes = { active: string; others: string[] };
+/**
+ * The session's mailboxes: the active one (possibly a mailbox shared with the person, `activeShared`), its own other
+ * sign-ins, and every mailbox shared with its person ("Shared with you", ADR-0026 §6).
+ */
+export type Mailboxes = { active: string; activeShared: boolean; others: string[]; shared: SharedMailbox[] };
 
 const localName = (address: string) => {
   const local = address.split("@")[0] ?? address;
@@ -84,6 +91,7 @@ function NavItem({
   collapsed,
   onClick,
   emphasis = false,
+  mono = false,
 }: {
   icon: LucideIcon;
   label: string;
@@ -92,6 +100,8 @@ function NavItem({
   collapsed: boolean;
   onClick: () => void;
   emphasis?: boolean;
+  /** The label is an address (shown in mono). */
+  mono?: boolean;
 }) {
   return (
     <Tooltip label={label} side="right" disabled={!collapsed}>
@@ -116,7 +126,7 @@ function NavItem({
         </span>
         {!collapsed && (
           <>
-            <span className="min-w-0 flex-1 truncate">{label}</span>
+            <span className={`min-w-0 flex-1 truncate ${mono ? "font-mono text-[12.5px]" : ""}`}>{label}</span>
             {count > 0 && (
               <span
                 aria-hidden
@@ -153,6 +163,10 @@ export function Sidebar({
   onSignOut,
   onAddMailbox,
   onSwitchMailbox,
+  onOpenShared,
+  onOpenAnother,
+  scoped = false,
+  ownHref,
 }: {
   folders: Folder[] | null;
   view: View | null;
@@ -169,25 +183,65 @@ export function Sidebar({
   onSignOut: () => void;
   onAddMailbox: () => void;
   onSwitchMailbox: (address: string) => void;
+  /** Opens a "Shared with you" mailbox in this tab (it becomes the session's active one). */
+  onOpenShared: (address: string) => void;
+  /** "Open another mailbox": asks for an address and opens it in a new tab. */
+  onOpenAnother: () => void;
+  /**
+   * A tab scoped to one mailbox shared with the person (Open another mailbox): only that mailbox, no switching, and
+   * `ownHref` leads to the person's own webmail.
+   */
+  scoped?: boolean;
+  ownHref?: string;
 }) {
-  const all = [mailboxes.active, ...mailboxes.others];
+  const shared = mailboxes.activeShared || scoped;
+  // The tiles: the session's own mailboxes, plus the shared one while it is the active one (never in a scoped tab).
+  const all = scoped ? [mailboxes.active] : [mailboxes.active, ...mailboxes.others];
+  // "Shared with you": the mailboxes the person may open (read and manage), not the one shown now.
+  const openable = scoped ? [] : mailboxes.shared.filter((m) => m.fullAccess);
   const tree = folders ? folderTree(folders) : [];
   const inbox = tree.find((n) => n.folder.role === "inbox")?.folder;
   const rest = tree.filter((n) => n.folder.role !== "inbox");
   const isCurrent = (f: Folder) => view?.kind === "folder" && view.id === f.id;
-  const accountMenu = [
-    { heading: "Mailboxes" },
-    ...all.map((address) => ({
-      label: address,
-      checked: address === mailboxes.active,
-      onSelect: () => {
-        if (address !== mailboxes.active) onSwitchMailbox(address);
-      },
-    })),
-    { separator: true as const },
-    { label: "Add another mailbox", icon: UserPlus, onSelect: onAddMailbox },
-    { label: "Sign out", icon: LogOut, onSelect: onSignOut },
-  ];
+  const accountMenu = scoped
+    ? [
+        {
+          label: "Go to your mailbox",
+          icon: House,
+          onSelect: () => {
+            if (ownHref) window.location.assign(ownHref);
+          },
+        },
+        { label: "Open another mailbox", icon: ExternalLink, onSelect: onOpenAnother },
+      ]
+    : [
+        { heading: "Mailboxes" },
+        ...all
+          .filter((address) => !(mailboxes.activeShared && address === mailboxes.active))
+          .map((address) => ({
+            label: address,
+            checked: address === mailboxes.active,
+            onSelect: () => {
+              if (address !== mailboxes.active) onSwitchMailbox(address);
+            },
+          })),
+        ...(openable.length > 0
+          ? [
+              { heading: "Shared with you" },
+              ...openable.map((m) => ({
+                label: m.address,
+                checked: mailboxes.activeShared && m.address === mailboxes.active.toLowerCase(),
+                onSelect: () => {
+                  if (m.address !== mailboxes.active.toLowerCase()) onOpenShared(m.address);
+                },
+              })),
+            ]
+          : []),
+        { separator: true as const },
+        { label: "Add another mailbox", icon: UserPlus, onSelect: onAddMailbox },
+        { label: "Open another mailbox", icon: ExternalLink, onSelect: onOpenAnother },
+        { label: "Sign out", icon: LogOut, onSelect: onSignOut },
+      ];
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-sidebar text-sidebar-foreground">
@@ -227,25 +281,29 @@ export function Sidebar({
         </div>
         {!collapsed && (
           <div className="flex min-w-0 flex-col gap-0.5 border-sidebar-border border-t pt-3">
+            {shared && <span className="am-micro">Shared with you</span>}
             <span className="truncate font-medium text-[14px]">{localName(mailboxes.active)}</span>
             <Tooltip label={mailboxes.active}>
               <span className="truncate font-mono text-[12px] text-muted-foreground">{mailboxes.active}</span>
             </Tooltip>
           </div>
         )}
-        <Tooltip label="New email" shortcut="c" side={collapsed ? "right" : "bottom"}>
-          <button
-            type="button"
-            onClick={onCompose}
-            aria-label="New email"
-            className={`inline-flex h-9 items-center justify-center gap-2 rounded-lg border bg-background font-medium text-[13.5px] shadow-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${
-              collapsed ? "w-9" : "w-full"
-            }`}
-          >
-            <PenLine className="size-4" aria-hidden />
-            {!collapsed && "New email"}
-          </button>
-        </Tooltip>
+        {/* A mailbox shared with the person: sending is from their own mailbox (choose it in From there). */}
+        {!shared && (
+          <Tooltip label="New email" shortcut="c" side={collapsed ? "right" : "bottom"}>
+            <button
+              type="button"
+              onClick={onCompose}
+              aria-label="New email"
+              className={`inline-flex h-9 items-center justify-center gap-2 rounded-lg border bg-background font-medium text-[13.5px] shadow-xs transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${
+                collapsed ? "w-9" : "w-full"
+              }`}
+            >
+              <PenLine className="size-4" aria-hidden />
+              {!collapsed && "New email"}
+            </button>
+          </Tooltip>
+        )}
       </div>
 
       <nav aria-label="Folders" className={`min-h-0 flex-1 overflow-y-auto pb-3 ${collapsed ? "px-2" : "px-2"}`}>
@@ -294,15 +352,39 @@ export function Sidebar({
                 />
               </div>
             ))}
-            {collapsed ? <div className="mx-2 my-2 h-px bg-sidebar-border" /> : <div className="pt-3" />}
-            <NavItem
-              icon={Users}
-              label="Contacts"
-              count={0}
-              current={contactsCurrent}
-              collapsed={collapsed}
-              onClick={onContacts}
-            />
+            {openable.length > 0 && (
+              <>
+                {!collapsed && <p className="am-micro px-2.5 pt-4 pb-1">Shared with you</p>}
+                {collapsed && <div className="mx-2 my-2 h-px bg-sidebar-border" />}
+                {openable.map((m) => (
+                  <NavItem
+                    key={m.address}
+                    icon={MailboxIcon}
+                    label={m.address}
+                    count={0}
+                    current={mailboxes.activeShared && m.address === mailboxes.active.toLowerCase()}
+                    collapsed={collapsed}
+                    mono
+                    onClick={() => {
+                      if (m.address !== mailboxes.active.toLowerCase()) onOpenShared(m.address);
+                    }}
+                  />
+                ))}
+              </>
+            )}
+            {!shared && (
+              <>
+                {collapsed ? <div className="mx-2 my-2 h-px bg-sidebar-border" /> : <div className="pt-3" />}
+                <NavItem
+                  icon={Users}
+                  label="Contacts"
+                  count={0}
+                  current={contactsCurrent}
+                  collapsed={collapsed}
+                  onClick={onContacts}
+                />
+              </>
+            )}
           </div>
         )}
       </nav>
@@ -347,16 +429,18 @@ export function Sidebar({
         {!collapsed && (
           <div className="flex items-center justify-between gap-2 px-1 pt-2">
             <ThemeToggle />
-            <Tooltip label="Sign out">
-              <button
-                type="button"
-                onClick={onSignOut}
-                aria-label="Sign out"
-                className="inline-flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-              >
-                <LogOut className="size-4" aria-hidden />
-              </button>
-            </Tooltip>
+            {!scoped && (
+              <Tooltip label="Sign out">
+                <button
+                  type="button"
+                  onClick={onSignOut}
+                  aria-label="Sign out"
+                  className="inline-flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+                >
+                  <LogOut className="size-4" aria-hidden />
+                </button>
+              </Tooltip>
+            )}
           </div>
         )}
       </div>

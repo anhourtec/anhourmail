@@ -9,6 +9,7 @@ import { inputClass, primaryButtonClass, secondaryButtonClass } from "@/componen
 import { useHydrated } from "@/components/use-hydrated";
 
 import { type MailClient, RefusedError } from "./mail-client";
+import { mailboxTabHref, pagesBase } from "./tab-paths";
 
 /** A centred modal with a title, closed by Escape, the backdrop or the X. */
 export function Modal({
@@ -170,6 +171,97 @@ export function AddMailboxDialog({ client, onClose }: { client: MailClient; onCl
           {pending ? "Signing in…" : "Add mailbox"}
         </button>
       </form>
+    </Modal>
+  );
+}
+
+/**
+ * "Open another mailbox" (ADR-0026 §6): the address of a mailbox shared with the person, opened in a new tab at its own
+ * address-scoped page. That tab checks access (and says when there is none); this tab stays as it is.
+ */
+export function OpenMailboxDialog({ onClose }: { onClose: () => void }) {
+  const [error, setError] = useState<string | null>(null);
+  const hydrated = useHydrated();
+
+  function submit(e: SyntheticEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const v = new FormData(e.currentTarget).get("address");
+    const address = typeof v === "string" ? v.trim() : "";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) {
+      setError("Enter a mailbox address, like name@example.com.");
+      return;
+    }
+    window.open(mailboxTabHref(pagesBase(), address), "_blank", "noopener");
+    onClose();
+  }
+
+  return (
+    <Modal title="Open another mailbox" onClose={onClose} wide>
+      <form method="post" onSubmit={submit} className="flex flex-col gap-4" noValidate>
+        <p className="am-small -mt-1">
+          Open a mailbox someone gave you access to. It opens in a new tab; this one stays on your mailbox.
+        </p>
+        <label className="flex flex-col gap-1.5">
+          <span className="am-h4">Mailbox address</span>
+          <input
+            name="address"
+            type="email"
+            autoComplete="off"
+            required
+            autoFocus
+            aria-invalid={error !== null}
+            className={`${inputClass} font-mono text-[14px]`}
+          />
+        </label>
+        {error && (
+          <p role="alert" className="am-small text-destructive">
+            {error}
+          </p>
+        )}
+        <button type="submit" disabled={!hydrated} className={primaryButtonClass}>
+          Open
+        </button>
+      </form>
+    </Modal>
+  );
+}
+
+/**
+ * Settings while a mailbox shared with the person is shown: they belong to the person's own mailbox (ADR-0026 §6), so
+ * this says so and offers the way back.
+ */
+export function OwnSettingsDialog({
+  address,
+  onBack,
+  backHref,
+  onClose,
+}: {
+  address: string;
+  onBack?: (() => void) | undefined;
+  backHref?: string | undefined;
+  onClose: () => void;
+}) {
+  return (
+    <Modal title="Settings" onClose={onClose} wide>
+      <p className="am-small mb-5">
+        Settings, signatures, contacts and sending belong to your own mailbox. You're viewing{" "}
+        <span className="font-mono text-foreground">{address}</span>, a mailbox shared with you. Go back to your mailbox
+        to change them.
+      </p>
+      <div className="flex justify-end gap-2">
+        <button type="button" autoFocus onClick={onClose} className={secondaryButtonClass}>
+          Close
+        </button>
+        {backHref ? (
+          <a href={backHref} className={primaryButtonClass}>
+            Go to your mailbox
+          </a>
+        ) : (
+          <button type="button" onClick={onBack} className={primaryButtonClass}>
+            Back to your mailbox
+          </button>
+        )}
+      </div>
     </Modal>
   );
 }

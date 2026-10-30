@@ -57,6 +57,7 @@ import type { Folder, MailClient, Summary } from "./mail-client";
 import { iconButtonClass, Menu, type MenuEntry } from "./menu";
 import { type ImageOptions, MessageContent } from "./message-body";
 import { SenderAvatar } from "./message-list";
+import { pagesBase } from "./tab-paths";
 import type { ImagePolicy } from "./remote-images";
 
 export type ReaderAction =
@@ -77,10 +78,6 @@ export type ReaderActions = {
   setRead: (read: boolean) => void;
   reply: (mode: "reply" | "replyAll" | "forward") => void;
 };
-
-/** Where the webmail's pages live on this origin ("" on the webmail host, "/webmail" on a dev bare host). */
-const pagesBase = () =>
-  typeof window !== "undefined" && window.location.pathname.startsWith("/webmail") ? "/webmail" : "";
 
 function AddressList({ list }: { list: Address[] }) {
   return (
@@ -178,6 +175,7 @@ function MessageCard({
   onViewFull,
   collapsible,
   images,
+  canAnswer = true,
 }: {
   summary: Summary;
   view: MessageView | "missing" | undefined;
@@ -195,12 +193,16 @@ function MessageCard({
   onViewFull: () => void;
   collapsible: boolean;
   images?: ImageOptions | undefined;
+  /** False in a mailbox shared with the person: no reply or contacts from here (they stay with their own mailbox). */
+  canAnswer?: boolean;
 }) {
   const [details, setDetails] = useState(false);
   const from = summary.from?.[0];
   const own = isMine(from, mine);
   const flagged = summary.keywords.$flagged === true;
   const loaded = view && view !== "missing" ? view : null;
+  // "Sender on behalf of From": only from the message's standard Sender header (never a tag header, ADR-0026 §8).
+  const onBehalf = loaded?.sender[0];
   return (
     <article aria-label={`Message from ${senderLabel(from, mine)}`} className="flex flex-col gap-4 px-3 py-3">
       <div className="flex items-start gap-3">
@@ -222,7 +224,7 @@ function MessageCard({
             {from && (
               <span className="truncate font-mono text-[12.5px] text-muted-foreground">&lt;{from.email}&gt;</span>
             )}
-            {from && !own && !knownAddresses.has(from.email.toLowerCase()) && (
+            {canAnswer && from && !own && !knownAddresses.has(from.email.toLowerCase()) && (
               <button
                 type="button"
                 onClick={() => {
@@ -234,6 +236,15 @@ function MessageCard({
               </button>
             )}
           </div>
+          {/* What the message's Sender header says (not authenticated, so plain names, never "me" or a badge). */}
+          {onBehalf && (
+            <p className="min-w-0 truncate text-[12.5px] text-muted-foreground">
+              On behalf of {from?.name?.trim() ? `${from.name.trim()} ` : ""}
+              {from && <span className="font-mono">&lt;{from.email}&gt;</span>}, sent by{" "}
+              {onBehalf.name?.trim() ? `${onBehalf.name.trim()} ` : ""}
+              <span className="font-mono">&lt;{onBehalf.email}&gt;</span>
+            </p>
+          )}
           {loaded ? (
             <button
               type="button"
@@ -269,11 +280,13 @@ function MessageCard({
               />
             </button>
           </Tooltip>
-          <Tooltip label="Reply">
-            <button type="button" onClick={onReply} disabled={!loaded} aria-label="Reply" className={iconButtonClass}>
-              <Reply className="size-4" aria-hidden />
-            </button>
-          </Tooltip>
+          {canAnswer && (
+            <Tooltip label="Reply">
+              <button type="button" onClick={onReply} disabled={!loaded} aria-label="Reply" className={iconButtonClass}>
+                <Reply className="size-4" aria-hidden />
+              </button>
+            </Tooltip>
+          )}
           <Menu label="Message actions" icon={EllipsisVertical} items={menu} />
         </div>
       </div>
@@ -290,6 +303,14 @@ function MessageCard({
           <dd className="break-words">
             <AddressList list={loaded.from} />
           </dd>
+          {loaded.sender.length > 0 && (
+            <>
+              <dt>sender</dt>
+              <dd className="break-words">
+                <AddressList list={loaded.sender} />
+              </dd>
+            </>
+          )}
           <dt>to</dt>
           <dd className="break-words">
             <AddressList list={loaded.to} />
@@ -401,6 +422,7 @@ export function Reader({
   defaultReply = "reply",
   imagePolicy,
   onRememberImages,
+  canAnswer = true,
 }: {
   client: MailClient;
   threadId: string;
@@ -423,6 +445,11 @@ export function Reader({
   imagePolicy?: ImagePolicy;
   /** Remembers or forgets a sender for "Always load images from this sender". */
   onRememberImages?: (senderKey: string, on: boolean) => void;
+  /**
+   * False in a mailbox shared with the person (ADR-0026 §6): reading and managing only. Reply, forward, blocking a
+   * sender and adding contacts act on the person's own mailbox, so they aren't offered here.
+   */
+  canAnswer?: boolean;
   folders: Folder[];
   /** The folder being viewed (null in Priority or search). */
   currentFolder: Folder | null;
@@ -633,7 +660,7 @@ export function Reader({
         if (current) setKeyword([current.id], "$seen", r);
       },
       reply: (mode) => {
-        reply(mode === "reply" ? defaultReply : mode);
+        if (canAnswer) reply(mode === "reply" ? defaultReply : mode);
       },
     });
     return () => {
@@ -646,33 +673,38 @@ export function Reader({
     const v = views[e.id];
     const view = v && v !== "missing" ? v : null;
     const sender = e.from?.[0];
-    const blockable = sender && !isMine(sender, mine) ? sender.email.toLowerCase() : null;
+    const blockable = canAnswer && sender && !isMine(sender, mine) ? sender.email.toLowerCase() : null;
+    const answers: MenuEntry[] = canAnswer
+      ? [
+          {
+            label: "Reply",
+            icon: Reply,
+            disabled: !view,
+            onSelect: () => {
+              replyWith(view, "reply");
+            },
+          },
+          {
+            label: "Reply all",
+            icon: ReplyAll,
+            disabled: !view,
+            onSelect: () => {
+              replyWith(view, "replyAll");
+            },
+          },
+          {
+            label: "Forward",
+            icon: Forward,
+            disabled: !view,
+            onSelect: () => {
+              replyWith(view, "forward");
+            },
+          },
+          { separator: true },
+        ]
+      : [];
     return [
-      {
-        label: "Reply",
-        icon: Reply,
-        disabled: !view,
-        onSelect: () => {
-          replyWith(view, "reply");
-        },
-      },
-      {
-        label: "Reply all",
-        icon: ReplyAll,
-        disabled: !view,
-        onSelect: () => {
-          replyWith(view, "replyAll");
-        },
-      },
-      {
-        label: "Forward",
-        icon: Forward,
-        disabled: !view,
-        onSelect: () => {
-          replyWith(view, "forward");
-        },
-      },
-      { separator: true },
+      ...answers,
       {
         label: inTrash || inJunk ? "Delete forever" : "Delete",
         icon: Trash2,
@@ -746,7 +778,7 @@ export function Reader({
         label: "Show original",
         icon: FileCode,
         onSelect: () => {
-          window.open(`${pagesBase()}/message/${encodeURIComponent(e.id)}/original`, "_blank", "noopener,noreferrer");
+          window.open(client.originalUrl(pagesBase(), e.id), "_blank", "noopener,noreferrer");
         },
       },
     ];
@@ -921,19 +953,21 @@ export function Reader({
         </Tooltip>
         <span className="hidden items-center gap-0.5 md:flex">
           {primaryMove("size-4", true)}
-          <Tooltip label={defaultReply === "replyAll" ? "Reply all" : "Reply"} shortcut="r">
-            <button
-              type="button"
-              onClick={() => {
-                reply(defaultReply);
-              }}
-              disabled={!loaded}
-              aria-label={defaultReply === "replyAll" ? "Reply all" : "Reply"}
-              className={iconButtonClass}
-            >
-              <ReplyIcon className="size-4" aria-hidden />
-            </button>
-          </Tooltip>
+          {canAnswer && (
+            <Tooltip label={defaultReply === "replyAll" ? "Reply all" : "Reply"} shortcut="r">
+              <button
+                type="button"
+                onClick={() => {
+                  reply(defaultReply);
+                }}
+                disabled={!loaded}
+                aria-label={defaultReply === "replyAll" ? "Reply all" : "Reply"}
+                className={iconButtonClass}
+              >
+                <ReplyIcon className="size-4" aria-hidden />
+              </button>
+            </Tooltip>
+          )}
           <Menu label="More actions" icon={EllipsisVertical} items={more} />
           <span aria-hidden className="mx-1 h-4 w-px bg-border" />
           {deleteButton}
@@ -1012,6 +1046,7 @@ export function Reader({
                     knownAddresses={knownAddresses}
                     onAddContact={onAddContact}
                     images={images}
+                    canAnswer={canAnswer}
                     collapsible={thread.length > 1}
                     onCollapse={() => {
                       setExpanded((s) => {
@@ -1052,46 +1087,47 @@ export function Reader({
 
           {/* Reply buttons stay at the bottom of the pane while the conversation scrolls under them. */}
           <div className="sticky bottom-0 z-10 -mx-4 mt-auto shrink-0 bg-gradient-to-t from-background from-70% to-transparent px-4 pt-4 pb-1 sm:-mx-6 sm:px-6">
-            {inlineComposer ?? (
-              <div
-                role="group"
-                aria-label={`Answer ${senderLabel(last?.from?.[0], mine)}`}
-                className="flex flex-wrap gap-2"
-              >
-                <button
-                  type="button"
-                  disabled={!lastView}
-                  onClick={() => {
-                    reply("reply", true);
-                  }}
-                  className={pill}
+            {inlineComposer ??
+              (!canAnswer ? null : (
+                <div
+                  role="group"
+                  aria-label={`Answer ${senderLabel(last?.from?.[0], mine)}`}
+                  className="flex flex-wrap gap-2"
                 >
-                  <Reply className="size-4" aria-hidden /> Reply
-                </button>
-                {manyRecipients && (
                   <button
                     type="button"
                     disabled={!lastView}
                     onClick={() => {
-                      reply("replyAll", true);
+                      reply("reply", true);
                     }}
                     className={pill}
                   >
-                    <ReplyAll className="size-4" aria-hidden /> Reply all
+                    <Reply className="size-4" aria-hidden /> Reply
                   </button>
-                )}
-                <button
-                  type="button"
-                  disabled={!lastView}
-                  onClick={() => {
-                    reply("forward", true);
-                  }}
-                  className={pill}
-                >
-                  <Forward className="size-4" aria-hidden /> Forward
-                </button>
-              </div>
-            )}
+                  {manyRecipients && (
+                    <button
+                      type="button"
+                      disabled={!lastView}
+                      onClick={() => {
+                        reply("replyAll", true);
+                      }}
+                      className={pill}
+                    >
+                      <ReplyAll className="size-4" aria-hidden /> Reply all
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={!lastView}
+                    onClick={() => {
+                      reply("forward", true);
+                    }}
+                    className={pill}
+                  >
+                    <Forward className="size-4" aria-hidden /> Forward
+                  </button>
+                </div>
+              ))}
           </div>
         </div>
       )}
@@ -1103,17 +1139,19 @@ export function Reader({
       >
         {primaryMove("size-5", false)}
         {deleteButton}
-        <button
-          type="button"
-          onClick={() => {
-            reply(defaultReply);
-          }}
-          disabled={!loaded}
-          aria-label={defaultReply === "replyAll" ? "Reply all" : "Reply"}
-          className={iconButtonClass}
-        >
-          <ReplyIcon className="size-5" aria-hidden />
-        </button>
+        {canAnswer && (
+          <button
+            type="button"
+            onClick={() => {
+              reply(defaultReply);
+            }}
+            disabled={!loaded}
+            aria-label={defaultReply === "replyAll" ? "Reply all" : "Reply"}
+            className={iconButtonClass}
+          >
+            <ReplyIcon className="size-5" aria-hidden />
+          </button>
+        )}
         <Menu label="More actions" icon={EllipsisVertical} items={more} side="top" />
       </nav>
     </section>

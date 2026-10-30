@@ -38,7 +38,7 @@ import { type ComposeSeed, Composer } from "./composer";
 import { SettingsWindow } from "./settings/settings-window";
 import { usePhotoSync } from "./avatars";
 import { ContactsView } from "./contacts-view";
-import { AddMailboxDialog, ConfirmDialog, Modal } from "./dialogs";
+import { AddMailboxDialog, ConfirmDialog, Modal, OpenMailboxDialog, OwnSettingsDialog } from "./dialogs";
 import {
   type ComposeMode,
   displayName,
@@ -53,6 +53,7 @@ import {
 import { quoteHtml } from "./rich-text";
 import {
   createMailClient,
+  type DelegatedSender,
   type Folder,
   type Identity,
   type ListFilter,
@@ -80,7 +81,9 @@ import {
   tabTitle,
 } from "./sync";
 import { Reader, type ReaderAction, type ReaderActions } from "./reader";
+import { SharedBanner } from "./shared-mailbox";
 import { type Mailboxes, Sidebar } from "./sidebar";
+import { FOLDER_ROLES, mailboxTabHref, pagesBase } from "./tab-paths";
 import { ToastHost, useToasts } from "./toasts";
 
 type Shown = { view: View; narrow: Narrow; search: SearchQuery | null };
@@ -153,6 +156,18 @@ type AppProps = {
   initialPreferences: WebmailPreferences;
   /** Our mail server's authserv-ids (only its Authentication-Results are trusted in message details). */
   authservIds?: string[];
+  /**
+   * The active mailbox is one shared with the person (ADR-0026 §6): the person's own mailbox it comes through. Reading
+   * and managing only; sending, contacts and settings stay with their own mailbox.
+   */
+  sharedVia?: string | null;
+  /**
+   * A tab scoped to one mailbox shared with the person (Open another mailbox, `/mailbox/<address>/`): `username` is
+   * that mailbox, every request pins it, and the session's active mailbox (other tabs) is left alone. `folder` is the
+   * folder named in the URL (a role or an id); `ownHref` leads to the person's own webmail; `onRefused` runs when
+   * the mailbox can't be used (any more).
+   */
+  scope?: { ownHref: string; folder?: string | undefined; onRefused: () => void };
 };
 
 export function WebmailApp(props: AppProps) {
@@ -171,9 +186,12 @@ function Mailroom({
   initialCollapsed,
   initialPreferences,
   authservIds = [],
+  sharedVia = null,
+  scope,
 }: AppProps) {
+  const scoped = scope !== undefined;
   const client = useMemo(() => {
-    const c = createMailClient();
+    const c = createMailClient("", scope ? { shared: username, onRefused: scope.onRefused } : {});
     c.setGrouping(initialPreferences.grouping);
     return c;
     // Created once; grouping changes go through setGrouping below.
@@ -211,8 +229,27 @@ function Mailroom({
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const anchor = useRef<number | null>(null);
   const [priorityCount, setPriorityCount] = useState(0);
-  const [mailboxes, setMailboxes] = useState<Mailboxes>({ active: username, others: [] });
+  const [mailboxes, setMailboxes] = useState<Mailboxes>({
+    active: username,
+    activeShared: scoped || sharedVia !== null,
+    others: [],
+    shared: [],
+  });
+  /**
+   * A mailbox shared with the person is shown (this tab is scoped to one, or it is the session's active mailbox):
+   * reading and managing only (ADR-0026 §6). Composing, contacts, blocking senders and settings stay with the person's
+   * own mailbox, and the server refuses them here (403), so they aren't offered.
+   */
+  const sharedMode = scoped || mailboxes.activeShared;
+  const sharedModeRef = useRef(sharedMode);
+  useEffect(() => {
+    sharedModeRef.current = sharedMode;
+  });
+  /** The person's own mailbox a shared one comes through ("Back to your mailbox"). */
+  const via = mailboxes.shared.find((m) => m.address === mailboxes.active.toLowerCase())?.via ?? sharedVia ?? undefined;
   const [identities, setIdentities] = useState<Identity[]>([]);
+  /** Mailboxes shared with the person they may send from (the From picker). */
+  const [senders, setSenders] = useState<DelegatedSender[]>([]);
   /** The mailbox's named signatures and defaults (null until loaded; the composer then adds the default). */
   const [signatures, setSignatures] = useState<SignatureSet | null>(null);
   /** Your own addresses (lowercase): the mailbox and its sender identities. */
@@ -228,6 +265,7 @@ function Mailroom({
   const [drawer, setDrawer] = useState(false);
   const [help, setHelp] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [openingAnother, setOpeningAnother] = useState(false);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** List windows being fetched (`key:page`), each with the ticket of its latest request. */
@@ -419,8 +457,13 @@ function Mailroom({
         const h = [f.find((x) => x.role === "trash")?.id, f.find((x) => x.role === "junk")?.id].filter(
           (x): x is string => x !== undefined,
         );
-        const start = prefsRef.current.startIn;
-        const chosen = start.startsWith("folder:") ? f.find((x) => `folder:${x.id}` === start) : undefined;
+        // A mailbox-scoped tab starts in the folder its URL names (a role or an id), else its Inbox.
+        const wanted = scope?.folder;
+        const named = wanted
+          ? f.find((x) => ((FOLDER_ROLES as readonly string[]).includes(wanted) ? x.role === wanted : x.id === wanted))
+          : undefined;
+        const start = scoped ? "inbox" : prefsRef.current.startIn;
+        const chosen = start.startsWith("folder:") ? f.find((x) => `folder:${x.id}` === start) : named;
         const first = chosen ?? f.find((x) => x.role === "inbox") ?? f[0];
         if (start === "priority") {
           const shown: Shown = { view: { kind: "priority" }, narrow: {}, search: null };
@@ -436,22 +479,35 @@ function Mailroom({
       .catch((err: unknown) => {
         fail(err);
       });
-    client
-      .mailboxes()
-      .then(setMailboxes)
-      .catch(() => undefined);
-    client
-      .identities()
-      .then(setIdentities)
-      .catch(() => undefined);
-    client
-      .signatures()
-      .then(setSignatures)
-      .catch(() => undefined);
-    client
-      .contacts()
-      .then(setBook)
-      .catch(() => undefined);
+    if (!scoped) {
+      client
+        .mailboxes()
+        .then(setMailboxes)
+        .catch(() => undefined);
+    }
+    // The person's own mailbox only (refused while a shared one is shown, so not asked for then).
+    if (!scoped && sharedVia === null) {
+      client
+        .senders()
+        .then((r) => {
+          setIdentities(r.identities);
+          setSenders(r.shared);
+        })
+        .catch(() => {
+          client
+            .identities()
+            .then(setIdentities)
+            .catch(() => undefined);
+        });
+      client
+        .signatures()
+        .then(setSignatures)
+        .catch(() => undefined);
+      client
+        .contacts()
+        .then(setBook)
+        .catch(() => undefined);
+    }
     return () => {
       live = false;
     };
@@ -568,6 +624,20 @@ function Mailroom({
     };
   }, [client]);
 
+  // A mailbox-scoped tab keeps its address bar on the folder shown, so the page can be bookmarked or reloaded there.
+  useEffect(() => {
+    if (!scoped || view?.kind !== "folder" || !folders) return;
+    const f = folders.find((x) => x.id === view.id);
+    if (!f) return;
+    const named = f.role !== null && (FOLDER_ROLES as readonly string[]).includes(f.role);
+    const href = mailboxTabHref(
+      pagesBase(),
+      username,
+      f.role === "inbox" ? undefined : named ? (f.role ?? f.id) : f.id,
+    );
+    if (window.location.pathname !== href) window.history.replaceState(window.history.state, "", href);
+  }, [scoped, view, folders, username]);
+
   // The tab title shows the view and how much unread mail the Inbox has.
   const inboxUnread = folders?.find((f) => f.role === "inbox")?.unreadEmails ?? 0;
   const viewName = currentFolder ? folderLabel(currentFolder) : view?.kind === "priority" ? "Priority" : null;
@@ -584,6 +654,8 @@ function Mailroom({
       const next = { ...before, ...patch };
       prefsRef.current = next;
       setPrefs(next);
+      // Preferences are the person's own mailbox's: while a shared one is shown they apply here only, unsaved.
+      if (sharedModeRef.current) return;
       client.updatePreferences(patch).catch((err: unknown) => {
         prefsRef.current = before;
         setPrefs(before);
@@ -1030,6 +1102,8 @@ function Mailroom({
 
   const openComposer = useCallback(
     (seed: ComposeSeed, variant: "panel" | "inline" = "panel") => {
+      // Sending is from the person's own mailbox (they choose the shared one in From there).
+      if (sharedModeRef.current) return;
       ensureContacts();
       composerKey.current += 1;
       setComposer({ seed, variant: variant === "inline" && wide() ? "inline" : "panel", key: composerKey.current });
@@ -1106,7 +1180,7 @@ function Mailroom({
   );
 
   const onSent = useCallback(
-    (submissionId: string, _draftId: string, holdSeconds: number) => {
+    (submissionId: string, _draftId: string, holdSeconds: number, from?: string) => {
       setComposer(null);
       setContacts([]); // New recipients may have been saved: suggestions reload next time.
       refresh();
@@ -1118,7 +1192,7 @@ function Mailroom({
           label: "Undo",
           onClick: () => {
             void client
-              .undoSend(submissionId)
+              .undoSend(submissionId, from)
               .then(({ draftId }) => {
                 refresh();
                 void openDraft(draftId);
@@ -1141,14 +1215,14 @@ function Mailroom({
       if (!row) return;
       setSelected(index);
       anchor.current = index;
-      if (currentFolder?.role === "drafts") {
+      if (currentFolder?.role === "drafts" && !sharedMode) {
         void openDraft(row.id);
         return;
       }
       setOpenThread(rowKey(row));
       setOpenRow(row);
     },
-    [rowAt, currentFolder, openDraft, rowKey],
+    [rowAt, currentFolder, openDraft, rowKey, sharedMode],
   );
 
   const close = useCallback(() => {
@@ -1214,7 +1288,7 @@ function Mailroom({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
-      if (composer?.variant === "panel" || confirm || adding || settingsOpen) return;
+      if (composer?.variant === "panel" || confirm || adding || openingAnother || settingsOpen) return;
       // With shortcuts off (a setting), only Escape works.
       if (!prefs.shortcuts && e.key !== "Escape") return;
       if (e.key === ",") {
@@ -1327,6 +1401,30 @@ function Mailroom({
       });
   };
 
+  /** Opens a "Shared with you" mailbox here: it becomes the session's active one (the page reloads to show it). */
+  const openShared = (address: string) => {
+    setDrawer(false);
+    client
+      .openShared(address)
+      .then(() => {
+        window.location.reload();
+      })
+      .catch((err: unknown) => {
+        fail(err);
+        // Its grant may be gone: the list says what is still shared.
+        client
+          .mailboxes()
+          .then(setMailboxes)
+          .catch(() => undefined);
+      });
+  };
+
+  /** Back from a shared mailbox to the person's own (the one it came through). */
+  const backToOwn = () => {
+    const own = via ?? mailboxes.others[0];
+    if (own) switchMailbox(own);
+  };
+
   const signOut = async () => {
     try {
       // "Empty Trash when I sign out" (a setting the person turned on).
@@ -1381,6 +1479,13 @@ function Mailroom({
         setAdding(true);
       }}
       onSwitchMailbox={switchMailbox}
+      onOpenShared={openShared}
+      onOpenAnother={() => {
+        setDrawer(false);
+        setOpeningAnother(true);
+      }}
+      scoped={scoped}
+      {...(scope ? { ownHref: scope.ownHref } : {})}
     />
   );
 
@@ -1518,6 +1623,7 @@ function Mailroom({
         key={composer.key}
         client={client}
         identities={identities}
+        senders={senders}
         signatures={signatures}
         contacts={contacts}
         knownAddresses={known}
@@ -1535,448 +1641,483 @@ function Mailroom({
     ) : null;
 
   return (
-    <div
-      className={`grid h-dvh grid-cols-1 overflow-hidden ${
-        collapsed ? "lg:grid-cols-[3.5rem_minmax(0,1fr)]" : "lg:grid-cols-[15rem_minmax(0,1fr)]"
-      }`}
-    >
-      <aside className="hidden min-h-0 border-sidebar-border border-r lg:block">{sidebar(collapsed)}</aside>
-
-      {drawer && (
-        <div className="fixed inset-0 z-40 lg:hidden">
-          <button
-            type="button"
-            aria-label="Close folders"
-            onClick={() => {
-              setDrawer(false);
-            }}
-            className="absolute inset-0 bg-foreground/30"
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Folders"
-            className="absolute inset-y-0 left-0 w-72 max-w-[85vw] border-r shadow-xl"
-          >
-            {sidebar(false)}
-          </div>
-        </div>
+    <div className="flex h-dvh flex-col overflow-hidden">
+      {sharedMode && (
+        <SharedBanner address={mailboxes.active} {...(scope ? { backHref: scope.ownHref } : { onBack: backToOwn })} />
       )}
+      <div
+        className={`grid min-h-0 flex-1 grid-cols-1 overflow-hidden ${
+          collapsed ? "lg:grid-cols-[3.5rem_minmax(0,1fr)]" : "lg:grid-cols-[15rem_minmax(0,1fr)]"
+        }`}
+      >
+        <aside className="hidden min-h-0 border-sidebar-border border-r lg:block">{sidebar(collapsed)}</aside>
 
-      {section === "contacts" ? (
-        <ContactsView
-          client={client}
-          data={book}
-          onChanged={loadBook}
-          onToggleSidebar={toggleSidebar}
-          onCompose={(address, name) => {
-            openComposer({
-              title: "New message",
-              to: [{ name: name || null, email: address }],
-              cc: [],
-              bcc: [],
-              subject: "",
-              text: "",
-              attachments: [],
-              focus: "body",
-              signature: "new",
-            });
-          }}
-        />
-      ) : (
-        <div className={`grid min-h-0 grid-cols-1 ${mailGrid}`} data-reading-pane={pane}>
-          <section
-            aria-label={title}
-            className={`flex min-h-0 flex-col ${pane === "bottom" ? "md:border-b" : pane === "right" ? "border-r" : ""} ${listVisibility}`}
-          >
-            <header className="flex h-14 shrink-0 items-center gap-1 px-2">
-              <Tooltip label="Folders">
-                <button type="button" onClick={toggleSidebar} aria-label="Toggle folders" className={iconButtonClass}>
-                  <PanelLeft className="size-4" aria-hidden />
-                </button>
-              </Tooltip>
-              <span aria-hidden className="mx-1 h-4 w-px bg-border" />
-              <h1 className="min-w-0 flex-1 truncate font-display font-medium text-[1.25rem] tracking-tight">
-                {title}
-              </h1>
-              <Menu
-                label={narrowed ? "Filter (on)" : "Filter"}
-                icon={SlidersHorizontal}
-                items={filterItems}
-                className={narrowed ? "[&>span>button]:text-primary" : ""}
-              />
-              <Tooltip label="Refresh">
-                <button type="button" onClick={refreshAll} aria-label="Refresh" className={iconButtonClass}>
-                  <RotateCw className="size-4" aria-hidden />
-                </button>
-              </Tooltip>
-              <Menu label="More" icon={Ellipsis} items={moreItems} />
-            </header>
+        {drawer && (
+          <div className="fixed inset-0 z-40 lg:hidden">
+            <button
+              type="button"
+              aria-label="Close folders"
+              onClick={() => {
+                setDrawer(false);
+              }}
+              className="absolute inset-0 bg-foreground/30"
+            />
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Folders"
+              className="absolute inset-y-0 left-0 w-72 max-w-[85vw] border-r shadow-xl"
+            >
+              {sidebar(false)}
+            </div>
+          </div>
+        )}
 
-            {checked.size > 0 ? (
-              <div
-                role="toolbar"
-                aria-label="Selected conversations"
-                className="mx-2 mb-2 flex h-10 shrink-0 items-center gap-0.5 rounded-lg border bg-accent/60 px-1.5"
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setChecked(new Set());
-                  }}
-                  aria-label="Clear selection"
-                  className={iconButtonClass}
+        {section === "contacts" ? (
+          <ContactsView
+            client={client}
+            data={book}
+            onChanged={loadBook}
+            onToggleSidebar={toggleSidebar}
+            onCompose={(address, name) => {
+              openComposer({
+                title: "New message",
+                to: [{ name: name || null, email: address }],
+                cc: [],
+                bcc: [],
+                subject: "",
+                text: "",
+                attachments: [],
+                focus: "body",
+                signature: "new",
+              });
+            }}
+          />
+        ) : (
+          <div className={`grid min-h-0 grid-cols-1 ${mailGrid}`} data-reading-pane={pane}>
+            <section
+              aria-label={title}
+              className={`flex min-h-0 flex-col ${pane === "bottom" ? "md:border-b" : pane === "right" ? "border-r" : ""} ${listVisibility}`}
+            >
+              <header className="flex h-14 shrink-0 items-center gap-1 px-2">
+                <Tooltip label="Folders">
+                  <button type="button" onClick={toggleSidebar} aria-label="Toggle folders" className={iconButtonClass}>
+                    <PanelLeft className="size-4" aria-hidden />
+                  </button>
+                </Tooltip>
+                <span aria-hidden className="mx-1 h-4 w-px bg-border" />
+                <h1 className="min-w-0 flex-1 truncate font-display font-medium text-[1.25rem] tracking-tight">
+                  {title}
+                </h1>
+                <Menu
+                  label={narrowed ? "Filter (on)" : "Filter"}
+                  icon={SlidersHorizontal}
+                  items={filterItems}
+                  className={narrowed ? "[&>span>button]:text-primary" : ""}
+                />
+                <Tooltip label="Refresh">
+                  <button type="button" onClick={refreshAll} aria-label="Refresh" className={iconButtonClass}>
+                    <RotateCw className="size-4" aria-hidden />
+                  </button>
+                </Tooltip>
+                <Menu label="More" icon={Ellipsis} items={moreItems} />
+              </header>
+
+              {checked.size > 0 ? (
+                <div
+                  role="toolbar"
+                  aria-label="Selected conversations"
+                  className="mx-2 mb-2 flex h-10 shrink-0 items-center gap-0.5 rounded-lg border bg-accent/60 px-1.5"
                 >
-                  <X className="size-4" aria-hidden />
-                </button>
-                <span className="min-w-0 flex-1 truncate px-1 font-medium text-[13px]">{checked.size} selected</span>
-                {currentFolder?.role === "trash" ? (
-                  <Tooltip label="Restore">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        act(t, { kind: "restore" });
-                      }}
-                      aria-label="Restore selected"
-                      className={iconButtonClass}
-                    >
-                      <ArchiveRestore className="size-4" aria-hidden />
-                    </button>
-                  </Tooltip>
-                ) : currentFolder?.role === "junk" ? (
-                  <Tooltip label="Not spam" shortcut="!">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        act(t, { kind: "notJunk" });
-                      }}
-                      aria-label="Not spam (selected)"
-                      className={iconButtonClass}
-                    >
-                      <ShieldCheck className="size-4" aria-hidden />
-                    </button>
-                  </Tooltip>
-                ) : (
-                  currentFolder?.role !== "archive" && (
-                    <Tooltip label="Archive" shortcut="e">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          act(t, { kind: "archive" });
-                        }}
-                        aria-label="Archive selected"
-                        className={iconButtonClass}
-                      >
-                        <Archive className="size-4" aria-hidden />
-                      </button>
-                    </Tooltip>
-                  )
-                )}
-                <Tooltip label="Delete" shortcut="#">
                   <button
                     type="button"
                     onClick={() => {
-                      act(t, { kind: "trash" });
+                      setChecked(new Set());
                     }}
-                    aria-label="Delete selected"
-                    className={`${iconButtonClass} text-destructive hover:text-destructive`}
+                    aria-label="Clear selection"
+                    className={iconButtonClass}
                   >
-                    <Trash2 className="size-4" aria-hidden />
+                    <X className="size-4" aria-hidden />
                   </button>
-                </Tooltip>
-                <Menu
-                  label="More for selected"
-                  icon={Ellipsis}
-                  items={[
-                    { label: "Mark as read", icon: MailOpen, onSelect: () => void bulkKeyword(t, "$seen", true) },
-                    { label: "Mark as unread", icon: Mail, onSelect: () => void bulkKeyword(t, "$seen", false) },
-                    { label: "Add to Priority", icon: Flag, onSelect: () => void bulkKeyword(t, "$flagged", true) },
-                    { label: "Pin", icon: Pin, onSelect: () => void bulkKeyword(t, "$pinned", true) },
-                    { label: "Unpin", icon: Pin, onSelect: () => void bulkKeyword(t, "$pinned", false) },
-                    currentFolder?.role === "junk"
-                      ? {
-                          label: "Not spam",
-                          icon: ShieldCheck,
-                          onSelect: () => {
-                            act(t, { kind: "notJunk" });
+                  <span className="min-w-0 flex-1 truncate px-1 font-medium text-[13px]">{checked.size} selected</span>
+                  {currentFolder?.role === "trash" ? (
+                    <Tooltip label="Restore">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          act(t, { kind: "restore" });
+                        }}
+                        aria-label="Restore selected"
+                        className={iconButtonClass}
+                      >
+                        <ArchiveRestore className="size-4" aria-hidden />
+                      </button>
+                    </Tooltip>
+                  ) : currentFolder?.role === "junk" ? (
+                    <Tooltip label="Not spam" shortcut="!">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          act(t, { kind: "notJunk" });
+                        }}
+                        aria-label="Not spam (selected)"
+                        className={iconButtonClass}
+                      >
+                        <ShieldCheck className="size-4" aria-hidden />
+                      </button>
+                    </Tooltip>
+                  ) : (
+                    currentFolder?.role !== "archive" && (
+                      <Tooltip label="Archive" shortcut="e">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            act(t, { kind: "archive" });
+                          }}
+                          aria-label="Archive selected"
+                          className={iconButtonClass}
+                        >
+                          <Archive className="size-4" aria-hidden />
+                        </button>
+                      </Tooltip>
+                    )
+                  )}
+                  <Tooltip label="Delete" shortcut="#">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        act(t, { kind: "trash" });
+                      }}
+                      aria-label="Delete selected"
+                      className={`${iconButtonClass} text-destructive hover:text-destructive`}
+                    >
+                      <Trash2 className="size-4" aria-hidden />
+                    </button>
+                  </Tooltip>
+                  <Menu
+                    label="More for selected"
+                    icon={Ellipsis}
+                    items={[
+                      { label: "Mark as read", icon: MailOpen, onSelect: () => void bulkKeyword(t, "$seen", true) },
+                      { label: "Mark as unread", icon: Mail, onSelect: () => void bulkKeyword(t, "$seen", false) },
+                      { label: "Add to Priority", icon: Flag, onSelect: () => void bulkKeyword(t, "$flagged", true) },
+                      { label: "Pin", icon: Pin, onSelect: () => void bulkKeyword(t, "$pinned", true) },
+                      { label: "Unpin", icon: Pin, onSelect: () => void bulkKeyword(t, "$pinned", false) },
+                      currentFolder?.role === "junk"
+                        ? {
+                            label: "Not spam",
+                            icon: ShieldCheck,
+                            onSelect: () => {
+                              act(t, { kind: "notJunk" });
+                            },
+                          }
+                        : {
+                            label: "Report spam",
+                            icon: ShieldAlert,
+                            onSelect: () => {
+                              act(t, { kind: "junk" });
+                            },
                           },
-                        }
-                      : {
-                          label: "Report spam",
-                          icon: ShieldAlert,
-                          onSelect: () => {
-                            act(t, { kind: "junk" });
-                          },
+                      {
+                        label: "Report phishing",
+                        icon: ShieldX,
+                        onSelect: () => {
+                          act(t, { kind: "phishing" });
                         },
-                    {
-                      label: "Report phishing",
-                      icon: ShieldX,
-                      onSelect: () => {
-                        act(t, { kind: "phishing" });
                       },
-                    },
-                    { separator: true },
-                    { heading: "Move to" },
-                    ...bulkMove,
-                  ]}
-                />
-              </div>
-            ) : (
-              <form
-                role="search"
-                className="mx-2 mb-2 shrink-0"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  show({ search: parseSearch(searchText) });
-                  setOpenThread(null);
-                }}
-              >
-                <label className="relative flex items-center">
-                  <span className="sr-only">Search mail</span>
-                  <Search
-                    className="pointer-events-none absolute left-2.5 size-3.5 text-muted-foreground"
-                    aria-hidden
+                      { separator: true },
+                      { heading: "Move to" },
+                      ...bulkMove,
+                    ]}
                   />
-                  <input
-                    ref={searchBox}
-                    type="search"
-                    value={searchText}
-                    onChange={(e) => {
-                      setSearchText(e.target.value);
-                      if (e.target.value === "" && search) show({ search: null });
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Escape") {
-                        setSearchText("");
-                        if (search) show({ search: null });
-                        e.currentTarget.blur();
-                      }
-                    }}
-                    placeholder="Search (from:, subject:, has:attachment)"
-                    aria-label="Search mail"
-                    className="h-8 w-full rounded-lg border bg-background pr-8 pl-8 text-[13px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring"
-                  />
-                  <kbd className="pointer-events-none absolute right-2.5 hidden font-mono text-[11px] text-muted-foreground md:block">
-                    /
-                  </kbd>
-                </label>
-              </form>
-            )}
-
-            {error && (
-              <div
-                role="alert"
-                className="flex items-center justify-between gap-3 border-y bg-destructive/8 px-4 py-2.5"
-              >
-                <p className="am-small text-destructive">{error}</p>
-                <button
-                  type="button"
-                  onClick={refreshAll}
-                  className="am-small shrink-0 font-medium text-foreground underline underline-offset-2"
-                >
-                  Retry
-                </button>
-              </div>
-            )}
-            <div className="flex min-h-0 flex-1 flex-col border-t">
-              {!list || total === null ? (
-                <div className="min-h-0 flex-1 overflow-hidden">
-                  <MessageListSkeleton rows={8} />
-                </div>
-              ) : total === 0 && pinned.length === 0 ? (
-                <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
-                  <span className="flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
-                    {searching ? <Search className="size-5" aria-hidden /> : <Inbox className="size-5" aria-hidden />}
-                  </span>
-                  <p className="am-h4">
-                    {searching ? "No messages match" : narrowed ? "Nothing matches the filter" : `Nothing in ${title}`}
-                  </p>
-                  <p className="am-small max-w-64">
-                    {searching
-                      ? "Try other words, or from:, to:, subject: and has:attachment."
-                      : view?.kind === "priority"
-                        ? "Flag a message (s) to keep it here."
-                        : ((currentFolder?.role && EMPTY_COPY[currentFolder.role]) ?? "This folder is empty.")}
-                  </p>
                 </div>
               ) : (
-                <MessageList
-                  pinned={pinned}
-                  total={total}
-                  rows={list.rows}
-                  sectionLabel={title}
-                  selectedIndex={selected}
-                  checked={checked}
-                  sentFolder={currentFolder?.role === "sent" || currentFolder?.role === "drafts"}
-                  label={`${title} messages`}
-                  look={prefs}
-                  rowKey={rowKey}
-                  onOpen={open}
-                  onCheck={toggleCheck}
-                  onRange={onRange}
-                />
+                <form
+                  role="search"
+                  className="mx-2 mb-2 shrink-0"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    show({ search: parseSearch(searchText) });
+                    setOpenThread(null);
+                  }}
+                >
+                  <label className="relative flex items-center">
+                    <span className="sr-only">Search mail</span>
+                    <Search
+                      className="pointer-events-none absolute left-2.5 size-3.5 text-muted-foreground"
+                      aria-hidden
+                    />
+                    <input
+                      ref={searchBox}
+                      type="search"
+                      value={searchText}
+                      onChange={(e) => {
+                        setSearchText(e.target.value);
+                        if (e.target.value === "" && search) show({ search: null });
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") {
+                          setSearchText("");
+                          if (search) show({ search: null });
+                          e.currentTarget.blur();
+                        }
+                      }}
+                      placeholder="Search (from:, subject:, has:attachment)"
+                      aria-label="Search mail"
+                      className="h-8 w-full rounded-lg border bg-background pr-8 pl-8 text-[13px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                    <kbd className="pointer-events-none absolute right-2.5 hidden font-mono text-[11px] text-muted-foreground md:block">
+                      /
+                    </kbd>
+                  </label>
+                </form>
               )}
-            </div>
-            {/* Phones and tablets have no sidebar: New email floats over the list (not while selecting or with the
+
+              {error && (
+                <div
+                  role="alert"
+                  className="flex items-center justify-between gap-3 border-y bg-destructive/8 px-4 py-2.5"
+                >
+                  <p className="am-small text-destructive">{error}</p>
+                  <button
+                    type="button"
+                    onClick={refreshAll}
+                    className="am-small shrink-0 font-medium text-foreground underline underline-offset-2"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+              <div className="flex min-h-0 flex-1 flex-col border-t">
+                {!list || total === null ? (
+                  <div className="min-h-0 flex-1 overflow-hidden">
+                    <MessageListSkeleton rows={8} />
+                  </div>
+                ) : total === 0 && pinned.length === 0 ? (
+                  <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
+                    <span className="flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+                      {searching ? <Search className="size-5" aria-hidden /> : <Inbox className="size-5" aria-hidden />}
+                    </span>
+                    <p className="am-h4">
+                      {searching
+                        ? "No messages match"
+                        : narrowed
+                          ? "Nothing matches the filter"
+                          : `Nothing in ${title}`}
+                    </p>
+                    <p className="am-small max-w-64">
+                      {searching
+                        ? "Try other words, or from:, to:, subject: and has:attachment."
+                        : view?.kind === "priority"
+                          ? "Flag a message (s) to keep it here."
+                          : ((currentFolder?.role && EMPTY_COPY[currentFolder.role]) ?? "This folder is empty.")}
+                    </p>
+                  </div>
+                ) : (
+                  <MessageList
+                    pinned={pinned}
+                    total={total}
+                    rows={list.rows}
+                    sectionLabel={title}
+                    selectedIndex={selected}
+                    checked={checked}
+                    sentFolder={currentFolder?.role === "sent" || currentFolder?.role === "drafts"}
+                    label={`${title} messages`}
+                    look={prefs}
+                    rowKey={rowKey}
+                    onOpen={open}
+                    onCheck={toggleCheck}
+                    onRange={onRange}
+                  />
+                )}
+              </div>
+              {/* Phones and tablets have no sidebar: New email floats over the list (not while selecting or with the
                 folders drawer open, which has its own). */}
-            {composer === null && checked.size === 0 && !drawer && (
-              <button
-                type="button"
-                onClick={compose}
-                aria-label="New email"
-                className="fixed right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-30 inline-flex h-12 items-center gap-2 rounded-2xl bg-primary px-4 font-medium text-[14px] text-primary-foreground shadow-lg transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none lg:hidden"
-              >
-                <PenLine className="size-4" aria-hidden />
-                New email
-              </button>
-            )}
-          </section>
+              {composer === null && checked.size === 0 && !drawer && !sharedMode && (
+                <button
+                  type="button"
+                  onClick={compose}
+                  aria-label="New email"
+                  className="fixed right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-30 inline-flex h-12 items-center gap-2 rounded-2xl bg-primary px-4 font-medium text-[14px] text-primary-foreground shadow-lg transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none lg:hidden"
+                >
+                  <PenLine className="size-4" aria-hidden />
+                  New email
+                </button>
+              )}
+            </section>
 
-          <main className={`min-h-0 ${readerVisibility}`}>
-            {openThread !== null ? (
-              <Reader
-                key={openThread}
-                client={client}
-                threadId={openRow?.threadId ?? openThread}
-                mailChange={mailChange}
-                onlyEmailId={prefs.grouping === "messages" ? (openRow?.id ?? openThread) : undefined}
-                markRead={{ mode: prefs.markRead, delay: prefs.markReadDelay }}
-                mine={mine}
-                authservIds={authservIds}
-                defaultReply={prefs.defaultReply}
-                imagePolicy={imagePolicy}
-                onRememberImages={rememberImages}
-                folders={folders ?? []}
-                currentFolder={currentFolder}
-                hiddenMailboxIds={hidden.filter((id) => id !== currentFolder?.id)}
-                canPrev={(selected ?? 0) > 0}
-                canNext={selected !== null && selected < flatTotal - 1}
-                inlineComposer={inlineComposer}
-                onPrev={() => {
-                  move(-1);
-                }}
-                onNext={() => {
-                  move(1);
-                }}
-                onClose={close}
-                onAction={(a) => {
-                  if (a.kind === "reply" || a.kind === "replyAll" || a.kind === "forward")
-                    replyTo(a.message, a.kind, a.inline);
-                  else act([openThread], a);
-                }}
-                onKeyword={onKeyword}
-                onSignedOut={signedOut}
-                onComposeTo={(address) => {
-                  openComposer({
-                    title: "New message",
-                    to: [{ name: null, email: address.toLowerCase() }],
-                    cc: [],
-                    bcc: [],
-                    subject: "",
-                    text: "",
-                    attachments: [],
-                    focus: "body",
-                    signature: "new",
-                  });
-                }}
-                knownAddresses={known}
-                onAddContact={addContact}
-                registerActions={(a) => {
-                  readerActions.current = a;
-                }}
-              />
-            ) : (
-              <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
-                <span className="flex size-14 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
-                  <Inbox className="size-6" aria-hidden />
-                </span>
-                <p className="am-h3">No message selected</p>
-                <p className="am-small max-w-72">
-                  Pick a conversation to read it. Press <kbd className="font-mono">c</kbd> to write,{" "}
-                  <kbd className="font-mono">?</kbd> for all shortcuts.
-                </p>
-              </div>
-            )}
-          </main>
-        </div>
-      )}
+            <main className={`min-h-0 ${readerVisibility}`}>
+              {openThread !== null ? (
+                <Reader
+                  key={openThread}
+                  client={client}
+                  threadId={openRow?.threadId ?? openThread}
+                  mailChange={mailChange}
+                  onlyEmailId={prefs.grouping === "messages" ? (openRow?.id ?? openThread) : undefined}
+                  markRead={{ mode: prefs.markRead, delay: prefs.markReadDelay }}
+                  mine={mine}
+                  authservIds={authservIds}
+                  defaultReply={prefs.defaultReply}
+                  canAnswer={!sharedMode}
+                  imagePolicy={imagePolicy}
+                  onRememberImages={rememberImages}
+                  folders={folders ?? []}
+                  currentFolder={currentFolder}
+                  hiddenMailboxIds={hidden.filter((id) => id !== currentFolder?.id)}
+                  canPrev={(selected ?? 0) > 0}
+                  canNext={selected !== null && selected < flatTotal - 1}
+                  inlineComposer={inlineComposer}
+                  onPrev={() => {
+                    move(-1);
+                  }}
+                  onNext={() => {
+                    move(1);
+                  }}
+                  onClose={close}
+                  onAction={(a) => {
+                    if (a.kind === "reply" || a.kind === "replyAll" || a.kind === "forward")
+                      replyTo(a.message, a.kind, a.inline);
+                    else act([openThread], a);
+                  }}
+                  onKeyword={onKeyword}
+                  onSignedOut={signedOut}
+                  onComposeTo={(address) => {
+                    openComposer({
+                      title: "New message",
+                      to: [{ name: null, email: address.toLowerCase() }],
+                      cc: [],
+                      bcc: [],
+                      subject: "",
+                      text: "",
+                      attachments: [],
+                      focus: "body",
+                      signature: "new",
+                    });
+                  }}
+                  knownAddresses={known}
+                  onAddContact={addContact}
+                  registerActions={(a) => {
+                    readerActions.current = a;
+                  }}
+                />
+              ) : (
+                <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
+                  <span className="flex size-14 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+                    <Inbox className="size-6" aria-hidden />
+                  </span>
+                  <p className="am-h3">No message selected</p>
+                  <p className="am-small max-w-72">
+                    {sharedMode ? (
+                      <>
+                        Pick a conversation to read it. Press <kbd className="font-mono">?</kbd> for all shortcuts.
+                      </>
+                    ) : (
+                      <>
+                        Pick a conversation to read it. Press <kbd className="font-mono">c</kbd> to write,{" "}
+                        <kbd className="font-mono">?</kbd> for all shortcuts.
+                      </>
+                    )}
+                  </p>
+                </div>
+              )}
+            </main>
+          </div>
+        )}
 
-      {composer?.variant === "panel" && (
-        <Composer
-          key={composer.key}
-          client={client}
-          identities={identities}
-          signatures={signatures}
-          contacts={contacts}
-          knownAddresses={known}
-          onAddContact={addContact}
-          seed={composer.seed}
-          variant="panel"
-          trashId={roles.trash}
-          alwaysCcBcc={prefs.showCcBcc}
-          onClose={({ savedDraft }) => {
-            setComposer(null);
-            if (savedDraft) toasts.show({ message: "Draft saved." });
-            if (currentFolder?.role === "drafts") void reload({ keep: true });
-          }}
-          onSent={onSent}
-        />
-      )}
+        {composer?.variant === "panel" && (
+          <Composer
+            key={composer.key}
+            client={client}
+            identities={identities}
+            senders={senders}
+            signatures={signatures}
+            contacts={contacts}
+            knownAddresses={known}
+            onAddContact={addContact}
+            seed={composer.seed}
+            variant="panel"
+            trashId={roles.trash}
+            alwaysCcBcc={prefs.showCcBcc}
+            onClose={({ savedDraft }) => {
+              setComposer(null);
+              if (savedDraft) toasts.show({ message: "Draft saved." });
+              if (currentFolder?.role === "drafts") void reload({ keep: true });
+            }}
+            onSent={onSent}
+          />
+        )}
 
-      {settingsOpen && (
-        <SettingsWindow
-          client={client}
-          preferences={prefs}
-          folders={folders ?? []}
-          consoleHref={consoleHref}
-          shortcuts={SHORTCUTS}
-          onChange={updatePrefs}
-          onIdentitiesChanged={setIdentities}
-          onSignaturesChanged={setSignatures}
-          onSignOut={() => {
-            void signOut();
-          }}
-          onClose={() => {
-            setSettingsOpen(false);
-          }}
-        />
-      )}
-      {help && (
-        <Modal
-          title="Keyboard shortcuts"
-          onClose={() => {
-            setHelp(false);
-          }}
-        >
-          <dl className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto">
-            {SHORTCUTS.map(([keys, what]) => (
-              <div key={keys} className="flex items-center justify-between gap-4">
-                <dt className="am-small">{what}</dt>
-                <dd className="shrink-0 rounded-md border bg-muted px-1.5 py-0.5 font-mono text-[12px]">{keys}</dd>
-              </div>
-            ))}
-          </dl>
-        </Modal>
-      )}
-      {adding && (
-        <AddMailboxDialog
-          client={client}
-          onClose={() => {
-            setAdding(false);
-          }}
-        />
-      )}
-      {confirm && (
-        <ConfirmDialog
-          title={confirm.title}
-          body={confirm.body}
-          confirm={confirm.confirm}
-          onConfirm={confirm.run}
-          onClose={() => {
-            setConfirm(null);
-          }}
-        />
-      )}
+        {openingAnother && (
+          <OpenMailboxDialog
+            onClose={() => {
+              setOpeningAnother(false);
+            }}
+          />
+        )}
+        {settingsOpen && sharedMode && (
+          <OwnSettingsDialog
+            address={mailboxes.active}
+            {...(scope ? { backHref: scope.ownHref } : { onBack: backToOwn })}
+            onClose={() => {
+              setSettingsOpen(false);
+            }}
+          />
+        )}
+        {settingsOpen && !sharedMode && (
+          <SettingsWindow
+            client={client}
+            preferences={prefs}
+            folders={folders ?? []}
+            consoleHref={consoleHref}
+            shortcuts={SHORTCUTS}
+            onChange={updatePrefs}
+            onIdentitiesChanged={setIdentities}
+            onSignaturesChanged={setSignatures}
+            onSignOut={() => {
+              void signOut();
+            }}
+            onClose={() => {
+              setSettingsOpen(false);
+            }}
+          />
+        )}
+        {help && (
+          <Modal
+            title="Keyboard shortcuts"
+            onClose={() => {
+              setHelp(false);
+            }}
+          >
+            <dl className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto">
+              {SHORTCUTS.map(([keys, what]) => (
+                <div key={keys} className="flex items-center justify-between gap-4">
+                  <dt className="am-small">{what}</dt>
+                  <dd className="shrink-0 rounded-md border bg-muted px-1.5 py-0.5 font-mono text-[12px]">{keys}</dd>
+                </div>
+              ))}
+            </dl>
+          </Modal>
+        )}
+        {adding && (
+          <AddMailboxDialog
+            client={client}
+            onClose={() => {
+              setAdding(false);
+            }}
+          />
+        )}
+        {confirm && (
+          <ConfirmDialog
+            title={confirm.title}
+            body={confirm.body}
+            confirm={confirm.confirm}
+            onConfirm={confirm.run}
+            onClose={() => {
+              setConfirm(null);
+            }}
+          />
+        )}
+      </div>
     </div>
   );
 }

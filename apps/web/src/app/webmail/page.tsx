@@ -44,23 +44,29 @@ export default async function WebmailPage() {
     const reason = blocked ? `?reason=${signedNoticeReason(env().BETTER_AUTH_SECRET, blocked)}` : "";
     redirect(`${base}/sign-in${reason}`);
   }
+  // A mailbox shared with the person may be the active one (ADR-0026 §6): preferences, the password step and the
+  // console link are the person's own mailbox's.
+  const own = session.delegated?.via ?? session.username;
+  // That mailbox's own entry (its JMAP account), when a shared one is active.
+  const ownEntry =
+    [session, ...(session.others ?? [])].find((m) => !m.delegated && m.username.toLowerCase() === own) ?? session;
   // Display preferences only (no mail): read here so the first paint already has the chosen layout.
   const [preferences, mailbox] = await Promise.all([
     settingsService()
-      .preferences(session.username)
+      .preferences(own)
       .catch(() => DEFAULT_PREFERENCES),
     settingsService()
-      .mailbox(session.username)
+      .mailbox(own)
       .catch(() => null),
   ]);
   // "Add a user" with a first-sign-in password change: the new password comes before the inbox (the webmail API
   // refuses everything else meanwhile). It ends once the worker has applied the new password.
   if (mailbox?.mustChangePassword) {
-    const lastFailed = await lastPasswordChangeFailed(container().deps, session.username).catch(() => false);
+    const lastFailed = await lastPasswordChangeFailed(container().deps, own).catch(() => false);
     return (
       <FirstPasswordStep
-        address={session.username}
-        account={session.accountId}
+        address={own}
+        account={ownEntry.accountId}
         signInHref={`${base}/sign-in`}
         lastFailed={lastFailed}
       />
@@ -75,6 +81,7 @@ export default async function WebmailPage() {
       consoleHref={mailbox ? `${app}/accounts/${mailbox.accountId}/aliases` : app}
       initialCollapsed={jar.get(SIDEBAR_COOKIE)?.value === "collapsed"}
       initialPreferences={preferences}
+      sharedVia={session.delegated?.via ?? null}
       authservIds={trustedAuthservIds(env().MAIL_AUTHSERV_ID, platform().hosts.mx, env().NODE_ENV === "production")}
     />
   );
