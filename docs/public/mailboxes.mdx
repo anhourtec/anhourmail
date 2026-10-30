@@ -1,6 +1,6 @@
 ---
 title: Mailboxes
-description: Add users with their own mailbox, create mailboxes on your own domain or ours with a password, give them to people in your account, see and set their storage, reset a password, and suspend, delete or restore them.
+description: Add users with their own mailbox, create shared mailboxes on your own domain or ours, give people in your account access to a mailbox, convert a person's mailbox to a shared one, see and set storage, reset a password, and suspend, delete or restore mailboxes.
 ---
 
 A mailbox is an address with its own storage, like `jane@example.org`. Every account can have an address at our
@@ -36,15 +36,15 @@ all its people (counting pending invites), all the mailboxes its plan includes, 
 (lower another mailbox's storage first). Users need an address on a domain you've verified, or on our domain while
 your plan has room for one; for our domain, confirm your own email address first.
 
-### Make a shared address a user
+### Make a shared mailbox a user
 
-A mailbox that doesn't belong to anyone, like one added as a [shared address](#add-a-shared-address), can become a
-person's own mailbox. Open it, and on its **Overview** choose **Make this a user** next to **Belongs to**. The steps
+A mailbox that doesn't belong to anyone, like a [shared mailbox](#add-a-shared-mailbox), can become a person's own
+mailbox. Open it, and on its **Overview** choose **Make this a user** next to **Belongs to**. The steps
 are the same as **Add a user**, without the address and storage: their name and display name, a role, and the optional
 profile details. Before finishing you confirm it's you with your console password or a code, because this replaces
 the mailbox's password: we create a new one, show it to you once, and the person chooses their own the first time they
 sign in to the webmail or the console. Anyone still using the old password is signed out of the webmail, and the
-mailbox's [app passwords](/docs/clients/app-passwords) are revoked, so nobody who used the shared address keeps a way
+mailbox's [app passwords](/docs/clients/app-passwords) are revoked, so nobody who used the shared mailbox keeps a way
 in. One exception: a mail app that is already connected with the old password (IMAP) stays connected until it
 disconnects, so if the address was shared widely, assume the people who used it can still see new mail for a while.
 
@@ -52,14 +52,19 @@ Until the person has chosen their own password, the mailbox can't change its pas
 "Forgot password" request for their console login sends no email (it would land in this mailbox). If they forget the
 new password in the meantime, set it again from the **Password** tab.
 
-## Add a shared address
+If people have been [given access](#give-people-access-to-a-mailbox) to the mailbox, the last step lists them. They
+keep their access, with one exception: when the new user gets a role other than **Member**, access that someone other
+than an owner gave is taken away, because only an owner can give access to an owner's or an admin's mailbox.
 
-**Add a user** is the main way to add a mailbox. Use **Add a shared address** for an address that isn't one person's
+## Add a shared mailbox
+
+**Add a user** is the main way to add a mailbox. Use **Add a shared mailbox** for an address that isn't one person's
 sign-in, like `support@` or `info@`, or for one more address for someone who's already in the account. It has its own
-storage and password, and doesn't add anyone to People and roles.
+storage and password, and doesn't add anyone to People and roles. Once it's created, choose who can use it on its
+**Delegation** tab (see [Give people access to a mailbox](#give-people-access-to-a-mailbox)).
 
 1. In the console, open **Mailboxes**, open the **⋯** menu next to the search box and choose **Add a shared
-   address**. A panel opens on the right.
+   mailbox**. A panel opens on the right.
 2. Type the part before the @ and choose the domain. Letters, numbers, dots, hyphens and underscores work;
    `+` is reserved, because `you+anything@` already reaches you. Our domain is in the list too, marked **free
    address**, while your plan has room for one; names there follow [their own rules](/docs/free-address#choosing-a-name).
@@ -67,7 +72,7 @@ storage and password, and doesn't add anyone to People and roles.
 4. Set its **storage** in whole GB. It starts at an even share of the account's unassigned storage, and can be up to
    all of it (see [Account storage](#account-storage)).
 5. Set its **password**: type one, or choose **Generate a strong password** and copy it. A generated password is
-   shown only until you create the address. Give it to the person safely; they sign in to the
+   shown only until you create the mailbox. Give it to the person safely; they sign in to the
    [webmail](/docs/webmail) with it and can change it there.
 
 Mailbox passwords need 12 to 128 characters (a passphrase works well), no spaces at the start or end, and can't be
@@ -84,6 +89,57 @@ Choose a mailbox's address in the list to open its details panel. **Edit name** 
 settings). **Overview** shows who it belongs to and how much
 storage it uses; **Storage** and **Access** are where you change them. The ⋮ menu beside each address has the same actions,
 and you can tick several mailboxes to suspend, resume or delete them together.
+
+## Give people access to a mailbox
+
+On the Plus and Supporter plans, owners and User Administrators can give people in the account access to a mailbox
+that isn't theirs: a shared mailbox like `support@`, or a colleague's mailbox while they're away. Open the mailbox and
+choose its **Delegation** tab (or **Delegation** in the ⋮ menu beside its address). There are three separate lists:
+
+- **Read and manage**: open the mailbox and read, move and delete mail in all its folders. This doesn't include
+  sending.
+- **Send as**: send mail from the mailbox's address. Recipients see only the mailbox, not who sent it.
+- **Send on behalf**: send mail from the mailbox that also names who sent it, shown as "Name on behalf of" the
+  mailbox.
+
+Give someone any combination. If they have both **Send as** and **Send on behalf**, **Send as** is used.
+
+To add people:
+
+1. Choose **Add people** under the list.
+2. Tick each person. Everyone in the account is offered except the mailbox's own person and those already on the list.
+3. Choose **Add**. If you haven't confirmed it's you in the last few minutes, the console asks for your console password
+   or a code first.
+
+To take access away, choose **Remove** beside the person. Each list changes on its own, so removing someone from
+**Send as** leaves their **Read and manage** as it was. Changes can take up to a minute to apply.
+
+- A mailbox can have up to <Value of="delegatesPerMailbox" /> people with access, and one person can have access to up
+  to <Value of="delegatedMailboxesPerPerson" /> mailboxes.
+- Only an owner can give or take away access to a mailbox that belongs to an owner or an admin.
+- A person's **Mailboxes they can open** on [People and roles](/docs/people-and-roles#mailboxes-someone-can-open)
+  lists every mailbox they have access to.
+- Auditors can see the lists but can't change them. On the Free plan the tab says delegation isn't included.
+- Every change is recorded in the [audit log](/docs/audit-log).
+- Opening a mailbox you've been given access to, and sending from it, comes to the [webmail](/docs/webmail) next. Until
+  then, the lists record who should have access.
+
+## Convert to a shared mailbox
+
+A person's mailbox can become a shared mailbox, for example when they leave or the address becomes a team's. Open the
+mailbox, choose its **Access** tab (or **Convert to shared mailbox…** in the ⋮ menu beside its address), then
+**Convert to shared mailbox…**:
+
+1. Read what happens: the person can't sign in to it any more, in the webmail or mail apps, because its password is
+   replaced with one nobody is shown and its [app passwords](/docs/clients/app-passwords) stop working. Webmail
+   sessions open on it end within a minute. Its mail, address and aliases stay, and the person stays in the account.
+2. Optionally, under **Give full access to**, tick the people who should have **Read and manage**, and **Also let them
+   send as this mailbox** to give them **Send as** too. (Shown to owners and User Administrators on Plus and Supporter.)
+3. Choose **Convert to shared mailbox**. The console may ask you to confirm it's you first.
+
+Its **Overview** then says it belongs to nobody. To make it someone's mailbox again, use
+[Make this a user](#make-a-shared-mailbox-a-user). Only an owner can convert an owner's or an admin's mailbox, and a
+mailbox that is still being set up or is being deleted can't be converted.
 
 ## Storage used
 
@@ -176,9 +232,11 @@ restored if its domain is no longer verified in your account.
 
 ## Who can manage mailboxes
 
-Owners and User Admins can create, suspend, delete and restore mailboxes, change their storage and set a new password.
-Only an owner can suspend, delete, restore or set the password of a mailbox that belongs to an owner or an admin. Domain Admins and Auditors can see
-mailboxes.
+Owners and User Admins can create, suspend, delete and restore mailboxes, change their storage, set a new password,
+convert a person's mailbox to a shared mailbox and choose who has access to a mailbox. Only an owner can suspend,
+delete, restore, convert or set the password of a mailbox that belongs to an owner or an admin, or change who has
+access to it. Domain Admins and Auditors can see mailboxes; Auditors can
+also see who has access to them.
 
 If a suspension or deletion couldn't be applied on the mail server, the mailbox shows **Not applied** and its page
 offers **Retry**.

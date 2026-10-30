@@ -16,6 +16,8 @@ import {
   BULK_MAIL,
   CLIENT_ENDPOINTS,
   DATA_EXPORT,
+  DELEGATED_MAILBOXES_PER_PERSON,
+  DELEGATES_PER_MAILBOX,
   CLIENT_USERNAME_HINT,
   customerDomainRecords,
   formatPrice,
@@ -91,6 +93,9 @@ const VALUES = {
   aliasesFree: String(PLANS.free.aliases ?? ALIASES_PER_MAILBOX),
   maskedAliasesFree: String(PLANS.free.maskedAliases ?? ALIASES_PER_MAILBOX),
   maxPeople: String(MAX_PEOPLE),
+  // Mailbox delegation ceilings (plans.ts; ADR-0026).
+  delegatesPerMailbox: String(DELEGATES_PER_MAILBOX),
+  delegatedMailboxesPerPerson: String(DELEGATED_MAILBOXES_PER_PERSON),
   photoMaxUpload: `${String(AVATAR.maxUploadMb)} MB`,
   // Free platform addresses (packages/shared/src/addresses.ts, plans.ts; ADR-0021)
   platformAddressMin: String(PLATFORM_ADDRESS.min),
