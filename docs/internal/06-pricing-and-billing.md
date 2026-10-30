@@ -1,6 +1,6 @@
 # 06 — Pricing and billing
 
-Last updated: 2026-10-29. Research: `research/market-and-legal.md` (not legal or tax advice; confirm with an accountant).
+Last updated: 2026-10-30. Research: `research/market-and-legal.md` (not legal or tax advice; confirm with an accountant).
 
 ## Plans
 
@@ -21,7 +21,8 @@ in `plans.ts`; in outline:
 
 - **Free:** $0, one `@<platform domain>` address, 1 GB (`storagePoolGb`).
 - **Plus:** yearly, **per account** (covers everyone in it); up to 10 mailboxes included (`includedMailboxes`), **10 GB
-  pooled for the whole account** (`storagePoolGb`), unlimited custom domains and aliases, catch-all, add people.
+  pooled for the whole account** (`storagePoolGb`), unlimited custom domains, aliases up to `ALIASES_PER_MAILBOX` per
+  mailbox, catch-all, add people, mailbox delegation and shared mailboxes (`delegation`, ADR-0026).
 - **Supporter:** pay what you want above a lower minimum; everything in Plus plus the badge.
 - **Paid extras (Phase 5, billing):** storage blocks of `storageBlockGb` (+10 GB) at `storageBlockPrice` per year, and
   mailboxes beyond the included ten at `extraMailboxPrice` per year. Never auto-charged. The pricing page and docs render

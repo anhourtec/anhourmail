@@ -1,6 +1,6 @@
 # 08 — Operations
 
-Last updated: 2026-10-29 (data export and account deletion jobs, ADR-0025).
+Last updated: 2026-10-30 (data export and account deletion jobs, ADR-0025).
 
 ## Environments
 
@@ -101,6 +101,18 @@ private ops compose. Without them `job:data-export` and `job:account-deletion` f
 changes. Pending deletions are listed for Global Administrators under Platform → Pending deletions; a deletion that
 should not go ahead (abuse investigation) is held by suspending the account, which stops every step until it is
 lifted.
+
+**Deploy step for mailbox delegation and send on behalf (ADR-0026, migration 0029, 2026-10-30):** the web app needs
+`SENDER_DELEGATION_KEY` (64 lowercase hex, `openssl rand -hex 32`) and refuses to start in production without it; only
+the web container and the Stalwart bootstrap get it, never the worker or scheduler. The ops repo's compose and
+`deploy.sh` wiring must be on the server first, so pull **both** repos on every deploy (the deploy command in the ops
+README and the handoff does). After a deploy that changes the sender-identity script (send-on-behalf exception, tag
+expiry), run `scripts/deploy.sh --bootstrap-stalwart` once. On-behalf tags expire after five minutes and the script
+compares against the mail server's clock, so the web and mail hosts must run NTP (skew well under five minutes).
+Undo for delegated sends is held in one web process: a multi-instance web tier needs a shared store first.
+
+**Server access to the private ops repo:** the server pulls it with a read-only deploy key (an SSH key added under the
+repo's Deploy keys, write access off, `~/.ssh/config` host alias), not a personal token cached on the box.
 
 ## Suspending an account or a person
 

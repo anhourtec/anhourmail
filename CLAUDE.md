@@ -91,14 +91,15 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 ## Where we are and what's next
 
 Pre-staging has run on one VM since 2026-10-23 from the private ops repository (`anhourmail-ops`, following the
-local-only `deploy.md`); as of 2026-10-29 the work since then (Add a user, DKIM TXT keys, the image proxy, rich-text
-compose and signatures, profile photos, staff support access, the console → webmail handoff, data export and
-account deletion, alias limits) waits for the next pre-staging deploy. The work plan stops before Phase 6. The next
+local-only `deploy.md`); it was last deployed on 2026-10-30 at 300440a (leavers' sign-in cut-off, mailbox delegation
+in the console, the send-on-behalf sender rule). Since then the webmail side of delegation (Shared with you, Open
+another mailbox, sending as and on behalf) and the remote-image once-or-always choice wait for the next deploy. The work plan stops before Phase 6. The next
 phases, in order, with exit criteria, are in `docs/internal/09-roadmap.md` "Path to production":
 
 1. pre-staging on one VM (real DNS, certificates, rDNS, external mail, backups and a restore drill);
-2. product gaps a beta needs (free sign-up with SMS/OTP, webmail session handoff, data export and deletion, act-as,
-   image proxy, push sync, webmail settings part 2);
+2. product gaps a beta needs (built: webmail session handoff, data export and deletion, act-as, image proxy, leavers
+   and mailbox delegation; left: names as one source, free sign-up with proof-of-work instead of SMS/OTP, push sync,
+   webmail settings part 2);
 3. billing, plus mail and contacts import (migration);
 4. abuse controls, monitoring and backups;
 5. production host (app VM + mail VM), warm-up and dogfood;
@@ -377,3 +378,4 @@ an app container direct access to Stalwart's management listener.
 | 2026-10-29 | Nishchayjeet Singh (Nish) | "Where we are and what's next": pre-staging running; the work since waits for the next deploy                                      |
 | 2026-10-29 | Nishchayjeet Singh (Nish) | Rule 60: sweep every Markdown doc against the code every session; bump `Last updated` on change                                    |
 | 2026-10-29 | Nishchayjeet Singh (Nish) | Rule 61: profile data (name, avatar, sender name) has one source and stays in sync across console and webmail                      |
+| 2026-10-30 | Nishchayjeet Singh (Nish) | "Where we are and what's next": pre-staging redeployed at 300440a; delegation's webmail side waits for the next deploy             |
