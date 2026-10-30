@@ -14,21 +14,26 @@ import type { StalwartManagement } from "./management";
  * header and a missing From are refused with 5.5.3. Match variables (`${1}`) are not populated in this context, so
  * the script compares against `${envelope.from}` directly.
  *
- * One keyed exception, "send on behalf" (ADR-0026 §8, ADR-0019 update 2026-10-30), present only when a key is given:
+ * One keyed exception, "send on behalf" (ADR-0026 §8, ADR-0019 updates 2026-10-30), present only when a key is given:
  * a single Sender address that differs from the envelope sender passes when the message has exactly one Message-ID
- * and carries `X-AnhourMail-On-Behalf` equal to
- * hex sha256(key | hex sha256(key | lowercase envelope sender | lowercase Sender address | Message-ID)). The tag is
- * bound to the message, so one copied from a stored message is useless on any other. From must still equal the
+ * (in the web app's `local@host` form), exactly one `X-AnhourMail-On-Behalf-Expires` (UTC, not yet passed by the
+ * server's `currentdate`) and carries `X-AnhourMail-On-Behalf` equal to
+ * hex sha256(key | hex sha256(key | lowercase envelope sender | lowercase Sender address | Message-ID | expiry)). The
+ * tag is bound to the message and expires within minutes, so one copied from a stored message is useless on any other,
+ * and on the same one soon after. An unreadable Message-ID reads as empty in an expression rather than failing it
+ * (verified on v0.16.27), so its form is checked before it is hashed. From must still equal the
  * envelope sender, so only someone signed in as the mailbox itself (in practice the web app holding its token) can use
  * it. The computed tag must be 64 lowercase hex before it is compared: a failed expression leaves the variable empty
- * (verified), which an empty tag header would otherwise match. The header is removed from every submission, so it is
- * never delivered. Verified on v0.16.27 (`vnd.stalwart.expressions` `let` + nested `hash(…, 'sha256')` and
+ * (verified), which an empty tag header would otherwise match. Both headers are removed from every submission, so they
+ * are never delivered. Verified on v0.16.27 (`vnd.stalwart.expressions` `let` + nested `hash(…, 'sha256')` and
  * `header.message-id` at DATA; ADR-0026 probe P8, `stack:verify`).
  */
 export const SENDER_IDENTITY_SCRIPT = "sender-identity";
 
 /** The header the web app adds for a send on behalf; the script checks it and always removes it. */
 export const SENDER_ON_BEHALF_HEADER = "X-AnhourMail-On-Behalf";
+/** The tag's expiry (UTC, `YYYY-MM-DDTHH:MM:SSZ`), bound into the tag; checked against the server's clock, removed. */
+export const SENDER_ON_BEHALF_EXPIRES_HEADER = "X-AnhourMail-On-Behalf-Expires";
 
 const ON_BEHALF_KEY = /^[0-9a-f]{64}$/;
 
@@ -44,26 +49,44 @@ export function senderIdentitySieve(opts: { onBehalfKey?: string | undefined } =
     throw new Error("The on-behalf key must be 64 lowercase hex characters");
   }
   const requires = `"envelope", "variables", "relational", "comparator-i;ascii-numeric", "reject", "editheader"${
-    key === undefined ? "" : `, "regex", "vnd.stalwart.expressions"`
+    key === undefined ? "" : `, "regex", "date", "vnd.stalwart.expressions"`
   }`;
   const refuseSender = `reject "The Sender address must match the address you are sending from.";
     stop;`;
-  const inner = `hash('${key ?? ""}|' + to_lowercase(envelope.from) + '|' + to_lowercase(header.sender.addr) + '|' + header.message-id, 'sha256')`;
+  const refuse = `      ${refuseSender.replace("\n    ", "\n      ")}`;
+  const inner = `hash('${key ?? ""}|' + to_lowercase(envelope.from) + '|' + to_lowercase(header.sender.addr) + '|' + header.message-id + '|' + header.${SENDER_ON_BEHALF_EXPIRES_HEADER.toLowerCase()}, 'sha256')`;
   const differentSender =
     key === undefined
       ? `    ${refuseSender}`
-      : `    # Send on behalf (ADR-0026 §8): only with the web app's tag for exactly this mailbox, delegate and message.
+      : `    # Send on behalf (ADR-0026 §8): only with the web app's tag for exactly this mailbox, delegate, message and expiry.
     if header :count "ne" :comparator "i;ascii-numeric" "message-id" "1" {
       reject "Sending on behalf needs exactly one Message-ID header.";
       stop;
     }
+    if header :count "ne" :comparator "i;ascii-numeric" "${SENDER_ON_BEHALF_EXPIRES_HEADER}" "1" {
+${refuse}
+    }
+    # An unreadable Message-ID reads as empty (verified), and so would hash to a constant: only the web app's form.
+    let "onbehalfid" "header.message-id";
+    if not string :regex "\${onbehalfid}" "^[A-Za-z0-9._%+=-]{1,200}@[A-Za-z0-9.-]{1,200}$" {
+${refuse}
+    }
+    let "onbehalfexp" "header.${SENDER_ON_BEHALF_EXPIRES_HEADER.toLowerCase()}";
+    if not string :regex "\${onbehalfexp}" "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" {
+${refuse}
+    }
+    # Both are UTC in the same form, so comparing them as text compares the times. Fail closed: only a comparison
+    # that proves "now <= expiry" passes (one that can't be made doesn't match, so the message is refused).
+    if not currentdate :zone "+0000" :value "le" "iso8601" "\${onbehalfexp}" {
+${refuse}
+    }
     let "onbehalf" "hash('${key}|' + ${inner}, 'sha256')";
     # A failed expression leaves the variable empty: never compare anything but a real digest.
     if not string :regex "\${onbehalf}" "^[0-9a-f]{64}$" {
-      ${refuseSender.replace("\n    ", "\n      ")}
+${refuse}
     }
     if not header :is "${SENDER_ON_BEHALF_HEADER}" "\${onbehalf}" {
-      ${refuseSender.replace("\n    ", "\n      ")}
+${refuse}
     }`;
   return `require [${requires}];
 
@@ -97,8 +120,9 @@ ${differentSender}
   }
 }
 
-# The on-behalf tag is for this check only: never delivered, whatever the outcome above.
+# The on-behalf tag and its expiry are for this check only: never delivered, whatever the outcome above.
 deleteheader "${SENDER_ON_BEHALF_HEADER}";
+deleteheader "${SENDER_ON_BEHALF_EXPIRES_HEADER}";
 
 # Stalwart stamps no Authentication-Results on authenticated submissions, so any such header here was written by
 # the sender and could claim checks our server never ran (RFC 8601 section 5). Remove them all.

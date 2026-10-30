@@ -8,6 +8,7 @@ import {
   SENDER_IDENTITY_DATA_SCRIPT_EXPRESSION,
   SENDER_IDENTITY_SCRIPT,
   SENDER_IDENTITY_SIEVE,
+  SENDER_ON_BEHALF_EXPIRES_HEADER,
   SENDER_ON_BEHALF_HEADER,
   senderIdentitySieve,
 } from "./sender";
@@ -78,16 +79,21 @@ describe("sender identity policy", () => {
     expect(SENDER_IDENTITY_SIEVE).not.toContain("vnd.stalwart.expressions");
     expect(SENDER_IDENTITY_SIEVE).not.toContain("hash(");
     expect(SENDER_IDENTITY_SIEVE).toContain(`deleteheader "${SENDER_ON_BEHALF_HEADER}";`);
+    expect(SENDER_IDENTITY_SIEVE).toContain(`deleteheader "${SENDER_ON_BEHALF_EXPIRES_HEADER}";`);
   });
 
   it("with a key, compiles the message-bound on-behalf check", () => {
     const script = senderIdentitySieve({ onBehalfKey: KEY });
-    expect(script).toMatch(/^require \[[^\]]*"regex", "vnd\.stalwart\.expressions"\]/);
-    const inner = `hash('${KEY}|' + to_lowercase(envelope.from) + '|' + to_lowercase(header.sender.addr) + '|' + header.message-id, 'sha256')`;
+    expect(script).toMatch(/^require \[[^\]]*"regex", "date", "vnd\.stalwart\.expressions"\]/);
+    const inner = `hash('${KEY}|' + to_lowercase(envelope.from) + '|' + to_lowercase(header.sender.addr) + '|' + header.message-id + '|' + header.x-anhourmail-on-behalf-expires, 'sha256')`;
     expect(script).toContain(`let "onbehalf" "hash('${KEY}|' + ${inner}, 'sha256')";`);
-    // Exactly one Message-ID, a real digest, then the header comparison, in that order.
+    // Exactly one Message-ID and expiry, both in the web app's form, not expired, a real digest, then the comparison.
     const order = [
       ':count "ne" :comparator "i;ascii-numeric" "message-id" "1"',
+      `:count "ne" :comparator "i;ascii-numeric" "${SENDER_ON_BEHALF_EXPIRES_HEADER}" "1"`,
+      'if not string :regex "${onbehalfid}"',
+      'if not string :regex "${onbehalfexp}"',
+      'if not currentdate :zone "+0000" :value "le" "iso8601" "${onbehalfexp}"',
       'let "onbehalf"',
       'if not string :regex "${onbehalf}" "^[0-9a-f]{64}$"',
       `if not header :is "${SENDER_ON_BEHALF_HEADER}" "\${onbehalf}"`,
@@ -97,6 +103,7 @@ describe("sender identity policy", () => {
     // From is still checked first and unconditionally, and the tag never leaves the server.
     expect(script.indexOf('"from" "${envelope.from}"')).toBeLessThan(script.indexOf("hash("));
     expect(script).toContain(`deleteheader "${SENDER_ON_BEHALF_HEADER}";`);
+    expect(script).toContain(`deleteheader "${SENDER_ON_BEHALF_EXPIRES_HEADER}";`);
     expect(script).toContain('deleteheader "Authentication-Results";');
   });
 
