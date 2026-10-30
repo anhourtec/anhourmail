@@ -15,7 +15,6 @@ import {
   LifeBuoy,
   LogOut,
   type LucideIcon,
-  Mailbox as MailboxIcon,
   PenLine,
   Send,
   Settings,
@@ -36,7 +35,7 @@ import { Tooltip } from "@/components/tooltip";
 import { useOwnPhoto } from "./avatars";
 import { folderLabel, folderTree } from "./format";
 import type { Folder, SharedMailbox, View } from "./mail-client";
-import { Menu } from "./menu";
+import { Menu, type MenuEntry } from "./menu";
 
 const ROLE_ICON: Record<string, LucideIcon> = {
   inbox: Inbox,
@@ -48,8 +47,9 @@ const ROLE_ICON: Record<string, LucideIcon> = {
 };
 
 /**
- * The session's mailboxes: the active one (possibly a mailbox shared with the person, `activeShared`), its own other
- * sign-ins, and every mailbox shared with its person ("Shared with you", ADR-0026 §6).
+ * The session's mailboxes as the server lists them: the active one, its own other sign-ins, and every mailbox shared
+ * with its person (ADR-0026 §6). The sidebar shows the person's own mailboxes only: a shared one is opened with Open
+ * another mailbox, in a tab of its own (`activeShared` and `shared` aren't shown).
  */
 export type Mailboxes = { active: string; activeShared: boolean; others: string[]; shared: SharedMailbox[] };
 
@@ -165,7 +165,6 @@ export function Sidebar({
   onSignOut,
   onAddMailbox,
   onSwitchMailbox,
-  onOpenShared,
   onOpenAnother,
   scoped = false,
   ownHref,
@@ -187,13 +186,11 @@ export function Sidebar({
   onSignOut: () => void;
   onAddMailbox: () => void;
   onSwitchMailbox: (address: string) => void;
-  /** Opens a "Shared with you" mailbox in this tab (it becomes the session's active one). */
-  onOpenShared: (address: string) => void;
   /** "Open another mailbox": asks for an address and opens it in a new tab. */
   onOpenAnother: () => void;
   /**
-   * A tab scoped to one mailbox shared with the person (Open another mailbox): only that mailbox, no switching, and
-   * `ownHref` leads to the person's own webmail.
+   * A tab scoped to one mailbox shared with the person (Open another mailbox): only that mailbox, shown in the header
+   * like an own one, no switching, and `ownHref` (Your mailbox in the account menu) leads to the person's own webmail.
    */
   scoped?: boolean;
   ownHref?: string;
@@ -204,20 +201,30 @@ export function Sidebar({
   compose?: "ready" | "loading" | "blocked";
   composeBlockedReason?: string;
 }) {
-  const shared = mailboxes.activeShared || scoped;
   const blockedId = useId();
-  // The tiles: the session's own mailboxes, plus the shared one while it is the active one (never in a scoped tab).
+  // The tiles: the session's own mailboxes, or the one mailbox a scoped tab shows.
   const all = scoped ? [mailboxes.active] : [mailboxes.active, ...mailboxes.others];
-  // "Shared with you": the mailboxes the person may open (read and manage), not the one shown now.
-  const openable = scoped ? [] : mailboxes.shared.filter((m) => m.fullAccess);
   const tree = folders ? folderTree(folders) : [];
   const inbox = tree.find((n) => n.folder.role === "inbox")?.folder;
   const rest = tree.filter((n) => n.folder.role !== "inbox");
   const isCurrent = (f: Folder) => view?.kind === "folder" && view.id === f.id;
-  const accountMenu = scoped
+  const mailboxItems: MenuEntry[] = [
+    { heading: "Mailboxes" },
+    ...all.map((address) => ({
+      label: address,
+      mono: true,
+      checked: address === mailboxes.active,
+      onSelect: () => {
+        if (address !== mailboxes.active) onSwitchMailbox(address);
+      },
+    })),
+    { separator: true },
+  ];
+  const accountMenu: MenuEntry[] = scoped
     ? [
+        ...mailboxItems,
         {
-          label: "Go to your mailbox",
+          label: "Your mailbox",
           icon: House,
           onSelect: () => {
             if (ownHref) window.location.assign(ownHref);
@@ -226,29 +233,7 @@ export function Sidebar({
         { label: "Open another mailbox", icon: ExternalLink, onSelect: onOpenAnother },
       ]
     : [
-        { heading: "Mailboxes" },
-        ...all
-          .filter((address) => !(mailboxes.activeShared && address === mailboxes.active))
-          .map((address) => ({
-            label: address,
-            checked: address === mailboxes.active,
-            onSelect: () => {
-              if (address !== mailboxes.active) onSwitchMailbox(address);
-            },
-          })),
-        ...(openable.length > 0
-          ? [
-              { heading: "Shared with you" },
-              ...openable.map((m) => ({
-                label: m.address,
-                checked: mailboxes.activeShared && m.address === mailboxes.active.toLowerCase(),
-                onSelect: () => {
-                  if (m.address !== mailboxes.active.toLowerCase()) onOpenShared(m.address);
-                },
-              })),
-            ]
-          : []),
-        { separator: true as const },
+        ...mailboxItems,
         { label: "Add another mailbox", icon: UserPlus, onSelect: onAddMailbox },
         { label: "Open another mailbox", icon: ExternalLink, onSelect: onOpenAnother },
         { label: "Sign out", icon: LogOut, onSelect: onSignOut },
@@ -257,7 +242,8 @@ export function Sidebar({
   return (
     <div className="flex h-full min-h-0 flex-col bg-sidebar text-sidebar-foreground">
       <div className={`flex shrink-0 flex-col gap-3 pt-3 pb-2 ${collapsed ? "items-center px-2" : "px-3"}`}>
-        <div className="flex items-center gap-1.5">
+        {/* Positioned: the account menu spans this row (`fill`) when the sidebar is open. */}
+        <div className="relative flex items-center gap-1.5">
           {collapsed ? (
             <Menu
               label="Mailboxes and account"
@@ -286,13 +272,12 @@ export function Sidebar({
                   </Tooltip>
                 ))}
               </div>
-              <Menu label="Mailboxes and account" icon={EllipsisVertical} items={accountMenu} />
+              <Menu label="Mailboxes and account" icon={EllipsisVertical} items={accountMenu} fill />
             </>
           )}
         </div>
         {!collapsed && (
           <div className="flex min-w-0 flex-col gap-0.5 border-sidebar-border border-t pt-3">
-            {shared && <span className="am-micro">Shared with you</span>}
             <span className="truncate font-medium text-[14px]">{localName(mailboxes.active)}</span>
             <Tooltip label={mailboxes.active}>
               <span className="truncate font-mono text-[12px] text-muted-foreground">{mailboxes.active}</span>
@@ -386,27 +371,7 @@ export function Sidebar({
                 />
               </div>
             ))}
-            {openable.length > 0 && (
-              <>
-                {!collapsed && <p className="am-micro px-2.5 pt-4 pb-1">Shared with you</p>}
-                {collapsed && <div className="mx-2 my-2 h-px bg-sidebar-border" />}
-                {openable.map((m) => (
-                  <NavItem
-                    key={m.address}
-                    icon={MailboxIcon}
-                    label={m.address}
-                    count={0}
-                    current={mailboxes.activeShared && m.address === mailboxes.active.toLowerCase()}
-                    collapsed={collapsed}
-                    mono
-                    onClick={() => {
-                      if (m.address !== mailboxes.active.toLowerCase()) onOpenShared(m.address);
-                    }}
-                  />
-                ))}
-              </>
-            )}
-            {!shared && (
+            {!scoped && (
               <>
                 {collapsed ? <div className="mx-2 my-2 h-px bg-sidebar-border" /> : <div className="pt-3" />}
                 <NavItem
