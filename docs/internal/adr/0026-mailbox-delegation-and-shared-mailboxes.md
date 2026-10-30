@@ -1,6 +1,6 @@
 # ADR-0026: Mailbox delegation (read and manage, send as, send on behalf) and shared mailboxes, through BFF-held mailbox tokens
 
-**Status:** Accepted 2026-10-30 (maintainer decisions below; slices 1–12 built, see the dated updates)
+**Status:** Accepted 2026-10-30 (maintainer decisions below; slices 1–13 built, see the dated updates)
 
 **Maintainer decisions (2026-10-30):** behaviour follows the conventional enterprise mailbox-delegation model exactly
 (design reference, gitignored: `../private/2026-10-30-delegation-reference.md`).
@@ -327,6 +327,11 @@ existing allow-list applies unchanged. `Identity/get` is allowed only with a sen
 - Re-check of the right at send time **inside** the send (not only at page load); quota: the mailbox's own sending
   limits (it is the envelope sender, and Stalwart's throttles see it) **and** the delegate's own per-session window,
   both fail closed (rule 14, rule 27; needs a `security-reviewer` pass).
+- **Tier rule (2026-10-30, review):** a delegated send is limited by the **stricter of the shared mailbox's trust tier
+  and the sender's own mailbox's tier**, field by field (`delegatedSendingLimits` in
+  `apps/web/src/server/webmail/compose.ts`, built). Today every mailbox resolves to `new`, so it changes nothing yet;
+  when stored tiers (including `restricted`) are wired into `sendingTier()` in Phase 6, a restricted person can't send
+  through a shared mailbox and a shared mailbox's tier is never loosened by who sends from it. Keep this when wiring.
 - Audit every delegated submission in the mailbox's account log: `delegation.sent_as` / `delegation.sent_on_behalf`
   (actor = the delegate, target = the mailbox, meta `{ mailboxId, submissionId, recipients: <count> }` only — never
   addresses, subject or content, rule 24); a cancelled undo writes `delegation.send_cancelled`. The audit row is
@@ -404,6 +409,82 @@ hash can never become the constant `sha256(K|)`.
 
 `onBehalfTag` (`@anhourmail/core/webmail`) also refuses addresses or ids containing `|`, `"`, `<`, `>`, whitespace or
 control characters (`OnBehalfTagError`); the send refuses rather than falling back.
+
+**Update (2026-10-30, slice 13 built): sending as and on behalf from the webmail BFF.** All four requirements above are
+met; `05-webmail.md` "Sending from one" and `07-security.md` "Delegation" have the flow.
+
+- **Requirement 1.** A send on behalf creates, in one JMAP request with the mailbox's token, the kept copy in its Sent
+  (`Sender:`, no tag) and a temporary copy (not a draft) carrying `Sender:`, the tag and its expiry, and submits the
+  temporary one with `onSuccessDestroyEmail`; both share the BFF's Message-ID. Probed on v0.16.27 first: the email is
+  destroyed at once and the held (`HOLDFOR`) message is still delivered after the hold, and still cancellable. A
+  refused submission destroys both copies; if the implicit destroy isn't in the answer, the BFF destroys the temporary
+  copy itself. Decision 4 and residual 1 no longer apply.
+- **Requirement 2.** Core `authorizeDelegatedSend` re-checks the right uncached under the account lock immediately
+  before the submission and writes `delegation.sent_as` / `delegation.sent_on_behalf` (meta `mailboxId`,
+  `recipientCount`, `need`) before anything is submitted; `Sender:` and the tag are built right after it.
+- **Requirement 3** was already in the proxy (slice 11–12); the delegated send rebuilds the message from `DraftInput`,
+  which has no sender or header fields. **Requirement 4:** the webmail never reads the tag header of received mail.
+- **Leftover gap: decided — a short expiry in the inner hash.** Probed on the pinned server (throwaway account, a probe
+  DATA script scoped to it by `authenticated_as`, the wiring restored afterwards): Sieve `currentdate :zone "+0000"`
+  works at DATA and gives `iso8601` as `2026-10-30T09:26:37Z`, and `:value "gt"` compares that with a header value of
+  the same form as text, correctly. So `inner = sha256(K | mailbox | delegate | Message-ID | expiry)` with
+  `X-AnhourMail-On-Behalf-Expires: <UTC, whole seconds>` five minutes ahead (`ON_BEHALF_TTL_MS`); the script requires
+  exactly one expiry header in that form, refuses once `currentdate` is past it, and removes it from every submission
+  (`stack:verify`: an expired tag, a changed expiry, none, two, a non-UTC form — all refused; the accepted cases
+  carry a fresh one). What remains: the mailbox's own person reusing a tag they saw within five minutes with the same
+  Message-ID — accepted (owner-only, a race, ended by key rotation).
+- **Probe: a failed `header.message-id` read does _not_ fail the `let`.** With no Message-ID, or `Message-ID: <>`,
+  `Message-ID:` or `< >` (one header, so the count check passes), `header.message-id` reads as `""` and
+  `hash('k|' + header.message-id, 'sha256')` is `sha256("k|")` (verified against a local digest). The inner hash could
+  therefore have become a per-pair constant for an unreadable id (only the key holder can compute it, and the web app
+  never makes one — `onBehalfTag` refuses an empty id — but it is one input away from a reusable tag). The script now
+  reads the id into a variable first and refuses anything but `local@host` in letters, digits and `._%+=-`
+  (`onBehalfTag` refuses the same), before hashing; `stack:verify` sends `<>` with the tag for an empty id, and a
+  bracketless id with its matching tag, and both are refused. Also seen: `Message-ID: <a@b> <c@d>` reads as `c@d`
+  (the last), which gives nothing new (it is the same as reusing `c@d`).
+- **Choices made while building it** (deviations from §6's text): the person composes in **their own** mailbox and the
+  draft is rebuilt in the shared one at send time (attachments downloaded with their token, uploaded with the
+  mailbox's, same caps); the own draft is removed once the undo hold is over rather than at once, so undo hands it
+  back unchanged (`POST /api/webmail/send/undo` `{ submissionId, mailbox }` cancels in the shared mailbox, removes its
+  stored copy and records `delegation.send_cancelled`). What undo needs is held in the web process for the hold (as the
+  contacts auto-save is): after a restart in those seconds the message is sent and the own draft stays. Drafts saved
+  directly in a shared mailbox are not offered (slice 14 can add them). The audit meta has `recipientCount`, not a
+  submission id (the entry is written before the submission exists; `recipients` is a redacted key). A send from a
+  shared mailbox while a shared mailbox is the active one is refused (403 `own_mailbox_only`); the From picker
+  (`GET /api/webmail/senders`) lists only mailboxes reached through the active own mailbox, so the `Sender:` is always
+  that mailbox's person. A first send mints the mailbox's entry (`need: "send"`, audited open) and counts against
+  `webmailDelegatedOpen` per own mailbox. Recipients of a delegated send aren't auto-saved to contacts. Tests:
+  `apps/web/src/server/webmail/delegated-send.test.ts`, `packages/core/src/webmail/delegation.test.ts`, the int test
+  `apps/web/src/server/adapters/webmail-delegated-send.int.test.ts` (send as and on behalf delivered to Mailpit with the
+  right From / Sender and no tag stored or delivered, undo, revoked and read-and-manage-only refused), `stack:verify`.
+
+**Update (2026-10-30, slice 13 security review fixes).**
+
+- **Order:** the right is checked uncached and the send audited **before any work** in the shared mailbox (blobs, quota),
+  and checked once more, uncached and read-only (`delegatedSendCheck`), right before `Sender:` and the tag are built.
+- **No copy survives a failed send:** the copies are created in one request and submitted in a second. A method error,
+  a refusal or a lost answer destroys every unsent copy (after a lost creation answer they are found by Message-ID in
+  that mailbox's Drafts and Sent; after a lost submission answer `EmailSubmission/query` says whether it was sent — if
+  so it is a success) and records `delegation.send_failed`. A tagged copy the submission didn't destroy is destroyed
+  by the BFF, retried once, else recorded `delegation.tagged_copy_left`. Unit and int tests cover the method error and
+  both lost answers (the int test loses the real server's answer after it applied the request).
+- **Undo never opens a mailbox** and needs the entry the send used still in the session ("It has already been sent."
+  otherwise). **Decision:** undo does not re-check the send right — cancelling our own held submission only reduces
+  what is sent, so a revoke during the hold must not block it; the person's own sign-in is still proven. Its audit is
+  retried once; if it still fails the undo answers an error after the cancel.
+- **Sender name:** the `Sender:` display name is the active mailbox's own identity name (as the From picker labels it),
+  whichever own identity the draft used.
+- **Expiry fails closed:** the script passes only when `currentdate :zone "+0000" :value "le" "iso8601" <expiry>`
+  matches (probed: an expiry the comparison can't confirm — empty, past — doesn't match, so the message is refused); a
+  server without the `date` extension or with a bad zone refuses to compile the script, so it is never installed
+  (probed: compile error). `stack:verify` reads the mail server's own clock (its HTTP `Date`) for the expired case,
+  ten minutes back, and checks that it really is past.
+- **Re-review (same day):** a lost submission answer whose lookup also fails is **unknown**, kept apart from "not
+  sent": only the tagged copy is removed, the kept copy stays, `send_failed` reason `unknown`, answer `503
+send_unconfirmed` ("Check Sent before sending it again."). After a successful submission the undo hold is registered
+  before the tagged-copy cleanup, and a cleanup record that fails is only logged, so a sent message never answers 503.
+  The lookup of copies after a lost creation answer lists the folders: an `Email/query` `header: ["Message-ID", id]`
+  filter never matched a just-created message on v0.16.27 (probed, bare and bracketed, after 2 s).
 
 ## Consequences
 

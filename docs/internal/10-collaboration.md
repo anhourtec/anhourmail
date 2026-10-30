@@ -30,7 +30,10 @@ the public guides must tell the two apart.
 probes showed a person's mailbox can't become a Group and a User can't be a member of a User, and that a folder-shared
 delegate can't send. Delegation (read and manage, send as, send on behalf) is now granted per person and opened by the
 webmail BFF with the mailbox's own token; a shared mailbox is the person-less mailbox ("shared address") with members.
-Probe results P1–P10 are in the ADR. The mapping table below is kept as the 2026-10-21 record.
+Probe results P1–P10 are in the ADR. Sending as and on behalf of a delegated mailbox from the webmail is built
+(2026-10-30, ADR-0026 slice 13: always submitted from the mailbox itself; on behalf through the keyed, expiring
+exception in the sender-identity script, ADR-0019), so the "Send on behalf" gap rows below are closed for the webmail;
+mail apps still can't send on behalf. The mapping table below is kept as the 2026-10-21 record.
 
 ## Feature set and placement
 

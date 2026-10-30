@@ -1,6 +1,6 @@
 # ADR-0019: Sender identity enforcement for authenticated mail
 
-**Status:** Accepted 2026-10-21 · Updated 2026-10-30 (send-on-behalf exception, one Sender address; below)
+**Status:** Accepted 2026-10-21 · Updated 2026-10-30 (send-on-behalf exception, one Sender address; the tag's expiry and Message-ID form; below)
 
 ## Context
 
@@ -113,6 +113,31 @@ rendering questions for recipients' clients and our webmail; probe them and deci
 
 The first bullet of "Consequences" is superseded by this update: send on behalf is the keyed exception above,
 webmail only, audited by the web app (ADR-0026 §6).
+
+## Update 2026-10-30 (later): the on-behalf tag expires, and the Message-ID must be readable
+
+Built with ADR-0026 slice 13 (its dated update has the probes). The keyed exception above now also requires exactly one
+`X-AnhourMail-On-Behalf-Expires:` header in the form `YYYY-MM-DDTHH:MM:SSZ`, not yet passed by Sieve's
+`currentdate :zone "+0000"` (text comparison of two UTC values in the same form, verified on v0.16.27), and binds it
+into the inner hash: `inner = hex sha256(K | envelope | Sender | Message-ID | expiry)`. The web app sets it five minutes
+ahead. The Message-ID is read into a variable and must be `local@host` in letters, digits and `._%+=-` before it is
+hashed, because the pinned server reads an unreadable one (`<>`, empty) as `""` rather than failing the expression.
+Both headers are removed from every submission. `stack:verify` gained: an expired tag, a changed expiry, no or two
+expiry headers, a non-UTC expiry, an empty Message-ID with the tag for an empty one and a bracketless id with its
+matching tag — all refused; the accepted cases still deliver without either header. Applied to the dev server through
+the management API (`applySenderIdentityPolicy` + `ReloadSettings`, no restart); the production bootstrap applies the
+same text.
+
+The expiry test fails closed: the script refuses unless `currentdate :zone "+0000" :value "le" "iso8601" "<expiry>"`
+matches, so a comparison the server can't confirm refuses the message. Without the `date` extension, or with an
+invalid zone, the script doesn't compile and isn't installed (probed on v0.16.27; `applySenderIdentityPolicy` then
+fails and the previous script stays). `stack:verify`'s expired case uses the mail server's own clock (HTTP `Date`), ten
+minutes back.
+
+**Re-check on every Stalwart upgrade (rule 22):** that `currentdate` still answers `iso8601` as `YYYY-MM-DDTHH:MM:SSZ`
+under `:zone "+0000"` and that a comparison it can't make doesn't match (fail closed), and that an unreadable
+`header.message-id` still reads as `""` (or now fails the expression); `npm run stack:verify` covers the accepted,
+expired and malformed cases, and its negative control (a different key) must still fail the acceptance checks.
 
 ## Alternatives
 

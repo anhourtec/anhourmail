@@ -1,6 +1,6 @@
 # 02 — Mail infrastructure
 
-Last updated: 2026-10-30. Research: `research/stalwart.md`, `research/deliverability.md`.
+Last updated: 2026-10-30 (send-on-behalf tag expiry, ADR-0026 slice 13). Research: `research/stalwart.md`, `research/deliverability.md`.
 
 ## URL and hostname map
 
@@ -221,12 +221,14 @@ and 175 more`. Without `impersonate` these permissions apply to its own account 
   topmost `Received` (`07-security.md` "Authentication results in the webmail"). `stack:verify` checks the strip.
 - **Sender identity script and send on behalf** (ADR-0019, update 2026-10-30; ADR-0026 §8): authenticated mail needs
   exactly one `From:` equal to the envelope sender and, if a `Sender:` is present, exactly one `Sender:` address equal
-  to it — except the keyed send-on-behalf case: a `Sender:` that differs passes only with exactly one `Message-ID:` and
-  `X-AnhourMail-On-Behalf: hex sha256(K | hex sha256(K | mailbox | delegate | Message-ID))`, which only the web app can
-  make and which is good for that one message. `K` is
+  to it — except the keyed send-on-behalf case: a `Sender:` that differs passes only with exactly one `Message-ID:` (in
+  the web app's `local@host` form), exactly one `X-AnhourMail-On-Behalf-Expires: <UTC time>` not yet passed by the
+  server's clock, and
+  `X-AnhourMail-On-Behalf: hex sha256(K | hex sha256(K | mailbox | delegate | Message-ID | expiry))`, which only the web
+  app can make and which is good for that one message for five minutes (ADR-0026 slice 13). `K` is
   `SENDER_DELEGATION_KEY` (64 lowercase hex), compiled into the `sender-identity` system script by the dev plan
   (derived from `BETTER_AUTH_SECRET` when unset) and by the production bootstrap (private ops repository); the web app
-  holds the same value, the worker never. The tag header is removed from every submission. Changing the key = re-run
+  holds the same value, the worker never. The tag and expiry headers are removed from every submission. Changing the key = re-run
   the plan (or `applySenderIdentityPolicy` + `ReloadSettings`, no restart) and redeploy the web app together.
   `stack:verify` checks the accepted, refused and stripped cases (Mailpit and a local mailbox's stored copy) and that a forged From to the sender's own mailbox is
   refused (it is: a JMAP submission whose every recipient is throttled at `RCPT` is created as "not delivered" and

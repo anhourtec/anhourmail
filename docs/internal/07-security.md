@@ -1,6 +1,6 @@
 # 07 — Security
 
-Last updated: 2026-10-30 (new "Delegation" section: opening delegated mailboxes in the webmail and the gate; delegation grants and Convert to shared mailbox, ADR-0026; leavers lose mailbox sign-in; data export and account deletion; staff support access; profile photos).
+Last updated: 2026-10-30 ("Delegation": sending as and on behalf of a delegated mailbox, the tag never stored and its five-minute expiry, slice 13; opening delegated mailboxes in the webmail and the gate; delegation grants and Convert to shared mailbox, ADR-0026; leavers lose mailbox sign-in; data export and account deletion; staff support access; profile photos).
 
 ## Threat model
 
@@ -402,7 +402,33 @@ one needs no permission of its own: the grant is the authorisation, checked agai
   (the proof's cache).
 - **Sender fields from the client are refused.** The proxy refuses any `Email/set` or `Email/import` carrying a
   `sender` property, a `header:*` property or the `X-AnhourMail-On-Behalf` header, so no session can attach a `Sender:`
-  or an on-behalf tag; delegated sending (slice 13) builds both server-side only.
+  or an on-behalf tag; delegated sending builds both server-side only, from the structured draft (`DraftInput` has no
+  such fields).
+- **Sending from a delegated mailbox** (slice 13, `05-webmail.md` "Sending from one"). Always from the mailbox itself:
+  its token, its own identity (its address, never an alias) and its address as envelope sender, so its Sent folder gets
+  the copy and DKIM aligns with `From` (P5, P10). The right is checked **uncached before any work in that mailbox** and
+  the send is audited (`delegation.sent_as` / `delegation.sent_on_behalf`, a recipient count only) at that point — if
+  the audit append fails nothing is done; it is checked once more, uncached, right before `Sender:` and the tag are
+  built, so a revoke at any point before the submission is refused (tested). A send stopped after its audit entry, for
+  any reason including a lost answer, is recorded `delegation.send_failed` and leaves no copy behind. Send as wins when
+  both send rights are held. Limits: the **stricter of the shared mailbox's and the sender's own trust tier** (a
+  `restricted` sender can't send through a shared mailbox), charged to the shared mailbox's windows and the sending
+  session's, both fail closed, plus the mail server's own throttles. Read and manage alone never sends (404, like every
+  other refusal).
+- **No stored message holds an on-behalf tag.** The tag and its expiry go only on a temporary copy that is submitted
+  with `onSuccessDestroyEmail` in the same request as its creation; the copy kept in Sent is created separately without
+  them (same Message-ID); a refused or failed send destroys both, and the BFF destroys the temporary copy itself if the
+  mail server didn't (retried once; else recorded `delegation.tagged_copy_left`). The tag is bound to a Message-ID the BFF makes (`<uuid>@<mailbox domain>`) and to an expiry five
+  minutes ahead (`X-AnhourMail-On-Behalf-Expires`, checked by the script against the server's `currentdate`, fail
+  closed: only a comparison proving "now ≤ expiry" passes; both headers removed from every submission). This closes ADR-0026's "leftover gap": a tag seen during the moment the
+  temporary copy exists (a mail app syncing Drafts) or left by a crash is useless after five minutes, even with the
+  same Message-ID; the remaining window — the mailbox's own person reusing a tag they saw, within five minutes, for
+  the same Message-ID with any body — is accepted (owner-only; nobody can sign in as a shared mailbox; key rotation
+  ends every tag). The script also refuses a Message-ID not in the web app's `local@host` form before hashing,
+  because the pinned server reads an unreadable one (`<>`, empty) as `""` instead of failing the expression (probed
+  2026-10-30), which would have hashed to a per-pair constant.
+- **Received mail's tag means nothing.** Inbound mail doesn't run the sender script; the webmail never reads, shows or
+  trusts an `X-AnhourMail-On-Behalf` header on received mail ("on behalf of" comes only from `Sender:`).
 - **Revocation.** A revoke deletes the row; the next use is refused and the entry dropped from that session. Tokens
   stay valid at the mail server until they expire (≤ 1 h access, 30 days refresh) unless the mailbox's password
   changes; only our sealed session store holds them (residual 3). A refused refresh or a mail-server 403 drops only

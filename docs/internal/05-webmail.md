@@ -1,6 +1,6 @@
 # 05 — Webmail
 
-Last updated: 2026-10-30 (mailboxes shared with you: the delegation BFF, ADR-0026; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
+Last updated: 2026-10-30 (remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
 notifications; quoted replies; compose image placeholders; first-sign-in password step; sign-in links not pre-filled).
 
 **Status (2026-10-22): slice 1 is built** — webmail sign-in (OAuth code flow + PKCE, tokens sealed server-side), the
@@ -550,7 +550,7 @@ A fresh sign-in to a mailbox Stalwart already disabled fails at Stalwart with th
 it can't reach the check above; the suspension is named only to a browser that signed in to that address before
 (07-security.md "Webmail sign-in and suspension").
 
-### Mailboxes shared with you (delegation, ADR-0026 §6; BFF built 2026-10-30, webmail UI and sending next)
+### Mailboxes shared with you (delegation, ADR-0026 §6; BFF and sending built 2026-10-30, webmail UI next)
 
 A person given **Read and manage** on another mailbox of their account opens it in their own webmail session, without
 its password and without signing in again (maintainer decision 2: no extra step). The BFF holds that mailbox's own
@@ -561,7 +561,8 @@ token; the browser never does (rule 21).
   mailbox the session's people hold a right on now (`address`, `via` — the own mailbox it comes through —,
   `fullAccess`, `sendAs`, `sendOnBehalf`, `open`). The people are found from the session's own mailboxes'
   `mailbox.user_id` (a shared mailbox signed in by password maps nothing). Listing mints nothing; it also drops opened
-  entries whose grant is gone.
+  entries with no right left (an entry opened to send from stays while a send right does; each use is checked for
+  what it needs).
 - **Opening one.** `POST /api/webmail/mailboxes/delegated` `{ address }` (a "Shared with you" entry, or the address
   typed in **Open another mailbox**; tier `webmailDelegatedOpen`, fail closed). Core `openDelegatedMailbox` checks
   everything now under the account lock, then the web app mints a throwaway credential with the operations key,
@@ -593,13 +594,72 @@ token; the browser never does (rule 21).
     session back to the mailbox it came through; the person's own session never ends over it. The access and
     first-password gates check the session's own mailbox (`via`) while a delegated one is active.
 - **The proxy.** `checkJmapRequest` keeps its single-`accountId` rule (for a delegated entry, that mailbox's own
-  account) and refuses `Identity/get` there without a send right (none is used until slice 13). `Email/set` and
+  account) and refuses `Identity/get` there without a send right. `Email/set` and
   `Email/import` that would set `sender`, any `header:*` property or the `X-AnhourMail-On-Behalf` header are refused
   outright, before the allow-list (ADR-0026 §8 requirement 3); drafts are built server-side from `DraftInput`, which
   has no such fields.
-- **Not built yet:** sending as or on behalf (the From picker, the cross-mailbox draft move, the tag; slice 13), the
-  webmail UI ("Shared with you" in the switcher and sidebar, **Open another mailbox**, the refusal page; slice 14), and
-  the best-effort Redis scrub of sealed tokens after a revoke (§7; the gate is the control).
+- **The From picker** (slice 13). `GET /api/webmail/senders` (own mailbox only, tier `webmail`) answers
+  `{ identities, shared }`: the active mailbox's own identities, then every mailbox shared with its person (through the
+  active mailbox) that they may send from, `{ mailbox, mode, label }` with `mode` `send_as` (label the mailbox's address)
+  or `send_on_behalf` (label "<their sender name> on behalf of <mailbox>"); send as wins when both are held. Nothing is
+  minted.
+- **Sending from one** (slice 13, revised after review; `WebmailService.send` with `from`, `POST /api/webmail/send`
+  `{ draftId, identityId, from }`). The person composes in their own mailbox (drafts are saved there as before, from
+  their own identity). At send time, in this order:
+  1. the draft passes the usual checks against **the stricter of the shared mailbox's and the sender's own sending
+     tier** (`delegatedSendingLimits`, field by field);
+  2. that mailbox's entry is opened for sending (core `openDelegatedMailbox` with `need: "send"`, audited; the mint
+     also counts against `webmailDelegatedOpen` per own mailbox, fail closed) or reused, and passes the gate for a send
+     right;
+  3. the right is checked **uncached** and the send audited (`delegation.sent_as` / `delegation.sent_on_behalf`, core
+     `authorizeDelegatedSend`) **before any work in that mailbox** — no blob copied, no quota charged without it;
+  4. its roles and its own identity (its address, never an alias) are read with its token; the draft is rebuilt there
+     from its structured fields (`DraftInput` again, HTML re-sanitised; attachments downloaded with the person's token
+     and uploaded with the mailbox's, same caps); the quota windows of the mailbox and the session are charged (fail
+     closed);
+  5. the right is checked once more, uncached and read-only (`delegatedSendCheck`), and `Sender:` and the tag are
+     built right after;
+  6. the copies are created in one request and submitted in a second, so their ids are known whatever happens:
+     - **send as:** created in its Drafts (`From:` its identity, a Message-ID made here) and submitted from its
+       identity with envelope sender = the mailbox; `onSuccessUpdateEmail` moves it to its Sent;
+     - **send on behalf:** two copies with the same Message-ID (`<uuid>@<mailbox domain>`): the kept copy in its Sent
+       (`Sender:` the active mailbox's address, named with that mailbox's own identity name, as the From picker labels
+       it), and a temporary copy (not a draft) with the same `Sender:` plus `X-AnhourMail-On-Behalf-Expires` (five
+       minutes ahead) and `X-AnhourMail-On-Behalf` (`onBehalfTag`). Only the temporary copy is submitted, with
+       `onSuccessDestroyEmail` (verified on v0.16.27: the held message is still delivered, and still cancellable,
+       after its email is destroyed); no stored message ever holds a tag. If the submission didn't destroy it, the BFF
+       does (retried once); one that still can't be removed is recorded `delegation.tagged_copy_left` (its tag expires
+       within minutes). No key configured → 503 for sends on behalf (send as keeps working).
+  7. **Anything that stops it after step 3** — a refusal, the quota, the last check, a method error or an answer lost
+     in transit — destroys every copy that wasn't sent (after a lost creation answer the BFF finds them by Message-ID
+     among the latest in that mailbox's Drafts and Sent; after a lost submission answer it asks `EmailSubmission/query`
+     whether the copy was submitted, and if so it is a normal success) and records `delegation.send_failed` (meta
+     `reason`), so a "sent" entry with no submission is visible.
+     If the submission answer was lost **and** the mail server can't be asked, the send is **unknown**, not "not sent":
+     only the tagged copy is removed, the kept copy stays, `delegation.send_failed` gets reason `unknown`, and the
+     answer is `503 send_unconfirmed` "We couldn't confirm whether this was sent. Check Sent before sending it again."
+     A sent message always answers as sent: the undo hold is registered first, and a cleanup record that can't be
+     written is only logged. (Copies are found by listing the folders, not by an `Email/query` header filter, which
+     never matched a just-created message on v0.16.27.)
+
+  The person's own draft stays until the undo hold is over and is then removed (only if it is still a BFF-built
+  draft). **Undo** (`POST /api/webmail/send/undo` `{ submissionId, mailbox }`) uses only the entry the send used, still
+  in the session — it never opens a mailbox (no credential minted; without the entry: "It has already been sent.").
+  It does **not** re-check the send right (decision: cancelling the BFF's own held submission only reduces what is
+  sent, so a revoke during the hold doesn't block it); the person's own sign-in is still proven first. It cancels the
+  submission, removes the stored copy, hands the own draft back and records `delegation.send_cancelled` (retried once;
+  if it still can't be written the answer is an error after the cancel, so a missing audit row is never silent). What
+  undo needs is held in the web process for the hold (a restart in those seconds: the message is sent, the own draft
+  stays). Recipients of a delegated send are not auto-saved to contacts. Refusals: no send right, read and manage only,
+  another account's mailbox, an unknown address → the same 404; a shared mailbox active → 403 `own_mailbox_only`
+  (sending is from the person's own tab).
+
+- **Received mail's tag means nothing** (ADR-0026 §8 requirement 4): inbound MX mail doesn't run the sender script, so an
+  `X-AnhourMail-On-Behalf` header on received mail is never read, shown or trusted by the webmail; "on behalf of"
+  comes only from `Sender:`, like any other message.
+- **Not built yet:** the webmail UI ("Shared with you" in the switcher and sidebar, **Open another mailbox**, the
+  refusal page, From picker labels; slice 14), drafts saved directly in a shared mailbox, and the best-effort Redis
+  scrub of sealed tokens after a revoke (§7; the gate is the control).
 
 ### Push
 
@@ -659,8 +719,12 @@ Built 2026-10-29. `server/webmail/{sanitize,image-proxy,remote-image}.ts`, `app/
   An expired link (410) makes the reader load the message again for fresh links, once. Images that fail stay
   placeholders and the notice says how many.
 - **Without asking:** `remoteImages` `always`; `contacts` when the From address is on a contact card (the reader's
-  known-addresses set); or a remembered sender (`senderKey` in `imageSenders`). "Always load from this sender" /
-  "Stop loading from this sender" on the notice; "Forget all" in Reading settings. Both `contacts` and remembered
+  known-addresses set); or a remembered sender (`senderKey` in `imageSenders`). For a verified sender not yet
+  remembered, "Load images" opens an inline choice in the notice, "Just this once" / "Always for <address>" (focus
+  moves to the first; Escape closes it and returns focus); "Always" remembers and loads. Without a sender key it
+  loads at once and the notice says why it isn't remembered (below). After loading, "Stop loading from this sender" /
+  "Always load from this sender" toggles it. The decision is `rememberOffer` in `remote-images.ts`; "Forget all" in
+  Reading settings. Both `contacts` and remembered
   senders need a **verified From** (`senderVerified` in `image-proxy.ts`): our own trusted Authentication-Results show
   DMARC passing for the From domain or DKIM passing for it or a parent domain. A message with no results of ours is
   not verified: a copy forwarded by a mailbox's redirect rule arrives that way whatever its From says (security-audit
@@ -669,7 +733,9 @@ Built 2026-10-29. `server/webmail/{sanitize,image-proxy,remote-image}.ts`, `app/
   verified.
 - **Notice copy.** Blocked: "N remote images blocked · N trackers removed — Senders can't see when or where you
   opened this. Loading them goes through our privacy proxy, so the sender never sees your IP address." Loaded:
-  "Images loaded through our privacy proxy — The sender can't see your IP address or your browser."
+  "Images loaded through our privacy proxy — The sender can't see your IP address or your browser." Unverified
+  sender (no sender key, mode not `always`), in both states: "We can't confirm this message came from <domain>, so
+  we'll ask again next time." (domain in mono; no protocol names in the UI).
 - **Limits** (`REMOTE_IMAGES` in `packages/shared/src/webmail.ts`, published): 5 MB per image, 100 per message,
   3 redirects, 10 s, links valid 60 min, 500 remembered senders. Rate tier `webmailImage`.
 - Print, forward and "view original" run through the same sanitiser and sandbox. Attachments download with `Content-Disposition: attachment` and are never rendered inline on the app origin (all three of HourMail's XSS paths are closed).
