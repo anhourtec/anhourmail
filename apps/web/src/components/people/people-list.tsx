@@ -24,6 +24,7 @@ import {
 } from "../console/data-list";
 import { ConfirmDialog } from "../console/flyout";
 import { StatusText } from "../console/status-text";
+import { type HandOver, RemovePersonDialog } from "./remove-person-dialog";
 
 export type PersonRow = {
   userId: string;
@@ -39,6 +40,8 @@ export type PersonRow = {
   joinedAt: number;
   canChangeRole: boolean;
   canRemove: boolean;
+  /** Addresses of the mailboxes they own (null when the viewer can't see mailboxes). */
+  mailboxes: string[] | null;
 };
 
 export type InviteRow = {
@@ -74,6 +77,7 @@ export function PeopleList({
   openId,
   inviteHref,
   docsHref,
+  handOver = null,
 }: {
   accountId: string;
   people: PersonRow[];
@@ -81,6 +85,8 @@ export function PeopleList({
   openId: string | null;
   inviteHref: string | null;
   docsHref: string;
+  /** What removing one person offers for their mailboxes ("Give full access to …"; `RemovePersonDialog`). */
+  handOver?: HandOver;
 }) {
   const router = useRouter();
   const [refreshing, startRefresh] = useTransition();
@@ -364,13 +370,26 @@ export function PeopleList({
         )}
       </section>
 
-      {confirm?.kind === "remove" && (
+      {confirm?.kind === "remove" && confirm.ids.length === 1 && (
+        <RemovePersonDialog
+          accountId={accountId}
+          userId={confirm.ids[0] ?? ""}
+          label={label(confirm.ids[0] ?? "")}
+          mailboxes={people.find((p) => p.userId === confirm.ids[0])?.mailboxes ?? null}
+          handOver={handOver}
+          onCancel={() => {
+            setConfirm(null);
+          }}
+          onRemoved={() => {
+            selection.clear();
+            setConfirm(null);
+            router.refresh();
+          }}
+        />
+      )}
+      {confirm?.kind === "remove" && confirm.ids.length > 1 && (
         <ConfirmDialog
-          title={
-            confirm.ids.length === 1
-              ? `Remove ${label(confirm.ids[0] ?? "")}?`
-              : `Remove ${String(confirm.ids.length)} people?`
-          }
+          title={`Remove ${String(confirm.ids.length)} people?`}
           confirmLabel="Remove"
           pendingLabel="Removing…"
           onCancel={() => {
@@ -383,17 +402,15 @@ export function PeopleList({
             }));
             selection.clear();
             router.refresh();
-            if (confirm.ids.length === 1 && r.failed[0]) return r.failed[0];
-            if (confirm.ids.length > 1) {
-              setNotice({ error: r.failed.length > 0, text: bulkMessage(r, "Removed", "person", "people") });
-            }
+            setNotice({ error: r.failed.length > 0, text: bulkMessage(r, "Removed", "person", "people") });
             setConfirm(null);
             return null;
           }}
         >
           <p>
-            {confirm.ids.length === 1 ? "They lose" : "They each lose"} access to this account at once. Their mailboxes
-            and mail stay, as shared addresses with their sign-in turned off.
+            They each lose access to this account at once. Their mailboxes and mail stay, as shared mailboxes with their
+            sign-in turned off. To give someone access to a person&apos;s mailbox as part of the removal, remove them
+            one at a time.
           </p>
         </ConfirmDialog>
       )}

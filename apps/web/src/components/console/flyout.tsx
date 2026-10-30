@@ -162,6 +162,7 @@ export function ConfirmDialog({
   pendingLabel,
   onConfirm,
   onCancel,
+  actions = true,
 }: {
   title: string;
   children: ReactNode;
@@ -170,6 +171,8 @@ export function ConfirmDialog({
   /** Resolves to an error message to show, or null when done (the caller closes the dialog). */
   onConfirm: () => Promise<string | null>;
   onCancel: () => void;
+  /** Show Cancel and the confirm button (false while the content asks for something else first, e.g. a step-up). */
+  actions?: boolean;
 }) {
   const box = useRef<HTMLDivElement>(null);
   useModal(box, onCancel);
@@ -185,7 +188,7 @@ export function ConfirmDialog({
         aria-modal="true"
         aria-labelledby={`${id}-t`}
         aria-describedby={`${id}-d`}
-        className="relative flex w-full max-w-md flex-col gap-4 rounded-xl border bg-background p-5 shadow-xl"
+        className="relative flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col gap-4 overflow-y-auto rounded-xl border bg-background p-5 shadow-xl"
       >
         <h2 id={`${id}-t`} className="am-h3">
           {title}
@@ -198,7 +201,7 @@ export function ConfirmDialog({
             {error}
           </p>
         )}
-        <div className="flex flex-wrap justify-end gap-2">
+        <div className={`flex flex-wrap justify-end gap-2 ${actions ? "" : "hidden"}`}>
           <button
             type="button"
             data-autofocus

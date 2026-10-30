@@ -10,6 +10,7 @@ import { ACCOUNT_ROLES, type AccountRole, ROLE_LABELS } from "@anhourmail/shared
 import { callApi } from "../api";
 import { ConfirmDialog, inlineActionClass } from "../console/flyout";
 import { inputClass, secondaryButtonClass } from "../ui-classes";
+import { type HandOver, RemovePersonDialog } from "./remove-person-dialog";
 
 /**
  * Change someone's role (Owners only; the server checks again). Making someone an Owner asks first: Owners can do
@@ -114,7 +115,8 @@ export function RoleForm({
 }
 
 /**
- * Remove someone from the account (two steps). Their mailboxes and mail stay, person-less with sign-in off. `closeHref`: where to go after (the
+ * Remove someone from the account (two steps; `RemovePersonDialog`). Their mailboxes and mail stay, as shared mailboxes
+ * with their sign-in off, optionally with "Give full access to …" (`handOver`). `closeHref`: where to go after (the
  * details panel closes, since the person is gone).
  */
 export function RemovePerson({
@@ -122,11 +124,15 @@ export function RemovePerson({
   userId,
   label,
   closeHref,
+  mailboxes,
+  handOver,
 }: {
   accountId: string;
   userId: string;
   label: string;
   closeHref: string;
+  mailboxes: string[] | null;
+  handOver: HandOver;
 }) {
   const router = useRouter();
   const [confirming, setConfirming] = useState(false);
@@ -144,29 +150,21 @@ export function RemovePerson({
         Remove
       </button>
       {confirming && (
-        <ConfirmDialog
-          title={`Remove ${label}?`}
-          confirmLabel="Remove"
-          pendingLabel="Removing…"
+        <RemovePersonDialog
+          accountId={accountId}
+          userId={userId}
+          label={label}
+          mailboxes={mailboxes}
+          handOver={handOver}
           onCancel={() => {
             setConfirming(false);
           }}
-          onConfirm={async () => {
-            const res = await callApi(`/api/accounts/${accountId}/people/${encodeURIComponent(userId)}`, {
-              method: "DELETE",
-            });
-            if (!res.ok) return res.message;
+          onRemoved={() => {
             setConfirming(false);
             router.push(closeHref, { scroll: false });
             router.refresh();
-            return null;
           }}
-        >
-          <p>
-            They lose access to this account at once. Their mailboxes and mail stay, as shared addresses with their
-            sign-in turned off.
-          </p>
-        </ConfirmDialog>
+        />
       )}
     </>
   );
