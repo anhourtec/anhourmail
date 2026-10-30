@@ -71,6 +71,10 @@ export const LIMITS = {
   emailVerification: { limit: 5, windowSec: 3600, by: "caller", failMode: "closed" },
   // Each call emails an outside address (forwarding confirmation); a per-mailbox daily cap applies in the service.
   forwardingVerify: { limit: 10, windowSec: 3600, by: "caller", failMode: "closed" },
+  // Mailbox delegation (ADR-0026 §9): a batch of grants and revokes on a mailbox's three lists, and "Convert to shared
+  // mailbox". Each needs a fresh step-up and changes nothing on the mail server but the conversion's password job, so
+  // it fails open like other console writes.
+  delegationManage: { limit: 30, windowSec: 600, by: "caller", failMode: "open" },
 } as const satisfies Record<string, RateLimit>;
 
 export type LimitName = keyof typeof LIMITS;
