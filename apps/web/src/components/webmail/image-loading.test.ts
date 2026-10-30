@@ -5,7 +5,15 @@ import { linkingSanitizer } from "@/server/webmail/image-proxy";
 
 import { createMailClient, IMAGE_LINK_EXPIRED, imageDataUrl } from "./mail-client";
 import { frameDocument } from "./message-frame";
-import { imageLinks, isLoadedImageType, loadsWithoutAsking, withLoadedImages } from "./remote-images";
+import {
+  imageLinks,
+  isLoadedImageType,
+  loadsWithoutAsking,
+  rememberOffer,
+  shownAddress,
+  shownDomain,
+  withLoadedImages,
+} from "./remote-images";
 
 /** The reader's HTML as the server makes it: placeholders with image links, no addresses. */
 const served = () =>
@@ -63,6 +71,34 @@ describe("loading images into the message frame", () => {
     expect(loadsWithoutAsking({ mode: "contacts", senders: [] }, null, "x@example.org", contacts, true)).toBe(false);
     expect(loadsWithoutAsking({ mode: "contacts", senders: [] }, null, undefined, contacts)).toBe(false);
     expect(loadsWithoutAsking({ mode: "always", senders: [] }, null, undefined, contacts)).toBe(true);
+  });
+
+  it("offers once or always only for a verified sender, and says why not otherwise", () => {
+    const key = "k".repeat(22);
+    const ask = { mode: "ask", senders: [] } as const;
+    expect(rememberOffer(ask, key, "news@club.example")).toEqual({ kind: "choose", sender: "news@club.example" });
+    expect(rememberOffer({ mode: "contacts", senders: [key] }, key, "news@club.example")).toEqual({
+      kind: "remembered",
+    });
+    // No sender key means the server couldn't verify the From: load once, never remember, explain.
+    expect(rememberOffer(ask, null, "news@Club.Example")).toEqual({ kind: "unverified", domain: "club.example" });
+    expect(rememberOffer({ mode: "contacts", senders: [] }, null, "friend@example.org")).toEqual({
+      kind: "unverified",
+      domain: "example.org",
+    });
+    expect(rememberOffer(ask, null, undefined)).toEqual({ kind: "unverified", domain: null });
+    expect(rememberOffer(ask, null, "no-at-sign")).toEqual({ kind: "unverified", domain: null });
+    expect(rememberOffer(ask, null, "trailing@")).toEqual({ kind: "unverified", domain: null });
+    // Images load anyway, so there is nothing to ask about next time.
+    expect(rememberOffer({ mode: "always", senders: [] }, null, "x@example.org")).toEqual({ kind: "none" });
+    expect(rememberOffer({ mode: "always", senders: [] }, key, "x@example.org")).toEqual({
+      kind: "choose",
+      sender: "x@example.org",
+    });
+    // Without image settings (an attached message) nothing is remembered or explained.
+    expect(rememberOffer(undefined, key, "x@example.org")).toEqual({ kind: "none" });
+    expect(rememberOffer(undefined, null, "x@example.org")).toEqual({ kind: "none" });
+    expect(rememberOffer(ask, key, undefined)).toEqual({ kind: "none" });
   });
 
   it("knows the raster types the proxy serves", () => {
@@ -124,5 +160,14 @@ describe("the mail client's remoteImage", () => {
     expect(await imageDataUrl(new Blob([new Uint8Array([1, 2, 3])], { type: "image/gif" }))).toBe(
       "data:image/gif;base64,AQID",
     );
+  });
+});
+
+describe("shown sender and domain", () => {
+  it("drops invisible characters and shows lookalike domains in their xn-- form", () => {
+    expect(shownDomain("Harbour-Reading.example")).toBe("harbour-reading.example");
+    expect(shownDomain("p\u0430ypal.example")).toBe("xn--pypal-4ve.example");
+    expect(shownDomain("evil\u202Eelpmaxe.com")).toBe("evilelpmaxe.com");
+    expect(shownAddress("news\u200B@p\u0430ypal.example")).toBe("news@xn--pypal-4ve.example");
   });
 });

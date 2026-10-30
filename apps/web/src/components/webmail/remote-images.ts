@@ -123,3 +123,57 @@ export function loadsWithoutAsking(
   if (senderKey !== null && policy.senders.includes(senderKey)) return true;
   return policy.mode === "contacts" && verified && from !== undefined && contacts.has(from.toLowerCase());
 }
+
+/**
+ * What "Load images" can offer about remembering the sender:
+ * - `choose`: a verified sender not yet remembered — ask "Just this once" or "Always for <sender>";
+ * - `remembered`: already remembered — load, and offer "Stop loading from this sender" afterwards;
+ * - `unverified`: the From isn't verified (no sender key), so it can't be remembered — load once and say why
+ *   (`domain` is the From address's domain, or null when there is none);
+ * - `none`: nothing to remember (no image settings here, or every message's images load anyway).
+ */
+export type RememberOffer =
+  | { kind: "choose"; sender: string }
+  | { kind: "remembered" }
+  | { kind: "unverified"; domain: string | null }
+  | { kind: "none" };
+
+/** Direction controls and zero-width characters: they can reorder or hide parts of an address on screen. */
+const INVISIBLE = /[\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g;
+
+/**
+ * A domain as the notice shows it: invisible characters removed and, when it isn't plain ASCII, its `xn--` form, so a
+ * lookalike (a Cyrillic "а" for "a") can't pass for a familiar name.
+ */
+export function shownDomain(domain: string): string {
+  const clean = domain.replace(INVISIBLE, "").toLowerCase();
+  if (/^[\x21-\x7e]*$/.test(clean)) return clean;
+  try {
+    return new URL(`http://${clean}`).hostname;
+  } catch {
+    return clean;
+  }
+}
+
+/** An address as the notice shows it: the domain through `shownDomain`, invisible characters removed. */
+export function shownAddress(address: string): string {
+  const at = address.lastIndexOf("@");
+  const local = (at > 0 ? address.slice(0, at) : address).replace(INVISIBLE, "");
+  return at > 0 ? `${local}@${shownDomain(address.slice(at + 1))}` : local;
+}
+
+export function rememberOffer(
+  policy: ImagePolicy | undefined,
+  senderKey: string | null,
+  from: string | undefined,
+): RememberOffer {
+  if (policy === undefined) return { kind: "none" };
+  if (senderKey !== null) {
+    if (policy.senders.includes(senderKey)) return { kind: "remembered" };
+    return from ? { kind: "choose", sender: shownAddress(from) } : { kind: "none" };
+  }
+  if (policy.mode === "always") return { kind: "none" };
+  const at = from?.lastIndexOf("@") ?? -1;
+  const domain = from !== undefined && at > 0 && at < from.length - 1 ? shownDomain(from.slice(at + 1)) : null;
+  return { kind: "unverified", domain };
+}

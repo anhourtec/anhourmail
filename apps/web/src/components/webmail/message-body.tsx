@@ -30,7 +30,14 @@ import { Modal } from "./dialogs";
 import { displayName, fileKind, fileSize, fullDate, subjectOf } from "./format";
 import { IMAGE_LINK_EXPIRED, type MailClient } from "./mail-client";
 import { MessageFrame } from "./message-frame";
-import { type ImagePolicy, imageLinks, loadsWithoutAsking, withLoadedImages } from "./remote-images";
+import {
+  type ImagePolicy,
+  imageLinks,
+  loadsWithoutAsking,
+  type RememberOffer,
+  rememberOffer,
+  withLoadedImages,
+} from "./remote-images";
 
 const KIND_ICON: Record<ReturnType<typeof fileKind>, LucideIcon> = {
   image: FileImage,
@@ -463,8 +470,7 @@ function ImageNotice({
   loadable,
   trackers,
   failed,
-  remembered,
-  canRemember,
+  offer,
   onLoad,
   onRemember,
 }: {
@@ -473,11 +479,23 @@ function ImageNotice({
   loadable: number;
   trackers: number;
   failed: number;
-  remembered: boolean;
-  canRemember: boolean;
+  offer: RememberOffer;
   onLoad: () => void;
   onRemember: (on: boolean) => void;
 }) {
+  const [choosing, setChoosing] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  const loadButton = useRef<HTMLButtonElement>(null);
+  const firstChoice = useRef<HTMLButtonElement>(null);
+  const reopen = useRef(false);
+  useEffect(() => {
+    if (choosing) firstChoice.current?.focus();
+    else if (reopen.current) {
+      reopen.current = false;
+      loadButton.current?.focus();
+    }
+  }, [choosing]);
+
   const removed = trackers > 0 ? ` · ${plural(trackers, "tracker")} removed` : "";
   const title = [
     count > 0 ? `${plural(count, "remote image")} blocked` : null,
@@ -487,11 +505,33 @@ function ImageNotice({
     .join(" · ")
     .replace(/^./, (c) => c.toUpperCase());
   const button =
-    "inline-flex h-8 shrink-0 items-center rounded-lg border bg-background px-3 text-[12.5px] transition-colors hover:bg-accent disabled:opacity-60";
+    "inline-flex h-8 min-w-0 max-w-full shrink-0 items-center gap-1 rounded-lg border bg-background px-3 text-[12.5px] transition-colors hover:bg-accent disabled:opacity-60";
   const link = "text-left text-[12.5px] text-primary underline-offset-2 hover:underline";
+  const canRemember = offer.kind === "choose" || offer.kind === "remembered";
+  const unverified =
+    offer.kind === "unverified" ? (
+      <p className="am-micro">
+        {offer.domain ? (
+          <>
+            We can't confirm this message came from <bdi className="font-mono">{offer.domain}</bdi>, so we'll ask again
+            next time.
+          </>
+        ) : (
+          "We can't confirm who sent this message, so we'll ask again next time."
+        )}
+      </p>
+    ) : null;
+  /** After a choice the buttons go away: keep focus in the notice, which announces the result. */
+  const choose = (always: boolean) => {
+    setChoosing(false);
+    box.current?.focus();
+    if (always) onRemember(true);
+    onLoad();
+  };
+  const noticeClass = "flex flex-wrap items-start gap-3 rounded-xl border bg-muted/60 px-4 py-3 outline-none";
   if (state === "loaded") {
     return (
-      <div role="status" className="flex flex-wrap items-start gap-3 rounded-xl border bg-muted/60 px-4 py-3">
+      <div ref={box} tabIndex={-1} role="status" className={noticeClass}>
         <ImageIcon className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <p className="font-medium text-[13px]">Images loaded through our privacy proxy{removed}</p>
@@ -499,23 +539,24 @@ function ImageNotice({
             The sender can't see your IP address or your browser
             {failed > 0 ? `. ${plural(failed, "image")} couldn't be loaded.` : "."}
           </p>
+          {unverified}
         </div>
         {canRemember && (
           <button
             type="button"
             className={link}
             onClick={() => {
-              onRemember(!remembered);
+              onRemember(offer.kind !== "remembered");
             }}
           >
-            {remembered ? "Stop loading from this sender" : "Always load from this sender"}
+            {offer.kind === "remembered" ? "Stop loading from this sender" : "Always load from this sender"}
           </button>
         )}
       </div>
     );
   }
   return (
-    <div role="status" className="flex flex-wrap items-start gap-3 rounded-xl border bg-muted/60 px-4 py-3">
+    <div ref={box} tabIndex={-1} role="status" className={noticeClass}>
       <ImageOff className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <p className="font-medium text-[13px]">{title}</p>
@@ -524,24 +565,59 @@ function ImageNotice({
             ? "Senders can't see when or where you opened this. Loading them goes through our privacy proxy, so the sender never sees your IP address."
             : "Senders can't see when or where you opened this."}
         </p>
-        {loadable > 0 && canRemember && (
-          <button
-            type="button"
-            className={`${link} mt-1 w-fit`}
-            disabled={state === "loading"}
-            onClick={() => {
-              onRemember(true);
+        {loadable > 0 && unverified}
+      </div>
+      {loadable > 0 &&
+        (choosing && offer.kind === "choose" ? (
+          <div
+            role="group"
+            aria-label="Load images from this sender"
+            className="flex min-w-0 basis-full flex-wrap gap-2 pl-7"
+            onKeyDown={(e) => {
+              if (e.key !== "Escape") return;
+              e.preventDefault();
+              e.stopPropagation();
+              reopen.current = true;
+              setChoosing(false);
             }}
           >
-            Always load from this sender
+            <button
+              ref={firstChoice}
+              type="button"
+              className={button}
+              onClick={() => {
+                choose(false);
+              }}
+            >
+              Just this once
+            </button>
+            <button
+              type="button"
+              className={button}
+              title={offer.sender}
+              onClick={() => {
+                choose(true);
+              }}
+            >
+              <span className="shrink-0 whitespace-nowrap">Always for</span>{" "}
+              <bdi className="min-w-0 truncate font-mono">{offer.sender}</bdi>
+            </button>
+          </div>
+        ) : (
+          <button
+            ref={loadButton}
+            type="button"
+            className={button}
+            disabled={state === "loading"}
+            aria-haspopup={offer.kind === "choose" ? "true" : undefined}
+            onClick={() => {
+              if (offer.kind === "choose") setChoosing(true);
+              else onLoad();
+            }}
+          >
+            {state === "loading" ? "Loading images…" : "Load images"}
           </button>
-        )}
-      </div>
-      {loadable > 0 && (
-        <button type="button" className={button} disabled={state === "loading"} onClick={onLoad}>
-          {state === "loading" ? "Loading images…" : "Load images"}
-        </button>
-      )}
+        ))}
     </div>
   );
 }
@@ -704,7 +780,7 @@ export function MessageContent({
   const [nested, setNested] = useState<AttachmentView | null>(null);
   const again = useCallback(() => (reload ? reload() : client.message(view.id)), [reload, client, view.id]);
   const remote = useRemoteImages(view, client, again, images);
-  const remembered = view.senderKey !== null && (images?.policy.senders.includes(view.senderKey) ?? false);
+  const offer = rememberOffer(images?.policy, view.senderKey, view.from[0]?.email);
   return (
     <div className="flex flex-col gap-4">
       {view.blockedImages + view.blockedTrackers > 0 && (
@@ -714,8 +790,7 @@ export function MessageContent({
           loadable={view.loadableImages}
           trackers={view.blockedTrackers}
           failed={remote.failed}
-          remembered={remembered}
-          canRemember={images !== undefined && view.senderKey !== null}
+          offer={offer}
           onLoad={() => {
             void remote.load();
           }}
