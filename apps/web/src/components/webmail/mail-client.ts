@@ -174,6 +174,8 @@ const ACCOUNT = "X-Webmail-Account";
  */
 const PIN_HEADER = "X-Webmail-Shared";
 const PIN_QUERY = "shared";
+/** The same tab's compose requests name the person's own mailbox the shared one comes through instead (fetches only). */
+const OWN_PIN_HEADER = "X-Webmail-Own";
 const REFUSED = "x-webmail-refused";
 
 export type { DelegatedSender, MailboxList, SendResult };
@@ -254,10 +256,17 @@ export class MailboxRefusedError extends Error {
 /**
  * `origin` "" (the default) means same-origin relative URLs, which is what the browser app uses. `shared` scopes the
  * client to a mailbox shared with the person (a tab opened with Open another mailbox): every request pins it, and
- * `onRefused` runs when the BFF answers that it can't be used (any more).
+ * `onRefused` runs when the BFF answers that it can't be used (any more). `own` instead scopes it to one of the person's
+ * own mailboxes (the one a shared mailbox comes through) without switching the session: a shared mailbox's tab writes
+ * mail from it with such a client (drafts, uploads, the From picker, send and undo live in the person's own mailbox).
  */
-export function createMailClient(origin = "", opts: { shared?: string; onRefused?: () => void } = {}) {
+export function createMailClient(
+  origin = "",
+  opts:
+    { shared?: string; onRefused?: () => void; own?: never } | { own: string; shared?: never; onRefused?: never } = {},
+) {
   const shared = opts.shared?.toLowerCase();
+  const own = opts.own?.toLowerCase();
   /** `url` with the pin for links that can't carry headers (downloads, print, raw source, previews). */
   const pinned = (url: string) =>
     shared === undefined ? url : `${url}${url.includes("?") ? "&" : "?"}${PIN_QUERY}=${encodeURIComponent(shared)}`;
@@ -328,6 +337,11 @@ export function createMailClient(origin = "", opts: { shared?: string; onRefused
 
   const net: typeof fetch = (input, init) =>
     gated(async () => {
+      if (own !== undefined) {
+        const headers = new Headers(init?.headers);
+        headers.set(OWN_PIN_HEADER, own);
+        return fetch(input, { ...init, headers });
+      }
       if (shared === undefined) return fetch(input, init);
       const headers = new Headers(init?.headers);
       headers.set(PIN_HEADER, shared);

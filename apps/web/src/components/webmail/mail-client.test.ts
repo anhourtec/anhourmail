@@ -349,3 +349,51 @@ describe("automatic refresh", () => {
     });
   });
 });
+
+describe("a shared mailbox's tab", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const headersSeen = () => {
+    const seen: { path: string; shared: string | null; own: string | null }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+        const h = new Headers(init?.headers);
+        seen.push({ path: url.pathname, shared: h.get("X-Webmail-Shared"), own: h.get("X-Webmail-Own") });
+        if (url.pathname === "/api/webmail/session") return Promise.resolve(Response.json(SESSION));
+        return Promise.resolve(Response.json({ data: { id: "d1" } }));
+      }),
+    );
+    return seen;
+  };
+
+  it("pins its shared mailbox on reads, and the person's own mailbox (never both) on its compose requests", async () => {
+    const seen = headersSeen();
+    const reading = createMailClient(ORIGIN, { shared: "Desk@Example.test" });
+    const writing = createMailClient(ORIGIN, { own: "Pat@Example.test" });
+    await reading.mailboxes();
+    await writing.saveDraft({
+      identityId: "i1",
+      to: [],
+      cc: [],
+      bcc: [],
+      subject: "",
+      text: "",
+      attachments: [],
+    });
+    expect(seen.find((r) => r.path === "/api/webmail/mailboxes")).toMatchObject({
+      shared: "desk@example.test",
+      own: null,
+    });
+    // The draft's account check and the draft itself both go to the own mailbox.
+    for (const path of ["/api/webmail/session", "/api/webmail/drafts"]) {
+      expect(seen.find((r) => r.path === path && r.own !== null)).toMatchObject({
+        shared: null,
+        own: "pat@example.test",
+      });
+    }
+  });
+});
