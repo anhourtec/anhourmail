@@ -120,9 +120,18 @@ export function newMailToAnnounce<T extends Created>(
   );
 }
 
-/** The tab title: "(3) Inbox · AnhourMail" with unread Inbox mail, else "Inbox · AnhourMail" (the view shown). */
-export function tabTitle(view: string | null, unread: number, product = "AnhourMail"): string {
-  const base = view ? `${view} · ${product}` : product;
+/**
+ * The tab title: "(3) Inbox · AnhourMail" with unread Inbox mail, else "Inbox · AnhourMail" (the view shown). A tab
+ * showing a mailbox shared with the person names that mailbox instead: "desk@example.com · Inbox".
+ */
+export function tabTitle(view: string | null, unread: number, opts: { mailbox?: string } = {}): string {
+  const base = opts.mailbox
+    ? view
+      ? `${opts.mailbox} · ${view}`
+      : opts.mailbox
+    : view
+      ? `${view} · AnhourMail`
+      : "AnhourMail";
   return unread > 0 ? `(${String(unread)}) ${base}` : base;
 }
 

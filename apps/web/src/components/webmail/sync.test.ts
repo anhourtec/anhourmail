@@ -66,6 +66,12 @@ describe("tabTitle", () => {
     expect(tabTitle("Archive", 0)).toBe("Archive · AnhourMail");
     expect(tabTitle(null, 0)).toBe("AnhourMail");
   });
+
+  it("names a shared mailbox's tab by its address", () => {
+    expect(tabTitle("Inbox", 0, { mailbox: "desk@example.com" })).toBe("desk@example.com · Inbox");
+    expect(tabTitle("Sent", 2, { mailbox: "desk@example.com" })).toBe("(2) desk@example.com · Sent");
+    expect(tabTitle(null, 0, { mailbox: "desk@example.com" })).toBe("desk@example.com");
+  });
 });
 
 describe("desktop notification help", () => {
