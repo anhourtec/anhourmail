@@ -1,6 +1,6 @@
 # Roles and permissions
 
-Last updated: 2026-10-30 (mailbox delegation, ADR-0026: `delegation.manage.any` for User Administrators with guard rail 8; data export and account deletion, ADR-0025; staff support access / act-as, ADR-0023; profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
+Last updated: 2026-10-30 (mailbox delegation, ADR-0026: console routes and RBAC harness rows; `delegation.manage.any` for User Administrators with guard rail 8; data export and account deletion, ADR-0025; staff support access / act-as, ADR-0023; profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
 
 **Source of truth: `packages/shared/src/rbac`.** That code is canonical: the permission list, the role → permission matrix, critical-permission flags and guard rails. The UI (what to show), the API (what to allow) and the RBAC harness (`npm run test:rbac`) all derive from it. This document explains the matrix for people. If the two disagree, the code wins, and this file is updated in the same change (rule 35).
 
@@ -291,8 +291,12 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
     becomes an Owner, or a Member gets an admin role (`changeMemberRole`, or "Make this a user" with a role other than
     Member), the grants on their mailboxes that weren't made by a current Owner are revoked in the same transaction
     (`delegation.revoked`, reason `role_changed`); an Owner's grants stay. The batch and the conversion take the account
-    lock before reading the mailbox and members. No route yet, so the RBAC harness has no rows
-    for it; unit tests cover every refusal.
+    lock before reading the mailbox and members. Routes (`apps/web/src/server/routes.ts`): `GET`/`PATCH
+/api/accounts/:accountId/mailboxes/:mailboxId/delegation` (`delegation.read` / `delegation.manage.any`), `POST
+…/mailboxes/:mailboxId/convert-to-shared` (`mailbox.manage`), `GET /api/accounts/:accountId/people/:userId/delegation`
+    (`delegation.read`) and the optional `{ delegateTo }` body on `DELETE …/people/:userId` (`member.manage`). The RBAC
+    harness probes every one as every persona (random ids → 404; the empty batch → 400 for allowed callers); unit tests
+    cover every refusal, and route tests (`apps/web/src/server/delegation-routes.test.ts`) the HTTP mapping.
 
 ## Webmail
 

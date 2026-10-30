@@ -231,6 +231,36 @@ export const ROUTES: readonly RouteSpec[] = [
     accountParam: "accountId",
     probeStatus: 404,
   },
+  // Mailbox delegation (ADR-0026; core delegation/service.ts). Random ids → 404 for allowed readers; the harness's
+  // empty batch is a validation error (400) for allowed callers, reached only after the permission and act-as checks.
+  // Its audit action depends on the batch (`delegation.granted` or `delegation.revoked`), so none is asserted here.
+  {
+    method: "GET",
+    path: "/api/accounts/:accountId/mailboxes/:mailboxId/delegation",
+    file: "app/api/accounts/[accountId]/mailboxes/[mailboxId]/delegation/route.ts",
+    guard: "delegation.read",
+    accountParam: "accountId",
+    probeStatus: 404,
+  },
+  {
+    method: "PATCH",
+    path: "/api/accounts/:accountId/mailboxes/:mailboxId/delegation",
+    file: "app/api/accounts/[accountId]/mailboxes/[mailboxId]/delegation/route.ts",
+    guard: "delegation.manage.any",
+    accountParam: "accountId",
+    probeStatus: 400,
+  },
+  // "Convert to shared mailbox" (core mailboxes/convert-to-shared.ts): giving people access in the same request also
+  // needs delegation.manage.any (checked in the service). Random ids → 404 for allowed callers.
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/mailboxes/:mailboxId/convert-to-shared",
+    file: "app/api/accounts/[accountId]/mailboxes/[mailboxId]/convert-to-shared/route.ts",
+    guard: "mailbox.manage",
+    accountParam: "accountId",
+    audits: "mailbox.converted_to_shared",
+    probeStatus: 404,
+  },
   // Free platform-domain addresses (ADR-0021): is a name available (no name → the rule it breaks, 200).
   {
     method: "GET",
@@ -404,6 +434,15 @@ export const ROUTES: readonly RouteSpec[] = [
     guard: "account.admins.manage",
     accountParam: "accountId",
     audits: "account.role_changed",
+    probeStatus: 404,
+  },
+  // "Mailboxes they can open" on a person's panel (ADR-0026 §5). Random ids → 404 for allowed readers.
+  {
+    method: "GET",
+    path: "/api/accounts/:accountId/people/:userId/delegation",
+    file: "app/api/accounts/[accountId]/people/[userId]/delegation/route.ts",
+    guard: "delegation.read",
+    accountParam: "accountId",
     probeStatus: 404,
   },
   // "Edit profile" on a person's panel: a Member's with member.manage, anyone's for an Owner (and your own always,
