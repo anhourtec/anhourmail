@@ -720,6 +720,18 @@ describe("deleting one's own login", () => {
     // owner-b also joins account A as a Member (no mailbox there), and owns only an empty account B.
     s.mailboxes = s.mailboxes.filter((m) => m.accountId !== ACCOUNT_B);
     s.memberships.push({ userId: "owner-b", accountId: ACCOUNT_A, role: "member" });
+    // They could open one of account A's mailboxes (ADR-0026): the grant goes on record in A's log.
+    const someBox = s.mailboxes.find((m) => m.accountId === ACCOUNT_A);
+    if (!someBox) throw new Error("world has a mailbox in account A");
+    s.delegations.push({
+      id: "g-1",
+      accountId: ACCOUNT_A,
+      mailboxId: someBox.id,
+      granteeUserId: "owner-b",
+      right: "full_access",
+      grantedBy: null,
+      createdAt: new Date(0),
+    });
     const actor = user({
       id: "owner-b",
       account: [
@@ -743,6 +755,10 @@ describe("deleting one's own login", () => {
       ["platform", { accountsDeleted: 1, accountsLeft: 1 }],
       [`account:${ACCOUNT_A}`, { left: true }],
       [`account:${ACCOUNT_B}`, { accountDeleted: true }],
+    ]);
+    expect(s.delegations).toEqual([]);
+    expect(audits(d, "delegation.revoked").map((e) => [e.scope, e.target.id, e.meta.reason])).toEqual([
+      [`account:${ACCOUNT_A}`, someBox.id, "member_removed"],
     ]);
   });
 });

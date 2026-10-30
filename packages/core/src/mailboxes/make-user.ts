@@ -3,6 +3,7 @@ import { generateMailboxPassword } from "@anhourmail/shared/security";
 import type { AccountRole } from "@anhourmail/shared/rbac";
 
 import type { Actor } from "../actor";
+import { dropGrantsNotByOwners, dropOwnGrants } from "../delegation/cascade";
 import { ConflictError, ForbiddenError, NotFoundError, StepUpRequiredError, ValidationError } from "../errors";
 import { mutation, type MutationOutcome } from "../mutation";
 import { displayName, isAccountRole, loginNames, profileDetails } from "../people/entity";
@@ -41,7 +42,8 @@ type Refusal = "act_as" | "role" | "step_up_required";
  * name, and a new generated password for both the console (salted argon2id, `hashLogin`) and the mailbox (its own
  * argon2id hash, applied by the worker's `mailbox.password` job), with the first-sign-in change required in both.
  * The mailbox's app passwords are revoked (`app_password.revoke`), and its webmail sessions and tokens end when the new
- * password reaches the mail server, so nobody who used the shared address keeps a way in. The password is returned
+ * password reaches the mail server, so nobody who used the shared address keeps a way in except through the grants an
+ * administrator gave (delegation, ADR-0026), which stay. The password is returned
  * once and never stored, queued, logged or audited (rule 23).
  *
  * Same gate as `addUser`: `mailbox.manage` (403 without it, 404 for another account's id or mailbox) and a role the
@@ -121,6 +123,11 @@ export async function makeMailboxUser(
       if (!(await repos.mailboxes.assignOwner(m.id, userId))) {
         throw new ConflictError("This mailbox changed while you were working on it. Reload and try again.");
       }
+      // Anyone it was delegated to keeps their access (ADR-0026 §3); a right the new person held on it as a delegate
+      // goes, since it is their own mailbox now (`became_owner`). A login made here is new, so today there is none.
+      const also = await dropOwnGrants(repos, accountId, m, userId);
+      // An admin's or Owner's mailbox keeps only grants an Owner made (guard rail 8 survives; ADR-0026 review update).
+      if (role !== "member") also.push(...(await dropGrantsNotByOwners(repos, accountId, userId)));
       await repos.mailboxes.setDisplayName(m.id, shown);
       await repos.mailboxes.setPasswordChangeRequired(m.id, true);
       // The new mailbox password, for the worker (with the grant the management proxy needs for a replacement).
@@ -156,6 +163,7 @@ export async function makeMailboxUser(
           profileFields: Object.keys(profile),
           appPasswordsRevoked: revoked.length,
         },
+        also,
       };
     },
   );

@@ -22,7 +22,8 @@ import {
   PlanLimitError,
   ValidationError,
 } from "../errors";
-import { authorizeAudited, mutation, type MutationOutcome } from "../mutation";
+import { dropMailboxGrants } from "../delegation/cascade";
+import { type AuditAlso, authorizeAudited, mutation, type MutationOutcome } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 import { BreachedPasswordError, passwordBreached } from "../security/breached-passwords";
 import type { MailServer } from "../provisioning/ports";
@@ -626,7 +627,10 @@ async function lifecycle(
   id: string,
   req: RequestMeta,
   action: LifecycleAction,
-  change: (repos: Repositories, m: Mailbox) => Promise<{ next: Mailbox; meta?: Record<string, unknown> }>,
+  change: (
+    repos: Repositories,
+    m: Mailbox,
+  ) => Promise<{ next: Mailbox; meta?: Record<string, unknown>; also?: AuditAlso[] }>,
 ): Promise<MailboxView> {
   const out = await mutation(
     deps,
@@ -638,8 +642,13 @@ async function lifecycle(
       if (lifecycleLocked(actor, accountId, m, await repos.access.members(accountId))) {
         return { result: null, target: { label: m.address }, denied: { code: "forbidden" } };
       }
-      const { next, meta } = await change(repos, m);
-      return { result: await viewOf(repos, accountId, next), target: { label: m.address }, meta: meta ?? {} };
+      const { next, meta, also } = await change(repos, m);
+      return {
+        result: await viewOf(repos, accountId, next),
+        target: { label: m.address },
+        meta: meta ?? {},
+        ...(also && also.length > 0 ? { also } : {}),
+      };
     },
   );
   if (out === null) throw new ForbiddenError(LOCKED_MESSAGE);
@@ -691,7 +700,9 @@ export async function resumeMailbox(
 /**
  * Deletes a mailbox with a grace period: it is suspended at once (mail kept, its aliases off the mail server, its
  * address and theirs still reserved) and removed for good after `MAILBOX_DELETE_GRACE_DAYS`, unless restored.
- * Deleting a deleting mailbox whose job gave up retries it (the purge date stays).
+ * Deleting a deleting mailbox whose job gave up retries it (the purge date stays). Everyone it was delegated to loses
+ * their access at once (ADR-0026: one `delegation.revoked` entry each, reason `mailbox_deleted`); a restore doesn't
+ * bring the grants back.
  */
 export async function deleteMailbox(
   deps: Deps,
@@ -704,12 +715,14 @@ export async function deleteMailbox(
     if (m.status === "deleting") {
       if (m.lastError === null) throw new ConflictError("This mailbox is already being deleted.");
       const next = await moveTo(deps, repos, m, "deleting", m.purgeAfter);
-      return { next, meta: { from: m.status, retry: true, purgeAfter: m.purgeAfter?.toISOString() ?? null } };
+      const also = await dropMailboxGrants(repos, accountId, m);
+      return { next, meta: { from: m.status, retry: true, purgeAfter: m.purgeAfter?.toISOString() ?? null }, also };
     }
     const purgeAfter = new Date(deps.clock.now().getTime() + MAILBOX_DELETE_GRACE_DAYS * DAY_MS);
     const next = await moveTo(deps, repos, m, "deleting", purgeAfter);
     const aliases = (await repos.aliases.listByAccount(accountId)).filter((a) => a.mailboxId === m.id).length;
     const catchAllOff = await turnOffCatchAllFor(deps, repos, m.id);
+    const also = await dropMailboxGrants(repos, accountId, m);
     return {
       next,
       meta: {
@@ -717,7 +730,9 @@ export async function deleteMailbox(
         purgeAfter: purgeAfter.toISOString(),
         aliases,
         ...(catchAllOff.length > 0 ? { catchAllOff } : {}),
+        ...(also.length > 0 ? { grantsRevoked: also.length } : {}),
       },
+      also,
     };
   });
 }
@@ -851,6 +866,8 @@ export async function purgeDueMailboxes(
           if (await staffHeld(repos, current)) throw new ConflictError("Anhourtec holds this mailbox.");
           const own = (await repos.aliases.listByAccount(m.accountId)).filter((a) => a.mailboxId === m.id);
           const aliases = own.length;
+          // Grants are dropped when the deletion is scheduled; any left (a backstop) go on record with the row.
+          const also = await dropMailboxGrants(repos, m.accountId, current);
           // Delete the row first (conditional: still deleting and due), which also locks it until this unit of work
           // ends: a restore arriving now waits, then finds nothing to restore (409) instead of reporting success for
           // a mailbox whose mail is being destroyed. If the mail server refuses, everything rolls back.
@@ -870,6 +887,7 @@ export async function purgeDueMailboxes(
               purgeAfter: current.purgeAfter.toISOString(),
               ...(retired.length > 0 ? { retiredPlatformAddresses: retired.length } : {}),
             },
+            also,
           };
         },
       );

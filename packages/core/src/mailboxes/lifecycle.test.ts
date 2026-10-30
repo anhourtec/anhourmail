@@ -384,6 +384,59 @@ describe("scheduled purge", () => {
   });
 });
 
+describe("delegation grants go with the mailbox (ADR-0026)", () => {
+  const grant = (d: ReturnType<typeof setup>["d"], granteeUserId: string, right: "full_access" | "send_as") =>
+    d.uow.state.delegations.push({
+      id: `g-${granteeUserId}-${right}`,
+      accountId: ACCOUNT_A,
+      mailboxId: MBX,
+      granteeUserId,
+      right,
+      grantedBy: "owner",
+      createdAt: new Date(0),
+    });
+
+  it("deleting drops every grant on it, one entry each; a restore doesn't bring them back", async () => {
+    const { d } = setup();
+    grant(d, "uadmin", "full_access");
+    grant(d, "dadmin", "send_as");
+    d.uow.state.delegations.push({
+      id: "g-other",
+      accountId: ACCOUNT_A,
+      mailboxId: MBX_OWNER,
+      granteeUserId: "uadmin",
+      right: "full_access",
+      grantedBy: "owner",
+      createdAt: new Date(0),
+    });
+    await deleteMailbox(d, owner, ACCOUNT_A, MBX, req);
+    expect(d.uow.state.delegations.map((g) => g.mailboxId)).toEqual([MBX_OWNER]);
+    const revoked = d.uow.state.audit.filter((e) => e.action === "delegation.revoked");
+    expect(revoked.map((e) => [e.target.id, e.meta.granteeUserId, e.meta.right, e.meta.reason])).toEqual([
+      [MBX, "uadmin", "full_access", "mailbox_deleted"],
+      [MBX, "dadmin", "send_as", "mailbox_deleted"],
+    ]);
+    expect(d.uow.state.audit.find((e) => e.action === "mailbox.deletion_scheduled")?.meta).toMatchObject({
+      grantsRevoked: 2,
+    });
+    await restoreMailbox(d, owner, ACCOUNT_A, MBX, req, fakeHasher);
+    expect(d.uow.state.delegations.filter((g) => g.mailboxId === MBX)).toEqual([]);
+  });
+
+  it("a purge drops any grant left on record, as the system", async () => {
+    const { d, clock } = setup();
+    await deleteMailbox(d, owner, ACCOUNT_A, MBX, req);
+    grant(d, "uadmin", "full_access"); // a backstop case: deletion already dropped the others
+    clock.set(new Date(clock.now().getTime() + MAILBOX_DELETE_GRACE_DAYS * DAY));
+    expect(await purgeDueMailboxes(d, fakeMail())).toEqual({ purged: 1, failed: 0, held: 0 });
+    expect(d.uow.state.delegations).toEqual([]);
+    expect(d.uow.state.audit.slice(-2).map((e) => [e.action, e.actor.type, e.meta.reason])).toEqual([
+      ["platform.mailbox_purged", "system", undefined],
+      ["delegation.revoked", "system", "mailbox_deleted"],
+    ]);
+  });
+});
+
 describe("retrying a change whose job gave up", () => {
   it("shows it as not applied, and suspending again re-queues it (audited) instead of a conflict", async () => {
     const { d } = setup();

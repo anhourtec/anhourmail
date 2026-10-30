@@ -264,6 +264,45 @@ describe("makeMailboxUser", () => {
     await expect(make(again, owner)).rejects.toThrow(ConflictError);
   });
 
+  it("keeps the grants others hold on the mailbox (its members keep their access; ADR-0026)", async () => {
+    const d = setup();
+    d.uow.state.delegations.push({
+      id: "g-1",
+      accountId: ACCOUNT_A,
+      mailboxId: SHARED,
+      granteeUserId: "member",
+      right: "full_access",
+      grantedBy: "owner",
+      createdAt: new Date(0),
+    });
+    await make(d, owner);
+    expect(d.uow.state.delegations.map((g) => g.granteeUserId)).toEqual(["member"]);
+    expect(d.uow.state.audit.some((e) => e.action === "delegation.revoked")).toBe(false);
+  });
+
+  it("with an admin role, keeps only the grants an Owner made on it (guard rail 8 survives)", async () => {
+    const d = setup();
+    const grant = (granteeUserId: string, grantedBy: string) =>
+      d.uow.state.delegations.push({
+        id: `g-${granteeUserId}`,
+        accountId: ACCOUNT_A,
+        mailboxId: SHARED,
+        granteeUserId,
+        right: "full_access",
+        grantedBy,
+        createdAt: new Date(0),
+      });
+    grant("member", "uadmin");
+    grant("dadmin", "owner");
+    await make(d, owner, { role: "domain_admin" });
+    expect(d.uow.state.delegations.map((g) => g.granteeUserId)).toEqual(["dadmin"]);
+    expect(
+      d.uow.state.audit
+        .filter((e) => e.action === "delegation.revoked")
+        .map((e) => [e.meta.granteeUserId, e.meta.reason]),
+    ).toEqual([["member", "role_changed"]]);
+  });
+
   it("stops at the people ceiling", async () => {
     const d = setup();
     for (let i = d.uow.state.memberships.filter((m) => m.accountId === ACCOUNT_A).length; i < MAX_PEOPLE; i++) {

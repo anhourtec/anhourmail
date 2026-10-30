@@ -1,12 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { INVITE_EMAILS_PER_DAY, INVITE_TTL_DAYS, MAX_PEOPLE, PLANS } from "@anhourmail/shared/plans";
 import { ACCOUNT_ROLES, type AccountRole } from "@anhourmail/shared/rbac";
-import { generateMailboxPassword } from "@anhourmail/shared/security";
+import { firstIssue, memberRemovalSchema } from "@anhourmail/shared/delegation";
 
 import { type Actor, authorize, can } from "../actor";
 import { maskEmail } from "../audit/record";
-import { ConflictError, ForbiddenError, NotFoundError, PlanLimitError, ValidationError } from "../errors";
-import { hashMailboxPassword, type PasswordHasher } from "../mailboxes/password-hash";
+import { dropGrantsNotByOwners, dropPersonGrants } from "../delegation/cascade";
+import { applyDelegationChanges, assertDelegationPlan, mayDelegate } from "../delegation/grants";
+import {
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  PlanLimitError,
+  StepUpRequiredError,
+  ValidationError,
+} from "../errors";
+import type { PasswordHasher } from "../mailboxes/password-hash";
+import { releaseMailboxOwner } from "../mailboxes/release";
 import { mutation } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 import { assertNotBreached, type BreachedPasswords } from "../security/breached-passwords";
@@ -360,10 +370,14 @@ export async function changeMemberRole(
       if (target.role === "owner" && ownerCount(members) <= 1) throw new ConflictError(LAST_OWNER);
       if (!(await repos.people.setRole(accountId, target.userId, role))) throw new NotFoundError();
       const after = members.map((m) => (m.userId === target.userId ? { ...m, role } : m));
+      // Guard rail 8 survives the promotion: their mailboxes now need an Owner's grants (ADR-0026, review update).
+      const promoted = role === "owner" || (target.role === "member" && role !== "member");
+      const also = promoted ? await dropGrantsNotByOwners(repos, accountId, target.userId) : [];
       return {
         result: memberView(actor, accountId, { ...target, role }, ownerCount(after)),
         target: { label: target.email },
-        meta: { previousRole: target.role, newRole: role },
+        meta: { previousRole: target.role, newRole: role, ...(also.length > 0 ? { grantsRevoked: also.length } : {}) },
+        also,
       };
     },
   );
@@ -371,12 +385,17 @@ export async function changeMemberRole(
 
 /**
  * Removes someone from the account (`member.manage`; an Owner or an admin needs `account.admins.manage`). Not
- * yourself, and never the last Owner. Their mailboxes stay, as person-less mailboxes (shared addresses: mail keeps
- * arriving and admins decide what happens next — a new password, "Make this a user", or deletion), with the removed
- * person's sign-in turned off in the same unit of work: the owner link is released, a new generated password that
- * nobody is shown replaces theirs (the worker's `mailbox.password` job; the mail server ends every webmail session
- * and OAuth token derived from the old one), and the app passwords on those mailboxes are revoked
- * (`app_password.revoke`). The generated password is never returned, stored, logged or audited (rule 23).
+ * yourself, and never the last Owner. Their mailboxes stay, as person-less (shared) mailboxes — mail keeps arriving and
+ * admins decide what happens next: a new password, "Make this a user", delegation or deletion — with the removed
+ * person's sign-in turned off in the same unit of work (`releaseMailboxOwner`: the owner link released, a new generated
+ * password nobody is shown, their app passwords revoked). The grants they held on other mailboxes go too (ADR-0026,
+ * one `delegation.revoked` entry each, reason `member_removed`); grants others hold on their mailboxes stay.
+ *
+ * `delegateTo` (the leaver dialog's "Give full access to …"): one person staying in the account gets read and manage
+ * (and send as, with `sendAs`) on each of the leaver's mailboxes that isn't being deleted, in the same unit of work
+ * (`delegation.granted`, reason `member_removed`). That part needs what a delegation batch needs: `delegation.manage.any`
+ * with guard rail 8 for each mailbox and a plan with delegation (403, and nothing is removed), and a fresh step-up on
+ * this console session (403 `step_up_required`). A removal without it needs neither.
  */
 export async function removeMember(
   deps: Deps,
@@ -385,8 +404,11 @@ export async function removeMember(
   userId: string,
   req: RequestMeta,
   hasher: PasswordHasher,
-): Promise<{ userId: string }> {
-  const out = await mutation<{ userId: string } | null>(
+  opts: { delegateTo?: unknown; session?: { sessionId: string | null } } = {},
+): Promise<{ userId: string; delegated: number }> {
+  const parsed = memberRemovalSchema.safeParse({ delegateTo: opts.delegateTo });
+  type Refusal = "role" | "delegation" | "step_up_required";
+  const out = await mutation<{ userId: string; delegated: number } | Refusal>(
     deps,
     actor,
     req,
@@ -399,17 +421,17 @@ export async function removeMember(
     async (repos) => {
       await repos.accounts.lock(accountId);
       const { target, members } = await scopedMember(repos, accountId, userId);
-      if (!mayTouch(actor, accountId, target.role)) {
-        return {
-          result: null,
-          target: { label: target.email },
-          meta: { role: target.role },
-          denied: { code: "forbidden" },
-        };
-      }
+      const refuse = (code: Refusal) => ({
+        result: code,
+        target: { label: target.email },
+        meta: { role: target.role },
+        denied: { code: code === "step_up_required" ? code : "forbidden" },
+      });
+      if (!mayTouch(actor, accountId, target.role)) return refuse("role");
       if (target.userId === selfId(actor)) throw new ConflictError("You can't remove yourself from the account.");
       if (target.role === "owner" && ownerCount(members) <= 1) throw new ConflictError(LAST_OWNER);
-      if (!(await repos.people.remove(accountId, target.userId))) throw new NotFoundError();
+      if (!parsed.success) throw new ValidationError(firstIssue(parsed.error));
+      const delegateTo = parsed.data.delegateTo;
       const mailboxes = (await repos.mailboxes.listByAccount(accountId)).filter((m) => m.userId === target.userId);
       // A mailbox the worker may be creating right now could still get the password they were given: wait for it.
       const settingUp = mailboxes.find((m) => m.stalwartId === null && m.status !== "deleting");
@@ -418,38 +440,76 @@ export async function removeMember(
           `Their mailbox ${settingUp.address} is still being set up on the mail server. Try again in a minute, or delete it first.`,
         );
       }
-      const now = deps.clock.now();
+      const handOver = delegateTo ? mailboxes.filter((m) => m.status !== "deleting") : [];
+      if (delegateTo) {
+        if (actor.kind !== "user" || handOver.some((m) => !mayDelegate(actor, accountId, m, members))) {
+          return refuse("delegation");
+        }
+        if (delegateTo.userId === target.userId) {
+          throw new ConflictError("Give access to someone who is staying in the account.");
+        }
+        await assertDelegationPlan(repos, accountId);
+        if (
+          !opts.session?.sessionId ||
+          !(await repos.security.stepUpFresh(actor.userId, opts.session.sessionId, deps.clock.now()))
+        ) {
+          return refuse("step_up_required");
+        }
+      }
+      // Before the membership goes (its foreign key would take the rows without a record).
+      const also = await dropPersonGrants(repos, accountId, target.userId);
+      if (!(await repos.people.remove(accountId, target.userId))) throw new NotFoundError();
       let appPasswordsRevoked = 0;
       let mailboxesSignedOut = 0;
       for (const m of mailboxes) {
-        if (!(await repos.mailboxes.releaseOwner(m.id, target.userId))) continue;
-        // Sign-in off: a password they don't know replaces theirs. Not a first-sign-in change: nobody signs in with
-        // it. A mailbox being deleted (or deleted before the job runs) keeps it waiting for a restore, which applies
-        // it before the account comes back on (`restoreMailbox`, `mailbox.ensure`).
-        const phc = await hashMailboxPassword(hasher, generateMailboxPassword());
-        const grant =
-          m.stalwartId === null ? null : (hasher.grant?.({ externalId: m.stalwartId, passwordHash: phc }) ?? null);
-        await repos.mailboxPasswords.setPending(m.id, phc, grant);
-        await repos.mailboxes.setPasswordChangeRequired(m.id, false);
-        if (m.stalwartId !== null && m.status !== "deleting") {
-          await repos.provisioning.enqueue({ kind: "mailbox.password", subjectId: m.id, runAfter: now });
-        }
+        const released = await releaseMailboxOwner(deps, repos, hasher, m, target.userId);
+        if (!released) continue;
         mailboxesSignedOut += 1;
-        // App passwords don't depend on the mailbox password: they're credentials the removed person holds.
-        const moved = await repos.appPasswords.markRevoking(m.id, null);
-        appPasswordsRevoked += moved.length;
-        if (moved.length > 0) {
-          await repos.provisioning.enqueue({ kind: "app_password.revoke", subjectId: m.id, runAfter: now });
+        appPasswordsRevoked += released.appPasswordsRevoked;
+      }
+      let delegated = 0;
+      if (delegateTo && actor.kind === "user") {
+        const staying = members.filter((m) => m.userId !== target.userId);
+        const rights = delegateTo.sendAs ? (["full_access", "send_as"] as const) : (["full_access"] as const);
+        for (const m of handOver) {
+          const applied = await applyDelegationChanges(
+            repos,
+            {
+              accountId,
+              mailbox: { ...m, userId: null },
+              members: staying,
+              grantedBy: actor.userId,
+              now: deps.clock.now(),
+              reason: "member_removed",
+            },
+            { add: rights.map((right) => ({ userId: delegateTo.userId, right })), remove: [] },
+          );
+          delegated += applied.granted;
+          also.push(...applied.also);
         }
       }
       return {
-        result: { userId: target.userId },
+        result: { userId: target.userId, delegated },
         target: { label: target.email },
-        meta: { role: target.role, mailboxesUnassigned: mailboxes.length, mailboxesSignedOut, appPasswordsRevoked },
+        meta: {
+          role: target.role,
+          mailboxesUnassigned: mailboxes.length,
+          mailboxesSignedOut,
+          appPasswordsRevoked,
+          grantsRevoked: also.filter((e) => e.action === "delegation.revoked").length,
+          delegated,
+        },
+        also,
       };
     },
   );
-  if (out === null) throw new ForbiddenError(ROLE_DENIED);
+  if (out === "role") throw new ForbiddenError(ROLE_DENIED);
+  if (out === "delegation") {
+    throw new ForbiddenError(
+      "You can't give access to their mailboxes. Remove them without it, and an owner can give access later.",
+    );
+  }
+  if (out === "step_up_required") throw new StepUpRequiredError();
   return out;
 }
 

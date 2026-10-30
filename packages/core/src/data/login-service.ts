@@ -2,7 +2,8 @@
 import { type Actor, authorize } from "../actor";
 import { maskEmail } from "../audit/record";
 import { ConflictError, ForbiddenError, StepUpRequiredError, ValidationError } from "../errors";
-import { mutation, type MutationOutcome } from "../mutation";
+import { dropPersonGrants } from "../delegation/cascade";
+import { type AuditAlso, mutation, type MutationOutcome } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 
 /**
@@ -130,7 +131,10 @@ export async function deleteOwnLogin(
       const plan = await planFor(repos, actor.userId);
       const first = plan.blockers[0];
       if (first) return { result: first.reason, denied: { code: first.reason } };
+      const also: AuditAlso[] = [];
       for (const a of plan.accountsLeft) {
+        // The grants they hold there go on record in that account's log before the membership takes them (ADR-0026).
+        also.push(...(await dropPersonGrants(repos, a.accountId, actor.userId, { accountScoped: true })));
         if (!(await repos.people.remove(a.accountId, actor.userId)))
           throw new ConflictError("Your accounts changed. Try again.");
       }
@@ -152,6 +156,7 @@ export async function deleteOwnLogin(
           ...plan.accountsLeft.map((a) => ({ accountId: a.accountId, meta: { left: true } })),
           ...plan.accountsDeleted.map((a) => ({ accountId: a.accountId, meta: { accountDeleted: true } })),
         ],
+        also,
       };
     },
   );

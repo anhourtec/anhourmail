@@ -6,6 +6,7 @@ import { INVITE_EMAILS_PER_DAY, MAX_PEOPLE } from "@anhourmail/shared/plans";
 import {
   ACCOUNT_A,
   ACCOUNT_B,
+  actAs,
   BREACHED_PW,
   deps,
   fakeBreaches,
@@ -15,7 +16,14 @@ import {
   user,
 } from "../__tests__/helpers";
 import type { Actor } from "../actor";
-import { ConflictError, ForbiddenError, NotFoundError, PlanLimitError, ValidationError } from "../errors";
+import {
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  PlanLimitError,
+  StepUpRequiredError,
+  ValidationError,
+} from "../errors";
 import { hashToken } from "../tokens";
 import { checkPassword, loginNames, normaliseEmail } from "./entity";
 import {
@@ -327,6 +335,69 @@ describe("changeMemberRole", () => {
   });
 });
 
+describe("changeMemberRole and delegation grants (guard rail 8 survives a promotion)", () => {
+  const KID_BOX = "55555555-aaaa-4aaa-8aaa-555555555555";
+  const AUDITOR_BOX = "66666666-aaaa-4aaa-8aaa-666666666666";
+  function promoWorld() {
+    const w = world();
+    for (const [id, address, userId] of [
+      [KID_BOX, "kid@family.test", "kid"],
+      [AUDITOR_BOX, "auditor@family.test", "auditor"],
+    ] as const) {
+      w.s.mailboxes.push({
+        id,
+        accountId: ACCOUNT_A,
+        userId,
+        address,
+        status: "active",
+        quotaBytes: 1,
+        stalwartId: "s",
+        lastError: null,
+        purgeAfter: null,
+        createdAt: new Date(0),
+      });
+    }
+    const grant = (mailboxId: string, granteeUserId: string, grantedBy: string | null) =>
+      w.s.delegations.push({
+        id: `${mailboxId}-${granteeUserId}`,
+        accountId: ACCOUNT_A,
+        mailboxId,
+        granteeUserId,
+        right: "full_access",
+        grantedBy,
+        createdAt: new Date(0),
+      });
+    return { ...w, grant };
+  }
+
+  it("a Member made an admin keeps only the grants an Owner made on their mailboxes, each drop audited", async () => {
+    const { d, s, as, grant } = promoWorld();
+    grant(KID_BOX, "admin", "admin"); // a User Admin's grant on a Member's mailbox
+    grant(KID_BOX, "auditor", "owner"); // an Owner's
+    grant(KID_BOX, "owner", null); // written by the system
+    await changeMemberRole(d, as("owner"), ACCOUNT_A, "kid", { role: "user_admin" }, req);
+    expect(s.delegations.map((g) => g.granteeUserId)).toEqual(["auditor"]);
+    expect(
+      audits(s, "delegation.revoked").map((e) => [e.target.id, e.meta.granteeUserId, e.meta.reason, e.requestId]),
+    ).toEqual([
+      [KID_BOX, "admin", "role_changed", req.requestId],
+      [KID_BOX, "owner", "role_changed", req.requestId],
+    ]);
+    expect(audits(s, "account.role_changed")[0]?.meta).toMatchObject({ grantsRevoked: 2 });
+  });
+
+  it("anyone made an Owner too; a move between admin roles or down keeps the grants", async () => {
+    const { d, s, as, grant } = promoWorld();
+    grant(AUDITOR_BOX, "kid", "admin");
+    await changeMemberRole(d, as("owner"), ACCOUNT_A, "auditor", { role: "domain_admin" }, req);
+    await changeMemberRole(d, as("owner"), ACCOUNT_A, "auditor", { role: "member" }, req);
+    expect(s.delegations).toHaveLength(1);
+    await changeMemberRole(d, as("owner"), ACCOUNT_A, "auditor", { role: "owner" }, req);
+    expect(s.delegations).toEqual([]);
+    expect(audits(s, "delegation.revoked").map((e) => e.meta.reason)).toEqual(["role_changed"]);
+  });
+});
+
 describe("removeMember", () => {
   it("a User Admin removes a Member; their mailboxes stay, person-less, with sign-in off", async () => {
     const { d, s, as } = world();
@@ -377,7 +448,10 @@ describe("removeMember", () => {
         stalwartId: "s4",
       },
     );
-    expect(await removeMember(d, as("admin"), ACCOUNT_A, "kid", req, fakeHasher)).toEqual({ userId: "kid" });
+    expect(await removeMember(d, as("admin"), ACCOUNT_A, "kid", req, fakeHasher)).toEqual({
+      userId: "kid",
+      delegated: 0,
+    });
     expect(s.memberships.some((m) => m.userId === "kid")).toBe(false);
     expect(s.mailboxes).toHaveLength(4);
     expect(s.mailboxes.filter((m) => m.userId === "kid")).toEqual([]);
@@ -464,6 +538,150 @@ describe("removeMember", () => {
     await expect(removeMember(d, as("kid"), ACCOUNT_A, "kid", req, fakeHasher)).rejects.toThrow(ForbiddenError);
     await expect(removeMember(d, as("owner-b"), ACCOUNT_A, "kid", req, fakeHasher)).rejects.toThrow(NotFoundError);
     await expect(removeMember(d, as("owner"), ACCOUNT_A, "owner-b", req, fakeHasher)).rejects.toThrow(NotFoundError);
+  });
+});
+
+describe("removeMember and delegation (ADR-0026)", () => {
+  const KID_BOX = "11111111-aaaa-4aaa-8aaa-111111111111";
+  const KID_OLD = "22222222-aaaa-4aaa-8aaa-222222222222";
+  const DESK = "33333333-aaaa-4aaa-8aaa-333333333333";
+  const OWNER_BOX = "44444444-aaaa-4aaa-8aaa-444444444444";
+  const session = { sessionId: "sess-1" };
+
+  function leaverWorld() {
+    const w = world();
+    const box = (id: string, address: string, userId: string | null, status: "active" | "deleting" = "active") => ({
+      id,
+      accountId: ACCOUNT_A,
+      userId,
+      address,
+      status,
+      quotaBytes: 1,
+      stalwartId: `s-${id.slice(0, 2)}`,
+      lastError: null,
+      purgeAfter: null,
+      createdAt: new Date(),
+    });
+    w.s.mailboxes.push(
+      box(KID_BOX, "kid@family.test", "kid"),
+      box(KID_OLD, "kid-old@family.test", "kid", "deleting"),
+      box(DESK, "desk@family.test", null),
+      box(OWNER_BOX, "owner@family.test", "owner"),
+    );
+    for (const id of ["owner", "admin"]) {
+      w.s.stepUps.push({ userId: id, sessionId: "sess-1", expiresAt: new Date("2099-01-01T00:00:00Z") });
+    }
+    const grant = (mailboxId: string, granteeUserId: string, right: "full_access" | "send_as") =>
+      w.s.delegations.push({
+        id: `${mailboxId}-${granteeUserId}-${right}`,
+        accountId: ACCOUNT_A,
+        mailboxId,
+        granteeUserId,
+        right,
+        grantedBy: "owner",
+        createdAt: new Date(0),
+      });
+    return { ...w, grant };
+  }
+
+  it("revokes the grants the leaver held, keeps others' grants on their mailboxes, one entry each", async () => {
+    const { d, s, as, grant } = leaverWorld();
+    grant(DESK, "kid", "full_access");
+    grant(OWNER_BOX, "kid", "send_as");
+    grant(KID_BOX, "admin", "full_access");
+    await removeMember(d, as("owner"), ACCOUNT_A, "kid", req, fakeHasher);
+    expect(s.delegations.map((g) => [g.mailboxId, g.granteeUserId])).toEqual([[KID_BOX, "admin"]]);
+    const revoked = audits(s, "delegation.revoked");
+    expect(revoked.map((e) => [e.target.label, e.meta.right, e.meta.reason, e.meta.grantee])).toEqual([
+      ["desk@family.test", "full_access", "member_removed", "k***@a.test"],
+      ["owner@family.test", "send_as", "member_removed", "k***@a.test"],
+    ]);
+    expect(audits(s, "account.member_removed")[0]?.meta).toMatchObject({ grantsRevoked: 2, delegated: 0 });
+  });
+
+  it("gives one person staying full access (and send as) to each mailbox the leaver had, not one being deleted", async () => {
+    const { d, s, as } = leaverWorld();
+    const out = await removeMember(d, as("admin"), ACCOUNT_A, "kid", req, fakeHasher, {
+      delegateTo: { userId: "auditor", sendAs: true },
+      session,
+    });
+    expect(out).toEqual({ userId: "kid", delegated: 2 });
+    expect(s.mailboxes.find((m) => m.id === KID_BOX)?.userId).toBeNull();
+    expect(s.delegations.map((g) => [g.mailboxId, g.granteeUserId, g.right, g.grantedBy])).toEqual([
+      [KID_BOX, "auditor", "full_access", "admin"],
+      [KID_BOX, "auditor", "send_as", "admin"],
+    ]);
+    // The new password for the released mailbox is still queued, as without a hand-over.
+    expect(s.jobs.filter((j) => j.kind === "mailbox.password").map((j) => j.subjectId)).toEqual([KID_BOX]);
+    const granted = audits(s, "delegation.granted");
+    expect(granted.map((e) => [e.result, e.target.id, e.meta.right, e.meta.reason])).toEqual([
+      ["success", KID_BOX, "full_access", "member_removed"],
+      ["success", KID_BOX, "send_as", "member_removed"],
+    ]);
+    expect(audits(s, "account.member_removed")[0]?.meta).toMatchObject({ delegated: 2, mailboxesSignedOut: 2 });
+  });
+
+  it("without send as, only full access", async () => {
+    const { d, s, as } = leaverWorld();
+    await removeMember(d, as("owner"), ACCOUNT_A, "kid", req, fakeHasher, { delegateTo: { userId: "admin" }, session });
+    expect(s.delegations.map((g) => g.right)).toEqual(["full_access"]);
+  });
+
+  it("refuses the hand-over without delegation rights, a step-up, a plan with it, or a person staying (nothing removed)", async () => {
+    const { d, s, as } = leaverWorld();
+    const kidStays = () => {
+      expect(s.memberships.some((m) => m.userId === "kid")).toBe(true);
+    };
+    // No console session to check a step-up against, then a stale one.
+    await expect(
+      removeMember(d, as("admin"), ACCOUNT_A, "kid", req, fakeHasher, { delegateTo: { userId: "admin" } }),
+    ).rejects.toThrow(StepUpRequiredError);
+    kidStays();
+    await expect(
+      removeMember(d, as("owner"), ACCOUNT_A, "kid", req, fakeHasher, {
+        delegateTo: { userId: "admin" },
+        session: { sessionId: "stale" },
+      }),
+    ).rejects.toThrow(StepUpRequiredError);
+    await expect(
+      removeMember(d, as("owner"), ACCOUNT_A, "kid", req, fakeHasher, { delegateTo: { userId: "kid" }, session }),
+    ).rejects.toThrow("someone who is staying");
+    await expect(
+      removeMember(d, as("owner"), ACCOUNT_A, "kid", req, fakeHasher, { delegateTo: { userId: "owner-b" }, session }),
+    ).rejects.toThrow(NotFoundError);
+    await expect(
+      removeMember(d, as("owner"), ACCOUNT_A, "kid", req, fakeHasher, { delegateTo: "admin", session }),
+    ).rejects.toThrow(ValidationError);
+    kidStays();
+    expect(s.delegations).toEqual([]);
+    expect(audits(s, "account.member_removed").map((e) => [e.result, e.errorCode])).toEqual([
+      ["denied", "step_up_required"],
+      ["denied", "step_up_required"],
+      ["failed", "conflict"],
+      ["failed", "not_found"],
+      ["failed", "bad_request"],
+    ]);
+    s.accounts[0] = { id: ACCOUNT_A, name: "Family A", plan: "free" };
+    await expect(
+      removeMember(d, as("owner"), ACCOUNT_A, "kid", req, fakeHasher, { delegateTo: { userId: "admin" }, session }),
+    ).rejects.toThrow(PlanLimitError);
+    kidStays();
+  });
+
+  it("refuses the hand-over (403, nothing removed) when the actor can't delegate; the plain removal still works", async () => {
+    const { d, s, as } = leaverWorld();
+    // Only reachable defensively today: every role that removes people also delegates, so use a session that is
+    // acting as someone (which never delegates) while still holding member.manage.
+    const acting = { ...as("admin"), actingAs: actAs(ACCOUNT_A) };
+    await expect(
+      removeMember(d, acting, ACCOUNT_A, "kid", req, fakeHasher, { delegateTo: { userId: "owner" }, session }),
+    ).rejects.toThrow("can't give access to their mailboxes");
+    expect(s.memberships.some((m) => m.userId === "kid")).toBe(true);
+    expect(audits(s, "account.member_removed")[0]).toMatchObject({ result: "denied", errorCode: "forbidden" });
+    expect(await removeMember(d, as("admin"), ACCOUNT_A, "kid", req, fakeHasher)).toEqual({
+      userId: "kid",
+      delegated: 0,
+    });
   });
 });
 
