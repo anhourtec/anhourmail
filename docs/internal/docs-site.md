@@ -1,6 +1,6 @@
 # Public docs site
 
-Last updated: 2026-10-29. Decision: ADR-0007.
+Last updated: 2026-10-30. Decision: ADR-0007.
 
 ## What and where
 
@@ -43,6 +43,49 @@ Plus the usual verification for UI (rule 34): Playwright MCP check of changed pa
 - Per-DNS-provider guides (Cloudflare, Namecheap, GoDaddy, Porkbun, …) use the shared DNS component plus provider-specific screenshots, with no repeated values.
 - Never expose internals (rule 33): no internal hostnames, IPs, admin paths or detection thresholds. Publish sending limits, not detection rules.
 - Every user-facing change updates `docs/public` and adds a changelog entry in the same change (rule 31).
+
+## SEO
+
+What's in place (2026-10-30):
+
+- **Metadata from one helper.** Every page builds its metadata with `pageMetadata` (`apps/site/src/lib/seo.ts`):
+  title (the root layout's template adds ` · AnhourMail`; docs pages use ` · AnhourMail docs`), a description under
+  160 characters, a canonical URL against `metadataBase` (`SITE_URL`, from `PRODUCT_DOMAIN` in `packages/shared`),
+  and full Open Graph and Twitter card tags with `og-image.png`. Next merges metadata shallowly, so a page that set
+  only `openGraph.title` used to lose the image; the helper always sends the complete set. The root layout has no
+  canonical of its own, so a page without one never claims to be the home page. Feature pages have a search-worded
+  `seoTitle` next to their visible H1 (`lib/feature-content.tsx`). Docs titles and descriptions come from the MDX
+  frontmatter; write the description as a sentence a searcher would recognise.
+- **Structured data**, inline JSON-LD only (`src/components/json-ld.tsx`, escaped by `serializeJsonLd`; data blocks
+  aren't executed, so the nonce CSP is unaffected): Organization (Anhourtec, no address or location), WebSite,
+  WebApplication with one Offer per plan and currency (prices from `PLANS`, yearly `UnitPriceSpecification`, the
+  Supporter minimum as `minPrice`) and FAQPage on the home page; the WebApplication and a BreadcrumbList on
+  `/pricing`; BreadcrumbList on feature pages and every docs page. No ratings, reviews or availability we can't show.
+  Unit tests: `src/lib/seo.test.ts`.
+- **FAQPage answers are the visible text.** The home FAQ is plain strings for that reason; a question with a link
+  (pricing's "Where are the full terms?") keeps that page out of FAQPage.
+- **Sitemap** (`src/app/sitemap.ts`): every marketing route (`SITE_ROUTES` in `lib/ia.ts`), blog post and docs page,
+  on the site's own origin only (console and webmail are other hosts, and set `noindex` themselves). `lastModified`
+  is deterministic: the newest changelog entry or blog post for those indexes, the post date for posts, git history
+  for docs and marketing pages, and nothing when there is no git (image builds) rather than a made-up date.
+  Changelog entries have no pages of their own. `changeFrequency` and `priority` come from `routePriority`.
+- **robots.txt** allows everything except `/api/` (the docs search endpoint) and points at the sitemap.
+- **Feature list:** `docs/public/features.mdx` (`/docs/features`) lists what works today, grouped by what people
+  search for, with facts as `<Value />` components and a "Not built yet" section. It's linked from the home page, the
+  Features menu and `/features`. Add a line there when a feature ships.
+- **Share images:** `og-image.png` (1200 × 630) for the site; the GitHub social preview (1280 × 640) is
+  `packages/ui/assets/brand/github/social-preview.png`, rendered by `scripts/render-social-preview.mjs`.
+
+Rules:
+
+- **Truthful claims only.** Describe what works today (README "What works today", the docs); planned features are
+  labelled as planned. Prices and limits come from `packages/shared`, never typed by hand. No superlatives we can't
+  prove ("cheapest", "fastest"): say "low-cost" or "affordable", or show the price.
+- **No competitor or other product names**, no comparisons, no "alternative to X" pages (rule 57).
+- **No third-party requests** for SEO: no tag managers, analytics, verification scripts, remote fonts or images
+  (rule 29). Search-console verification, if ever needed, uses a DNS TXT record, not a meta tag or script.
+- **No location.** Structured data and copy never state or imply where the company or the servers are.
+- One H1 per page; headings in sentence case; descriptive link text and alt text.
 
 ## Deploy
 
