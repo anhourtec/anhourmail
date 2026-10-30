@@ -158,7 +158,8 @@ userId)`, `grant`, `revoke`, `revokeAllForMailbox`, `revokeAllForGrantee`), Post
 ### 4. Permissions (matrix `packages/shared/src/rbac`, `roles.md`)
 
 - `delegation.read` (account scope): see a mailbox's three lists. Owner, User Administrator, Auditor (read-only, as for
-  other `*.read`; Auditor sees names only, as today). Unchanged name.
+  other `*.read`; an Auditor sees names and addresses, as on the People page, which `member.read` already shows them —
+  corrected 2026-10-30 in review: this line first said names only). Unchanged name.
 - `delegation.manage.any` ★ critical: add or remove people on any of the three lists. **Change from today's matrix:**
   held by **Owner and User Administrator** (was Owner only), with guard rail 8 applied per mailbox: on an Owner's or an
   administrator's mailbox, Owners only (403, audited). Reason: a User Administrator can already remove Members and
@@ -214,6 +215,11 @@ API (route handlers parse, call, map errors; services check permission and scope
 | `DELETE /api/accounts/:accountId/members/:userId` (existing)           | adds optional `{ delegateTo?: { userId, sendAs } }`                        | grants written in the removal's transaction; the grant part is refused (403) without `delegation.manage.any` for each mailbox, the removal itself is not                                  |
 
 zod schemas in `packages/shared` (rule 32).
+
+**Update (2026-10-30, slice 8):** the batch change is `PATCH …/delegation` (it adds and removes entries, it doesn't
+replace the lists), and the removal route is the existing `DELETE /api/accounts/:accountId/people/:userId`. A person's
+grants for the People panel are read with `GET /api/accounts/:accountId/people/:userId/delegation` (`delegation.read`).
+The `delegationManage` tier (§9) covers `PATCH …/delegation` and `POST …/convert-to-shared`.
 
 ### 6. Webmail BFF
 

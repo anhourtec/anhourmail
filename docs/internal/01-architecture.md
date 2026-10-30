@@ -1,6 +1,6 @@
 # 01 — Architecture
 
-Last updated: 2026-10-30 (mailbox delegation, ADR-0026: grants, cascades and conversion built in core and adapters; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
+Last updated: 2026-10-30 (mailbox delegation, ADR-0026: grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
 
 ## Overview
 
@@ -119,8 +119,8 @@ a person-less mailbox suspends it (fails closed), and `mailbox.ensure` refuses t
 existing account back on until it has landed; the console → webmail handoff takes the account lock before checking
 ownership, so it can't mint tokens for someone being removed.
 
-**Delegation and shared mailboxes (ADR-0026; the control-plane part is built, routes, UI and the webmail side are
-not):** administrators grant read and manage,
+**Delegation and shared mailboxes (ADR-0026; the control-plane part and its console API routes are built, the UI and
+the webmail side are not):** administrators grant read and manage,
 send as or send on behalf on any mailbox to people in the account (`mailbox_delegation`). No mail-server state changes:
 the webmail BFF opens a delegated mailbox with that mailbox's own token (a throwaway credential minted, used once and
 destroyed, as in the handoff), seals it into the delegate's session, and checks the grant on every request; delegated
@@ -131,7 +131,11 @@ manage plus send as; "Convert to shared" reuses the leaver release. Built so far
 step-up, plan gate, membership, own-mailbox and limit rules, one audit entry per change through `MutationOutcome.also`),
 the shared release `mailboxes/release.ts` used by both `removeMember` (now with an optional "Give full access to …")
 and `mailboxes/convert-to-shared.ts`, and the cascades that delete and audit grants when a person leaves (removal or
-login deletion), a mailbox is deleted or purged, or "Make this a user" gives it an owner.
+login deletion), a mailbox is deleted or purged, or "Make this a user" gives it an owner. Console API: `GET`/`PATCH
+/api/accounts/:accountId/mailboxes/:mailboxId/delegation` (the lists; one batch of adds and removes), `POST
+…/convert-to-shared` (202, the password replacement is a job), `GET /api/accounts/:accountId/people/:userId/delegation`
+(the People panel's "Mailboxes they can open") and the optional `{ delegateTo }` body on `DELETE
+/api/accounts/:accountId/people/:userId`; the changes use the `delegationManage` rate-limit tier.
 
 **"Make this a user"** (`mailboxes/make-user.ts`) does the same for an existing unassigned mailbox (a shared address):
 login, membership, profile, owner link (`mailboxes.assignOwner`, conditional on no owner) and display name in one
