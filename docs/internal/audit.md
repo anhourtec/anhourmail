@@ -1,6 +1,6 @@
 # Audit
 
-Last updated: 2026-10-30 (mailbox delegation, ADR-0026: `delegation.granted` / `delegation.revoked` per change, `mailbox.converted_to_shared`, `MutationOutcome.also`; `account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
+Last updated: 2026-10-30 (mailbox delegation, ADR-0026: `delegation.mailbox_opened` for opening a delegated mailbox in the webmail; `delegation.granted` / `delegation.revoked` per change, `mailbox.converted_to_shared`, `MutationOutcome.also`; `account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
 
 Every meaningful action is recorded, tamper-evident, searchable and visible to the right people. Audit is a core module, not a logging side effect.
 
@@ -38,7 +38,7 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `audit` | `audit.exported` |
 | `shared_mailbox` | `shared_mailbox.created`, `shared_mailbox.deleted`, `shared_mailbox.member_added`, `shared_mailbox.member_removed` |
 | `distribution_list` | `distribution_list.created`, `distribution_list.deleted`, `distribution_list.member_added`, `distribution_list.member_removed`, `distribution_list.senders_changed` |
-| `delegation` | `delegation.granted`, `delegation.revoked` |
+| `delegation` | `delegation.granted`, `delegation.revoked`, `delegation.mailbox_opened` |
 | `folder_share` | `folder_share.granted`, `folder_share.revoked` |
 | `send_as` | `send_as.granted`, `send_as.revoked` |
 | `send_on_behalf` | `send_on_behalf.granted`, `send_on_behalf.revoked` |
@@ -175,6 +175,19 @@ person outside the account), `conflict` (own mailbox, limits, mailbox being dele
 **Convert to shared mailbox**: `mailbox.converted_to_shared` (target = the mailbox; meta `formerUserId`, `former`
 masked, `status`, `appPasswordsRevoked`, `grants` — how many it wrote) plus one `delegation.granted` per grant; never the
 generated password.
+**Opening a delegated mailbox in the webmail** (ADR-0026 §6; `packages/core/src/webmail/delegation.ts`):
+`delegation.mailbox_opened`, actor = the delegate (the person behind the webmail session's own mailbox, rebuilt from the
+database), in **that person's own account** — every grant is within one account, so a success is also the mailbox's
+account; target = the mailbox, labelled with its address only when it is in that account (an unknown address or another
+account's mailbox is recorded with no target id or label, so another account's addresses never land here); meta `need`
+(`full_access`, or `send` from the send path) and, on refusals, `reason` / `state`. `success`; `denied` with
+`not_granted` (no right now, an unknown address, another account's, the plan without delegation, the person removed or
+suspended, their own mailbox no longer theirs), `mailbox_unavailable` (a granted mailbox that is suspended, being
+deleted or not on the mail server yet; meta `state`), `act_as` (the console session the webmail came from has staff
+act-as open) or the matrix's `forbidden` (a suspended person); `failed` `unavailable` when the mail server refused the
+credential twice (the reserved slot was held) or named another mailbox, `server_error` when it couldn't be reached.
+Every refusal looks the same to the person (404). Never the tokens or the throwaway credential. The per-request gate
+(`DelegationGate`) is a read and writes nothing.
 
 Profile details: `account.profile_changed` (target = the person, label their sign-in email; meta: `fields` — the names
 of the optional profile fields that changed, never their values — and `self`). An admin's edit is written to that

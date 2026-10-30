@@ -214,3 +214,21 @@ export class WebmailHandoffError extends DomainError {
     super(HANDOFF_MESSAGES[reason], reason === "invalid" ? "handoff_invalid" : "handoff_refused");
   }
 }
+
+/**
+ * A delegated mailbox can't be opened or used (ADR-0026 §6): no grant now, no such address, another account's address,
+ * the plan doesn't include delegation, or the mailbox can't be used. HTTP 404 with one message in every case, so the
+ * answer never confirms that an address exists (rule 25).
+ */
+export class DelegatedMailboxRefusedError extends NotFoundError {
+  constructor() {
+    super("You don't have access to this mailbox.");
+  }
+}
+
+/** The mail server was busy with this mailbox (a credential slot taken by a concurrent open): HTTP 503, try again. */
+export class TryAgainError extends DomainError {
+  constructor(message = "The mail server is busy with this mailbox. Try again in a moment.") {
+    super(message, "unavailable");
+  }
+}

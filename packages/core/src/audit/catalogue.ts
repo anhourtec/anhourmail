@@ -151,6 +151,7 @@ export const AUDIT_ACTIONS = [
   "distribution_list.senders_changed",
   "delegation.granted",
   "delegation.revoked",
+  "delegation.mailbox_opened",
   "folder_share.granted",
   "folder_share.revoked",
   "send_as.granted",

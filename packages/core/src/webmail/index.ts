@@ -7,3 +7,4 @@ export * from "./signatures-service";
 export * from "./managed-script";
 export * from "./handoff";
 export * from "./on-behalf";
+export * from "./delegation";
