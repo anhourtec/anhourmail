@@ -752,7 +752,7 @@ export function Composer({
                     </option>
                   ))}
                 </optgroup>
-                <optgroup label="Shared with you">
+                <optgroup label="Shared mailboxes">
                   {senders.map((m) => (
                     <option key={m.mailbox} value={`${SHARED_FROM}${m.mailbox}`}>
                       {m.label}

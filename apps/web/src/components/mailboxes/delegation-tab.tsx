@@ -117,8 +117,9 @@ export function DelegationTab({
       <p className="am-body max-w-prose">
         Give people in this account access to <span className="font-mono break-all">{address}</span>. The three lists
         are separate: Read and manage doesn&apos;t include sending, and the send rights work without it. People with
-        Read and manage find the mailbox in their webmail under Shared with you; the send rights add it to From there.
-        If someone has both Send as and Send on behalf, Send as is used. Changes can take up to a minute to apply.
+        Read and manage open the mailbox in their webmail with Open another mailbox; the send rights add it to From
+        there. If someone has both Send as and Send on behalf, Send as is used. Changes can take up to a minute to
+        apply.
       </p>
       {readOnly && (
         <p className="am-small max-w-prose rounded-lg border px-4 py-3">
