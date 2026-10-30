@@ -9,3 +9,4 @@ export * from "./handoff";
 export * from "./on-behalf";
 export * from "./delegation";
 export * from "./internal-mail";
+export * from "./forwarding-guard";

@@ -272,16 +272,5 @@ export function delayLabel(seconds: number): string {
   return `Delivered after ${unit(Math.round(seconds / 86400), "day")}`;
 }
 
-/** The authserv-ids we trust: configured, else our MX hosts (plus the dev server's hostname outside production). */
-export function trustedAuthservIds(
-  configured: string | undefined,
-  mxHosts: readonly string[],
-  production: boolean,
-): string[] {
-  const set = (configured ?? "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
-  if (set.length > 0) return set;
-  return [...mxHosts.map((h) => h.toLowerCase()), ...(production ? [] : ["mail.dev.test"])];
-}
+/** The authserv-ids we trust (one source in `@anhourmail/core/webmail`, shared with the forwarding rule). */
+export { trustedAuthservIds } from "@anhourmail/core/webmail";
