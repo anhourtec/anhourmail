@@ -25,6 +25,7 @@ import { stalwartHandoffSignIn, stalwartOAuthPort } from "../adapters/stalwart-o
 import { container } from "../container";
 import { env, senderDelegationKey } from "../env";
 import { platform } from "../platform";
+import { trustedAuthservIds } from "./original";
 import { type SessionKv, WebmailSessionStore } from "./session-store";
 import { WebmailService } from "./service";
 import { WebmailSettings } from "./settings";
@@ -191,6 +192,10 @@ export function webmail(): WebmailService {
       confirmedForward: async (address) => {
         const f = await settingsService().forwarding(address);
         return f?.status === "confirmed" ? f.address : null;
+      },
+      authservIds: () => {
+        const e = env();
+        return trustedAuthservIds(e.MAIL_AUTHSERV_ID, platform().hosts.mx, e.NODE_ENV === "production");
       },
     });
   }

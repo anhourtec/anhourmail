@@ -30,6 +30,7 @@ function production(overrides: Record<string, string | undefined> = {}) {
     STALWART_DEV_ADMIN_USER: undefined,
     STALWART_DEV_ADMIN_PASSWORD: undefined,
     BREACHED_PASSWORD_CHECK: undefined,
+    MAIL_AUTHSERV_ID: undefined,
     ...overrides,
   };
   for (const [k, v] of Object.entries(base)) vi.stubEnv(k, v);
@@ -148,6 +149,19 @@ describe("Stalwart credentials (ADR-0020 credential split)", () => {
     expect(senderDelegationKey()).toMatch(/^[0-9a-f]{64}$/);
     production({ NODE_ENV: "development", APP_URL: "http://localhost:43200", SENDER_DELEGATION_KEY: "nope" });
     expect(() => env()).toThrow(/SENDER_DELEGATION_KEY must be 64 lowercase hex/);
+  });
+
+  it("needs usable authserv-ids: configured ones must be hostnames, and production falls back to the MX host", () => {
+    production({ ...onDomain });
+    expect(() => env()).not.toThrow();
+    production({ ...onDomain, MAIL_AUTHSERV_ID: "mx1.anhourmail.com, mx2.anhourmail.com" });
+    expect(() => env()).not.toThrow();
+    for (const bad of ["*", "mx1.anhourmail.com,bad*id", 'a"b.example', "nodot"]) {
+      production({ ...onDomain, MAIL_AUTHSERV_ID: bad });
+      expect(() => env()).toThrow(/MAIL_AUTHSERV_ID/);
+    }
+    production({ NODE_ENV: "development", APP_URL: "http://localhost:43200", MAIL_AUTHSERV_ID: "bad*id" });
+    expect(() => env()).toThrow(/MAIL_AUTHSERV_ID/);
   });
 
   it("refuses the legacy single key in any mode", () => {

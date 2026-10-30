@@ -291,6 +291,11 @@ export type WebmailDeps = {
    * keeps a redirect only to this address — never what the script comment or the caller says.
    */
   confirmedForward: (address: string) => Promise<string | null>;
+  /**
+   * The authserv-ids of our own mail server's results headers (the reader's trusted ids), for the forwarding rule's
+   * DMARC check. The app wires it (`instance.ts`); without it the rule has no ids and forwards as before.
+   */
+  authservIds?: () => readonly string[];
 };
 
 const MAIL = "urn:ietf:params:jmap:mail";
@@ -427,6 +432,7 @@ export class WebmailService {
   constructor(deps: WebmailDeps) {
     this.#d = {
       fetch: fetch,
+      authservIds: () => [],
       queue: new UserQueue(),
       now: Date.now,
       refreshSkewMs: 60_000,
@@ -3452,7 +3458,9 @@ export class WebmailService {
         : { enabled: false, address: null, keepCopy: rules.forwarding.keepCopy };
     const full: MailRules = { ...rules, forwarding, include: null };
     const identities = (await this.identities(sessionId)).map((i) => i.email.toLowerCase());
-    const base = buildScript(full, { identities, contacts: [] });
+    const authservIds = this.#d.authservIds();
+    const mailboxDomain = s.username.slice(s.username.lastIndexOf("@") + 1).toLowerCase() || null;
+    const base = buildScript(full, { identities, contacts: [], authservIds, mailboxDomain });
     let contacts: string[] = [];
     if (usesContacts(full)) {
       const { cards } = await this.#allCards(sessionId, ["emails"], account);
@@ -3462,7 +3470,7 @@ export class WebmailService {
       // Each contact can appear twice (trusted senders and the automatic-reply test).
       contacts = fitContacts(addresses, Math.floor((MAX_SCRIPT_BYTES - Buffer.byteLength(base)) / 2));
     }
-    const script = buildScript(full, { identities, contacts });
+    const script = buildScript(full, { identities, contacts, authservIds, mailboxDomain });
     if (new TextEncoder().encode(script).length > MAX_SCRIPT_BYTES) {
       throw new WebmailRefusedError(MAILBOX_RULES_LIMIT_MESSAGE);
     }

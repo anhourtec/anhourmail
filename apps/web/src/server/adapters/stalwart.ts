@@ -3,6 +3,7 @@ import "server-only";
 
 import { stalwartAppPasswords } from "@anhourmail/adapters/stalwart";
 import type { AppPasswordIssuer } from "@anhourmail/core/app-passwords";
+import type { ManagedScriptStore } from "@anhourmail/core/webmail";
 import { type StalwartManagement, stalwartOperations, verifyStalwartCredential } from "@anhourmail/stalwart-client";
 
 import { MANAGED_SCRIPT } from "../webmail/sieve";
@@ -39,6 +40,15 @@ export function managedSieve(): ManagedSieve {
   return {
     read: async (accountId) => (await operations()).getSieveScript(accountId, MANAGED_SCRIPT),
     write: async (accountId, script) => (await operations()).putSieveScript(accountId, MANAGED_SCRIPT, script),
+  };
+}
+
+/** The managed script for the start-up upgrade: reads with the Sieve state, writes only if it is unchanged. */
+export function managedSieveStore(): ManagedScriptStore {
+  return {
+    read: async (accountId) => (await operations()).getSieveScript(accountId, MANAGED_SCRIPT),
+    write: async (accountId, script, state) =>
+      (await operations()).putSieveScriptIfUnchanged(accountId, MANAGED_SCRIPT, script, state),
   };
 }
 

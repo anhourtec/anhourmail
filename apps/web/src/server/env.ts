@@ -3,8 +3,19 @@ import "server-only";
 
 import { z } from "zod";
 
-import { isSenderDelegationKey, resolveSenderDelegationKey } from "@anhourmail/core/webmail";
-import { isPlatformDomain, parsePlatformDomain, productionPlatformProblems } from "@anhourmail/shared/platform";
+import {
+  guardIds,
+  isPlainHostname,
+  isSenderDelegationKey,
+  resolveSenderDelegationKey,
+  trustedAuthservIds,
+} from "@anhourmail/core/webmail";
+import {
+  isPlatformDomain,
+  parsePlatformDomain,
+  platformFacts,
+  productionPlatformProblems,
+} from "@anhourmail/shared/platform";
 
 import { stalwartSettingsProblems } from "./adapters/stalwart-settings";
 
@@ -74,7 +85,32 @@ const checked = schema.superRefine((e, ctx) => {
       message: "SENDER_DELEGATION_KEY must be 64 lowercase hex characters (openssl rand -hex 32)",
     });
   }
+  // The authserv-ids the reader trusts and the forwarding rule writes into every managed script (ADR-0019): each
+  // configured one must be a plain hostname, and in production there must be at least one (else forwarding would
+  // run without its DMARC guard and the reader would trust nothing).
+  for (const id of (e.MAIL_AUTHSERV_ID ?? "")
+    .split(",")
+    .map((x) => x.trim().toLowerCase())
+    .filter(Boolean)) {
+    if (!isPlainHostname(id)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["MAIL_AUTHSERV_ID"],
+        message: "MAIL_AUTHSERV_ID must be the mail server's hostnames (comma-separated), as it stamps them",
+      });
+    }
+  }
   if (e.NODE_ENV !== "production") return;
+  // An unusable PLATFORM_DOMAIN is reported on its own below; then only a configured id can count.
+  const mx = isPlatformDomain(e.PLATFORM_DOMAIN) ? platformFacts(e.PLATFORM_DOMAIN).hosts.mx : [];
+  const ids = guardIds(trustedAuthservIds(e.MAIL_AUTHSERV_ID, mx, true));
+  if (ids.length === 0) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["MAIL_AUTHSERV_ID"],
+      message: "No usable authserv-id: set MAIL_AUTHSERV_ID to the mail server's hostname (or PLATFORM_DOMAIN)",
+    });
+  }
   if (delegationKey === "") {
     ctx.addIssue({
       code: "custom",
