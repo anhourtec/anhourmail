@@ -3,12 +3,23 @@ import { MANAGED_SIEVE_SETTINGS_PREFIX } from "@anhourmail/shared/webmail";
 
 import { mutation } from "../mutation";
 import type { Deps } from "../ports";
+import { forwardingGuard } from "./forwarding-guard";
 
 /**
  * Reads a mailbox's managed Sieve script on the mail server (adapter: the scheduler's read-only audit key) with whether
  * it is the active one. Null when it has none.
  */
-export type ManagedScriptReader = { read(externalId: string): Promise<{ content: string; active: boolean } | null> };
+export type ManagedScriptReader = {
+  /** `state` is the mail server's Sieve state for the account when read (for a compare-and-swap write). */
+  read(externalId: string): Promise<{ content: string; active: boolean; state?: string } | null>;
+};
+
+/** What the reconciler expects a mailbox's forwarding guard to be (the web app's `forwardingGuard` inputs). */
+export type ExpectedGuard = { authservIds: readonly string[] };
+
+/** A mailbox's own domain: the part of its address after the last `@`, lowercased, or null. */
+export const mailboxDomainOf = (address: string): string | null =>
+  address.includes("@") ? address.slice(address.lastIndexOf("@") + 1).toLowerCase() : null;
 
 export type ManagedScriptFindings = {
   /** The settings line we write is there and readable. */
@@ -19,6 +30,12 @@ export type ManagedScriptFindings = {
   redirects: string[];
   /** Requires or uses an extension we never write (notify, enotify, extprograms, include of a non-personal script). */
   foreign: string[];
+  /**
+   * A redirect not inside the expected forwarding guard (or, with no expectation given, with no results check at all):
+   * written before the guard, or for other authserv-ids. The web app upgrades these at start-up
+   * (`upgradeManagedScripts`); the reconciler only counts them.
+   */
+  unguardedRedirect: boolean;
 };
 
 /** Extensions the webmail never requires: anything that sends, runs or computes. */
@@ -78,7 +95,7 @@ function tokenize(text: string): { code: string; strings: string[] } {
  * webmail writes (`apps/web/src/server/webmail/sieve.ts`). It doesn't rebuild the whole script: that needs the
  * mailbox's contacts, which the control plane doesn't read.
  */
-export function inspectManagedScript(text: string): ManagedScriptFindings {
+export function inspectManagedScript(text: string, expectedGuard?: string | null): ManagedScriptFindings {
   const line = text.split("\n").find((l) => l.startsWith(MANAGED_SIEVE_SETTINGS_PREFIX));
   let forwarding: ManagedScriptFindings["forwarding"] = null;
   if (line) {
@@ -106,7 +123,23 @@ export function inspectManagedScript(text: string): ManagedScriptFindings {
       if (NEVER.has(ext)) foreign.push(ext);
     }
   }
-  return { ours: forwarding !== null, forwarding, redirects, foreign };
+  // With the expected guard: every redirect must sit directly inside exactly that text. Without: any results check.
+  const guarded =
+    expectedGuard === undefined
+      ? [...code.matchAll(/\bheader\s+:matches\s+"#(\d+)"/gi)].some(
+          (m) => str(m[1]).toLowerCase() === "authentication-results",
+        )
+      : expectedGuard !== null &&
+        // Redirect commands only: words inside strings (a reply text) are not code.
+        (code.match(/\bredirect\b/gi) ?? []).length ===
+          text.split(`if not ${expectedGuard} {\n    redirect`).length - 1;
+  return {
+    ours: forwarding !== null,
+    forwarding,
+    redirects,
+    foreign,
+    unguardedRedirect: redirects.length > 0 && !guarded,
+  };
 }
 
 export type ManagedScriptDrift = {
@@ -124,6 +157,11 @@ export type ManagedScriptDrift = {
   inactive: number;
   /** Mailboxes the mail server couldn't answer for. */
   unreachable: number;
+  /**
+   * Forwarding scripts whose redirect isn't inside the guard expected for that mailbox (reported, not re-queued: the web
+   * app's start-up upgrade fixes them).
+   */
+  unguardedForwarding: number;
   /** Mailboxes queued for `mailbox.ensure` (re-asserts the customer lock; never rewrites or deletes anything). */
   requeued: number;
   clean: boolean;
@@ -138,7 +176,11 @@ const RECONCILER = { kind: "system", name: "reconcile" } as const;
  * (`platform.reconciler_drift`, counts only) and re-queues `mailbox.ensure` for those mailboxes; never deletes or
  * rewrites a script (CLAUDE.md rule 26) — a person looks at it.
  */
-export async function reconcileManagedScripts(deps: Deps, reader: ManagedScriptReader): Promise<ManagedScriptDrift> {
+export async function reconcileManagedScripts(
+  deps: Deps,
+  reader: ManagedScriptReader,
+  expected?: ExpectedGuard,
+): Promise<ManagedScriptDrift> {
   const mailboxes = (await deps.uow.run((r) => r.appPasswords.mailboxesOnServer())).filter(
     (m) => m.status === "active",
   );
@@ -149,6 +191,7 @@ export async function reconcileManagedScripts(deps: Deps, reader: ManagedScriptR
     foreign: 0,
     inactive: 0,
     unreachable: 0,
+    unguardedForwarding: 0,
     requeued: 0,
     clean: true,
   };
@@ -162,7 +205,10 @@ export async function reconcileManagedScripts(deps: Deps, reader: ManagedScriptR
     if (script === null) continue; // no managed script yet: nothing set
     out.checked += 1;
     if (!script.active) out.inactive += 1;
-    const found = inspectManagedScript(script.content);
+    const found = inspectManagedScript(
+      script.content,
+      expected === undefined ? undefined : forwardingGuard(expected.authservIds, mailboxDomainOf(m.address)),
+    );
     const target = await deps.uow.run((r) => r.webmailSettings.forwarding(m.id));
     const confirmed = target?.status === "confirmed" ? target.address.toLowerCase() : null;
     let drift = false;
@@ -178,10 +224,13 @@ export async function reconcileManagedScripts(deps: Deps, reader: ManagedScriptR
       out.foreign += 1;
       drift = true;
     }
+    if (found.unguardedRedirect) out.unguardedForwarding += 1;
     if (drift) requeue.push(m.id);
   }
   out.requeued = requeue.length;
-  out.clean = out.notOurs + out.unconfirmedRedirects + out.foreign + out.inactive + out.unreachable === 0;
+  out.clean =
+    out.notOurs + out.unconfirmedRedirects + out.foreign + out.inactive + out.unreachable + out.unguardedForwarding ===
+    0;
   if (!out.clean) {
     const now = deps.clock.now();
     await mutation(
@@ -207,10 +256,139 @@ export async function reconcileManagedScripts(deps: Deps, reader: ManagedScriptR
             foreignScripts: out.foreign,
             scriptsInactive: out.inactive,
             mailboxesUnreachable: out.unreachable,
+            unguardedForwarding: out.unguardedForwarding,
             requeued: out.requeued,
           },
         };
       },
+    );
+  }
+  return out;
+}
+
+/** Reads and writes a mailbox's managed script (adapter: the web app's operations key — nothing else can write it). */
+export type ManagedScriptStore = ManagedScriptReader & {
+  /**
+   * Writes `content` only if the account's Sieve state is still `ifInState` (JMAP `ifInState`, honoured by the pinned
+   * server: a stale state is refused with `stateMismatch`, verified on v0.16.27). False when the state changed.
+   */
+  write(externalId: string, content: string, ifInState: string): Promise<boolean>;
+};
+
+export type ManagedScriptUpgrade = {
+  checked: number;
+  /** Scripts rewritten to the current format. */
+  upgraded: number;
+  /** Already current, or nothing the upgrade applies to. */
+  current: number;
+  /** Ours but not the active script: left alone (writing would make it active); the reconciler reports these. */
+  skippedInactive: number;
+  /** The redirect target isn't the mailbox's confirmed forwarding target: never rewritten (the reconciler flags it). */
+  skippedUnconfirmed: number;
+  /** Changed on the mail server between the read and the write (a save won): left as the save wrote it. */
+  skippedChanged: number;
+  /** The upgraded script would exceed the size limit. */
+  skippedTooLarge: number;
+  /** Mailboxes the mail server couldn't answer for, or writes it refused. */
+  failed: number;
+};
+
+const UPGRADER = { kind: "system", name: "webmail-rules-upgrade" } as const;
+
+/**
+ * Brings existing managed scripts up to the current format without a person saving their settings: for every active
+ * mailbox, reads its managed script and, when it is ours, active and forwards to the mailbox's **confirmed** target
+ * (case-insensitive, as recorded in the control plane), writes `upgrade(content, mailbox address)` if that returns a
+ * new text within `maxBytes`. `upgrade` is the generator's own exact transform (`upgradeManagedScript` in the web app):
+ * null unless the text is precisely what a generator wrote. The write is a compare-and-swap on the Sieve state read
+ * with the script, so a save in between (forwarding turned off, say) is never undone. Never deletes a script and never
+ * changes which one is active. Audited once, counts only (`platform.mail_rules_upgraded`), when anything was written,
+ * skipped for a reason other than "current", or failed.
+ */
+export async function upgradeManagedScripts(
+  deps: Deps,
+  store: ManagedScriptStore,
+  upgrade: (content: string, mailboxAddress: string) => string | null,
+  opts: { maxBytes: number },
+): Promise<ManagedScriptUpgrade> {
+  const mailboxes = (await deps.uow.run((r) => r.appPasswords.mailboxesOnServer())).filter(
+    (m) => m.status === "active",
+  );
+  const out: ManagedScriptUpgrade = {
+    checked: 0,
+    upgraded: 0,
+    current: 0,
+    skippedInactive: 0,
+    skippedUnconfirmed: 0,
+    skippedChanged: 0,
+    skippedTooLarge: 0,
+    failed: 0,
+  };
+  for (const m of mailboxes) {
+    const script = await store.read(m.stalwartId).catch(() => undefined);
+    if (script === undefined) {
+      out.failed += 1;
+      continue;
+    }
+    if (script === null) continue;
+    out.checked += 1;
+    const next = upgrade(script.content, m.address);
+    if (next === null || next === script.content) {
+      out.current += 1;
+      continue;
+    }
+    if (!script.active) {
+      out.skippedInactive += 1;
+      continue;
+    }
+    const found = inspectManagedScript(script.content);
+    const target = await deps.uow.run((r) => r.webmailSettings.forwarding(m.id));
+    const confirmed = target?.status === "confirmed" ? target.address.toLowerCase() : null;
+    const recorded = found.forwarding?.address ?? null;
+    if (confirmed === null || recorded !== confirmed || found.redirects.some((a) => a !== confirmed)) {
+      out.skippedUnconfirmed += 1;
+      continue;
+    }
+    if (new TextEncoder().encode(next).length > opts.maxBytes) {
+      out.skippedTooLarge += 1;
+      continue;
+    }
+    if (script.state === undefined) {
+      out.failed += 1; // no state to compare against: never write blind
+      continue;
+    }
+    try {
+      if (await store.write(m.stalwartId, next, script.state)) out.upgraded += 1;
+      else out.skippedChanged += 1;
+    } catch {
+      out.failed += 1;
+    }
+  }
+  if (out.checked - out.current > 0 || out.failed > 0) {
+    const now = deps.clock.now();
+    await mutation(
+      deps,
+      UPGRADER,
+      { requestId: `upgrade-sieve-${String(now.getTime())}`, ip: null, userAgent: null },
+      {
+        action: "platform.mail_rules_upgraded",
+        permission: "self.profile.read",
+        accountId: null,
+        target: { type: "mail_server", label: "managed sieve scripts" },
+      },
+      async () => ({
+        result: undefined,
+        meta: {
+          scriptsChecked: out.checked,
+          upgraded: out.upgraded,
+          current: out.current,
+          skippedInactive: out.skippedInactive,
+          skippedUnconfirmed: out.skippedUnconfirmed,
+          skippedChanged: out.skippedChanged,
+          skippedTooLarge: out.skippedTooLarge,
+          failed: out.failed,
+        },
+      }),
     );
   }
   return out;

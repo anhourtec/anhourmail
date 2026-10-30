@@ -27,7 +27,8 @@ import type { Mailbox } from "../mailboxes/entity";
 import { removeMember } from "../people/service";
 import type { Deps, UnitOfWork } from "../ports";
 import type { UserActor } from "../actor";
-import { reconcileManagedScripts } from "../webmail/managed-script";
+import { forwardingGuard } from "../webmail/forwarding-guard";
+import { inspectManagedScript, reconcileManagedScripts, upgradeManagedScripts } from "../webmail/managed-script";
 import { appPasswordName, appPasswordProtocols } from "./entity";
 import type { AppPasswordInventory, AppPasswordIssuer } from "./ports";
 import {
@@ -583,6 +584,7 @@ describe("reconciling managed Sieve scripts", () => {
       unconfirmedRedirects: 2,
       foreign: 1,
       inactive: 1,
+      unguardedForwarding: 3,
       requeued: 2,
     });
     expect(d.uow.state.jobs.map((j) => `${j.kind}:${j.subjectId}`).sort()).toEqual(
@@ -605,5 +607,178 @@ describe("reconciling managed Sieve scripts", () => {
     expect(d.uow.state.audit.length).toBe(before);
     const down = await reconcileManagedScripts(d, { read: () => Promise.reject(new Error("down")) });
     expect(down).toMatchObject({ clean: false, unreachable: 4, requeued: 0 });
+  });
+
+  it("tells a forwarding rule with the DMARC check from one without", () => {
+    const head = ours({ enabled: true, address: "copy@example.test" });
+    expect(inspectManagedScript(`${head}redirect "copy@example.test";\n`).unguardedRedirect).toBe(true);
+    const guarded = `${head}if not header :matches "Authentication-Results" ["mx1.example.test;*dmarc=fail*"] {\n  redirect "copy@example.test";\n}\n`;
+    expect(inspectManagedScript(guarded).unguardedRedirect).toBe(false);
+    // The words in a reply text are not code.
+    const inText = `${head}vacation "header :matches \\"Authentication-Results\\"";\nredirect "copy@example.test";\n`;
+    expect(inspectManagedScript(inText).unguardedRedirect).toBe(true);
+    expect(inspectManagedScript(ours({ enabled: false, address: null })).unguardedRedirect).toBe(false);
+  });
+});
+
+describe("upgradeManagedScripts", () => {
+  const ours = (address: string) =>
+    `require ["copy"];\n# am-settings: ${Buffer.from(JSON.stringify({ v: 1, forwarding: { enabled: true, address } }), "utf8").toString("base64url")}\n  redirect :copy "${address}";\n`;
+  const upgrade = (t: string) => (t.includes("OLD") ? t.replace("OLD", "NEW") : null);
+  const confirm = (
+    d: ReturnType<typeof setup>["d"],
+    mailboxId: string,
+    address: string,
+    status: "confirmed" | "pending" = "confirmed",
+  ) =>
+    d.uow.state.forwardingTargets.push({
+      mailboxId,
+      accountId: ACCOUNT_A,
+      address,
+      status,
+      tokenHash: null,
+      expiresAt: null,
+      confirmedAt: d.clock.now(),
+      requestedAt: d.clock.now(),
+      sendsInWindow: 0,
+      windowStartedAt: d.clock.now(),
+    });
+  type Row = { content: string; active: boolean; state: string };
+  /** A fake mail server: per-account script and Sieve state; a write lands only with the current state. */
+  const server = (rows: Record<string, Row | null | Error>) => {
+    const writes: [string, string][] = [];
+    return {
+      writes,
+      rows,
+      store: {
+        read: async (id: string) => {
+          const v = rows[id] ?? null;
+          if (v instanceof Error) throw v;
+          return v === null ? null : { ...v };
+        },
+        write: async (id: string, content: string, ifInState: string) => {
+          const v = rows[id];
+          if (!v || v instanceof Error) throw new Error("gone");
+          if (v.state !== ifInState) return false;
+          writes.push([id, content]);
+          rows[id] = { ...v, content, state: `${v.state}+` };
+          return true;
+        },
+      },
+    };
+  };
+
+  it("writes only active scripts that forward to the confirmed target, and audits counts once", async () => {
+    const { d } = setup();
+    confirm(d, MBX_MEMBER, "Copy@Example.test"); // compared case-insensitively
+    confirm(d, MBX_OWNER, "copy@example.test", "pending");
+    confirm(d, MBX_UADMIN, "elsewhere@example.test");
+    const s = server({
+      "s-dddd": { content: `OLD${ours("copy@example.test")}`, active: true, state: "1" },
+      "s-abab": { content: `OLD${ours("copy@example.test")}`, active: true, state: "1" }, // pending target
+      "s-efef": { content: `OLD${ours("copy@example.test")}`, active: true, state: "1" }, // another target
+      "s-eeee": new Error("down"),
+    });
+    const report = await upgradeManagedScripts(d, s.store, upgrade, { maxBytes: 95_000 });
+    expect(s.writes.map(([id]) => id)).toEqual(["s-dddd"]);
+    expect(report).toEqual({
+      checked: 3,
+      upgraded: 1,
+      current: 0,
+      skippedInactive: 0,
+      skippedUnconfirmed: 2,
+      skippedChanged: 0,
+      skippedTooLarge: 0,
+      failed: 1,
+    });
+    expect(d.uow.state.audit.at(-1)).toMatchObject({
+      action: "platform.mail_rules_upgraded",
+      meta: { scriptsChecked: 3, upgraded: 1, skippedUnconfirmed: 2, failed: 1 },
+    });
+    expect(JSON.stringify(d.uow.state.audit.at(-1))).not.toContain("example.test");
+  });
+
+  it("never undoes a save made between the read and the write (compare-and-swap on the Sieve state)", async () => {
+    const { d } = setup();
+    confirm(d, MBX_MEMBER, "copy@example.test");
+    const saved = `${ours("copy@example.test").replace('"enabled":true', '"enabled":false')}# forwarding off\n`;
+    const s = server({ "s-dddd": { content: `OLD${ours("copy@example.test")}`, active: true, state: "1" } });
+    const store = {
+      ...s.store,
+      read: async (id: string) => {
+        const got = await s.store.read(id);
+        // The person saves (forwarding off) right after our read: the state moves on.
+        s.rows[id] = { content: saved, active: true, state: "2" };
+        return got;
+      },
+    };
+    const report = await upgradeManagedScripts(d, store, upgrade, { maxBytes: 95_000 });
+    expect(report).toMatchObject({ upgraded: 0, skippedChanged: 1 });
+    expect(s.writes).toEqual([]);
+    expect((s.rows["s-dddd"] as Row).content).toBe(saved);
+  });
+
+  it("skips inactive and over-size results, never writes without a state, and is silent when all is current", async () => {
+    const { d } = setup();
+    for (const id of [MBX_MEMBER, MBX_OWNER, MBX_UADMIN, MBX_B]) confirm(d, id, "copy@example.test");
+    const s = server({
+      "s-dddd": { content: `OLD${ours("copy@example.test")}`, active: false, state: "1" },
+      "s-abab": { content: `OLD${ours("copy@example.test")}${"x".repeat(200)}`, active: true, state: "1" },
+      "s-efef": { content: `OLD${ours("copy@example.test")}`, active: true, state: "" },
+      "s-eeee": { content: `NEW${ours("copy@example.test")}`, active: true, state: "1" },
+    });
+    const report = await upgradeManagedScripts(
+      d,
+      {
+        ...s.store,
+        read: async (id) => {
+          const v = await s.store.read(id);
+          return v && id === "s-efef" ? { content: v.content, active: v.active } : v;
+        },
+      },
+      upgrade,
+      { maxBytes: 200 },
+    );
+    expect(report).toMatchObject({ checked: 4, current: 1, skippedInactive: 1, skippedTooLarge: 1, failed: 1 });
+    expect(s.writes).toEqual([]);
+    const before = d.uow.state.audit.length;
+    const quiet = await upgradeManagedScripts(
+      d,
+      server({ "s-dddd": { content: "NEW", active: true, state: "1" } }).store,
+      upgrade,
+      { maxBytes: 95_000 },
+    );
+    expect(quiet).toMatchObject({ checked: 1, current: 1, upgraded: 0 });
+    expect(d.uow.state.audit.length).toBe(before);
+  });
+
+  it("the reconciler compares a redirect's guard with the exact text expected for that mailbox", async () => {
+    const guard = forwardingGuard(["mx1.family.ca"], "family.ca") ?? "";
+    const head = `require ["copy"];\n# am-settings: ${Buffer.from(JSON.stringify({ v: 1, forwarding: { enabled: true, address: "copy@example.test" } }), "utf8").toString("base64url")}\n`;
+    const inGuard = (g: string) => `${head}  if not ${g} {\n    redirect :copy "copy@example.test";\n  }\n`;
+    expect(inspectManagedScript(inGuard(guard), guard).unguardedRedirect).toBe(false);
+    // An older or other-id guard, or a bare redirect, is "unguarded" against today's expectation.
+    expect(
+      inspectManagedScript(inGuard(forwardingGuard(["old.family.ca"], "family.ca") ?? ""), guard).unguardedRedirect,
+    ).toBe(true);
+    expect(inspectManagedScript(`${head}  redirect :copy "copy@example.test";\n`, guard).unguardedRedirect).toBe(true);
+    expect(inspectManagedScript(`${inGuard(guard)}redirect "x@evil.test";\n`, guard).unguardedRedirect).toBe(true);
+    // The word in a reply text is not a redirect command.
+    const withReply = `${inGuard(guard)}vacation "I will redirect your mail.";\n`;
+    expect(inspectManagedScript(withReply, guard).unguardedRedirect).toBe(false);
+    const { d } = setup();
+    confirm(d, MBX_MEMBER, "copy@example.test");
+    const report = await reconcileManagedScripts(
+      d,
+      { read: async (id) => (id === "s-dddd" ? { content: inGuard(guard), active: true } : null) },
+      { authservIds: ["mx1.family.ca"] },
+    );
+    expect(report).toMatchObject({ checked: 1, unguardedForwarding: 0 });
+    const stale = await reconcileManagedScripts(
+      d,
+      { read: async (id) => (id === "s-dddd" ? { content: inGuard(guard), active: true } : null) },
+      { authservIds: ["mx9.family.ca"] },
+    );
+    expect(stale).toMatchObject({ checked: 1, unguardedForwarding: 1, clean: false });
   });
 });

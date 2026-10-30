@@ -170,6 +170,7 @@ const EXPLICIT: Partial<Record<AuditAction, string>> = {
   "platform.provisioning_failed": "Mail server change failed",
   "platform.reconciler_drift": "Mail server drift found",
   "platform.mailboxes_requeued": "Mailboxes re-applied to the mail server",
+  "platform.mail_rules_upgraded": "Mailbox rules updated to the current format",
   "platform.mailbox_purged": "Mailbox permanently deleted",
   "platform.audit_chain_broken": "Audit chain break found",
   "audit.exported": "Audit log exported",

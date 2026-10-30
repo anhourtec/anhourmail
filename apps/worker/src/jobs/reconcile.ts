@@ -7,10 +7,11 @@
 import { stalwartAppPasswordInventory, stalwartManagedScripts } from "@anhourmail/adapters/stalwart";
 import { reconcileAppPasswords } from "@anhourmail/core/app-passwords";
 import { reconcile } from "@anhourmail/core/provisioning";
-import { reconcileManagedScripts } from "@anhourmail/core/webmail";
+import { reconcileManagedScripts, trustedAuthservIds } from "@anhourmail/core/webmail";
 import { log } from "@anhourmail/server/log";
 import { hasStalwartCredential, stalwartAudit, stalwartProvisioning } from "@anhourmail/stalwart-client";
 
+import { workerPlatform } from "../platform";
 import { runtime } from "../runtime";
 
 const l = log.child({ component: "reconcile" });
@@ -53,7 +54,14 @@ l.at(credentials.clean ? "info" : "warn", "app password reconcile finished", {
 // only. Reading a mailbox's script needs owner access, which only the scheduler's read-only audit key has; a one-off run
 // in the worker container (no audit key) skips it and says so.
 if (hasStalwartCredential("audit")) {
-  const scripts = await reconcileManagedScripts(deps, stalwartManagedScripts(stalwartAudit()));
+  // The forwarding guard each script should have: the same authserv-ids as the web app (MAIL_AUTHSERV_ID, else the MX
+  // host) and the mailbox's own domain (ADR-0019 updates "forwarding and DMARC").
+  const authservIds = trustedAuthservIds(
+    process.env.MAIL_AUTHSERV_ID,
+    workerPlatform().hosts.mx,
+    process.env.NODE_ENV === "production",
+  );
+  const scripts = await reconcileManagedScripts(deps, stalwartManagedScripts(stalwartAudit()), { authservIds });
   l.at(scripts.clean ? "info" : "warn", "managed script reconcile finished", { ...scripts });
 } else {
   l.warn("managed script reconcile skipped: no audit credential in this process (STALWART_AUDIT_KEY, scheduler only)");

@@ -136,6 +136,7 @@ export const AUDIT_ACTIONS = [
   "platform.provisioning_failed",
   "platform.reconciler_drift",
   "platform.mailboxes_requeued",
+  "platform.mail_rules_upgraded",
   "platform.mailbox_purged",
   "platform.audit_chain_broken",
   "audit.exported",
