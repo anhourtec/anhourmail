@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 
+import { internalMailTag } from "@anhourmail/core/webmail";
+
 import {
   authLabel,
   authResults,
   delayLabel,
   deliveryDelaySeconds,
+  isInternalMail,
   ourAuthResultsHeader,
   parseHeaderBlock,
+  type RawHeader,
+  receivedWith,
   receivedBy,
   senderChecks,
   stripComments,
@@ -251,5 +256,131 @@ describe("senderChecks", () => {
     expect(senderChecks(null)).toEqual({ mailedBy: null, signedBy: null });
     const raw = `${RCVD}Authentication-Results: mail.dev.test; spf=fail smtp.mailfrom=a@b.example\r\n\r\n`;
     expect(senderChecks(authResults(parseHeaderBlock(raw), OURS))).toEqual({ mailedBy: null, signedBy: null });
+  });
+});
+
+describe("isInternalMail", () => {
+  const KEY = "0123456789abcdef".repeat(4);
+  const FROM = "alice@dev.test";
+  const MID = "18e3.f7@mail.dev.test";
+  const tag = internalMailTag(KEY, FROM, MID) ?? "";
+  const internal = (h: RawHeader[], from: string, key: string) => isInternalMail(h, from, key, OURS);
+  // As a locally submitted message reaches a mailbox (captured on Stalwart v0.16.27): no Received, no results.
+  const local = (extra: { name: string; value: string }[] = []) => [
+    { name: "Delivered-To", value: "bob@dev.test" },
+    { name: "X-Spam-Status", value: "No" },
+    { name: "X-AnhourMail-Internal", value: tag },
+    { name: "From", value: `<${FROM}>` },
+    { name: "Message-ID", value: `<${MID}>` },
+    ...extra,
+  ];
+
+  it("accepts our server's marker for this From and Message-ID", () => {
+    expect(internal(local(), FROM, KEY)).toBe(true);
+    expect(internal(local(), "Alice@Dev.Test", KEY)).toBe(true);
+    // A copy redirected by a mailbox's rule keeps the original marker under our LMTP Received: its From is ours.
+    const redirected = [{ name: "Received", value: "from localhost by mail.dev.test with LMTP id 1" }, ...local()];
+    expect(internal(redirected, FROM, KEY)).toBe(true);
+  });
+
+  it("refuses a marker for another From, Message-ID or key", () => {
+    expect(internal(local(), "bob@dev.test", KEY)).toBe(false);
+    expect(internal(local(), FROM, "fedcba9876543210".repeat(4))).toBe(false);
+    const otherId = local().map((h) => (h.name === "Message-ID" ? { ...h, value: "<x@mail.dev.test>" } : h));
+    expect(internal(otherId, FROM, KEY)).toBe(false);
+  });
+
+  it("refuses no marker, a made-up one, or any header doubled", () => {
+    expect(
+      internal(
+        local().filter((h) => h.name !== "X-AnhourMail-Internal"),
+        FROM,
+        KEY,
+      ),
+    ).toBe(false);
+    const madeUp = local().map((h) => (h.name === "X-AnhourMail-Internal" ? { ...h, value: "ab".repeat(32) } : h));
+    expect(internal(madeUp, FROM, KEY)).toBe(false);
+    expect(internal(local([{ name: "x-anhourmail-internal ", value: tag }]), FROM, KEY)).toBe(false);
+    expect(internal(local([{ name: "Message-ID", value: "<y@mail.dev.test>" }]), FROM, KEY)).toBe(false);
+    expect(internal(local([{ name: "From", value: "mallory@evil.example" }]), FROM, KEY)).toBe(false);
+    expect(
+      internal(
+        local().filter((h) => h.name !== "Message-ID"),
+        FROM,
+        KEY,
+      ),
+    ).toBe(false);
+  });
+
+  it("is false, never a throw, for a malformed key", () => {
+    expect(internal(local(), FROM, "short")).toBe(false);
+  });
+
+  it("is false for anything that shows it arrived on port 25, wherever it sits", () => {
+    const rcvd = (w: string) => ({ name: "Received", value: `from mx.example.org by mail.dev.test with ${w} id 1; x` });
+    const ar = { name: "Authentication-Results", value: "mx.other.example; dmarc=pass" };
+    // A copy redirected from outside: our LMTP Received on top, the port 25 block further down.
+    expect(internal([rcvd("LMTP"), ...local([rcvd("ESMTP"), ar])], FROM, KEY)).toBe(false);
+    for (const extra of [
+      [rcvd("ESMTP")],
+      [rcvd("ESMTPS")],
+      [rcvd("SMTP")],
+      [{ name: "Received", value: "from x by mail.dev.test; date" }],
+      [ar],
+      [{ name: "authentication-results", value: "anything" }],
+      [{ name: "Received-SPF", value: "pass" }],
+      [{ name: "Authentication-Results\u00a0", value: "spelled oddly" }],
+    ]) {
+      expect(internal(local(extra), FROM, KEY)).toBe(false);
+    }
+    // Another host's Received (the sender's own client wrote it) and our LMTP hop don't count as port 25.
+    expect(internal(local([{ name: "Received", value: "from a by smtp.other.example with ESMTPSA" }]), FROM, KEY)).toBe(
+      true,
+    );
+    expect(internal([rcvd("LMTP"), ...local()], FROM, KEY)).toBe(true);
+  });
+
+  it("matches header names exactly: look-alikes count, only the exact name is the marker", () => {
+    const renamed = (name: string) => local().map((h) => (h.name === "X-AnhourMail-Internal" ? { ...h, name } : h));
+    for (const odd of [
+      "X-AnhourMail-Internal\u00a0",
+      "\ufeffX-AnhourMail-Internal",
+      "X-AnhourMail-Internal\v",
+      "X_AnhourMail_Internal",
+    ]) {
+      expect(internal(renamed(odd), FROM, KEY)).toBe(false); // the one marker-like header isn't exactly named
+      expect(internal(local([{ name: odd, value: tag }]), FROM, KEY)).toBe(false); // two marker-like headers
+    }
+    expect(internal(renamed("x-anhourmail-internal"), FROM, KEY)).toBe(true);
+    const oddId = local().map((h) => (h.name === "Message-ID" ? { ...h, name: "Message-ID\u00a0" } : h));
+    expect(internal(oddId, FROM, KEY)).toBe(false);
+  });
+});
+
+describe("exact header names elsewhere", () => {
+  it("reads the protocol of a Received header", () => {
+    expect(receivedWith("from a (b) by mail.dev.test (Stalwart SMTP) with LMTP id 1; x")).toBe("lmtp");
+    expect(receivedWith("from a by b; x")).toBeNull();
+  });
+
+  it("never trusts a results pair whose names only look right", () => {
+    // Stalwart keeps these names as written and its deleteheader doesn't match them (verified on v0.16.27), so a
+    // submitter could plant them: the raw parse must not trim them into the real names.
+    const raw =
+      "Delivered-To: bob@dev.test\r\nReceived\u00a0: from x by mail.dev.test with ESMTP id 1; x\r\n" +
+      "Authentication-Results\u00a0: mail.dev.test; dmarc=pass header.from=bank.example\r\nFrom: a@dev.test\r\n\r\n";
+    const parsed = parseHeaderBlock(raw);
+    expect(parsed.map((h) => h.name)).toContain("Received\u00a0");
+    expect(ourAuthResultsHeader(parsed, OURS)).toBeNull();
+    const jmap = [
+      { name: "Received\ufeff", value: "from x by mail.dev.test with ESMTP id 1; x" },
+      { name: "Authentication-Results", value: "mail.dev.test; dmarc=pass" },
+    ];
+    expect(ourAuthResultsHeader(jmap, OURS)).toBeNull();
+  });
+
+  it("still reads names with ASCII space or tab before the colon as the field (as Stalwart does)", () => {
+    const raw = `${RCVD}Authentication-Results \t: mail.dev.test; dmarc=pass header.from=example.org\r\n\r\n`;
+    expect(ourAuthResultsHeader(parseHeaderBlock(raw), OURS)).toMatch(/^mail\.dev\.test;/);
   });
 });

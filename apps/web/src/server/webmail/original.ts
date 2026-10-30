@@ -6,7 +6,21 @@
  * `authResults` for how that is decided.
  */
 
+import { INTERNAL_MAIL_HEADER, isInternalMailTag } from "@anhourmail/core/webmail";
+
 export type RawHeader = { name: string; value: string };
+
+/**
+ * Header names are matched exactly: ASCII-only lowercasing, nothing trimmed (JS `trim()` and `toLowerCase()` also
+ * touch Unicode spaces and letters). Stalwart v0.16.27 keeps a name ending in NBSP, a BOM or `\v` as written and its
+ * `deleteheader` doesn't remove it (verified 2026-10-30), so such a header is never the one we mean.
+ */
+export function asciiLower(s: string): string {
+  return s.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+}
+const isNamed = (h: RawHeader, name: string) => asciiLower(h.name) === name;
+/** A name with everything but ASCII letters and digits removed: catches look-alike spellings for counting. */
+const loose = (name: string) => asciiLower(name).replace(/[^a-z0-9]/g, "");
 
 /** The message's header block in order (folded lines joined), up to the first blank line. */
 export function parseHeaderBlock(raw: string): RawHeader[] {
@@ -21,7 +35,8 @@ export function parseHeaderBlock(raw: string): RawHeader[] {
     }
     const colon = line.indexOf(":");
     if (colon <= 0) continue;
-    out.push({ name: line.slice(0, colon).trim(), value: line.slice(colon + 1).trim() });
+    // Only ASCII space and tab before the colon (RFC 5322 obsolete syntax, which Stalwart reads as the same field).
+    out.push({ name: line.slice(0, colon).replace(/^[ \t]+|[ \t]+$/g, ""), value: line.slice(colon + 1).trim() });
   }
   return out;
 }
@@ -115,15 +130,15 @@ export function receivedBy(value: string): string | null {
  */
 export function ourAuthResultsHeader(headers: readonly RawHeader[], trustedIds: readonly string[]): string | null {
   const trusted = new Set(trustedIds.map((t) => t.trim().toLowerCase()).filter(Boolean));
-  const at = headers.findIndex((h) => h.name.toLowerCase() === "received");
+  const at = headers.findIndex((h) => isNamed(h, "received"));
   const received = headers[at];
   if (!received) return null;
   const by = receivedBy(received.value);
   if (!by || !trusted.has(by)) return null;
   let i = at + 1;
-  while (headers[i]?.name.toLowerCase().startsWith("arc-")) i++;
+  while (asciiLower(headers[i]?.name ?? "").startsWith("arc-")) i++;
   const ar = headers[i];
-  if (ar?.name.toLowerCase() !== "authentication-results") return null;
+  if (!ar || !isNamed(ar, "authentication-results")) return null;
   const [idPart = ""] = splitOutsideQuotes(stripComments(ar.value), ";");
   const authservId = idPart.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
   return authservId && trusted.has(authservId) ? ar.value : null;
@@ -167,6 +182,59 @@ export function authResults(headers: readonly RawHeader[], trustedIds: readonly 
       ? { result: dmarc.result, detail: withDomain(dmarc.result === "pass", dmarcDomain), domain: dmarcDomain }
       : none,
   };
+}
+
+/** The protocol in a `Received` header's `with` clause, lower-cased, or null. */
+export function receivedWith(value: string): string | null {
+  const m = /(?:^|\s)with\s+([^\s;]+)/i.exec(stripComments(value));
+  return m?.[1]?.toLowerCase() ?? null;
+}
+
+/**
+ * Whether our own server vouches that `from` submitted this message here (the internal-mail marker, ADR-0019 update
+ * 2026-10-30). Only the `sender-identity` script adds the header — to authenticated submissions whose recipients are
+ * all local, after checking From is exactly the account's envelope sender and removing any the client sent — and the
+ * `inbound-headers` script removes it from everything arriving from outside. True only when:
+ *
+ * - exactly one header is named like the marker (look-alike spellings counted), and its name is exactly it; the same
+ *   for `From` and `Message-ID`;
+ * - the marker equals the tag for `from` and that Message-ID under `key`;
+ * - nothing shows the message arrived on port 25 (a second barrier if the inbound strip were ever off — Stalwart skips
+ *   a missing or inactive system script, verified): no `Authentication-Results` or `Received-SPF` anywhere (the
+ *   submission script deletes every results header, and only port 25 gets either), and no `Received` stamped by one of
+ *   `trustedIds` with anything but LMTP (a redirect adds only an LMTP one; submissions add none).
+ *
+ * So a redirected copy of internal mail passes and one of outside mail fails. False on any doubt, including a malformed
+ * key.
+ */
+export function isInternalMail(
+  headers: readonly RawHeader[],
+  from: string,
+  key: string,
+  trustedIds: readonly string[],
+): boolean {
+  const trusted = new Set(trustedIds.map((t) => asciiLower(t.trim())).filter(Boolean));
+  const one = (name: string): RawHeader | null => {
+    const like = headers.filter((h) => loose(h.name) === loose(name));
+    const only = like[0];
+    return like.length === 1 && only && isNamed(only, name) ? only : null;
+  };
+  for (const h of headers) {
+    const n = loose(h.name);
+    if (n === "authenticationresults" || n === "receivedspf") return false;
+    if (n === "received") {
+      const by = receivedBy(h.value);
+      if (by !== null && trusted.has(by) && receivedWith(h.value) !== "lmtp") return false;
+    }
+  }
+  const marker = one(INTERNAL_MAIL_HEADER.toLowerCase());
+  const id = one("message-id");
+  if (!marker || !id || !one("from")) return false;
+  try {
+    return isInternalMailTag(key, from, id.value, marker.value);
+  } catch {
+    return false;
+  }
 }
 
 /** "mailed-by" and "signed-by" for a message's details: the passing SPF and DKIM domains, else null. */
