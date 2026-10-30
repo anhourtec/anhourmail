@@ -1,6 +1,6 @@
 # ADR-0026: Mailbox delegation (read and manage, send as, send on behalf) and shared mailboxes, through BFF-held mailbox tokens
 
-**Status:** Accepted 2026-10-30 (maintainer decisions below; slices 1–13 built, see the dated updates)
+**Status:** Accepted 2026-10-30 (maintainer decisions below; slices 1–14 built, see the dated updates)
 
 **Maintainer decisions (2026-10-30):** behaviour follows the conventional enterprise mailbox-delegation model exactly
 (design reference, gitignored: `../private/2026-10-30-delegation-reference.md`).
@@ -485,6 +485,35 @@ send_unconfirmed` ("Check Sent before sending it again."). After a successful su
   before the tagged-copy cleanup, and a cleanup record that fails is only logged, so a sent message never answers 503.
   The lookup of copies after a lost creation answer lists the folders: an `Email/query` `header: ["Message-ID", id]`
   filter never matched a just-created message on v0.16.27 (probed, bare and bracketed, after 2 s).
+
+**Update (2026-10-30, slice 14 built): the webmail UI.** "Shared with you" (sidebar and account menu; choosing one
+opens it in place, a banner names it, compose, replies, contacts, blocking and settings are hidden or explained),
+**Open another mailbox** (account menu → address → new tab at `/mailbox/<address>`, `/webmail/mailbox/<address>` on
+the bare dev host, optional `/<folder>`; one refusal page), the From picker labels from `GET /api/webmail/senders`
+(undo names the mailbox; `send_unconfirmed` shown as such), and "Sender on behalf of From" in the reader from the
+`Sender:` header only. `05-webmail.md` "Mailboxes shared with you" has the details. Choices made while building it:
+
+- **Server change, smallest found: tabs pin their mailbox per request.** The session's active entry is one value per
+  browser (one cookie), so making the address-scoped tab's mailbox active would have switched the person's other tabs.
+  Instead that tab sends `X-Webmail-Shared` (`?shared=` on links), and the session store reads the session with that
+  entry as the active one and writes it back with the real active entry restored (`server/webmail/pin.ts`), inside
+  `route()` and the Show original page. Only a delegated entry already in the session can be pinned; anything else is
+  the one 404 (marked `x-webmail-refused: mailbox` so the tab can show the refusal page). It grants nothing new: the
+  same person could switch to that entry. The open takes `activate: false` for this tab (an entry already open is
+  only re-checked, and not dropped when refused, so a send-only entry keeps its undo hold). Refreshes in flight are
+  keyed by session and mailbox.
+- **Review fixes (same day):** only an entry opened for read and manage can be pinned (the open records `opened`); a
+  pinned request never drops an entry (refused instead), so a cross-site link can't end a send's undo hold; `?shared=`
+  counts only on same-origin requests; a pinned write restores the real active entry from the record it replaces and,
+  if it is gone, hands over to its `via` or the first own mailbox, never the pinned one; refreshes are keyed by pin too
+  and deferred work runs unpinned; the address-scoped page opens by itself only for navigations from us
+  (`Sec-Fetch-Site` same-origin, same-site or none), otherwise it asks; "on behalf of" is shown as what the message
+  says, From first ("On behalf of From, sent by Sender").
+- **"Shared with you" switches the session** (as the existing mailbox switcher does), so other unpinned tabs follow;
+  sending from a shared mailbox stays in the person's own tab (403 `own_mailbox_only` otherwise, slice 13).
+- **Not built:** "People who can open this mailbox" in webmail Settings → Account (§5 "Visibility"): no webmail route
+  lists a mailbox's delegates yet; the owner notification email; drafts saved in a shared mailbox (the From choice
+  isn't kept with the draft).
 
 ## Consequences
 

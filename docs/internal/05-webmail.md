@@ -1,6 +1,6 @@
 # 05 — Webmail
 
-Last updated: 2026-10-30 (remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
+Last updated: 2026-10-30 (mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
 notifications; quoted replies; compose image placeholders; first-sign-in password step; sign-in links not pre-filled).
 
 **Status (2026-10-22): slice 1 is built** — webmail sign-in (OAuth code flow + PKCE, tokens sealed server-side), the
@@ -550,7 +550,7 @@ A fresh sign-in to a mailbox Stalwart already disabled fails at Stalwart with th
 it can't reach the check above; the suspension is named only to a browser that signed in to that address before
 (07-security.md "Webmail sign-in and suspension").
 
-### Mailboxes shared with you (delegation, ADR-0026 §6; BFF and sending built 2026-10-30, webmail UI next)
+### Mailboxes shared with you (delegation, ADR-0026 §6; BFF, sending and the webmail UI built 2026-10-30)
 
 A person given **Read and manage** on another mailbox of their account opens it in their own webmail session, without
 its password and without signing in again (maintainer decision 2: no extra step). The BFF holds that mailbox's own
@@ -657,9 +657,56 @@ token; the browser never does (rule 21).
 - **Received mail's tag means nothing** (ADR-0026 §8 requirement 4): inbound MX mail doesn't run the sender script, so an
   `X-AnhourMail-On-Behalf` header on received mail is never read, shown or trusted by the webmail; "on behalf of"
   comes only from `Sender:`, like any other message.
-- **Not built yet:** the webmail UI ("Shared with you" in the switcher and sidebar, **Open another mailbox**, the
-  refusal page, From picker labels; slice 14), drafts saved directly in a shared mailbox, and the best-effort Redis
-  scrub of sealed tokens after a revoke (§7; the gate is the control).
+- **The webmail UI** (slice 14, `components/webmail/sidebar.tsx`, `shared-mailbox.tsx`, `composer.tsx`, `reader.tsx`):
+  - **Shared with you**: the sidebar section and the account menu (⋮) list the mailboxes with `fullAccess`; choosing
+    one runs the open (made active, the page reloads). While one is active a banner ("You're viewing …", **Back to
+    your mailbox** switches to `via`) runs across the top, and New email, replies, Contacts, blocking a sender and
+    contact adds are hidden; Settings opens a note that settings belong to the person's own mailbox. Preferences
+    change locally only there (the route refuses saving). The page reads preferences, the password step and the
+    console link for the own mailbox (`via`).
+  - **Open another mailbox** (account menu): a dialog asks for an address and opens `/mailbox/<address>` (on the bare
+    dev host `/webmail/mailbox/<address>`; `/<folder>` adds a role or folder id) in a new tab
+    (`app/webmail/mailbox/[address]/[[...folder]]`, skeleton `SharedMailboxSkeleton`). The page only reads the session
+    record (signed out → sign-in; one of the person's own addresses → the webmail; their password step owed → the
+    webmail); the client then calls the open with `activate: false` (unless the entry is open already for reading),
+    so the session's active mailbox — what the person's other tabs show — is not changed. The open starts by itself
+    only when the navigation came from us (`Sec-Fetch-Site` `same-origin` or `same-site` — Open another mailbox, our
+    own links — or `none`, the person's address bar or bookmark; `navigationFromUs`, the `open-webmail` page's rule
+    plus `none`); from another site's link the page asks first ("Open <address>"), so nothing is minted, audited or
+    counted without a click. A refusal (404) shows one full-page answer, "You don't have access to this mailbox", with a link
+    back; it names the address only once the server has refused it.
+  - **Tabs pinned to their mailbox** (`server/webmail/pin.ts`): the session's active mailbox is one value for all of a
+    browser's tabs (one cookie), so a mailbox-scoped tab sends `X-Webmail-Shared: <address>` on every request (and
+    `?shared=<address>` on downloads, previews, print, raw source and Show original). `route()` runs webmail routes
+    inside that pin; the session store then **reads** the session with the pinned entry swapped in as the active one
+    (`pinView`) and **writes** it back with the real active entry restored (`unpinWrite`), so the access gate, the
+    delegation gate, own-mailbox-only, token refresh and every service path apply to the pinned mailbox, and nothing
+    the tab does changes another tab. A pin can only name a **delegated entry already in the session that was opened
+    for reading and managing** (`delegated.opened: "full_access"`; one minted by a send can't be pinned); one of the
+    person's own mailboxes, an entry not open and a malformed value are the one delegation refusal (404,
+    `x-webmail-refused: mailbox`, which the tab turns into the refusal page). The `?shared=` form counts only on
+    same-origin requests (`Sec-Fetch-Site` `same-origin` or absent). A pinned request **never drops** an entry: a
+    refused grant is answered 404 and the entry goes on the session's own next use or listing (so a link can't end
+    another tab's send and its undo). A pinned write takes the real active entry from the record it replaces (same
+    version, else it retries); if that entry is gone it hands over to the mailbox it came through, else the first own
+    one, never to the pinned entry. Refreshes in flight are keyed by session, pin and mailbox, and a request that finds
+    one pending re-reads the session itself afterwards. Deferred work (the end of an undo hold, contacts auto-save)
+    runs outside the pin of the request that scheduled it. `POST …/mailboxes/delegated` `{ address, activate: false }` opens the entry without
+    switching (or, if open, checks the grant now; not dropped when refused, so a send-only entry keeps its undo hold).
+  - **From picker**: `GET /api/webmail/senders` fills **From** with the person's identities, then a "Shared with you"
+    group with each label (the mailbox, or "<name> on behalf of <mailbox>"); sending passes `from` and undo passes
+    `mailbox`. `503 send_unconfirmed` shows its message ("We couldn't confirm whether this was sent. Check Sent before
+    sending it again."). The choice isn't stored with the draft (it is the person's own); reopening a draft starts
+    from their own address again.
+  - **"On behalf of" in the reader**: the message view has `sender` — the `Sender:` header when it is one address
+    that isn't the (single) From — and the reader shows what the message says, "On behalf of <From name> <address>,
+    sent by <Sender name> <address>", styled like the other header details: `Sender:` isn't authenticated, so it is never shown
+    as "me" or as a verified mark. A `sender` row is in the details too. No tag header is read (§8 requirement 4).
+  - The e2e journey (`tests/e2e/webmail-delegation.spec.ts`) runs on the desktop project only; the phone layout was
+    checked by hand.
+- **Not built yet:** drafts saved directly in a shared mailbox, the best-effort Redis scrub of sealed tokens after a
+  revoke (§7; the gate is the control), "People who can open this mailbox" in Settings → Account, and the owner
+  notification email.
 
 ### Push
 
@@ -894,7 +941,7 @@ Budgets are checked by Playwright performance tests with seeded mailboxes (Phase
 
 ### Shared and delegated mailboxes (`10-collaboration.md`)
 
-- The folder sidebar lists the personal mailbox first, then each shared mailbox and each delegated mailbox (from the JMAP session's non-personal accounts), each collapsible, with unread counts.
+- The folder sidebar lists the personal mailbox's folders, then **Shared with you** (each mailbox shared with the person with Read and manage, from our grants — not the JMAP session's non-personal accounts, ADR-0026); one is opened in place or in a tab of its own ("Mailboxes shared with you" above).
 - The composer's **From** picker lists only identities the BFF says the actor may use: own addresses and aliases, shared mailboxes they belong to (send as), and send-on-behalf grants. The BFF re-checks on submit and audits send as / on behalf; it never trusts the picker.
 - Folder sharing: "Share folder…" on a folder opens a dialog with people from the same account only (no directory search across accounts), presets (read, read + organise, full), optional expiry; applies per folder ("include subfolders" applies to each child).
 - Lists: sending to a list the actor can't post to shows an inline error before send.

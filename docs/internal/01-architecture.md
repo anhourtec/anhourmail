@@ -1,6 +1,6 @@
 # 01 — Architecture
 
-Last updated: 2026-10-30 (mailbox delegation, ADR-0026: sending as and on behalf of a delegated mailbox from the webmail BFF, slice 13; the webmail BFF opens delegated mailboxes behind the delegation gate; grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
+Last updated: 2026-10-30 (mailbox delegation, ADR-0026: the webmail UI and tabs pinned to a shared mailbox per request, slice 14; sending as and on behalf of a delegated mailbox from the webmail BFF, slice 13; the webmail BFF opens delegated mailboxes behind the delegation gate; grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
 
 ## Overview
 
@@ -119,8 +119,8 @@ a person-less mailbox suspends it (fails closed), and `mailbox.ensure` refuses t
 existing account back on until it has landed; the console → webmail handoff takes the account lock before checking
 ownership, so it can't mint tokens for someone being removed.
 
-**Delegation and shared mailboxes (ADR-0026; the control-plane part, its console API and UI and the webmail BFF's
-read-and-manage side are built; delegated sending and the webmail UI are not):** administrators grant read and manage,
+**Delegation and shared mailboxes (ADR-0026; built: the control-plane part, its console API and UI, the webmail BFF
+for reading, managing and sending, and the webmail UI):** administrators grant read and manage,
 send as or send on behalf on any mailbox to people in the account (`mailbox_delegation`). No mail-server state changes:
 the webmail BFF opens a delegated mailbox with that mailbox's own token (a throwaway credential minted, used once and
 destroyed, as in the handoff), seals it into the delegate's session, and checks the grant on every request; delegated
@@ -153,6 +153,12 @@ right" never). The opened tokens are a `delegated` entry in the delegate's seale
 delegated mailbox is active, and a route-file test pins the lists. `WebmailService.session()` checks the gate again on
 each use and drops only the entry (never the session) when the grant, the mailbox's state or its token is gone. Opening
 is `POST /api/webmail/mailboxes/delegated` (`webmailDelegatedOpen`, fail closed); every refusal is the same 404.
+Webmail UI (slice 14): "Shared with you" switches the session to a mailbox (as the mailbox switcher does); **Open another
+mailbox** opens `/mailbox/<address>` in a new tab, which opens the entry with `activate: false` and then **pins** it on
+every request (`X-Webmail-Shared`, `?shared=` on links; `server/webmail/pin.ts`): `route()` runs the request in that
+pin and the session store reads the session with the pinned entry as the active one and writes it back with the real
+active entry restored, so the gates and the service act on the pinned mailbox and the person's other tabs keep theirs.
+Only a delegated entry already in the session can be pinned; anything else is the one 404.
 
 **"Make this a user"** (`mailboxes/make-user.ts`) does the same for an existing unassigned mailbox (a shared address):
 login, membership, profile, owner link (`mailboxes.assignOwner`, conditional on no owner) and display name in one
