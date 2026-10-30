@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { hashPassword } from "@anhourmail/adapters/auth";
+import { resolveSenderDelegationKey } from "@anhourmail/core/webmail";
 import {
   applyDefaultFolders,
   applySenderIdentityPolicy,
@@ -23,6 +24,9 @@ import {
  * - Pyzor is a network lookup service; the isolated dev network can't reach it, and Stalwart refuses to
  *   reload while it is enabled. Dev only — production keeps it on (rule 20 is about production filtering).
  * - The admin WebUI bundle is served from a pinned local file because Stalwart can't download it.
+ * - The sender-identity script carries the send-on-behalf exception (ADR-0026 §8), keyed with `SENDER_DELEGATION_KEY`
+ *   from `.env`, or the dev key derived from BETTER_AUTH_SECRET when unset (`resolveSenderDelegationKey`), so the web
+ *   app and `stack:verify` compute the same tags. Production's bootstrap passes its own key (private ops repository).
  * - The webmail BFF's OAuth client (`anhourmail-webmail`, ADR-0018) is registered with the local webmail origins.
  *   Production registers exactly one redirect URI, `https://mail.anhourmail.com/oauth/callback` (the same call,
  *   run by the deploy's bootstrap with `WEBMAIL_URL`); the URI is never visited, it only has to match.
@@ -59,7 +63,7 @@ export async function ensureWebUiBundle(): Promise<void> {
 
 export async function applyDevMailPlan(
   mgmt: StalwartManagement,
-  opts: { mailboxPassword: string; webmailOrigins: string[] },
+  opts: { mailboxPassword: string; webmailOrigins: string[]; senderDelegationKey?: string },
 ): Promise<{ domainId: string; restartNeeded: boolean }> {
   await ensureWebUiBundle();
   let restartNeeded = await mgmt.setWebUiResource(`file:///opt/anhourmail/${WEBUI_FILE}`);
@@ -79,8 +83,11 @@ export async function applyDevMailPlan(
   ] as const) {
     if (await mgmt.ensureListener(l)) restartNeeded = true;
   }
-  // Header From must equal the authenticated envelope sender (ADR-0019). Also a production setting.
-  await applySenderIdentityPolicy(mgmt);
+  // Header From must equal the authenticated envelope sender, with the keyed send-on-behalf exception (ADR-0019,
+  // ADR-0026 §8). Also a production setting (with production's own key).
+  await applySenderIdentityPolicy(mgmt, {
+    onBehalfKey: opts.senderDelegationKey ?? resolveSenderDelegationKey(process.env),
+  });
   // Transport hardening (ADR-0018, validated 2026-10-21): offer no SASL mechanisms on submission until the session
   // is TLS. The default still offered OAUTHBEARER/XOAUTH2 in clear text on 587. Port 25 never offers AUTH.
   await mgmt.updateSingleton("x:MtaStageAuth", {

@@ -7,8 +7,14 @@
  *   4. The Stalwart container has no route to the internet.
  *   5. Mail clients can sign in over every protocol we offer: IMAP (993), POP3 (995) and SMTP submission (465)
  *      with TLS, plus greetings on SMTP 587 (STARTTLS) and ManageSieve (4190).
- *   6. Sender identity (ADR-0019): an authenticated submission with a forged header From, two From lines or a
- *      null envelope sender is refused.
+ *   6. Sender identity (ADR-0019): an authenticated submission with a forged header From, two From lines, a second
+ *      Sender header, a From/Sender field name written oddly (space or tab before the colon, mixed case) or a null
+ *      envelope sender is refused, also when addressed to the sender's own mailbox. Send on behalf (ADR-0026 §8): From =
+ *      the mailbox and Sender = a delegate pass only with the web app's tag for exactly that pair and that Message-ID
+ *      (`onBehalfTag`), over SMTP and JMAP, and arrive without the tag header (in Mailpit and in a local mailbox's
+ *      stored copy); a wrong, missing, empty, other-pair or other-message tag, a missing or doubled Message-ID, odd
+ *      Sender forms (group, `<>`, encoded word, source route) and a delegate putting the mailbox in From even with the
+ *      tag are refused. Each case uses a fresh recipient so the per-recipient throttle never answers first.
  *   7. A submitted message reaches a local mailbox without any Authentication-Results header, so a sender can't
  *      plant results our server never produced (07-security.md "Authentication results in the webmail").
  *   8. Unknown local recipients (02-mail-infrastructure.md "Unknown recipients"): refused at RCPT with 550 on a
@@ -23,6 +29,8 @@ import { randomUUID } from "node:crypto";
 import net from "node:net";
 import tls from "node:tls";
 
+import { hashPassword } from "@anhourmail/adapters/auth";
+import { ON_BEHALF_HEADER, onBehalfTag, resolveSenderDelegationKey } from "@anhourmail/core/webmail";
 import { JmapClient } from "@anhourmail/jmap-client";
 import { stalwartDevAdmin } from "@anhourmail/stalwart-client";
 
@@ -179,40 +187,107 @@ await protocolCheck("SMTP 465: TLS AUTH PLAIN", async () => {
   w.close();
   return res.startsWith("235");
 });
-/** SMTP AUTH submission as alice with a given header From; resolves to the DATA reply (ADR-0019). */
+/**
+ * SMTP AUTH submission (alice unless `as` is given) with a given header From; resolves to the DATA reply, or to the
+ * first 4xx/5xx before it (ADR-0019).
+ */
 async function submitWithHeaderFrom(
   headerFrom: string,
-  opts: { to?: string; subject?: string; extra?: string } = {},
+  opts: {
+    to?: string;
+    subject?: string;
+    extra?: string;
+    as?: { user: string; password: string };
+    /** Write the headers as given, with no `From:` line of our own. */
+    raw?: boolean;
+  } = {},
 ): Promise<string> {
   const to = opts.to ?? `sender-check-${randomUUID().slice(0, 8)}@example.com`;
+  const login = opts.as ?? { user, password };
+  await sleep(250); // stay under the per-IP throttle (5 / s): a 4xx would hide what the script decides
   const w = await wire(port("STALWART_SUBMISSIONS_PORT", 465), true);
-  await w.read(/^220 /m);
-  w.send("EHLO verify.local");
-  await w.read(/^250 /m);
-  w.send(`AUTH PLAIN ${Buffer.from(`\0${user}\0${password}`).toString("base64")}`);
-  await w.read(/^\d{3} /m);
-  w.send(`MAIL FROM:<${user}>`);
-  await w.read(/^\d{3} /m);
-  w.send(`RCPT TO:<${to}>`);
-  await w.read(/^\d{3} /m);
-  w.send("DATA");
-  await w.read(/^354 /m);
-  const subject = opts.subject ?? "sender identity check";
-  w.send(`From: ${headerFrom}\r\nTo: ${to}\r\nSubject: ${subject}\r\n${opts.extra ?? ""}\r\nx\r\n.`);
-  const res = await w.read(/^\d{3} /m);
-  w.send("QUIT");
-  w.close();
-  return res;
+  try {
+    await w.read(/^220 /m);
+    w.send("EHLO verify.local");
+    await w.read(/^250 /m);
+    w.send(`AUTH PLAIN ${Buffer.from(`\0${login.user}\0${login.password}`).toString("base64")}`);
+    await w.read(/^\d{3} /m);
+    for (const line of [`MAIL FROM:<${login.user}>`, `RCPT TO:<${to}>`]) {
+      w.send(line);
+      const reply = await w.read(/^\d{3} /m);
+      if (/^[45]\d\d /m.test(reply)) return reply;
+    }
+    w.send("DATA");
+    await w.read(/^354 /m);
+    const subject = opts.subject ?? "sender identity check";
+    const from = opts.raw === true ? headerFrom : `From: ${headerFrom}\r\n`;
+    w.send(`${from}To: ${to}\r\nSubject: ${subject}\r\n${opts.extra ?? ""}\r\nx\r\n.`);
+    const res = await w.read(/^\d{3} /m);
+    w.send("QUIT");
+    return res;
+  } finally {
+    w.close();
+  }
 }
+/** A submission whose header block (apart from To and Subject) is exactly `headers`. */
+const submitRaw = (headers: string, opts: { to?: string } = {}) =>
+  submitWithHeaderFrom(headers, { ...opts, raw: true });
+/** A DATA refusal by the sender-identity script (5.5.3), not a throttle or recipient answer. */
+const refusedBySenderCheck = (reply: string) => /^5\d\d 5\.5\.3 /m.test(reply);
 await protocolCheck("Sender identity: own header From accepted", async () =>
   (await submitWithHeaderFrom(user)).startsWith("250"),
 );
 await protocolCheck("Sender identity: forged header From refused", async () =>
-  /^5\d\d /m.test(await submitWithHeaderFrom(`bob@${DEV_DOMAIN}`)),
+  refusedBySenderCheck(await submitWithHeaderFrom(`bob@${DEV_DOMAIN}`)),
 );
 await protocolCheck("Sender identity: two From lines refused", async () =>
-  /^5\d\d /m.test(await submitWithHeaderFrom(`${user}\r\nFrom: bob@${DEV_DOMAIN}`)),
+  refusedBySenderCheck(await submitWithHeaderFrom(`${user}\r\nFrom: bob@${DEV_DOMAIN}`)),
 );
+await protocolCheck("Sender identity: a second Sender header refused, even when one matches", async () =>
+  refusedBySenderCheck(await submitWithHeaderFrom(user, { extra: `Sender: ${user}\r\nSender: bob@${DEV_DOMAIN}\r\n` })),
+);
+type Throwaway = { id: string; user: string; password: string };
+/** A throwaway dev.test mailbox (fresh recipient throttle), removed again whatever happens. */
+async function withThrowawayMailbox(label: string, fn: (m: Throwaway) => Promise<boolean>): Promise<boolean> {
+  const admin = stalwartDevAdmin();
+  const local = `verify-${label}-${token}`;
+  const password = `Vs-${randomUUID()}-9!`;
+  const id = await admin.upsertUser({
+    name: local,
+    domain: DEV_DOMAIN,
+    password: await hashPassword(password),
+    quotaBytes: 10 * 1024 ** 2,
+  });
+  try {
+    return await fn({ id, user: `${local}@${DEV_DOMAIN}`, password });
+  } finally {
+    await admin.destroy("x:Account", id);
+  }
+}
+await protocolCheck("Sender identity: forged From to the sender's own mailbox refused", async () =>
+  // The control must be delivered and the forged one refused at DATA by the script.
+  withThrowawayMailbox("self", async (self) => {
+    const own = await submitWithHeaderFrom(self.user, { to: self.user, as: self });
+    const forged = await submitWithHeaderFrom(`bob@${DEV_DOMAIN}`, { to: self.user, as: self });
+    return own.startsWith("250") && refusedBySenderCheck(forged);
+  }),
+);
+// Field names written oddly: Stalwart's parser reads every one of these as From / Sender (verified 2026-10-30), so the
+// checks see them; these cases keep it that way.
+const bobForged = `bob@${DEV_DOMAIN}`;
+for (const [label, submit] of [
+  ["Sender with a space before the colon", () => submitWithHeaderFrom(user, { extra: `Sender : ${bobForged}\r\n` })],
+  ["Sender with a tab before the colon", () => submitWithHeaderFrom(user, { extra: `Sender\t: ${bobForged}\r\n` })],
+  ["Sender in mixed case", () => submitWithHeaderFrom(user, { extra: `sEnDeR: ${bobForged}\r\n` })],
+  [
+    "a second From with a space before the colon",
+    () => submitWithHeaderFrom(user, { extra: `From : ${bobForged}\r\n` }),
+  ],
+  ["a From with a tab before the colon, then our own", () => submitRaw(`From\t: ${bobForged}\r\nFrom: ${user}\r\n`)],
+  ["From in mixed case", () => submitRaw(`fRoM: ${bobForged}\r\n`)],
+] as const) {
+  await protocolCheck(`Sender identity: ${label} refused`, async () => refusedBySenderCheck(await submit()));
+}
 await protocolCheck("Sender identity: authenticated null sender (MAIL FROM:<>) refused", async () => {
   const w = await wire(port("STALWART_SUBMISSIONS_PORT", 465), true);
   await w.read(/^220 /m);
@@ -240,6 +315,158 @@ await protocolCheck("Submission: Authentication-Results headers stripped before 
   const names = (list[0]?.headers ?? []).map((h) => h.name.toLowerCase());
   return names.includes("from") && !names.includes("authentication-results");
 });
+// Send on behalf (ADR-0026 §8): alice is the mailbox (envelope and From), bob the delegate (Sender). The key is the one
+// the dev plan wrote into the script (SENDER_DELEGATION_KEY, else derived from BETTER_AUTH_SECRET); never printed.
+const onBehalfKey = resolveSenderDelegationKey(process.env);
+const bobAddress = `bob@${DEV_DOMAIN}`;
+const newMessageId = () => `${randomUUID()}@verify.${DEV_DOMAIN}`;
+const tagFor = (messageId: string, delegate = bobAddress) => onBehalfTag(onBehalfKey, user, delegate, messageId);
+/** Sender, Message-ID(s) and tag header lines for an SMTP submission (`tag: null` = no tag header). */
+const onBehalf = (o: { tag: string | null; messageIds: string[]; sender?: string }) =>
+  `Sender: ${o.sender ?? bobAddress}\r\n${o.messageIds.map((id) => `Message-ID: <${id}>\r\n`).join("")}${
+    o.tag === null ? "" : `${ON_BEHALF_HEADER}: ${o.tag}\r\n`
+  }`;
+/** The headers of the one Mailpit message to `to`, keys lowercased. */
+async function mailpitHeaders(to: string): Promise<Record<string, string[]> | undefined> {
+  const found = await waitFor(async () => {
+    const res = await fetch(`${mailpit}/api/v1/search?query=${encodeURIComponent(`to:${to}`)}`);
+    const body = (await res.json()) as { messages?: { ID: string }[] };
+    return body.messages?.[0]?.ID;
+  });
+  if (!found) return undefined;
+  const res = await fetch(`${mailpit}/api/v1/message/${found}/headers`);
+  const headers = (await res.json()) as Record<string, string[]>;
+  return Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
+}
+const deliveredOnBehalf = (h: Record<string, string[]> | undefined) =>
+  h !== undefined &&
+  (h.from ?? []).some((v) => v.includes(user)) &&
+  (h.sender ?? []).some((v) => v.includes(bobAddress)) &&
+  !(ON_BEHALF_HEADER.toLowerCase() in h);
+const fresh = (label: string) => `on-behalf-${label}-${randomUUID().slice(0, 8)}@example.com`;
+const refusedOnBehalf = async (label: string, extra: string, as?: { user: string; password: string }) =>
+  refusedBySenderCheck(await submitWithHeaderFrom(user, { to: fresh(label), extra, ...(as ? { as } : {}) }));
+
+await protocolCheck(
+  "Send on behalf (SMTP): right tag accepted, delivered with Sender and without the tag",
+  async () => {
+    const to = fresh("smtp");
+    const id = newMessageId();
+    const reply = await submitWithHeaderFrom(user, { to, extra: onBehalf({ tag: tagFor(id), messageIds: [id] }) });
+    return reply.startsWith("250") && deliveredOnBehalf(await mailpitHeaders(to));
+  },
+);
+await protocolCheck(
+  "Send on behalf (JMAP): right tag accepted, delivered with Sender and without the tag",
+  async () => {
+    const to = fresh("jmap");
+    const id = newMessageId();
+    const accountId = await alice.accountId();
+    const drafts = await alice.mailboxByRole("drafts");
+    const ids = await alice.request([["Identity/get", { accountId, ids: null }, "i"]]);
+    const identity = ((ids.get("i")?.list ?? []) as { id: string; email: string }[]).find((i) => i.email === user);
+    if (!drafts || !identity) return false;
+    const res = await alice.request([
+      [
+        "Email/set",
+        {
+          accountId,
+          create: {
+            e: {
+              mailboxIds: { [drafts.id]: true },
+              keywords: { $draft: true, $seen: true },
+              messageId: [id],
+              from: [{ email: user }],
+              sender: [{ email: bobAddress }],
+              to: [{ email: to }],
+              subject: "stack-verify on behalf",
+              [`header:${ON_BEHALF_HEADER}:asText`]: tagFor(id),
+              bodyValues: { b: { value: "On-behalf check." } },
+              textBody: [{ partId: "b", type: "text/plain" }],
+            },
+          },
+        },
+        "e",
+      ],
+      [
+        "EmailSubmission/set",
+        { accountId, create: { s: { identityId: identity.id, emailId: "#e" } }, onSuccessDestroyEmail: ["#s"] },
+        "s",
+      ],
+    ]);
+    const created = res.get("s")?.created as Record<string, unknown> | undefined;
+    if (created?.s === undefined) {
+      // Refused: the draft stays behind (onSuccessDestroyEmail runs only on success), so remove it.
+      const draft = (res.get("e")?.created as Record<string, { id: string }> | undefined)?.e;
+      if (draft) await alice.request([["Email/set", { accountId, destroy: [draft.id] }, "d"]]);
+      return false;
+    }
+    return deliveredOnBehalf(await mailpitHeaders(to));
+  },
+);
+await protocolCheck("Send on behalf (local delivery): the stored copy has Sender and no tag header", async () =>
+  withThrowawayMailbox("onbehalf", async (box) => {
+    const id = newMessageId();
+    const subject = `stack-verify on behalf local ${token}`;
+    const reply = await submitWithHeaderFrom(user, {
+      to: box.user,
+      subject,
+      extra: onBehalf({ tag: tagFor(id), messageIds: [id] }),
+    });
+    if (!reply.startsWith("250")) return false;
+    const reader = new JmapClient({
+      sessionUrl: `${base}/jmap/session`,
+      authorization: `Basic ${Buffer.from(`${box.user}:${box.password}`).toString("base64")}`,
+    });
+    const boxInbox = await reader.mailboxByRole("inbox");
+    if (!boxInbox) return false;
+    const got = await waitFor(async () =>
+      (await reader.listEmails(boxInbox.id, 10)).find((e) => e.subject === subject),
+    );
+    if (!got) return false;
+    const res = await reader.request([
+      ["Email/get", { accountId: await reader.accountId(), ids: [got.id], properties: ["headers"] }, "g"],
+    ]);
+    const list = (res.get("g")?.list ?? []) as { headers?: { name: string; value: string }[] }[];
+    const headers = list[0]?.headers ?? [];
+    const names = headers.map((h) => h.name.toLowerCase());
+    return (
+      names.includes("sender") &&
+      headers.some((h) => h.name.toLowerCase() === "sender" && h.value.includes(bobAddress)) &&
+      !names.includes(ON_BEHALF_HEADER.toLowerCase())
+    );
+  }),
+);
+{
+  const id = newMessageId();
+  const good = tagFor(id);
+  const cases: [string, string][] = [
+    ["wrong tag", onBehalf({ tag: "0".repeat(64), messageIds: [id] })],
+    ["missing tag", onBehalf({ tag: null, messageIds: [id] })],
+    ["empty tag header", onBehalf({ tag: "", messageIds: [id] })],
+    ["another pair's tag", onBehalf({ tag: good, messageIds: [id], sender: `someone@${DEV_DOMAIN}` })],
+    // Replay: a tag copied from one message is useless on any other.
+    ["a tag made for another Message-ID", onBehalf({ tag: good, messageIds: [newMessageId()] })],
+    ["no Message-ID", onBehalf({ tag: good, messageIds: [] })],
+    ["two Message-IDs (tag right for one)", onBehalf({ tag: good, messageIds: [newMessageId(), id] })],
+  ];
+  // Sender forms an expression might read oddly: never accepted without the web app's tag, not with an empty one.
+  for (const [form, sender] of [
+    ["group syntax", "Undisclosed recipients:;"],
+    ["an empty address <>", "<>"],
+    ["an encoded word", `=?utf-8?q?B=C3=B6b?= <${bobAddress}>`],
+    ["a source route", `<@relay.example:${bobAddress}>`],
+  ] as const) {
+    cases.push([`Sender as ${form}, no tag`, onBehalf({ tag: null, messageIds: [id], sender })]);
+    cases.push([`Sender as ${form}, empty tag`, onBehalf({ tag: "", messageIds: [id], sender })]);
+  }
+  for (const [label, extra] of cases) {
+    await protocolCheck(`Send on behalf: ${label} refused`, () => refusedOnBehalf("refuse", extra));
+  }
+  await protocolCheck("Send on behalf: delegate putting the mailbox in From refused, even with the tag", () =>
+    refusedOnBehalf("forge", onBehalf({ tag: good, messageIds: [id] }), { user: bobAddress, password }),
+  );
+}
 await protocolCheck("IMAP 143: greeting + STARTTLS offered", async () => {
   const w = await wire(port("STALWART_IMAP_PORT", 143), false);
   const res = await w.read(/^\* OK/m);
