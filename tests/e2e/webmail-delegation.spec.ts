@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * Mailboxes shared with a person, in their webmail (ADR-0026 §6). The Owner gives a member Read and manage and Send as
- * on a shared mailbox (desk@) and Send on behalf on another (team@) in the console. The member then finds desk@ under
- * "Shared with you", sends as it and on behalf of team@ from their own mailbox (desk@'s Sent keeps its copy; the
- * message sent on behalf reads "… on behalf of team@"), reads desk@ in place and in a tab of its own (Open another
- * mailbox), which leaves their own tab alone. In desk@'s tab, New email and Reply start From desk@ and send as it.
- * An address they have no access to gets the one refusal page. Taking Send as away leaves New email off there, with
- * why; taking Read and manage away removes desk@ from "Shared with you" and closes its tab. Local delivery only
- * (rule 19).
+ * on a shared mailbox (desk@) and Send on behalf on another (team@) in the console. The member's own webmail lists
+ * neither (no shared section in the sidebar or the account menu); they send as desk@ and on behalf of team@ from their
+ * own mailbox (desk@'s Sent keeps its copy; the message sent on behalf reads "… on behalf of team@"), and read desk@ in
+ * a tab of its own (Open another mailbox), which leaves their own tab alone: its sidebar header names desk@ like an
+ * account, the tab title names it, and its account menu leads back to their own mailbox. In desk@'s tab, New email
+ * and Reply start From desk@ and send as it. An address they have no access to gets the one refusal page. Taking Send
+ * as away leaves New email off there, with why; taking Read and manage away closes its tab. A session left on a shared
+ * mailbox by the old in-place switch comes back on the person's own. Local delivery only (rule 19).
  */
 import type { BrowserContext, Locator, Page } from "@playwright/test";
 
@@ -112,7 +113,7 @@ async function write(
   await expect(composer).toBeHidden();
 }
 
-test("a member reads, sends as and on behalf of mailboxes shared with them, in place and in a tab of its own @desktop-only", async ({
+test("a member reads, sends as and on behalf of mailboxes shared with them, opening one in a tab of its own @desktop-only", async ({
   page,
   browser,
   consoleErrors,
@@ -138,10 +139,19 @@ test("a member reads, sends as and on behalf of mailboxes shared with them, in p
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const { page: mail, errors } = await webmailAs(context, dw.mailbox, dw.mailboxPassword);
 
-  // desk@ shows up by itself under "Shared with you"; team@ (send on behalf only) is offered in From, not there.
+  // Neither shared mailbox is listed in the member's own webmail: not in the sidebar, not in the account menu (desk@
+  // opens with Open another mailbox; both are offered in From).
   const folders = mail.getByRole("navigation", { name: "Folders" });
-  await expect(folders.getByRole("button", { name: dw.shared })).toBeVisible();
-  await expect(folders.getByRole("button", { name: dw.team })).toHaveCount(0);
+  await expect(folders.getByRole("button", { name: "Inbox" })).toBeVisible();
+  await expect(folders.getByText(dw.shared)).toHaveCount(0);
+  await expect(folders.getByText(dw.team)).toHaveCount(0);
+  await expect(mail.getByText("Shared with you")).toHaveCount(0);
+  await mail.getByRole("button", { name: "Mailboxes and account" }).click();
+  const account = mail.getByRole("menu", { name: "Mailboxes and account" });
+  await expect(account.getByRole("menuitemcheckbox", { name: dw.mailbox })).toHaveAttribute("aria-checked", "true");
+  await expect(account.getByText(dw.shared)).toHaveCount(0);
+  await expect(account.getByRole("menuitem")).toHaveText(["Add another mailbox", "Open another mailbox", "Sign out"]);
+  await mail.keyboard.press("Escape");
 
   // Send as desk@, and on behalf of team@, from the member's own mailbox to themselves.
   await send(mail, dw.mailbox, `As desk ${tag}`, async (from) => {
@@ -167,25 +177,6 @@ test("a member reads, sends as and on behalf of mailboxes shared with them, in p
     onBehalf.getByText(new RegExp(`^On behalf of .*${dw.team.replace(/[.]/g, "\\.")}.*, sent by `)).first(),
   ).toBeVisible();
 
-  // Open desk@ here: a banner says which mailbox this is, New email writes from it (Send as), its contacts stay the
-  // member's own, and its Sent has the copy.
-  await folders.getByRole("button", { name: dw.shared }).click();
-  const banner = mail.getByRole("region", { name: "Shared mailbox" });
-  await expect(banner).toContainText(dw.shared);
-  await expect(mail.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible();
-  await expect(mail.getByRole("button", { name: "New email" })).toBeEnabled();
-  await expect(folders.getByRole("button", { name: "Contacts" })).toHaveCount(0);
-  await folders.getByRole("button", { name: "Sent", exact: true }).click();
-  await expect(mail.getByRole("heading", { name: "Sent", level: 1 })).toBeVisible();
-  await expect(mail.getByRole("option", { name: new RegExp(`As desk ${tag}`) }).first()).toBeVisible();
-  // Settings belong to the member's own mailbox.
-  await mail.getByRole("button", { name: "Settings" }).click();
-  const settings = mail.getByRole("dialog", { name: "Settings" });
-  await expect(settings.getByText("belong to your own mailbox")).toBeVisible();
-  await settings.getByRole("button", { name: "Back to your mailbox" }).click();
-  await expect(banner).toHaveCount(0);
-  await expect(mail.getByRole("button", { name: "New email" })).toBeVisible();
-
   // Open another mailbox: desk@ in a tab of its own; this tab keeps the member's own mailbox.
   await mail.getByRole("button", { name: "Mailboxes and account" }).click();
   await mail.getByRole("menuitem", { name: "Open another mailbox" }).click();
@@ -196,12 +187,34 @@ test("a member reads, sends as and on behalf of mailboxes shared with them, in p
     if (m.type() === "error") errors.push(`tab: ${m.text()}`);
   });
   await expect(tab).toHaveURL(new RegExp(`/mailbox/${dw.shared.replace(/[.]/g, "\\.")}$`));
-  await expect(tab.getByRole("region", { name: "Shared mailbox" })).toContainText(dw.shared);
   await expect(tab.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible({ timeout: SIGN_IN_TIMEOUT });
   await tab.addStyleTag({ content: "nextjs-portal { display: none !important; }" });
-  await tab.getByRole("navigation", { name: "Folders" }).getByRole("button", { name: "Sent", exact: true }).click();
+  // No banner: the sidebar header names desk@ like an account, and so does the tab title.
+  await expect(tab.getByRole("region", { name: "Shared mailbox" })).toHaveCount(0);
+  await expect(tab.getByText("Shared with you")).toHaveCount(0);
+  await expect(tab.getByRole("radio", { name: dw.shared })).toHaveAttribute("aria-checked", "true");
+  await expect(tab).toHaveTitle(new RegExp(`^(\\(\\d+\\) )?${dw.shared.replace(/[.]/g, "\\.")} · Inbox$`));
+  // Its account menu: desk@ (shown), the way back to the member's own mailbox, and Open another mailbox.
+  await tab.getByRole("button", { name: "Mailboxes and account" }).click();
+  const tabMenu = tab.getByRole("menu", { name: "Mailboxes and account" });
+  await expect(tabMenu.getByRole("menuitemcheckbox", { name: dw.shared })).toHaveAttribute("aria-checked", "true");
+  await expect(tabMenu.getByRole("menuitem")).toHaveText(["Your mailbox", "Open another mailbox"]);
+  await tab.keyboard.press("Escape");
+  // Reading and managing: no Contacts there, New email writes from desk@ (Send as), and its Sent has the copy.
+  const tabFolders = tab.getByRole("navigation", { name: "Folders" });
+  await expect(tab.getByRole("button", { name: "New email" })).toBeEnabled();
+  await expect(tabFolders.getByRole("button", { name: "Contacts" })).toHaveCount(0);
+  await tabFolders.getByRole("button", { name: "Sent", exact: true }).click();
   await expect(tab).toHaveURL(/\/sent$/);
+  await expect(tab).toHaveTitle(new RegExp(`^(\\(\\d+\\) )?${dw.shared.replace(/[.]/g, "\\.")} · Sent$`));
   await expect(tab.getByRole("option", { name: new RegExp(`As desk ${tag}`) }).first()).toBeVisible();
+  // Settings belong to the member's own mailbox.
+  await tab.getByRole("button", { name: "Settings" }).click();
+  const ownSettings = tab.getByRole("dialog", { name: "Settings" });
+  await expect(ownSettings.getByText("belong to your own mailbox")).toBeVisible();
+  await expect(ownSettings.getByRole("link", { name: "Go to your mailbox" })).toBeVisible();
+  await ownSettings.getByRole("button", { name: "Close", exact: true }).last().click();
+  await expect(ownSettings).toBeHidden();
 
   // In desk@'s tab, New email starts From desk@ (Send as); the copy lands in desk@'s Sent.
   await tab.getByRole("button", { name: "New email" }).click();
@@ -230,10 +243,42 @@ test("a member reads, sends as and on behalf of mailboxes shared with them, in p
   await expect(reply.getByRole("heading", { name: `Re: To desk ${tag}` })).toBeVisible();
   await expect(reply.getByText(`<${dw.shared}>`).first()).toBeVisible();
 
+  // A session left on desk@ by the old in-place switch (an older page's request): the member's own tab comes back on
+  // their own mailbox, and desk@'s tab keeps showing desk@.
+  expect(
+    await mail.evaluate(async (address) => {
+      const res = await fetch("/api/webmail/mailboxes/delegated", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ address }),
+      });
+      return res.status;
+    }, dw.shared),
+  ).toBe(200);
   await mail.reload();
   await expect(mail.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible();
-  await expect(mail.getByRole("region", { name: "Shared mailbox" })).toHaveCount(0);
-  await expect(mail.getByRole("button", { name: "New email" })).toBeVisible();
+  await expect(mail.getByRole("radio", { name: dw.mailbox })).toHaveAttribute("aria-checked", "true");
+  await expect(
+    mail.getByRole("navigation", { name: "Folders" }).getByRole("button", { name: "Contacts" }),
+  ).toBeVisible();
+  await expect(mail).toHaveTitle(/Inbox · AnhourMail$/);
+  await tab.reload();
+  await expect(tab.getByRole("radio", { name: dw.shared })).toHaveAttribute("aria-checked", "true", {
+    timeout: SIGN_IN_TIMEOUT,
+  });
+  // Your mailbox (the tab's account menu) leads to the member's own webmail.
+  await tab.getByRole("button", { name: "Mailboxes and account" }).click();
+  await tab
+    .getByRole("menu", { name: "Mailboxes and account" })
+    .getByRole("menuitem", { name: "Your mailbox" })
+    .click();
+  await expect(tab.getByRole("radio", { name: dw.mailbox })).toHaveAttribute("aria-checked", "true", {
+    timeout: SIGN_IN_TIMEOUT,
+  });
+  await tab.goto(`${urls.webmail}/mailbox/${dw.shared}`);
+  await expect(tab.getByRole("radio", { name: dw.shared })).toHaveAttribute("aria-checked", "true", {
+    timeout: SIGN_IN_TIMEOUT,
+  });
 
   // An address they have no access to — another account's, or none at all — gets the one refusal page. Followed from
   // a link on another site, the page asks before opening anything; typed in the address bar, it opens at once. (Its
@@ -270,15 +315,13 @@ test("a member reads, sends as and on behalf of mailboxes shared with them, in p
   await expect(off).toHaveAccessibleDescription(/can read this mailbox but not send from it/);
   await expect(tab.getByText("Ask an admin for Send as or Send on behalf.")).toBeVisible();
 
-  // Then Read and manage: desk@ leaves "Shared with you", and its tab shows the refusal.
+  // Then Read and manage: its tab shows the refusal, and the member's own tab still lists no shared mailbox.
   const readManage = details.getByRole("region", { name: "Read and manage" });
   await readManage.getByRole("button", { name: new RegExp(`^Remove .* from Read and manage$`) }).click();
   await confirmIfAsked(page, readManage.getByText("Nobody has this yet."), u.password);
   await mail.reload();
   await expect(mail.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible();
-  await expect(mail.getByRole("navigation", { name: "Folders" }).getByRole("button", { name: dw.shared })).toHaveCount(
-    0,
-  );
+  await expect(mail.getByRole("navigation", { name: "Folders" }).getByText(dw.shared)).toHaveCount(0);
   // A grant still in use is trusted for up to 10 s (the gate's cache; the console says "up to a minute").
   await expect(async () => {
     await tab.reload();
