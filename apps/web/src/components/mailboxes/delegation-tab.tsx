@@ -4,12 +4,7 @@
 import { Plus, UserMinus } from "lucide-react";
 import { useId, useState } from "react";
 
-import {
-  DELEGATION_RIGHT_LABELS,
-  DELEGATION_RIGHTS,
-  type DelegationRight,
-  type DelegationUpdate,
-} from "@anhourmail/shared/delegation";
+import { DELEGATION_RIGHT_LABELS, type DelegationRight, type DelegationUpdate } from "@anhourmail/shared/delegation";
 
 import { Avatar } from "../account-menu";
 import { callApi } from "../api";
@@ -32,6 +27,9 @@ const LIST_OF: Record<DelegationRight, keyof DelegationLists> = {
   send_on_behalf: "sendOnBehalf",
 };
 
+/** The order the lists are shown in: the send rights first, then Read and manage. */
+const LIST_ORDER: readonly DelegationRight[] = ["send_as", "send_on_behalf", "full_access"];
+
 /** What each right allows, under its heading. */
 const RIGHT_HELP: Record<DelegationRight, string> = {
   full_access: "Open this mailbox and read, move and delete mail in all its folders. This doesn't include sending.",
@@ -47,8 +45,8 @@ const smallButton =
   "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-[14px] text-primary transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-60 [&>svg]:size-4";
 
 /**
- * A mailbox's Delegation tab (ADR-0026 §5): three separate lists — Read and manage, Send as, Send on behalf — each with
- * its people, a Remove button per person and Add people (a picker of the account's people, never the mailbox's own
+ * A mailbox's Delegation tab (ADR-0026 §5): three separate lists — Send as, Send on behalf, Read and manage — each with
+ * its people (the count in its heading), a Remove button per person and Add people (a picker of the account's people, never the mailbox's own
  * person). A change is one `PATCH …/delegation` batch; the server asks for a fresh confirmation that it's you (403
  * `step_up_required`) and the batch is sent again once confirmed. Read-only with only `delegation.read`, on a plan
  * without delegation, on an Owner's or admin's mailbox for a User Administrator (guard rail 8) and while the mailbox is
@@ -137,7 +135,7 @@ export function DelegationTab({
         {notice}
       </p>
 
-      {DELEGATION_RIGHTS.map((right) => {
+      {LIST_ORDER.map((right) => {
         const label = DELEGATION_RIGHT_LABELS[right];
         const people = lists[LIST_OF[right]];
         const onList = new Set(people.map((p) => p.userId));
@@ -148,7 +146,7 @@ export function DelegationTab({
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="flex max-w-prose flex-col gap-1">
                 <h3 id={headingId} className="am-h4">
-                  {label}
+                  {label} <span className="font-mono text-muted-foreground">({people.length})</span>
                 </h3>
                 <p className="am-small">{RIGHT_HELP[right]}</p>
               </div>

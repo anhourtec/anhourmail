@@ -56,6 +56,12 @@ test("an owner gives and takes away access, converts a mailbox to shared and han
   const onBehalf = details.getByRole("region", { name: "Send on behalf" });
   await expect(readManage.getByText("Nobody has this yet.")).toBeVisible();
   await expect(onBehalf.getByText("Nobody has this yet.")).toBeVisible();
+  // The send rights first, then Read and manage; each heading counts its people.
+  await expect(details.getByRole("heading", { level: 3 })).toHaveText([
+    "Send as (0)",
+    "Send on behalf (0)",
+    "Read and manage (0)",
+  ]);
 
   // Read and manage for the delegate (the picker never offers people already on the list).
   await readManage.getByRole("button", { name: "Add people to Read and manage" }).click();
@@ -74,6 +80,7 @@ test("an owner gives and takes away access, converts a mailbox to shared and han
   await page.reload();
   await expect(readManage.getByRole("listitem").filter({ hasText: dl.delegate })).toBeVisible();
   await expect(sendAs.getByRole("listitem").filter({ hasText: dl.delegate })).toBeVisible();
+  await expect(sendAs.getByRole("heading", { level: 3 })).toHaveText("Send as (1)");
   await sendAs.getByRole("button", { name: new RegExp(`^Remove .* from Send as$`) }).click();
   await confirmIfAsked(page, sendAs.getByText("Nobody has this yet."), u.password);
   await expect(readManage.getByRole("listitem").filter({ hasText: dl.delegate })).toBeVisible();
