@@ -126,6 +126,11 @@ export const REDACT_KEYS: readonly string[] = [
   "challenge",
   "secretskeyring",
   "keyring",
+  // Send on behalf (ADR-0026 §8): the key, the per-message tag and its header
+  "senderdelegationkey",
+  "onbehalfkey",
+  "onbehalftag",
+  "xanhourmailonbehalf",
   // AnhourMail: mail content never reaches logs
   "subject",
   "body",

@@ -239,6 +239,33 @@ describe("redaction of webmail OAuth secrets", () => {
   });
 });
 
+describe("redaction of the send-on-behalf key and tag", () => {
+  it("redacts them in any spelling, including the tag header's name", () => {
+    const out = redact({
+      SENDER_DELEGATION_KEY: "d".repeat(64),
+      senderDelegationKey: "d",
+      onBehalfKey: "d",
+      on_behalf_tag: "t",
+      onBehalfTag: "t",
+      "X-AnhourMail-On-Behalf": "t",
+      "x-anhourmail-on-behalf": "t",
+      nested: { draft: { "X-AnhourMail-On-Behalf": "t" } },
+      ok: "fine",
+    }) as Record<string, unknown>;
+    expect(out).toEqual({
+      SENDER_DELEGATION_KEY: "[redacted]",
+      senderDelegationKey: "[redacted]",
+      onBehalfKey: "[redacted]",
+      on_behalf_tag: "[redacted]",
+      onBehalfTag: "[redacted]",
+      "X-AnhourMail-On-Behalf": "[redacted]",
+      "x-anhourmail-on-behalf": "[redacted]",
+      nested: { draft: { "X-AnhourMail-On-Behalf": "[redacted]" } },
+      ok: "fine",
+    });
+  });
+});
+
 describe("sliding send quotas", async () => {
   const { memorySlidingQuota, redisSlidingQuota } = await import("./rate-limit");
   it("charges every window together or none, and frees units as the window slides", async () => {
