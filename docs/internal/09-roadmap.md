@@ -234,8 +234,34 @@ mailbox, resumable, with progress in the console and a summary email when done.
 - Staff spam/abuse metrics per account on Platform → account (outbound volume, bounces, complaints, blocklist hits),
   feeding the manual staff suspension that exists today (built 2026-10-23; `03-anti-spam-and-abuse.md` "Staff
   suspension"); later the Trust & Safety Administrator gets suspension once the abuse queue exists.
+- **Deliverability watch (maintainer, 2026-10-30): find out we're blocked before users tell us** (CLAUDE.md rule 62;
+  checklist in `03-anti-spam-and-abuse.md` "Designed never to be blocked"). Metadata only — provider, codes, counts,
+  never content or recipient lists (rule 24); thresholds in the private ops config (rule 44). In build order:
+  1. **Bounce and deferral classifier** (Phase 6, needs only our servers): Stalwart delivery events
+     (`dsn-perm-fail`, `dsn-temp-fail`, rate-limited) grouped by receiving provider (Gmail, Microsoft, Yahoo/AOL,
+     Proton, iCloud, GMX, then others by MX); known block signatures (policy 5.7.x rejections, rate and "unsolicited"
+     deferrals, block codes that name a listing) alert at once; a deferral rise above a provider's baseline warns.
+  2. **Blocklist checks** (Phase 6): a scheduler job every 10–15 min looks up each outbound IP and the sending
+     domains on the main DNS blocklists (Spamhaus via a DQS key, Barracuda, SpamCop, UCEPROTECT); a new listing
+     alerts with the delisting link.
+  3. **Queue and report health** (Phase 6): deferred count and oldest age per destination; DMARC aggregate reports
+     (who fails as us) and TLS-RPT parsed into the same view.
+  4. **Canary inbox placement** (Phase 7, production only — never dev or CI, rule 19): hourly test messages to seed
+     inboxes we own at the major providers; a checker records inbox, spam or missing, catching silent spam-foldering.
+  5. **Provider reputation data** (Phase 7, after registration): Gmail Postmaster Tools API (domain/IP reputation,
+     spam rate — alert well before 0.3 %), Microsoft SNDS, and complaint loops (JMRP, Yahoo CFL) parsed from the abuse
+     mailbox and mapped to the sending account.
+  - **Response:** a staff **Deliverability** page (Platform) with a per-provider status (green / warning / blocked),
+    listings and dated incidents; Sev-1 (a major provider blocking us, a Spamhaus listing) pages someone, Sev-2
+    (a smaller server, a deferral rise) emails; first automatic response: restrict the account a block traces to
+    (complaint or bounce spike) and slow sending to the affected provider; a runbook page per provider with its
+    delisting or support form. Target: action the same day, resolved within a day or two. Customer domains are
+    watched too, and their owners are told when only their domain is affected.
+  - **Accounts the maintainer creates before Phase 7:** seed inboxes at the major providers, Gmail Postmaster Tools,
+    Microsoft SNDS + JMRP, Yahoo Sender Hub (CFL), a Spamhaus DQS key.
 - **Decision required:** the free-tier launch posture (`03-anti-spam-and-abuse.md` "Free-tier risk").
-- **Exit:** a red-team run (scripted spam attempts from new free and paid accounts) is stopped within the published limits; restore drill passes; `security-reviewer` pass on all abuse logic.
+- **Exit:** a red-team run (scripted spam attempts from new free and paid accounts) is stopped within the published limits; restore drill passes; a simulated block (a test listing or a forced 5.7.1 from a test receiver) raises a Sev-1 alert
+  within 15 minutes; `security-reviewer` pass on all abuse logic.
 
 ## Phase 7 — Dogfood (2–4 weeks)
 

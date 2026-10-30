@@ -191,6 +191,9 @@ so prevention comes before the queue.
 | Not on blocklists                                                             | Screen IPs and /24 before use; monitor the major DNS blocklists and postmaster dashboards; alert on bounce codes that name a block                                                                                                                                             | Phase 6 (monitoring) / Phase 7 (screening)                   |
 | Separate reputation for risky traffic                                         | New and free accounts ramp slowly; bulk (Phase 10) never shares the personal-mail IPs or the platform domains                                                                                                                                                                  | Ramps Phase 6; bulk Phase 10                                 |
 
+**Finding blocks before users do:** the deliverability watch (bounce classifier, blocklist checks, canary inboxes, provider
+reputation data, a staff Deliverability page and Sev-1/Sev-2 alerts) is planned in `09-roadmap.md` Phase 6.
+
 **When a block happens anyway** (an obscure or strict server, or a provider's temporary deferral): the playbook in the
 section above — read the bounce, fix the cause (usually one sender), request delisting or contact that postmaster the
 same day, record it; resolved within a day or two. A block at a large provider is a Sev-1 incident.
