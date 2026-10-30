@@ -9,6 +9,7 @@ import {
 import { StalwartManagement } from "./management";
 
 export {
+  isOverQuotaError,
   type MethodCall,
   type StalwartAuth,
   type StalwartClientOptions,

@@ -31,6 +31,19 @@ export class StalwartError extends Error {
   }
 }
 
+/**
+ * True when a `/set` refusal is Stalwart's `overQuota` (e.g. an account's `maxAppPasswords` reached), as opposed to
+ * any other refusal of the same call.
+ */
+export function isOverQuotaError(err: unknown): boolean {
+  if (!(err instanceof StalwartError) || err.kind !== "set") return false;
+  const detail = err.detail;
+  if (typeof detail !== "object" || detail === null) return false;
+  return Object.values(detail).some(
+    (v) => typeof v === "object" && v !== null && (v as { type?: unknown }).type === "overQuota",
+  );
+}
+
 export class StalwartTransport {
   readonly #baseUrl: string;
   readonly #authHeader: string;

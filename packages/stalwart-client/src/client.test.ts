@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { describe, expect, it } from "vitest";
 
-import { StalwartError, StalwartTransport } from "./client";
+import { isOverQuotaError, StalwartError, StalwartTransport } from "./client";
 import { CUSTOMER_PERMISSIONS, StalwartManagement, SUSPENDED_PERMISSIONS } from "./management";
 
 type Call = { url: string; body: unknown; auth: string | null };
@@ -328,5 +328,16 @@ describe("reporting the customer lock", () => {
       ["open", false],
       ["partial", false],
     ]);
+  });
+});
+
+describe("isOverQuotaError", () => {
+  it("is true only for a /set refusal of type overQuota", () => {
+    const refusal = (type: string) => new StalwartError("x:AppPassword/set notCreated", "set", { h: { type } });
+    expect(isOverQuotaError(refusal("overQuota"))).toBe(true);
+    expect(isOverQuotaError(refusal("invalidProperties"))).toBe(false);
+    expect(isOverQuotaError(new StalwartError("x", "set"))).toBe(false);
+    expect(isOverQuotaError(new StalwartError("x", "http", { h: { type: "overQuota" } }))).toBe(false);
+    expect(isOverQuotaError(new Error("overQuota"))).toBe(false);
   });
 });
