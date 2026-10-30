@@ -1,6 +1,6 @@
 # 05 — Webmail
 
-Last updated: 2026-10-29 (profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
+Last updated: 2026-10-30 (mailboxes shared with you: the delegation BFF, ADR-0026; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
 notifications; quoted replies; compose image placeholders; first-sign-in password step; sign-in links not pre-filled).
 
 **Status (2026-10-22): slice 1 is built** — webmail sign-in (OAuth code flow + PKCE, tokens sealed server-side), the
@@ -549,6 +549,57 @@ request, within the 30 s cache.
 A fresh sign-in to a mailbox Stalwart already disabled fails at Stalwart with the same answer as a wrong password, so
 it can't reach the check above; the suspension is named only to a browser that signed in to that address before
 (07-security.md "Webmail sign-in and suspension").
+
+### Mailboxes shared with you (delegation, ADR-0026 §6; BFF built 2026-10-30, webmail UI and sending next)
+
+A person given **Read and manage** on another mailbox of their account opens it in their own webmail session, without
+its password and without signing in again (maintainer decision 2: no extra step). The BFF holds that mailbox's own
+token; the browser never does (rule 21).
+
+- **The list ("Shared with you").** `GET /api/webmail/mailboxes` now answers `{ active, activeShared, others, shared }`:
+  `others` are the session's own signed-in mailboxes only; `shared` lists, from core `delegatedMailboxesFor`, every
+  mailbox the session's people hold a right on now (`address`, `via` — the own mailbox it comes through —,
+  `fullAccess`, `sendAs`, `sendOnBehalf`, `open`). The people are found from the session's own mailboxes'
+  `mailbox.user_id` (a shared mailbox signed in by password maps nothing). Listing mints nothing; it also drops opened
+  entries whose grant is gone.
+- **Opening one.** `POST /api/webmail/mailboxes/delegated` `{ address }` (a "Shared with you" entry, or the address
+  typed in **Open another mailbox**; tier `webmailDelegatedOpen`, fail closed). Core `openDelegatedMailbox` checks
+  everything now under the account lock, then the web app mints a throwaway credential with the operations key,
+  exchanges it once with the person's client address forwarded and destroys it (the handoff's `stalwartHandoffSignIn`,
+  under the mailbox's credential lock, reserved slot, one retry when the slot was held, else 503), the BFF checks the
+  JMAP session names that mailbox, and the tokens become a `delegated` entry (`{ mailboxId, granteeUserId, via }`) in
+  the session, made active. Already open → switched to. Every refusal — no grant, a send-only grant, an unknown
+  address, another account's address, the plan, the mailbox's state — is the same `404 not_found` "You don't have
+  access to this mailbox.", audited `delegation.mailbox_opened` in the person's own account; 403 while the console
+  session a handoff-born session came from has act-as open. Delegated entries don't count toward `MAX_MAILBOXES`
+  (capped at `DELEGATED_MAILBOXES_PER_PERSON` instead). The page at `/mailbox/<address>/` that runs this open is slice 14.
+- **The gate on every request.** `route()` runs `delegationBlock` (`server/webmail/delegation-gate.ts`) on every route
+  with `session: "webmail"` after the access check. With a delegated active entry:
+  - `delegated: "full_access"` routes (JMAP proxy, session document, message, attached message, raw, print,
+    download, preview, image proxy, photos) ask core's `DelegationGate` (the right, membership, plan, mailbox state and
+    the own mailbox now; "has the right" cached ≤ 10 s per session and mailbox, "no right" never); refused → the entry
+    is dropped and the answer is 404;
+  - `delegated: "allowed"` routes (list, switch, open, add one's own mailbox, sign out) work whichever is active;
+  - every other webmail route (send, undo, drafts, upload, identities, settings, contacts, export) answers
+    `403 own_mailbox_only`: those always act on the person's own mailbox (a route-file test pins all three lists).
+    This route-level gate is defence in depth: the service decides on the entry whose token it uses (only its read
+    paths accept a delegated entry; settings, password, photo and export callers refuse one on the read they use), so
+    a switch between the gate and the handler can't aim an own-only action at a shared mailbox.
+    `WebmailService.session()` checks the gate again on each use and before refreshing a delegated token. Before every
+    open, and at most every 10 s on use, the person's own mailbox the grant comes through is proven at the mail server
+    (its JMAP session, with its token, refreshed when due); a refused token or refresh — a password reset — ends the
+    whole session. A refused
+    refresh (the mailbox's password changed), a mail-server 403 or a refused grant drop **only that entry** and hand the
+    session back to the mailbox it came through; the person's own session never ends over it. The access and
+    first-password gates check the session's own mailbox (`via`) while a delegated one is active.
+- **The proxy.** `checkJmapRequest` keeps its single-`accountId` rule (for a delegated entry, that mailbox's own
+  account) and refuses `Identity/get` there without a send right (none is used until slice 13). `Email/set` and
+  `Email/import` that would set `sender`, any `header:*` property or the `X-AnhourMail-On-Behalf` header are refused
+  outright, before the allow-list (ADR-0026 §8 requirement 3); drafts are built server-side from `DraftInput`, which
+  has no such fields.
+- **Not built yet:** sending as or on behalf (the From picker, the cross-mailbox draft move, the tag; slice 13), the
+  webmail UI ("Shared with you" in the switcher and sidebar, **Open another mailbox**, the refusal page; slice 14), and
+  the best-effort Redis scrub of sealed tokens after a revoke (§7; the gate is the control).
 
 ### Push
 

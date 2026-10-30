@@ -1,6 +1,6 @@
 # Roles and permissions
 
-Last updated: 2026-10-30 (mailbox delegation, ADR-0026: console routes and RBAC harness rows; `delegation.manage.any` for User Administrators with guard rail 8; data export and account deletion, ADR-0025; staff support access / act-as, ADR-0023; profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
+Last updated: 2026-10-30 (mailbox delegation, ADR-0026: mailboxes shared with the person in the webmail; console routes and RBAC harness rows; `delegation.manage.any` for User Administrators with guard rail 8; data export and account deletion, ADR-0025; staff support access / act-as, ADR-0023; profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
 
 **Source of truth: `packages/shared/src/rbac`.** That code is canonical: the permission list, the role → permission matrix, critical-permission flags and guard rails. The UI (what to show), the API (what to allow) and the RBAC harness (`npm run test:rbac`) all derive from it. This document explains the matrix for people. If the two disagree, the code wins, and this file is updated in the same change (rule 35).
 
@@ -321,6 +321,17 @@ identities, its own Sieve rules — and every change carries the account the app
 Mail-flow changes are audited in the mailbox's account as a `system` actor named by the mailbox, so the account's
 admins see them. The forwarding confirmation (`POST /api/webmail/forwarding/confirm`) is public: the one-time token
 is the authorisation, and an unknown, used or expired token is a 404.
+
+**Mailboxes shared with the person** (ADR-0026 §6): no permission of its own — a grant on the mailbox
+(`mailbox_delegation`) is the authorisation, for any account role including Auditor, checked against the database on
+every request. The matrix check on opening one is the self-level one only (`self.profile.read`: a signed-in person who
+isn't suspended); membership, the right and the plan come from the grant table and the account, never from the
+matrix. A webmail session lists and opens what its own mailboxes' people hold (`POST
+/api/webmail/mailboxes/delegated`; every refusal — no grant, unknown address, another account's — is the same **404**,
+audited in the person's own account; act-as on the console session behind a handoff-born session is a **403**). While
+a delegated mailbox is active, only routes marked `delegated: "full_access"` (reads, downloads, the image proxy) act on
+it; sending, drafts, uploads, identities, settings, contacts and export answer **403** `own_mailbox_only`. RBAC harness:
+the new route is `webmail`-guarded (401 to every console persona).
 
 ## What each role sees (navigation)
 

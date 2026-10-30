@@ -1,6 +1,6 @@
 # 07 — Security
 
-Last updated: 2026-10-30 (delegation grants and Convert to shared mailbox, ADR-0026; leavers lose mailbox sign-in; data export and account deletion; staff support access; profile photos).
+Last updated: 2026-10-30 (new "Delegation" section: opening delegated mailboxes in the webmail and the gate; delegation grants and Convert to shared mailbox, ADR-0026; leavers lose mailbox sign-in; data export and account deletion; staff support access; profile photos).
 
 ## Threat model
 
@@ -352,6 +352,63 @@ The console's **Open webmail** signs the person in to their own mailbox without 
   lock, so it can't shift the list position a revocation patches.
 - **No new key scope, no management proxy change:** `x:AppPassword/set` on customer accounts, `/api/auth` and
   `/auth/token` were already allowed for the web app; the proxy still refuses service accounts and `%`.
+
+## Delegation (ADR-0026)
+
+Grants (read and manage, send as, send on behalf) are rows in `mailbox_delegation`, made and removed only by Owners and
+User Administrators (guard rail 8, step-up, plan gate; "Mailbox passwords" above for leavers and the cascades). Using
+one needs no permission of its own: the grant is the authorisation, checked against the database **now** every time.
+
+- **How a delegated mailbox is opened.** The webmail BFF gets that mailbox's own token exactly as the console handoff
+  does (ADR-0024 decision 4): the operations key mints a credential with every permission but `authenticate` off and a
+  60 s expiry, the BFF exchanges it once at `/api/auth` with the delegate's client address forwarded (a 5 s exchange
+  timeout, as the locks are held), and destroys it in a `finally`, under the mailbox's credential lock and in the
+  reserved slot. Only Stalwart's `overQuota` answer counts as "slot taken": the open retries once (expired leftovers
+  are cleared before every mint), then answers 503. No new key scope, no management-proxy
+  change, no mailbox password anywhere. The tokens are sealed into the delegate's own webmail session (AES-256-GCM, the
+  session key as AAD) and never reach the browser. The mail server must name exactly that mailbox in its JMAP session.
+- **Checked at open** (core `openDelegatedMailbox`, one unit of work under the account lock, so a removal and an open
+  serialise): act-as on the console session a handoff-born webmail session came from (403, before any lookup); the
+  delegate's own mailbox is still theirs and usable; they are still a member and not suspended, the account isn't
+  suspended or being deleted and its plan has `delegation`; they hold the right; the mailbox is active, on the mail
+  server and passes the webmail access gate. Audited `delegation.mailbox_opened` (success, denied, failed).
+- **Checked on every use** (core `DelegationGate`): the same checks, in `route()` for every webmail route and again in
+  `WebmailService.session()` before any use or refresh of the token. "Has the right" is cached at most 10 s per
+  session and mailbox; "no right" is never cached, so a revoke, a removal, a suspension or a plan downgrade stops use
+  within 10 s. A failed check refuses the request (503) without dropping anything.
+- **No oracle.** Every refusal of a delegated mailbox — no grant, a send-only grant, an address that doesn't exist or
+  belongs to another account, the plan, the mailbox's state — is the same 404 "You don't have access to this mailbox.",
+  audited only in the person's own account (another account's mailbox is never named there). Opens are rate-limited
+  (`webmailDelegatedOpen`, 20 per 10 min per webmail session and again per own mailbox, so signing in again doesn't
+  reset it; fail closed). Residual (low, accepted): the open's timing differs slightly between an address with no
+  mailbox and one in the account without a grant (a few more database reads); it says nothing an attacker can't
+  learn from the account's own people list, and another account's addresses take the same path as unknown ones.
+- **Read and manage is not send, decided where the token is picked.** The service layer is the control: every
+  server-built call refuses a delegated entry's token unless it is one of the read-and-manage paths (message views,
+  downloads, folder roles, the JMAP proxy), checked on the very entry whose token the call uses, and `#call` also
+  refuses a delegated entry for the contacts, submission and quota capabilities. Callers that act on "the session's
+  mailbox" from one read (settings, the mailbox password, the profile photo, mail export) refuse a delegated entry on
+  that same read (`ownMailbox`). So switching the active mailbox while a slow request is under way (security review
+  2026-10-30: a body streamed to an own-only route, a switch, then the rest of the body) can't aim an own-only action at
+  a shared mailbox. `route()`'s gate is defence in depth on top: while a delegated mailbox is active, every webmail route
+  not marked `delegated: "full_access"` or `"allowed"` answers 403 `own_mailbox_only`, and a route-file test lists the
+  marked ones. The JMAP proxy refuses `Identity/get` there. The token itself could do more; the BFF is the enforcement
+  point (ADR-0026 "Consequences").
+- **It rides on the person's own sign-in, proven at the mail server.** Before every open, and on a gate check at most
+  every 10 s, the BFF calls the mail server's JMAP session with the token of the person's own mailbox the grant comes
+  through (refreshing it when due). A refused token or refresh — their own password was reset or changed, or the
+  account was disabled — ends the **whole** webmail session (401, cookie cleared), so a stolen session can neither keep
+  reading shared mailboxes with their own tokens nor open new ones. Remaining window: at most 10 s after the reset, per web process
+  (the proof's cache).
+- **Sender fields from the client are refused.** The proxy refuses any `Email/set` or `Email/import` carrying a
+  `sender` property, a `header:*` property or the `X-AnhourMail-On-Behalf` header, so no session can attach a `Sender:`
+  or an on-behalf tag; delegated sending (slice 13) builds both server-side only.
+- **Revocation.** A revoke deletes the row; the next use is refused and the entry dropped from that session. Tokens
+  stay valid at the mail server until they expire (≤ 1 h access, 30 days refresh) unless the mailbox's password
+  changes; only our sealed session store holds them (residual 3). A refused refresh or a mail-server 403 drops only
+  that entry; the delegate's own session goes on.
+- **Residual, accepted (maintainer decision 2, residual 4):** a delegated mailbox opens from any webmail session of the
+  delegate's own mailbox, including password sign-ins that don't pass the console's two-factor requirement.
 
 ## App passwords
 

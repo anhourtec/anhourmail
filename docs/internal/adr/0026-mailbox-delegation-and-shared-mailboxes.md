@@ -1,6 +1,6 @@
 # ADR-0026: Mailbox delegation (read and manage, send as, send on behalf) and shared mailboxes, through BFF-held mailbox tokens
 
-**Status:** Accepted 2026-10-30 (maintainer decisions below; nothing built yet)
+**Status:** Accepted 2026-10-30 (maintainer decisions below; slices 1–12 built, see the dated updates)
 
 **Maintainer decisions (2026-10-30):** behaviour follows the conventional enterprise mailbox-delegation model exactly
 (design reference, gitignored: `../private/2026-10-30-delegation-reference.md`).
@@ -271,6 +271,29 @@ mailbox); "no right" is never cached. No right → the entry is dropped from the
 (`Plan.delegation`) on every request and in `openDelegatedMailbox`, so a downgrade to a plan without delegation stops
 the use of existing grants at once (they stay on record, unused, until an administrator removes them or the plan comes
 back).
+
+**Update (2026-10-30, slices 11–12 built):** core `webmail/delegation.ts` (`delegatedMailboxesFor`,
+`openDelegatedMailbox`, `delegationCheck` + `DelegationGate`) and the BFF side. Choices made while building it:
+opening is `POST /api/webmail/mailboxes/delegated` `{ address }` (both the "Shared with you" entries and Open another
+mailbox use it; switching to an entry already open stays `PUT …/mailboxes/active`), tier `webmailDelegatedOpen`
+(20 / 10 min per webmail session, fail closed). The audit actor is the delegate rebuilt from the database, the
+matrix check being the self-level one (no permission for using a grant, §4). Refusals of the open are audited in the
+person's own account with the target named only when it is a mailbox of that account. Routes declare
+`delegated: "full_access"` or `"allowed"`; every other webmail route answers 403 `own_mailbox_only` while a delegated
+mailbox is active (settings pages acting on the person's own mailbox from a delegated tab are slice 14's). A refused
+grant, refresh or mail-server 403 drops only the entry. The Redis scrub of §7 is not built (the gate is the control).
+`checkJmapRequest` already refuses client `sender` / `header:*` / the tag in `Email/set` and `Email/import` (slice 13
+requirement 3). Int test: `packages/adapters/src/stalwart/delegation.int.test.ts`.
+
+**Update (2026-10-30, security review of slices 11–12):** (1) own-mailbox-only is enforced in the service on the entry
+whose token is used (delegated tokens only on the read paths; `ownMailbox` for settings, password, photo and export),
+so a switch between `route()`'s gate and the handler can't aim an own-only action at a shared mailbox; the gate stays as
+defence in depth. (2) Delegated use rides on the person's own sign-in **proven at the mail server**: before every open
+and at most every 10 s on use, the own mailbox's JMAP session is fetched with its token (refreshed when due); a refused
+token or refresh (a password reset) ends the whole webmail session. Remaining window ≤ 10 s. Int test:
+`apps/web/src/server/adapters/webmail-delegation.int.test.ts`. (3) `webmailDelegatedOpen` also counts per own mailbox;
+the per-person cap is re-checked in the session write; only Stalwart's `overQuota` means "slot taken"; the OAuth
+exchange under the locks has a 5 s timeout (the management calls keep their 10 s default).
 
 **What each right allows** (enforced in the BFF; the token itself could do everything):
 

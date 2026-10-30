@@ -1,6 +1,6 @@
 # 01 — Architecture
 
-Last updated: 2026-10-30 (mailbox delegation, ADR-0026: grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
+Last updated: 2026-10-30 (mailbox delegation, ADR-0026: the webmail BFF opens delegated mailboxes behind the delegation gate; grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
 
 ## Overview
 
@@ -119,8 +119,8 @@ a person-less mailbox suspends it (fails closed), and `mailbox.ensure` refuses t
 existing account back on until it has landed; the console → webmail handoff takes the account lock before checking
 ownership, so it can't mint tokens for someone being removed.
 
-**Delegation and shared mailboxes (ADR-0026; the control-plane part and its console API routes are built, the UI and
-the webmail side are not):** administrators grant read and manage,
+**Delegation and shared mailboxes (ADR-0026; the control-plane part, its console API and UI and the webmail BFF's
+read-and-manage side are built; delegated sending and the webmail UI are not):** administrators grant read and manage,
 send as or send on behalf on any mailbox to people in the account (`mailbox_delegation`). No mail-server state changes:
 the webmail BFF opens a delegated mailbox with that mailbox's own token (a throwaway credential minted, used once and
 destroyed, as in the handoff), seals it into the delegate's session, and checks the grant on every request; delegated
@@ -138,6 +138,18 @@ login deletion), a mailbox is deleted or purged, or "Make this a user" gives it 
 …/convert-to-shared` (202, the password replacement is a job), `GET /api/accounts/:accountId/people/:userId/delegation`
 (the People panel's "Mailboxes they can open") and the optional `{ delegateTo }` body on `DELETE
 /api/accounts/:accountId/people/:userId`; the changes use the `delegationManage` rate-limit tier.
+Webmail BFF (slices 11–12): core `packages/core/src/webmail/delegation.ts` lists what a session's people may open
+(`delegatedMailboxesFor`, from the session's own mailboxes' `user_id`; no tokens), opens one (`openDelegatedMailbox`:
+account lock, the right / membership / plan / mailbox and own-mailbox state now, act-as refused, then the credential
+lock and the caller's mint → exchange → destroy with one retry for a held slot, the mail server's `username` checked,
+audited `delegation.mailbox_opened`) and checks every later use (`DelegationGate`, "has the right" cached ≤ 10 s, "no
+right" never). The opened tokens are a `delegated` entry in the delegate's sealed webmail session
+(`session-store.ts`). `route()` runs the gate on every webmail route after the access check
+(`server/webmail/delegation-gate.ts`): routes declare `delegated: "full_access"` (reads, downloads, image proxy) or
+`"allowed"` (listing, switching, opening, signing out); every other webmail route answers 403 `own_mailbox_only` while a
+delegated mailbox is active, and a route-file test pins the lists. `WebmailService.session()` checks the gate again on
+each use and drops only the entry (never the session) when the grant, the mailbox's state or its token is gone. Opening
+is `POST /api/webmail/mailboxes/delegated` (`webmailDelegatedOpen`, fail closed); every refusal is the same 404.
 
 **"Make this a user"** (`mailboxes/make-user.ts`) does the same for an existing unassigned mailbox (a shared address):
 login, membership, profile, owner link (`mailboxes.assignOwner`, conditional on no owner) and display name in one
