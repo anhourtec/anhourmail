@@ -289,10 +289,15 @@ test("a member reads, sends as and on behalf of mailboxes shared with them, open
   await expect(refused.getByRole("heading", { name: "Open a shared mailbox" })).toBeVisible({
     timeout: SIGN_IN_TIMEOUT,
   });
-  await refused.getByRole("button", { name: `Open ${u.recipient.address}` }).click();
-  await expect(refused.getByRole("heading", { name: "You don't have access to this mailbox" })).toBeVisible({
-    timeout: SIGN_IN_TIMEOUT,
-  });
+  // The button only works once the page has hydrated; on a busy dev server an early click does nothing, so retry it
+  // until the refusal shows (a second click while opening changes nothing).
+  await expect(async () => {
+    const open = refused.getByRole("button", { name: `Open ${u.recipient.address}` });
+    if (await open.isVisible()) await open.click();
+    await expect(refused.getByRole("heading", { name: "You don't have access to this mailbox" })).toBeVisible({
+      timeout: 5_000,
+    });
+  }).toPass({ timeout: SIGN_IN_TIMEOUT * 2 });
   await expect(refused.getByText(u.recipient.address)).toBeVisible();
   await refused.goto(`${urls.webmail}/mailbox/nobody-${tag}@example.test`);
   await expect(refused.getByRole("heading", { name: "You don't have access to this mailbox" })).toBeVisible({
