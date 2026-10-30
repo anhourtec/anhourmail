@@ -5,8 +5,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   isSenderDelegationKey,
+  ON_BEHALF_EXPIRES_HEADER,
   ON_BEHALF_HEADER,
-  onBehalfTag,
+  ON_BEHALF_TTL_MS,
+  onBehalfExpires,
+  onBehalfTag as tagWithExpiry,
   OnBehalfTagError,
   resolveSenderDelegationKey,
   SenderDelegationKeyError,
@@ -16,13 +19,39 @@ const KEY = "0123456789abcdef".repeat(4);
 const OWNER = "owner@example.org";
 const DELEGATE = "delegate@example.org";
 const MID = "4f1c.9a@mail.example.org";
+const EXP = "2026-10-30T09:31:37Z";
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+/** The tag with this file's fixed expiry (cases about addresses, ids and keys). */
+const onBehalfTag = (key: string, mailbox: string, delegate: string, id: string) =>
+  tagWithExpiry(key, mailbox, delegate, id, EXP);
 
 describe("on-behalf tag", () => {
-  it("is sha256(K | sha256(K | mailbox | delegate | Message-ID)), the formula the mail server's script recomputes", () => {
-    const expected = sha(`${KEY}|${sha(`${KEY}|${OWNER}|${DELEGATE}|${MID}`)}`);
+  it("is sha256(K | sha256(K | mailbox | delegate | Message-ID | expiry)), the formula the mail server recomputes", () => {
+    const expected = sha(`${KEY}|${sha(`${KEY}|${OWNER}|${DELEGATE}|${MID}|${EXP}`)}`);
     expect(onBehalfTag(KEY, OWNER, DELEGATE, MID)).toBe(expected);
     expect(expected).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("binds the expiry, and refuses one not in the server's UTC form", () => {
+    const tag = onBehalfTag(KEY, OWNER, DELEGATE, MID);
+    expect(tagWithExpiry(KEY, OWNER, DELEGATE, MID, "2026-10-30T09:31:38Z")).not.toBe(tag);
+    for (const bad of [
+      "",
+      "2026-10-30T09:31:37.000Z",
+      "2026-10-30T09:31:37+00:00",
+      "2026-10-30 09:31:37Z",
+      `${EXP}\n`,
+    ]) {
+      expect(() => tagWithExpiry(KEY, OWNER, DELEGATE, MID, bad)).toThrow(OnBehalfTagError);
+    }
+  });
+
+  it("makes expiries a few minutes ahead, in UTC whole seconds", () => {
+    const now = Date.parse("2026-10-30T09:26:37.912Z");
+    expect(onBehalfExpires(now)).toBe("2026-10-30T09:31:37Z");
+    expect(onBehalfExpires(now, 1000)).toBe("2026-10-30T09:26:38Z");
+    expect(ON_BEHALF_TTL_MS).toBeLessThanOrEqual(10 * 60_000);
+    expect(ON_BEHALF_EXPIRES_HEADER).toBe("X-AnhourMail-On-Behalf-Expires");
   });
 
   it("lowercases and trims the addresses, keeps the Message-ID's case and drops its angle brackets", () => {
@@ -60,7 +89,20 @@ describe("on-behalf tag", () => {
       expect(() => onBehalfTag(KEY, bad, DELEGATE, MID)).toThrow(OnBehalfTagError);
       expect(() => onBehalfTag(KEY, OWNER, bad, MID)).toThrow(OnBehalfTagError);
     }
-    for (const bad of ["", "<>", "a|b@h", "a b@h", "<a@h> <b@h>", "a\r\n@h", "a<b@h"]) {
+    // Only `local@host` in letters, digits and `._%+=-`: what the script accepts before it hashes.
+    for (const bad of [
+      "",
+      "<>",
+      "a|b@h",
+      "a b@h",
+      "<a@h> <b@h>",
+      "a\r\n@h",
+      "a<b@h",
+      "garbage",
+      "a@b@c",
+      "a'b@h",
+      "ä@h",
+    ]) {
       expect(() => onBehalfTag(KEY, OWNER, DELEGATE, bad)).toThrow(OnBehalfTagError);
     }
   });

@@ -132,9 +132,15 @@ describe("Stalwart credentials (ADR-0020 credential split)", () => {
     }
     production({ ...onDomain, SENDER_DELEGATION_KEY: "e".repeat(64) });
     expect(senderDelegationKey()).toBe("e".repeat(64));
-    expect(onBehalfTag(senderDelegationKey(), "box@example.org", "me@example.org", "id.1@example.org")).toMatch(
-      /^[0-9a-f]{64}$/,
-    );
+    expect(
+      onBehalfTag(
+        senderDelegationKey(),
+        "box@example.org",
+        "me@example.org",
+        "id.1@example.org",
+        "2026-10-30T09:31:37Z",
+      ),
+    ).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("derives the dev sender delegation key when unset outside production, and checks a set one", () => {
