@@ -5,6 +5,7 @@ import { Check, Copy, ShieldCheck, UserPlus } from "lucide-react";
 import Link from "next/link";
 import { type ReactNode, type SyntheticEvent, useId, useState } from "react";
 
+import { DELEGATION_RIGHT_LABELS, type DelegationRight } from "@anhourmail/shared/delegation";
 import { nameProblem } from "@anhourmail/shared/names";
 import { ACCOUNT_ROLE_SUMMARIES, type AccountRole, ROLE_LABELS } from "@anhourmail/shared/rbac";
 import { mailboxPasswordProblem } from "@anhourmail/shared/security";
@@ -41,8 +42,16 @@ const STEPS: { id: StepId; label: string }[] = [
 
 type Added = { address: string; password: string | null; requirePasswordChange: boolean };
 
-/** "Make this a user": the person-less mailbox the person will sign in with (no new mailbox is created). */
-export type ExistingMailbox = { mailboxId: string; address: string; displayName: string | null };
+/**
+ * "Make this a user": the person-less mailbox the person will sign in with (no new mailbox is created), and the people
+ * who already have access to it through delegation (listed before Finish; null when the viewer can't see them).
+ */
+export type ExistingMailbox = {
+  mailboxId: string;
+  address: string;
+  displayName: string | null;
+  delegates?: { userId: string; name: string; email: string; rights: DelegationRight[] }[] | null;
+};
 
 const LOCAL_PART = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
 
@@ -528,6 +537,34 @@ export function AddUserWizard({
             >
               <ProfileSummary profile={profile} />
             </Summary>
+            {existing?.delegates && existing.delegates.length > 0 && (
+              <section
+                aria-labelledby="existing-access"
+                className="flex flex-col gap-2 rounded-lg border bg-card px-4 py-3.5"
+              >
+                <h3 id="existing-access" className="am-h4">
+                  People who already have access
+                </h3>
+                <ul className="flex flex-col gap-1.5">
+                  {existing.delegates.map((d) => (
+                    <li key={d.userId} className="flex flex-col">
+                      <span className="text-[14px]">
+                        {d.name || d.email}{" "}
+                        <span className="font-mono text-[12.5px] break-all text-muted-foreground">{d.email}</span>
+                      </span>
+                      <span className="am-micro">{d.rights.map((r) => DELEGATION_RIGHT_LABELS[r]).join(" · ")}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="am-small">
+                  They keep it once the mailbox is a user&apos;s
+                  {role === "member"
+                    ? "."
+                    : ", except access given by someone who isn't an owner: only an owner can share an owner's or admin's mailbox."}{" "}
+                  Change it on the mailbox&apos;s Delegation tab.
+                </p>
+              </section>
+            )}
             {stepUp && (
               <ConfirmItsYou
                 onConfirmed={() => {
