@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 
 import { can, NotFoundError } from "@anhourmail/core";
 import { accountAvatars, avatarPath } from "@anhourmail/core/avatars";
+import { delegationAvailability, listPersonDelegations } from "@anhourmail/core/delegation";
 import { listMailboxes } from "@anhourmail/core/mailboxes";
 import { getPersonProfile, listPeople } from "@anhourmail/core/people";
 import { INVITE_TTL_DAYS } from "@anhourmail/shared/plans";
@@ -27,7 +28,8 @@ const dateFmt = new Intl.DateTimeFormat("en-CA", { dateStyle: "medium", timeZone
 
 /**
  * People and roles (console page template). `?person=<userId>` opens a person's panel (`&tab=profile` for the
- * optional profile details, `&tab=role` for the role),
+ * optional profile details, `&tab=role` for the role; the Account tab lists the mailboxes they can open through
+ * delegation), removing one person can give someone full access to their mailboxes,
  * `?new=1` the "Invite someone" panel. Ids that aren't a member of this account are a 404.
  */
 export default async function PeoplePage({
@@ -45,7 +47,9 @@ export default async function PeoplePage({
   const data = await forPage(async () => ({
     overview: await listPeople(deps, actor, accountId),
     photos: await accountAvatars(deps, actor, accountId),
-    mailboxes: openId && can(actor, "mailbox.read", accountId) ? await listMailboxes(deps, actor, accountId) : null,
+    // Everyone's mailboxes (for the panel, and for what removing someone hands over).
+    mailboxes: can(actor, "mailbox.read", accountId) ? await listMailboxes(deps, actor, accountId) : null,
+    delegation: can(actor, "delegation.read", accountId) ? await delegationAvailability(deps, actor, accountId) : null,
     // Someone outside the account: no profile here, and the page answers 404 below.
     profile: openId
       ? await getPersonProfile(deps, actor, accountId, openId).catch((err: unknown) => {
@@ -68,6 +72,21 @@ export default async function PeoplePage({
   const { members, invites, grantableRoles, limits } = data.overview;
   const open = openId ? members.find((m) => m.userId === openId) : undefined;
   if (openId && !open) notFound();
+  // "Mailboxes they can open" for the open person (`delegation.read`).
+  const openDelegations =
+    open && data.delegation ? await forPage(() => listPersonDelegations(deps, actor, accountId, open.userId)) : null;
+  const ownedBy = (userId: string) =>
+    data.mailboxes ? data.mailboxes.filter((m) => m.owner?.userId === userId).map((m) => m.address) : null;
+  // Removing someone can give another person full access to their mailboxes when this viewer may give access and
+  // the plan includes it; otherwise, on a plan with delegation, the dialog says an owner can do it later.
+  const handOver = !data.delegation?.plan
+    ? null
+    : data.delegation.canManage
+      ? {
+          kind: "grant" as const,
+          candidates: members.map((m) => ({ userId: m.userId, name: m.name, email: m.email })),
+        }
+      : { kind: "later" as const };
   const canInvite = can(actor, "member.manage", accountId);
   const room = limits.addPeople && limits.used < limits.max;
   const path = `/accounts/${accountId}/people`;
@@ -114,6 +133,7 @@ export default async function PeoplePage({
           joinedAt: m.joinedAt.getTime(),
           canChangeRole: m.canChangeRole,
           canRemove: m.canRemove,
+          mailboxes: ownedBy(m.userId),
         }))}
         invites={invites.map((i) => ({
           id: i.id,
@@ -126,6 +146,7 @@ export default async function PeoplePage({
         openId={open?.userId ?? null}
         inviteHref={canInvite && room ? `${path}?new=1` : null}
         docsHref={`${env().SITE_URL.replace(/\/$/, "")}/docs/people-and-roles`}
+        handOver={handOver}
       />
 
       <details id="roles" className="mt-2 rounded-lg border px-4 py-3">
@@ -149,6 +170,8 @@ export default async function PeoplePage({
             closeHref={path}
             profile={data.profile}
             photoUrl={photoOf(open.userId)}
+            delegations={openDelegations}
+            handOver={handOver}
             tab={param(sp, "tab")}
           />
         </UrlFlyout>
