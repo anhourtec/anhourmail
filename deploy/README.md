@@ -123,6 +123,14 @@ version. CI builds all three on every push (`.cicd/build.sh`).
   refuse to start with it. Rotate by setting the new value on both at once (grants in flight fail and are retried by
   the person or admin).
 
+- **`SENDER_DELEGATION_KEY`** — **web app and the mail server's `sender-identity` script only** (64 lowercase hex
+  characters: `openssl rand -hex 32`). It keys the tag the webmail adds to a "send on behalf" message; the tag is bound
+  to that message's Message-ID, and the script accepts a `Sender:` other than the mailbox only with the right tag for
+  that mailbox, delegate and message, then removes it before delivery (ADR-0026). No stored copy carries a tag: the
+  webmail submits from a temporary copy and files the Sent copy without it. The bootstrap writes the key into the
+  script; the web app needs the same value or every send on behalf is refused. The worker and scheduler refuse to
+  start with it. Rotate by re-running the bootstrap with the new value and redeploying the web app.
+
 - **The public JMAP/CardDAV host (`imap.`) must not expose Stalwart's `/api/*`, `/auth/*`, `/admin`,
   `/.well-known/oauth-authorization-server` or `/.well-known/openid-configuration`.** `/api/auth` turns an app password
   into an account-wide OAuth token (ADR-0020); only the paths mail, contact and calendar apps use (`/jmap`,
