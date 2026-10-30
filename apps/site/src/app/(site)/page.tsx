@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import type { Metadata } from "next";
 import Link from "next/link";
 
 import {
@@ -16,17 +17,53 @@ import {
   ShieldCheckIcon,
   SmartphoneIcon,
   UserPlusIcon,
+  UsersIcon,
   VenetianMaskIcon,
   ZapIcon,
 } from "lucide-react";
 
-import { ADDONS, ALIASES_PER_MAILBOX, BILLING, PRODUCT_DOMAIN } from "@anhourmail/shared";
+import {
+  ADDONS,
+  ALIASES_PER_MAILBOX,
+  BILLING,
+  formatPrice,
+  MAX_PEOPLE,
+  PLAN_ORDER,
+  PLANS,
+  PRODUCT_DOMAIN,
+} from "@anhourmail/shared";
 
+import { JsonLd } from "@/components/json-ld";
+import { AuditMock } from "@/components/landing/console-mock";
 import { AliasToggles, DnsChecks, InstantList, TerminalCard, TrackerBlocked } from "@/components/landing/illustrations";
 import { WebmailMock } from "@/components/landing/webmail-mock";
 import { Reveal } from "@/components/reveal";
 import { CtaBand, EssentialsGrid, FaqList, FeatureRow, PlanCards, SectionHead } from "@/components/sections";
+import {
+  faqJsonLd,
+  HOME_DESCRIPTION,
+  HOME_TITLE,
+  organizationJsonLd,
+  pageMetadata,
+  softwareJsonLd,
+  websiteJsonLd,
+} from "@/lib/seo";
 import { SIGN_UP_URL } from "@/lib/site";
+
+export const metadata: Metadata = pageMetadata({
+  title: HOME_TITLE,
+  absoluteTitle: true,
+  description: HOME_DESCRIPTION,
+  path: "/",
+});
+
+/** Plans with a given feature, by name ("Plus and Supporter"), from the plan table. */
+const plansWith = (k: "customDomains" | "addPeople") =>
+  PLAN_ORDER.filter((id) => PLANS[id][k])
+    .map((id) => PLANS[id].name)
+    .join(" and ");
+const plusPrice = PLANS.plus.price ? formatPrice(PLANS.plus.price.USD, "USD") : "";
+const supporterPrice = PLANS.supporter.price ? formatPrice(PLANS.supporter.price.USD, "USD") : "";
 
 const LIFECYCLE = [
   { icon: UserPlusIcon, label: "Sign up" },
@@ -41,10 +78,10 @@ const FEATURES = [
     id: "domain",
     href: "/features/custom-domains",
     icon: GlobeIcon,
-    eyebrow: "Your domain",
-    title: "Bring the address you already own.",
+    eyebrow: "Custom domain email",
+    title: "Email on the domain you already own.",
     body: "Guided setup shows every DNS record with a copy button and checks each one live, so you always know what’s left.",
-    bullets: ["Records for every major DNS provider", "Live check per record", "Catch-all on paid plans"],
+    bullets: ["Works with any DNS provider", "Live check per record", "Catch-all on paid plans"],
     bloom: "blue",
     art: <DnsChecks />,
   },
@@ -53,8 +90,8 @@ const FEATURES = [
     href: "/features/aliases",
     icon: VenetianMaskIcon,
     eyebrow: "Aliases and masked aliases",
-    title: "A different address for every sign-up.",
-    body: "Give each shop and newsletter its own random address. See which ones get mail, and switch one off the moment it’s sold.",
+    title: "A masked alias for every sign-up.",
+    body: "Give each shop and newsletter its own random address. Spam on one tells you who passed it on, and you switch it off the moment it’s sold.",
     bullets: [
       "One-click off switch",
       "A note on each, so you know where you used it",
@@ -68,9 +105,9 @@ const FEATURES = [
     href: "/features/webmail",
     icon: ZapIcon,
     eyebrow: "Fast webmail",
-    title: "Built on JMAP, so it doesn’t wait on IMAP.",
-    body: "The webmail syncs only what changed and new mail appears as it arrives. Keyboard shortcuts for everything you do often.",
-    bullets: ["Incremental sync and push", "Keyboard-first", "IMAP and SMTP for your other apps"],
+    title: "Open-source webmail built on JMAP.",
+    body: "The webmail fetches only what changed instead of downloading whole folders, and has keyboard shortcuts for everything you do often.",
+    bullets: ["Incremental sync", "Keyboard-first", "IMAP, SMTP and JMAP for your other apps"],
     bloom: "cyan",
     art: <InstantList />,
   },
@@ -79,7 +116,7 @@ const FEATURES = [
     href: "/features/privacy",
     icon: EyeOffIcon,
     eyebrow: "Private by default",
-    title: "Your inbox isn’t a product.",
+    title: "Private email: your inbox isn’t a product.",
     body: "No ads and no profiling. Remote images stay blocked until you choose to load them, so tracking pixels never phone home.",
     bullets: [
       "Remote images off by default",
@@ -88,6 +125,21 @@ const FEATURES = [
     ],
     bloom: "green",
     art: <TrackerBlocked />,
+  },
+  {
+    id: "teams",
+    href: "/docs/mailboxes",
+    icon: UsersIcon,
+    eyebrow: "Families and small teams",
+    title: "One account for your family or small team.",
+    body: `Invite up to ${String(MAX_PEOPLE)} people, give each their own mailbox, and share addresses like support@ with a shared mailbox. One yearly price covers the whole account.`,
+    bullets: [
+      `${String(PLANS.plus.includedMailboxes)} mailboxes included on ${plansWith("addPeople")}`,
+      "Shared mailboxes with read and manage, send as and send on behalf",
+      "Roles for who can manage what, and an audit log of every change",
+    ],
+    bloom: "blue",
+    art: <AuditMock />,
   },
   {
     id: "open",
@@ -133,14 +185,31 @@ const STEPS = [
   },
 ] as const;
 
+/** Plain strings only: the same text is the FAQPage structured data, which must match what's on the page. */
 const FAQ = [
   {
     q: "Is it really free?",
     a: "Yes. Paid plans fund the free tier, and we plan to publish a public cost breakdown.",
   },
   {
+    q: "How much does it cost?",
+    a: `The free plan costs nothing. ${PLANS.plus.name} is planned at ${plusPrice} a ${BILLING.interval} for the whole account, not per person, with ${String(PLANS.plus.includedMailboxes)} mailboxes included. ${PLANS.supporter.name} is pay what you want from ${supporterPrice}. Prices are confirmed before the beta opens.`,
+  },
+  {
+    q: "Can I use my own domain?",
+    a: `Yes, on ${plansWith("customDomains")}. The console shows every DNS record with a copy button and checks each one live. Catch-all is included.`,
+  },
+  {
+    q: "What are masked aliases?",
+    a: "Random addresses you give to one site each. Mail reaches your inbox as usual, the site never sees your real address, and you can switch one off when it starts getting spam.",
+  },
+  {
+    q: "Can my family or team share an account?",
+    a: `Yes, on ${plansWith("addPeople")}. Invite up to ${String(MAX_PEOPLE)} people, give each a mailbox and a role, and share mailboxes such as support@ with read and manage, send as or send on behalf access.`,
+  },
+  {
     q: "Can I use my own mail app?",
-    a: "Yes. IMAP and SMTP work with any standard mail app. App passwords keep your main password private.",
+    a: "Yes. IMAP, SMTP and JMAP work with any standard mail app. App passwords keep your main password private.",
   },
   {
     q: "Can I leave and take my mail with me?",
@@ -165,6 +234,7 @@ const FAQ = [
 export default function HomePage() {
   return (
     <>
+      <JsonLd data={[organizationJsonLd(), websiteJsonLd(), softwareJsonLd(), faqJsonLd(FAQ)]} />
       {/* 01 · Hero: animated sky, oversized display, product mock across the seam */}
       <section className="am-site-hero am-site-under-nav">
         <div aria-hidden="true" className="am-site-sky-clip">
@@ -189,13 +259,13 @@ export default function HomePage() {
           </Reveal>
           <Reveal onLoad delayMs={130}>
             <h1 className="am-site-hero-h1 mt-7 max-w-[15ch]">
-              Email that minds <em>its own business</em>
+              Private email that minds <em>its own business</em>
             </h1>
           </Reveal>
           <Reveal onLoad delayMs={260}>
             <p className="mx-auto mt-6 max-w-[48ch] text-[clamp(1rem,0.95rem+0.3vw,1.125rem)] text-white/75 leading-relaxed">
-              Fast, open-source webmail on your own domain, a fresh alias for every sign-up, and no ads or tracking.
-              Ever.
+              Low-cost email hosting on your own domain, a masked alias for every sign-up, and open-source webmail. No
+              ads or tracking. Ever.
             </p>
           </Reveal>
           <Reveal
@@ -287,6 +357,16 @@ export default function HomePage() {
               />
             ))}
           </div>
+          <Reveal className="mt-20 flex flex-wrap justify-center gap-x-8 gap-y-3">
+            <Link href="/features" className="am-site-link-arrow">
+              Explore the features
+              <ArrowRightIcon className="size-4" aria-hidden="true" />
+            </Link>
+            <Link href="/docs/features" className="am-site-link-arrow">
+              The full feature list
+              <ArrowRightIcon className="size-4" aria-hidden="true" />
+            </Link>
+          </Reveal>
         </div>
       </section>
 
@@ -358,8 +438,8 @@ export default function HomePage() {
         <div className="am-site-wrap-wide flex flex-col gap-12">
           <SectionHead
             kicker="Planned pricing"
-            title="Start free. Pay yearly when you want more."
-            lead={`Billed once a ${BILLING.interval}, with a ${String(BILLING.refundWindowDays)}-day refund window. The free plan is the trial.`}
+            title="Affordable email hosting: start free, pay yearly when you want more."
+            lead={`${PLANS.plus.name} is ${plusPrice} a ${BILLING.interval} for the whole account. Billed once a ${BILLING.interval}, with a ${String(BILLING.refundWindowDays)}-day refund window. The free plan is the trial.`}
           />
           <PlanCards />
           <Reveal className="flex justify-center">

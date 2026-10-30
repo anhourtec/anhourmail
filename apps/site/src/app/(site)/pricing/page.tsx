@@ -19,13 +19,14 @@ import {
 
 import { Reveal } from "@/components/reveal";
 import { CtaBand, FaqList, PageHero, PlanCards, SectionHead } from "@/components/sections";
+import { JsonLd } from "@/components/json-ld";
+import { breadcrumbJsonLd, pageMetadata, softwareJsonLd } from "@/lib/seo";
 
-export const metadata: Metadata = {
-  title: "Pricing",
-  description: `AnhourMail plans: a free address, paid plans billed once a ${BILLING.interval} with a ${String(BILLING.refundWindowDays)}-day refund window.`,
-  alternates: { canonical: "/pricing" },
-  openGraph: { title: "Pricing · AnhourMail", url: "/pricing" },
-};
+export const metadata: Metadata = pageMetadata({
+  title: "Pricing: a free address and low-cost yearly plans",
+  description: `Planned pricing: a free @${PRODUCT_DOMAIN} address, or ${PLANS.plus.name} at ${PLANS.plus.price ? formatPrice(PLANS.plus.price.USD, "USD") : ""} a ${BILLING.interval} for your own domain and up to ${String(PLANS.plus.includedMailboxes)} mailboxes, with a ${String(BILLING.refundWindowDays)}-day refund window.`,
+  path: "/pricing",
+});
 
 type RowValue = string | boolean;
 const ROWS: readonly { label: string; value: (p: Plan) => RowValue }[] = [
@@ -118,8 +119,17 @@ const FAQ = [
 export default function PricingPage() {
   return (
     <>
+      <JsonLd
+        data={[
+          softwareJsonLd(),
+          breadcrumbJsonLd([
+            { name: "Home", path: "/" },
+            { name: "Pricing", path: "/pricing" },
+          ]),
+        ]}
+      />
       <PageHero
-        title="Simple yearly pricing"
+        title="Simple, affordable yearly pricing"
         lead={`Start free. Upgrade when you want your own domain and more room. Billed once a ${BILLING.interval}, with a ${String(BILLING.refundWindowDays)}-day refund window.`}
         actions={false}
       />
