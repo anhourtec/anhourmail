@@ -639,6 +639,50 @@ There is no OAuth token-exchange (RFC 8693) grant and no admin-mints-user-token 
 
 ---
 
+### Headers on locally delivered mail, per path (verified on the pinned v0.16.27, 2026-10-30)
+
+Probed with throwaway `dev.test` accounts (ADR-0019 update "internal mail" has the full table):
+
+- **Authenticated submission** (SMTP 465, JMAP `EmailSubmission`, nodemailer over 465 as system mail does in
+  production): the stored copy starts `Delivered-To`, `X-Spam-Status`, two `DKIM-Signature` (Ed25519 and RSA, ours),
+  then the client's headers. **No `Received` and no `Authentication-Results`**; a `Received` the client wrote is kept.
+  Without a `Message-ID`, none is added for local delivery.
+- **Port 25:** `Delivered-To`, `X-Spam-Status`, `Received … (Stalwart SMTP) with ESMTP`, `Authentication-Results`,
+  `Received-SPF`, `X-Spam-Result`, `X-Spam-Score`, `Return-Path`. In dev every check is `temperror` (no DNS egress), so
+  a DMARC pass can't be produced there. Port 587 without AUTH answers `MAIL` with 503 5.5.1.
+- **Sieve `redirect :copy` by the recipient's script:** the redirected copy gets `Delivered-To`, `X-Spam-Status`, our
+  two `DKIM-Signature`s **over the original From (also for mail from outside)**, then `Received from localhost … with
+  LMTP`, then the original headers. It does not pass the DATA stage again (a marker on the original is kept; none is
+  added or removed).
+- **Header names:** a name ending in NBSP, a BOM or `\v` is stored as written (JMAP `headers` shows it) and
+  `deleteheader` doesn't match it; one ending in `\f` is removed. Port 25 advertises `CHUNKING`; DATA-stage scripts
+  run for `BDAT` too. The strip leaves the rest of the header block byte-identical.
+- **System scripts fail open:** with the `inbound-headers` script inactive, or destroyed while the DATA expression
+  still names it, port 25 mail is accepted and delivered without it running.
+- **Sieve expressions at DATA:** `envelope.to` is the recipient array; `envelope.to[i]` past the end reads as empty;
+  `||` short-circuits; `is_local_domain` works (`is_local_address` doesn't exist there); `recipients`, `rcpt` and
+  `rcpt_domain` aren't variables there (compile error). `envelope :domain :is "to"` was false for a second, outside
+  recipient. Our `Received` and results headers are added **after** the DATA script, so it can't read them.
+- **DKIM signing contexts:** submissions use `x:SenderAuth.dkimSignDomain` (JMAP submissions run with `local_port` 0
+  and `remote_ip` 127.0.0.1); Sieve redirects and automatic replies use `x:SieveUserInterpreter.dkimSignDomain`
+  (`is_local_domain(sender_domain)`), with the forwarding mailbox as envelope sender (no SRS, no ARC seal). Our
+  signature's `h=` is `Subject:To:From:Date:Message-ID`.
+- **Sieve state and compare-and-swap:** `SieveScript/get` returns the account's Sieve `state`; `SieveScript/set` with a
+  stale `ifInState` is refused with the `stateMismatch` method error and changes nothing; uploading a blob doesn't move
+  the state.
+- **User scripts:** `index` and `regex` compile; on port 25 mail our results header is the top-most one; `:matches`
+  sees the unfolded value without its leading space. Our results header lists `spf`, `iprev`, then `dmarc` last; a
+  quoted MAIL FROM local part appears verbatim in `smtp.mailfrom="…"`, an EHLO argument with `=` is refused
+  (`550 5.5.0`), and comment text is reduced to letters.
+- **More than one From:** for two From addresses, two From headers or group syntax, our results header ends in
+  `dmarc=none header.from= policy.dmarc=none` (empty domain). `address :count "gt" :comparator "i;ascii-numeric" :all
+  "from" "1"` and `header :count "gt" … "from" "1"` compile in user scripts and see all three.
+- **mustMatchSender:** `true` for every session; the recovery admin is refused as anyone else (`501 5.5.4`).
+- **DATA-stage system scripts:** `MtaStageData.script` is an expression; its `else` branch (unauthenticated sessions)
+  can name a second system script. `addheader` / `deleteheader` (`editheader`) work in both; `deleteheader` matches
+  `Name :`, `name` and `Name<TAB>:` forms. `hash(…, 'sha256')` over `envelope.from` and `header.message-id` works in
+  `let`, as for the on-behalf tag.
+
 ### Console handoff without the password (verified on the pinned v0.16.27, 2026-10-29)
 
 For ADR-0024, with a throwaway domain and account and the real service keys (`issueTestKeys`), destroyed afterwards;

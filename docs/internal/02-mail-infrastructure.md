@@ -1,6 +1,6 @@
 # 02 — Mail infrastructure
 
-Last updated: 2026-10-30 (send-on-behalf tag expiry, ADR-0026 slice 13). Research: `research/stalwart.md`, `research/deliverability.md`.
+Last updated: 2026-10-30 (internal-mail marker and the inbound-headers script; send-on-behalf tag expiry, ADR-0026 slice 13). Research: `research/stalwart.md`, `research/deliverability.md`.
 
 ## URL and hostname map
 
@@ -233,6 +233,19 @@ and 175 more`. Without `impersonate` these permissions apply to its own account 
   `stack:verify` checks the accepted, refused and stripped cases (Mailpit and a local mailbox's stored copy) and that a forged From to the sender's own mailbox is
   refused (it is: a JMAP submission whose every recipient is throttled at `RCPT` is created as "not delivered" and
   never reaches DATA, so it is no bypass).
+- **Internal-mail marker** (ADR-0019 update 2026-10-30, verified on v0.16.27): with the key set, the `sender-identity`
+  script removes any `X-AnhourMail-Internal` the client sent and adds its own keyed tag (bound to the envelope sender
+  and the one `Message-ID`) to every authenticated submission whose recipients are all local; a second system script, `inbound-headers`, runs at DATA
+  for unauthenticated sessions (`MtaStageData.script` `else` branch) and only removes that header. The webmail uses it
+  to treat mail submitted here as from a verified sender (`05-webmail.md` "Remote images"). Both scripts and the DATA
+  expression are written by `applySenderIdentityPolicy` (dev plan and production bootstrap), then `ReloadSettings`;
+  no restart. `stack:verify` checks submission, port 25 (a copied genuine marker is removed) and redirected copies.
+- **Redirect signing** (verified 2026-10-30): Sieve redirects and automatic replies are DKIM-signed by
+  `x:SieveUserInterpreter.dkimSignDomain` with the forwarding mailbox's domain (the redirect's envelope sender; no
+  SRS), so a redirected copy of an outside message forging one of our addresses leaves with an aligned signature.
+  Mitigated (maintainer decision 2026-10-30, ADR-0019 update "forwarding and DMARC"): the managed forwarding rule
+  doesn't redirect mail whose results from our server say `dmarc=fail`; the signing setting is unchanged (it also signs
+  automatic replies). This relies on our own domains publishing an enforcing DMARC policy record; check on pre-staging.
 - Outbound spam scanning of authenticated mail is **off by default** in Stalwart (`MtaStageData.enableSpamFilter`). We turn it on and pair it with control-plane limits (`03-anti-spam-and-abuse.md`).
 - **Transport security** (ADR-0016, ADR-0018; verified 2026-10-21): listeners allow only TLS 1.2/1.3 (`TlsVersion` has
   no older values; 993 negotiated TLS 1.2 ECDHE-ECDSA-AES256-GCM and 587 STARTTLS negotiated TLS 1.3); set

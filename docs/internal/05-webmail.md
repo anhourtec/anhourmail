@@ -1,6 +1,6 @@
 # 05 — Webmail
 
-Last updated: 2026-10-30 (mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
+Last updated: 2026-10-30 (forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
 notifications; quoted replies; compose image placeholders; first-sign-in password step; sign-in links not pre-filled).
 
 **Status (2026-10-22): slice 1 is built** — webmail sign-in (OAuth code flow + PKCE, tokens sealed server-side), the
@@ -314,11 +314,25 @@ target }` — replies and forwarding run **only for ordinary person-to-person ma
    sender gets both. This stops auto-reply and relay of spam and backscatter. "Contacts only" tests the **envelope
    sender** (`envelope :is "from"`), the validated MAIL FROM, not a forgeable header.
 
+**Forwarding guard** (maintainer decisions 2026-10-30, ADR-0019 update "forwarding and DMARC"): the redirect is wrapped
+in `forwardingGuard(authservIds, mailboxDomain)` (`@anhourmail/core/webmail`): no redirect when any results header
+with our authserv-id says `dmarc=fail`, nor when the From is on the mailbox's own domain or a subdomain and either the
+message has more than one From address or header, or our top-most results header doesn't end in a `dmarc=pass` item
+for that domain (end-anchored `:regex` built per mailbox; `index`, `regex`, `relational` and the numeric comparator
+are required for this part only, with fixed patterns and validated hostnames — no user value ever reaches them). The message stays
+in the mailbox (implicit keep); automatic replies are unchanged; internal mail (no results header) is forwarded.
+Scripts written before are upgraded by the web app at start-up (`server/webmail/rules-upgrade.ts` →
+`upgradeManagedScripts` with the exact transform `upgradeManagedScript`): active scripts forwarding to the confirmed
+target only, a compare-and-swap write (`ifInState`) so a save in between wins, a size check, a Redis done flag, audited
+`platform.mail_rules_upgraded`. The reconciler compares each guard with the exact expected text (`unguardedForwarding`).
+`stack:verify` checks it with planted results (dev has no DNS); real verdicts are a pre-staging check.
+
 Blocked and junked mail is never answered or forwarded (the `stop` comes first). Settings are stored in the script
 as a base64url JSON comment and validated on read, so the mail server stays the source of truth. **Injection:**
 every value reaches the script only through `sieveString` (backslash and quote escaped, control characters
 dropped); the script requires only `fileinto`, `special-use`, `mailbox`, `envelope`, and `vacation`/`date`/
-`relational`/`copy` when used — never `variables`, `enotify`, `editheader`, `encoded-character` or `regex` — so
+`relational`/`copy` when used, and `index`/`regex` for the forwarding guard's fixed pattern only — never `variables`,
+`enotify`, `editheader` or `encoded-character`, and no person's value in a regex — so
 `${…}` is literal and there is no notify/redirect-by-variable; sender entries must be a plain address or domain.
 Tests in `sieve.test.ts` strip every quoted string and check no command was introduced. Contacts for "contacts
 only" rules are written into the script (≤ 1,000 addresses, within Stalwart's 100 KB `maxSizeScript`) and refreshed
@@ -651,8 +665,9 @@ token; the browser never does (rule 21).
   if it still can't be written the answer is an error after the cancel, so a missing audit row is never silent). What
   undo needs is held in the web process for the hold (a restart in those seconds: the message is sent, the own draft
   stays). Recipients of a delegated send are not auto-saved to contacts. Refusals: no send right, read and manage only,
-  another account's mailbox, an unknown address → the same 404; a shared mailbox active → 403 `own_mailbox_only`
-  (sending is from the person's own tab).
+  another account's mailbox, an unknown address → the same 404; a shared mailbox active (unpinned) → 403
+  `own_mailbox_only`. A shared mailbox's own view writes through the person's own mailbox with an **own pin** (below),
+  so this path is unchanged: the request sees the own mailbox active.
 
 - **Received mail's tag means nothing** (ADR-0026 §8 requirement 4): inbound MX mail doesn't run the sender script, so an
   `X-AnhourMail-On-Behalf` header on received mail is never read, shown or trusted by the webmail; "on behalf of"
@@ -660,8 +675,8 @@ token; the browser never does (rule 21).
 - **The webmail UI** (slice 14, `components/webmail/sidebar.tsx`, `shared-mailbox.tsx`, `composer.tsx`, `reader.tsx`):
   - **Shared with you**: the sidebar section and the account menu (⋮) list the mailboxes with `fullAccess`; choosing
     one runs the open (made active, the page reloads). While one is active a banner ("You're viewing …", **Back to
-    your mailbox** switches to `via`) runs across the top, and New email, replies, Contacts, blocking a sender and
-    contact adds are hidden; Settings opens a note that settings belong to the person's own mailbox. Preferences
+    your mailbox** switches to `via`) runs across the top, and Contacts, blocking a sender and the reader's contact adds
+    are hidden (New email and replies: see "Writing from a shared mailbox's view" below); Settings opens a note that settings belong to the person's own mailbox. Preferences
     change locally only there (the route refuses saving). The page reads preferences, the password step and the
     console link for the own mailbox (`via`).
   - **Open another mailbox** (account menu): a dialog asks for an address and opens `/mailbox/<address>` (on the bare
@@ -693,6 +708,31 @@ token; the browser never does (rule 21).
     one pending re-reads the session itself afterwards. Deferred work (the end of an undo hold, contacts auto-save)
     runs outside the pin of the request that scheduled it. `POST …/mailboxes/delegated` `{ address, activate: false }` opens the entry without
     switching (or, if open, checks the grant now; not dropped when refused, so a send-only entry keeps its undo hold).
+  - **Own pin for writing** (2026-10-30, after slice 14): a shared mailbox's view (its own tab, or the session switched
+    to it) writes mail through the person's own mailbox `via` with a second client (`createMailClient("", { own })`)
+    that sends `X-Webmail-Own: <via>` instead of the shared pin, on its compose requests: the session document, the
+    JMAP proxy (own Drafts and Trash), drafts, uploads, identities, `senders`, signatures, contacts (suggestions, "Add
+    to contacts"), send and undo. `route()` reads either pin (`requestPin`; both at once → the one refusal); with an own
+    pin the store's `pinView` swaps in that **own** entry (never a delegated one: a delegated address, one not signed
+    in here or a malformed value is the 404 refusal) and `unpinWrite` restores the real active entry, so every
+    own-mailbox-only check holds unchanged and `#sendDelegated` runs exactly as from the person's own tab, while the
+    session's active mailbox — possibly a shared one — stays as it was. Header only (no query form: a link can't
+    carry it, a cross-site page can't send it without a preflight). It grants nothing new: the same person could
+    switch the session to that own sign-in. Token refreshes under an own pin share the unpinned key of that entry, so
+    one refresh token is never used twice at once (each waiter re-reads its own view). Pinned requests still never
+    drop an entry.
+  - **Writing from a shared mailbox's view** (same change): with `send_as` or `send_on_behalf` on the shown mailbox
+    (it is in `senders().shared` through `via`), **New email**, Reply, Reply all and Forward open the composer with
+    `fromMailbox` = that mailbox, so **From** starts on it (send as, else "<you> on behalf of"); the person can pick
+    another From. Replies take the shown mailbox as "self" (the answer goes to the sender, threaded with the
+    original's `In-Reply-To` / `References`, which the send rebuilds in the shared mailbox). A forward's attachments
+    are **copied in the browser**: each is fetched with the shared pin (`downloadUrl`, a read the person may do) and
+    uploaded with the own pin into the own draft, so neither token ever reads or references the other account's
+    blobs; size caps as for any upload. A discarded draft goes to the own Trash. Undo uses the own-pinned client and
+    reopens the own draft with **From** on the mailbox again. With Read and manage only, **New email** is off
+    (`aria-disabled`, the reason "You can read this mailbox but not send from it. Ask an admin for Send as or Send on
+    behalf." under it; the shortcut shows it as a toast) and replies aren't offered; while the rights load it is
+    disabled.
   - **From picker**: `GET /api/webmail/senders` fills **From** with the person's identities, then a "Shared with you"
     group with each label (the mailbox, or "<name> on behalf of <mailbox>"); sending passes `from` and undo passes
     `mailbox`. `503 send_unconfirmed` shows its message ("We couldn't confirm whether this was sent. Check Sent before
@@ -704,7 +744,8 @@ token; the browser never does (rule 21).
     as "me" or as a verified mark. A `sender` row is in the details too. No tag header is read (§8 requirement 4).
   - The e2e journey (`tests/e2e/webmail-delegation.spec.ts`) runs on the desktop project only; the phone layout was
     checked by hand.
-- **Not built yet:** drafts saved directly in a shared mailbox, the best-effort Redis scrub of sealed tokens after a
+- **Not built yet:** drafts saved directly in a shared mailbox (drafts written in its view live in the person's own
+  Drafts), the best-effort Redis scrub of sealed tokens after a
   revoke (§7; the gate is the control), "People who can open this mailbox" in Settings → Account, and the owner
   notification email.
 
@@ -773,11 +814,17 @@ Built 2026-10-29. `server/webmail/{sanitize,image-proxy,remote-image}.ts`, `app/
   "Always load from this sender" toggles it. The decision is `rememberOffer` in `remote-images.ts`; "Forget all" in
   Reading settings. Both `contacts` and remembered
   senders need a **verified From** (`senderVerified` in `image-proxy.ts`): our own trusted Authentication-Results show
-  DMARC passing for the From domain or DKIM passing for it or a parent domain. A message with no results of ours is
-  not verified: a copy forwarded by a mailbox's redirect rule arrives that way whatever its From says (security-audit
-  run-32), and so does mail sent from inside, which therefore always asks. Otherwise the server sends no sender key
-  and the reader asks, so a forged From can't learn that the message was opened. Attached messages are never
-  verified.
+  DMARC passing for the From domain or DKIM passing for it or a parent domain, **or** our own server's internal-mail
+  marker vouches that the From address submitted the message here (`isInternalMail` in `original.ts`; ADR-0019
+  update "internal mail", 2026-10-30): mail between our users and our system mail, which never passes the inbound
+  checks and so has no results of ours. The marker is added only by the submission script, for mail whose recipients
+  are all local, bound to the From and Message-ID with `SENDER_DELEGATION_KEY`, and removed from everything arriving
+  from outside; the reader also refuses it on anything showing port 25 (results or `Received-SPF` headers, our
+  non-LMTP `Received`). A message with neither
+  is not verified: a copy forwarded by a mailbox's redirect rule arrives with no results whatever its From says
+  (security-audit run-32), and has no marker unless the original was internal mail (whose From is ours). Otherwise the
+  server sends no sender key and the reader asks, so a forged From can't learn that the message was opened. Attached
+  messages are never verified.
 - **Notice copy.** Blocked: "N remote images blocked · N trackers removed — Senders can't see when or where you
   opened this. Loading them goes through our privacy proxy, so the sender never sees your IP address." Loaded:
   "Images loaded through our privacy proxy — The sender can't see your IP address or your browser." Unverified

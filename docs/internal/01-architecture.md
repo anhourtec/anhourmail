@@ -1,6 +1,6 @@
 # 01 — Architecture
 
-Last updated: 2026-10-30 (mailbox delegation, ADR-0026: the webmail UI and tabs pinned to a shared mailbox per request, slice 14; sending as and on behalf of a delegated mailbox from the webmail BFF, slice 13; the webmail BFF opens delegated mailboxes behind the delegation gate; grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
+Last updated: 2026-10-30 (mailbox delegation, ADR-0026: writing from a shared mailbox's view through an own-mailbox pin; the webmail UI and tabs pinned to a shared mailbox per request, slice 14; sending as and on behalf of a delegated mailbox from the webmail BFF, slice 13; the webmail BFF opens delegated mailboxes behind the delegation gate; grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
 
 ## Overview
 
@@ -158,7 +158,10 @@ mailbox** opens `/mailbox/<address>` in a new tab, which opens the entry with `a
 every request (`X-Webmail-Shared`, `?shared=` on links; `server/webmail/pin.ts`): `route()` runs the request in that
 pin and the session store reads the session with the pinned entry as the active one and writes it back with the real
 active entry restored, so the gates and the service act on the pinned mailbox and the person's other tabs keep theirs.
-Only a delegated entry already in the session can be pinned; anything else is the one 404.
+Only a delegated entry already in the session can be pinned; anything else is the one 404. That view writes mail
+through the person's own mailbox with an **own pin** instead (`X-Webmail-Own`, header only): the request sees that own
+sign-in as the active one (never a delegated entry), so drafts, uploads, the From picker, send and undo run as in the
+person's own tab, and the server sends from the shared mailbox (`#sendDelegated`).
 
 **"Make this a user"** (`mailboxes/make-user.ts`) does the same for an existing unassigned mailbox (a shared address):
 login, membership, profile, owner link (`mailboxes.assignOwner`, conditional on no owner) and display name in one

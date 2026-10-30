@@ -515,6 +515,28 @@ the bare dev host, optional `/<folder>`; one refusal page), the From picker labe
   lists a mailbox's delegates yet; the owner notification email; drafts saved in a shared mailbox (the From choice
   isn't kept with the draft).
 
+**Update (2026-10-30, writing from a shared mailbox's view).** The maintainer found no way to send from a mailbox
+opened with Open another mailbox. Its view (the address-scoped tab, and the session switched to it) now has **New
+email**, and Reply, Reply all and Forward in the reader, with **From** preset to that mailbox (send as, else on behalf;
+the person can pick another From, the same list as their own tab's). With Read and manage only, New email is off and
+says why. Choices:
+
+- **Server change: an own pin** (`X-Webmail-Own: <own address>`, `server/webmail/pin.ts` `requestPin`, header only).
+  The view's compose requests (session document, proxy, drafts, uploads, identities, senders, signatures, contacts,
+  send, undo) name the person's own mailbox `via`; the store then shows that **own** entry as the active one and
+  writes the real active entry back, as the shared pin does for a delegated entry. An own pin can name only one of the
+  session's own sign-ins (a delegated entry, one not signed in here or a malformed value → the one 404 refusal), and a
+  request can't carry both pins, so own-mailbox-only and the default-deny are unchanged: the send goes through
+  `#sendDelegated` exactly as from the own tab (Sender and tag built by the server, the right re-checked uncached at
+  send). This also makes it work when the session's active mailbox is itself a shared one (switched in another tab),
+  which answered `403 own_mailbox_only` before. Nothing new is granted: the person could switch to that own sign-in.
+  Refreshes under an own pin share the entry's unpinned refresh (no refresh token used twice at once).
+- **Forwarded attachments are copied by the browser**: fetched with the shared pin (a read the person may do) and
+  uploaded with the own pin into the own draft; the own token never reads or references the shared account's blobs.
+- Replies treat the shown mailbox as "self"; `In-Reply-To` / `References` pass through the rebuild (unit test).
+- Console polish in the same change: the Delegation tab orders its lists Send as, Send on behalf, Read and manage,
+  each heading with its count ("Send as (2)").
+
 ## Consequences
 
 - Delegation, shared mailboxes and the leaver hand-over ship with **no new mail-server key, no management-proxy

@@ -1,6 +1,6 @@
 # 07 — Security
 
-Last updated: 2026-10-30 ("Delegation": sending as and on behalf of a delegated mailbox, the tag never stored and its five-minute expiry, slice 13; opening delegated mailboxes in the webmail and the gate; delegation grants and Convert to shared mailbox, ADR-0026; leavers lose mailbox sign-in; data export and account deletion; staff support access; profile photos).
+Last updated: 2026-10-30 ("Forwarding guard"; "Authentication results in the webmail": the internal-mail marker; "Delegation": sending as and on behalf of a delegated mailbox, the tag never stored and its five-minute expiry, slice 13; opening delegated mailboxes in the webmail and the gate; delegation grants and Convert to shared mailbox, ADR-0026; leavers lose mailbox sign-in; data export and account deletion; staff support access; profile photos).
 
 ## Threat model
 
@@ -688,6 +688,43 @@ mailbox's own credentials: they can only mislead themselves, or the others shari
 owner after "Make this a user" (messages planted before the handover, or through an IMAP session that outlives it;
 "Mailbox passwords" above). A robust fix would be cryptographic: have the mail server ARC-seal inbound mail and
 verify the seal (our key, configured, no DNS) in the webmail before trusting the results. Open item, not built.
+
+### Internal mail (ADR-0019 update 2026-10-30)
+
+Locally submitted mail has no results of ours, so for the remote-images "verified sender" rule the webmail also
+accepts our server's **internal-mail marker** (`isInternalMail` in `original.ts`): exactly one `From`, one
+`Message-ID` and one `X-AnhourMail-Internal` equal to
+`hex sha256(K | hex sha256(K | "internal-mail-v1" | lowercase From | Message-ID))`, `K` = `SENDER_DELEGATION_KEY`.
+Only the `sender-identity` submission script adds it (after removing any the client sent, and only once From is
+proven to be the account's envelope sender); the `inbound-headers` script removes it from every unauthenticated
+session (port 25). So an outside sender can't carry one in, not even one copied from a genuine message, and a copy
+redirected by a mailbox's own rule has one only if the original was internal mail (whose From is ours) — the run-32
+rule (no results of ours = not verified) is unchanged for everything else. Residual, as for planted results above:
+whoever can write into a mailbox (IMAP `APPEND`, JMAP `Email/import`) can store a copy of a genuine message's marker
+with that message's own From and Message-ID; a made-up marker fails without the key. The marker only affects the
+remote-images choice; "Show original" and "mailed-by" / "signed-by" still show only our results. `stack:verify` checks
+every path.
+
+- **Only for mail that stays here:** no marker unless every envelope recipient is on a domain we host.
+- **Second barrier in the reader:** never internal when any `Authentication-Results` or `Received-SPF` appears, or a
+  `Received` by our host with anything but LMTP — Stalwart skips a missing or inactive `inbound-headers` script and
+  delivers (verified), so the reader doesn't rely on the strip alone.
+- **Exact header names** everywhere in `original.ts`: ASCII-only lowercasing, no `trim()`; look-alike names (NBSP, BOM,
+  `\v`, which Stalwart keeps and doesn't delete) are counted but never taken for the real header.
+- **`SENDER_DELEGATION_KEY` now does two jobs:** it authorises send on behalf and it vouches for internal mail. A leak
+  lets someone both send on behalf of a delegated mailbox and forge a "verified sender" marker (for the reader, not
+  for DKIM or DMARC): rotate it as an incident. Rotating it turns stored internal mail back to "not verified" (readers
+  are asked again), which fails safe.
+
+## Forwarding guard (ADR-0019 update "forwarding and DMARC")
+
+A redirect leaves DKIM-signed with the forwarding mailbox's domain, so the managed rule never forwards mail our server
+found failing DMARC, nor mail claiming the mailbox's own domain (or a subdomain) unless it has exactly one From and our
+**top-most** results header ends in `dmarc=pass` for that domain (a pass for another `header.from` never counts). Only the top-most header can unlock forwarding (a planted one is below it), and the pass test is
+end-anchored because a quoted MAIL FROM local part appears verbatim inside our own header (verified). A planted `fail`
+only stops forwarding of the sender's own message. The web app's start-up upgrade rewrites only exact generator output,
+only to the confirmed target, with a compare-and-swap on the Sieve state, and audits counts. In production the web app
+refuses to start without a usable authserv-id (`MAIL_AUTHSERV_ID` entries must be hostnames).
 
 ## Image proxy (SSRF)
 
