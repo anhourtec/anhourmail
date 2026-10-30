@@ -4,7 +4,7 @@ import type { PasswordJobState } from "@anhourmail/core/mailboxes";
 import { mailboxPasswordProblem } from "@anhourmail/shared/security";
 import { log } from "@anhourmail/server/log";
 
-import { WebmailRefusedError, type WebmailService, WebmailSignedOutError, WebmailSignInError } from "./service";
+import { ownMailbox, WebmailRefusedError, type WebmailService, WebmailSignInError } from "./service";
 
 /**
  * A person changing their own mailbox password from the webmail (docs/internal/05-webmail.md "Settings"). Customer
@@ -53,8 +53,8 @@ export async function changeWebmailPassword(
   input: { current: string; next: string; account: string | null },
   meta: RequestMeta,
 ): Promise<PasswordChangeResult> {
-  const session = await d.mail.session(sessionId);
-  if (!session) throw new WebmailSignedOutError("signed out");
+  // The person's own mailbox only, decided on this one read: never a mailbox shared with them (ADR-0026 §6).
+  const session = ownMailbox(await d.mail.session(sessionId));
   // The page must be showing the mailbox whose password this is (a mailbox switched in another tab isn't changed).
   if (input.account !== session.accountId) throw new WebmailRefusedError("Reload the page and try again.");
   const address = session.username;

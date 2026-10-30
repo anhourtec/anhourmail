@@ -583,14 +583,29 @@ describe("several mailboxes in one session", () => {
     const t = setup();
     const { sessionId } = await t.svc.signIn("a@x.test", "right");
     await t.svc.addMailbox(sessionId, "b@x.test", "right");
-    expect(await t.svc.mailboxes(sessionId)).toEqual({ active: "b@x.test", others: ["a@x.test"] });
+    expect(await t.svc.mailboxes(sessionId)).toEqual({
+      active: "b@x.test",
+      activeShared: false,
+      others: ["a@x.test"],
+      shared: [],
+    });
     expect((await t.svc.session(sessionId))?.accountId).toBe("acc-b@x.test");
     await t.svc.switchMailbox(sessionId, "a@x.test");
-    expect(await t.svc.mailboxes(sessionId)).toEqual({ active: "a@x.test", others: ["b@x.test"] });
+    expect(await t.svc.mailboxes(sessionId)).toEqual({
+      active: "a@x.test",
+      activeShared: false,
+      others: ["b@x.test"],
+      shared: [],
+    });
     expect((await t.svc.session(sessionId))?.accessToken).toBe("at-a@x.test");
     // Re-adding one already there renews it instead of duplicating.
     await t.svc.addMailbox(sessionId, "b@x.test", "right");
-    expect(await t.svc.mailboxes(sessionId)).toEqual({ active: "b@x.test", others: ["a@x.test"] });
+    expect(await t.svc.mailboxes(sessionId)).toEqual({
+      active: "b@x.test",
+      activeShared: false,
+      others: ["a@x.test"],
+      shared: [],
+    });
     // Same answers for a wrong password; unknown switch targets are refused.
     await expect(t.svc.addMailbox(sessionId, "c@x.test", "wrong")).rejects.toBeInstanceOf(WebmailSignInError);
     await expect(t.svc.switchMailbox(sessionId, "zz@x.test")).rejects.toBeInstanceOf(WebmailRefusedError);

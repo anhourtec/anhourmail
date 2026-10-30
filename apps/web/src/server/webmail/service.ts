@@ -1,9 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { createHash, randomBytes } from "node:crypto";
 
-import type { WebmailAccess, WebmailRefusal } from "@anhourmail/core/webmail";
+import type { RequestMeta } from "@anhourmail/core";
+import {
+  type ConsoleBinding,
+  CredentialSlotTakenError,
+  type DelegatedEntry,
+  type DelegatedMailbox,
+  type DelegatedTarget,
+  type WebmailAccess,
+  type WebmailRefusal,
+} from "@anhourmail/core/webmail";
 import { log } from "@anhourmail/server/log";
 import type { SlidingQuotaStore } from "@anhourmail/server/rate-limit";
+import { DELEGATED_MAILBOXES_PER_PERSON } from "@anhourmail/shared/plans";
 
 import {
   COMPOSED_KEYWORD,
@@ -107,6 +117,24 @@ export class WebmailRefusedError extends Error {
   override readonly name = "WebmailRefusedError";
 }
 
+/**
+ * A delegated mailbox the session held or asked for can't be used (no grant now, unknown, another account's, the plan,
+ * the mailbox's state): the entry is dropped and the answer is 404 "You don't have access to this mailbox." in every
+ * case (ADR-0026 §6, rule 25). The session itself goes on with the person's own mailbox.
+ */
+export class WebmailDelegationRefusedError extends Error {
+  override readonly name = "WebmailDelegationRefusedError";
+}
+
+/**
+ * The active mailbox is one shared with the person (a delegated entry) and this needs their own: sending (until send
+ * rights are used), drafts, uploads, identities, settings, contacts and export (ADR-0026 §6 "What each right allows").
+ * → 403
+ */
+export class WebmailOwnMailboxOnlyError extends Error {
+  override readonly name = "WebmailOwnMailboxOnlyError";
+}
+
 /** The OAuth port refused the credentials or the grant (wrong password, revoked refresh token). */
 export class GrantRefusedError extends Error {
   override readonly name = "GrantRefusedError";
@@ -135,6 +163,35 @@ export type OAuthPort = {
   refresh(refreshToken: string): Promise<OAuthTokens>;
 };
 
+/**
+ * Delegated mailboxes (ADR-0026 §6), wired to core `@anhourmail/core/webmail` `delegation.ts`: the auto-mapping list,
+ * the audited open (mint → exchange → destroy under the locks) and the per-request gate.
+ */
+export type WebmailDelegation = {
+  list(owners: readonly string[]): Promise<DelegatedMailbox[]>;
+  open(
+    input: { owners: readonly string[]; address: string; console: ConsoleBinding | null },
+    signIn: (target: DelegatedTarget) => Promise<MailboxTokens>,
+    req: RequestMeta,
+  ): Promise<{ value: MailboxTokens; mailbox: DelegatedMailbox }>;
+  gate: { allowed(session: string, entry: DelegatedEntry): Promise<boolean>; forget(session: string): void };
+};
+
+/** A mailbox shared with the session's people, for the switcher, the sidebar and (later) the From picker. */
+export type SharedMailboxView = {
+  address: string;
+  /** The person's own mailbox it comes through. */
+  via: string;
+  fullAccess: boolean;
+  sendAs: boolean;
+  sendOnBehalf: boolean;
+  /** Its tokens are in this session already (opened before). */
+  open: boolean;
+};
+
+/** What `mailboxes()` answers: the active mailbox, the session's own others, and what is shared with its people. */
+export type MailboxList = { active: string; activeShared: boolean; others: string[]; shared: SharedMailboxView[] };
+
 export type WebmailDeps = {
   store: WebmailSessionStore;
   oauth: OAuthPort;
@@ -148,6 +205,8 @@ export type WebmailDeps = {
    * its console session; "alive" answers are cached for 30 s at most.
    */
   consoleSessionAlive?: (userId: string, sessionId: string) => Promise<boolean>;
+  /** Delegated mailboxes (ADR-0026). Absent: nothing is shared, and a session never holds a delegated entry. */
+  delegation?: WebmailDelegation;
   /** Stalwart's HTTP base URL (internal network). */
   stalwartUrl: string;
   /** Control-plane gate: may this mailbox use the webmail now, and if not why? (core `MailboxAccessGate`, ≤ 30 s) */
@@ -195,6 +254,9 @@ export type ManagedSieve = {
   write(accountId: string, script: string): Promise<void>;
 };
 
+/** How long a proof that the session's own mailbox still signs in (for delegated use) holds: the gate's cache, 10 s. */
+const VIA_PROOF_MS = 10_000;
+
 /** At most this many recipients of one message are saved to Other contacts. */
 const MAX_AUTO_SAVE = 100;
 /** Cards per `ContactCard/get` (the server's `getMaxResults`); MAX_CONTACTS / CARD_BATCH ≤ 16 calls a request. */
@@ -216,9 +278,43 @@ type Sanitize = (
 const MAX_INLINE_IMAGE = 512 * 1024;
 const MAX_INLINE_TOTAL = 2 * 1024 * 1024;
 
+/**
+ * Whether a server-built call may use a delegated entry's token: only the read-and-manage paths say `READ` (message
+ * views, downloads, roles, the proxy); everything else is the person's own mailbox only (default-deny, ADR-0026 §6).
+ */
+export type Access = "own" | "read";
+/** Capabilities only the person's own mailbox is used with. */
+const OWN_ONLY_CAPABILITIES: ReadonlySet<string> = new Set([
+  "urn:ietf:params:jmap:submission",
+  "urn:ietf:params:jmap:contacts",
+  "urn:ietf:params:jmap:quota",
+]);
+const OWN: Access = "own";
+const READ: Access = "read";
+
+/**
+ * The session's own active mailbox, for callers outside this class that act on "the mailbox of this session" from a
+ * single read (settings, password, photos, export): a mailbox shared with the person is refused.
+ */
+export function ownMailbox(s: WebmailSession | null): WebmailSession {
+  if (!s) throw new WebmailSignedOutError("signed out");
+  if (s.delegated) throw new WebmailOwnMailboxOnlyError("own mailbox only");
+  return s;
+}
+
+/** The session's own signed-in mailboxes (never delegated entries), the active one first. */
+function ownEntries(s: WebmailSession): MailboxTokens[] {
+  return [s, ...(s.others ?? [])].filter((m) => !m.delegated);
+}
+
+/** The delegated entries the session holds (opened before), the active one first. */
+function delegatedEntries(s: WebmailSession): MailboxTokens[] {
+  return [s, ...(s.others ?? [])].filter((m) => m.delegated !== undefined);
+}
+
 export class WebmailService {
-  readonly #d: Required<Omit<WebmailDeps, "sleep" | "handoffSignIn" | "consoleSessionAlive">> &
-    Pick<WebmailDeps, "sleep" | "handoffSignIn" | "consoleSessionAlive">;
+  readonly #d: Required<Omit<WebmailDeps, "sleep" | "handoffSignIn" | "consoleSessionAlive" | "delegation">> &
+    Pick<WebmailDeps, "sleep" | "handoffSignIn" | "consoleSessionAlive" | "delegation">;
   /** Console sessions seen alive recently (handoff-born webmail sessions), until when. */
   readonly #consoleAlive = new Map<string, number>();
   readonly #base: string;
@@ -226,6 +322,8 @@ export class WebmailService {
   readonly #refreshing = new Map<string, Promise<WebmailSession | null>>();
   readonly #roles = new Map<string, { at: number; roles: Roles }>();
   readonly #identities = new Map<string, { at: number; list: Identity[] }>();
+  /** Own mailboxes of a session proven against the mail server for delegated use (ADR-0026), until when. */
+  readonly #viaProven = new Map<string, number>();
 
   constructor(deps: WebmailDeps) {
     this.#d = {
@@ -404,24 +502,63 @@ export class WebmailService {
     return newId;
   }
 
-  /** The mailboxes signed in to this session, the active one first. */
-  async mailboxes(sessionId: string): Promise<{ active: string; others: string[] } | null> {
-    const s = await this.session(sessionId);
+  /**
+   * The mailboxes of this session: the active one, the session's own others, and every mailbox shared with its people
+   * now (auto-mapping, ADR-0026 §6: "Shared with you"; no tokens are minted for listing). Opened delegated entries
+   * whose grant is gone are dropped from the session here too.
+   */
+  async mailboxes(sessionId: string): Promise<MailboxList | null> {
+    const s = await this.#sessionOrOwn(sessionId);
     if (!s) return null;
-    return { active: s.username, others: (s.others ?? []).map((m) => m.username) };
+    const own = ownEntries(s).map((m) => m.username);
+    const opened = delegatedEntries(s);
+    let shared: DelegatedMailbox[] = [];
+    if (this.#d.delegation) {
+      try {
+        shared = await this.#d.delegation.list(own);
+      } catch (err) {
+        // The list is a convenience; the gate still decides every use. Keep what the session holds, drop nothing.
+        log.warn("webmail: delegated mailboxes not listed", { component: "webmail", err });
+        return this.#list(s, [], opened);
+      }
+      const keep = new Set(shared.filter((m) => m.rights.includes("full_access")).map((m) => m.address));
+      const gone = opened.filter((m) => !keep.has(m.username.toLowerCase()));
+      if (gone.length > 0) {
+        const next = await this.#dropDelegated(sessionId, new Set(gone.map((m) => m.username)));
+        return this.#list(next, shared, delegatedEntries(next));
+      }
+    }
+    return this.#list(s, shared, opened);
+  }
+
+  #list(s: WebmailSession, shared: DelegatedMailbox[], opened: MailboxTokens[]): MailboxList {
+    const isOpen = new Set(opened.map((m) => m.username.toLowerCase()));
+    return {
+      active: s.username,
+      activeShared: s.delegated !== undefined,
+      others: (s.others ?? []).filter((m) => !m.delegated).map((m) => m.username),
+      shared: shared.map((m) => ({
+        address: m.address,
+        via: m.via,
+        fullAccess: m.rights.includes("full_access"),
+        sendAs: m.rights.includes("send_as"),
+        sendOnBehalf: m.rights.includes("send_on_behalf"),
+        open: isOpen.has(m.address),
+      })),
+    };
   }
 
   /**
    * Signs another mailbox in to the same session ("Add another mailbox") and makes it active. Signing in to one
-   * that is already there just renews its tokens. At most `MAX_MAILBOXES` per session.
+   * that is already there just renews its tokens. At most `MAX_MAILBOXES` of the session's own per session.
    */
   async addMailbox(sessionId: string, address: string, password: string): Promise<WebmailSession> {
-    if (!(await this.session(sessionId))) throw new WebmailSignedOutError("signed out");
+    if (!(await this.#sessionOrOwn(sessionId))) throw new WebmailSignedOutError("signed out");
     const added = await this.#authenticate(address, password);
     return this.#update(sessionId, (current) => {
       const { others = [], createdAt, version, console: bound, ...active } = current;
       const rest = [active, ...others].filter((m) => m.username !== added.username);
-      if (rest.length + 1 > MAX_MAILBOXES) {
+      if (rest.filter((m) => !m.delegated).length + 1 > MAX_MAILBOXES) {
         throw new WebmailRefusedError(`You can have ${String(MAX_MAILBOXES)} mailboxes open at once.`);
       }
       // The console binding belongs to the whole session, whichever mailbox is active (ADR-0024).
@@ -429,18 +566,26 @@ export class WebmailService {
     });
   }
 
-  /** Makes another signed-in mailbox the active one. Unknown addresses are refused. */
+  /**
+   * Makes another mailbox of this session the active one: one of its own, or a delegated one already opened (checked
+   * against the grant first; refused → dropped, 404). Unknown addresses are refused.
+   */
   async switchMailbox(sessionId: string, username: string): Promise<WebmailSession> {
-    const current = await this.session(sessionId);
+    const current = await this.#sessionOrOwn(sessionId);
     if (!current) throw new WebmailSignedOutError("signed out");
     if (current.username === username) return current;
     const target = (current.others ?? []).find((m) => m.username === username);
     if (!target) throw new WebmailRefusedError("That mailbox isn't signed in here.");
-    if ((await this.#d.access.state(target.username)) !== "ok") {
-      // That one is suspended or gone: drop it, keep the session on the current mailbox.
+    if (target.delegated) {
+      if (!(await this.#delegatedOk(sessionId, current, target))) {
+        await this.#dropDelegated(sessionId, new Set([target.username]));
+        throw new WebmailDelegationRefusedError("not granted");
+      }
+    } else if ((await this.#d.access.state(target.username)) !== "ok") {
+      // That one is suspended or gone: drop it (and what was opened through it), keep the session on the current one.
       await this.#update(sessionId, (cur) => ({
         ...cur,
-        others: (cur.others ?? []).filter((m) => m.username !== username),
+        others: (cur.others ?? []).filter((m) => m.username !== username && m.delegated?.via !== username),
       }));
       throw new WebmailRefusedError("This mailbox can't be used right now.");
     }
@@ -456,6 +601,221 @@ export class WebmailService {
         others: [active, ...others.filter((m) => m !== t)],
       };
     });
+  }
+
+  /**
+   * Opens a mailbox shared with the person (ADR-0026 §6: a "Shared with you" entry, or **Open another mailbox** by
+   * address) and makes it active. Already open → switched to; one of the session's own → switched to. Otherwise core
+   * `openDelegatedMailbox` checks the grant now, mints a throwaway credential, exchanges it once and destroys it, and
+   * audits it; the tokens are sealed into this session only. Every refusal is the same 404.
+   */
+  async openDelegated(sessionId: string, address: string, req: RequestMeta): Promise<WebmailSession> {
+    const s = await this.#sessionOrOwn(sessionId);
+    if (!s) throw new WebmailSignedOutError("signed out");
+    const want = address.trim().toLowerCase();
+    const already = [s, ...(s.others ?? [])].find((m) => m.username.toLowerCase() === want);
+    if (already) return this.switchMailbox(sessionId, already.username);
+    const delegation = this.#d.delegation;
+    const signIn = this.#d.handoffSignIn;
+    if (!delegation || !signIn) throw new WebmailDelegationRefusedError("delegation not configured");
+    const tooMany = () =>
+      new WebmailRefusedError(
+        `You can have ${String(DELEGATED_MAILBOXES_PER_PERSON)} shared mailboxes open at once. Sign out and in again to start over.`,
+      );
+    // Before minting (no credential for an open that can't be kept), and again in the write below.
+    if (delegatedEntries(s).length >= DELEGATED_MAILBOXES_PER_PERSON) throw tooMany();
+    // Every own sign-in the open may go through must still hold at the mail server, checked now (not cached).
+    for (const own of ownEntries(s)) await this.#proveOwn(sessionId, s, own.username.toLowerCase(), true);
+    const { value, mailbox } = await delegation.open(
+      { owners: ownEntries(s).map((m) => m.username), address: want, console: s.console ?? null },
+      async (target) => {
+        let tokens: OAuthTokens;
+        try {
+          tokens = await signIn({ address: target.address, externalId: target.externalId });
+        } catch (err) {
+          if (err instanceof WebmailBusyError || err instanceof CredentialSlotTakenError) {
+            throw err;
+          }
+          log.warn("webmail delegated open: sign-in failed", { component: "webmail", err });
+          throw new WebmailUnavailableError("mail server unavailable");
+        }
+        try {
+          return await this.#mailboxFor(tokens);
+        } catch (err) {
+          // Checked a moment ago by the open itself; never end the delegate's own session over it.
+          if (err instanceof WebmailBlockedError) throw new WebmailUnavailableError("mailbox unavailable");
+          throw err;
+        }
+      },
+      req,
+    );
+    const entry: MailboxTokens = {
+      ...value,
+      delegated: { mailboxId: mailbox.mailboxId, granteeUserId: mailbox.granteeUserId, via: mailbox.via },
+    };
+    return this.#update(sessionId, (cur) => {
+      const { others = [], createdAt, version, console: bound, ...active } = cur;
+      const rest = [active, ...others].filter((m) => m.username.toLowerCase() !== entry.username.toLowerCase());
+      if (!rest.some((m) => !m.delegated && m.username.toLowerCase() === mailbox.via)) {
+        throw new WebmailRefusedError("Your active mailbox changed. Try again.");
+      }
+      // Counted again on the record being written: concurrent opens can't pass the cap together.
+      if (rest.filter((m) => m.delegated).length >= DELEGATED_MAILBOXES_PER_PERSON) throw tooMany();
+      return { ...entry, createdAt, version, ...(bound ? { console: bound } : {}), others: rest };
+    });
+  }
+
+  /** The gate key for a session: a hash of its id (never the id itself). */
+  #gateKey(sessionId: string): string {
+    return createHash("sha256").update(`delegation\0${sessionId}`).digest("base64url").slice(0, 22);
+  }
+
+  /**
+   * Whether a delegated entry of this session may be used now for reading and managing: the mailbox it came through is
+   * still one of the session's own, and core's `DelegationGate` says yes. Failures throw (unavailable, nothing dropped).
+   */
+  async #delegatedOk(sessionId: string, s: WebmailSession, entry: MailboxTokens): Promise<boolean> {
+    const d = entry.delegated;
+    const gate = this.#d.delegation?.gate;
+    if (!d || !gate) return false;
+    if (!ownEntries(s).some((m) => m.username.toLowerCase() === d.via)) return false;
+    // The person's own sign-in must still hold at the mail server (a password reset ends it), not only in our records.
+    await this.#proveOwn(sessionId, s, d.via);
+    try {
+      return await gate.allowed(this.#gateKey(sessionId), {
+        mailboxId: d.mailboxId,
+        granteeUserId: d.granteeUserId,
+        via: d.via,
+        need: "full_access",
+        console: s.console ?? null,
+      });
+    } catch (err) {
+      log.warn("webmail: delegation check failed", { component: "webmail", err });
+      throw new WebmailUnavailableError("delegation check unavailable");
+    }
+  }
+
+  /**
+   * Proves the session's own mailbox `via` against the mail server: its JMAP session answers with its token (refreshed
+   * if due), naming that mailbox. Checked at most every `VIA_PROOF_MS` (10 s, like the gate's cache) unless `force`.
+   * A refused token or refresh (its password was reset or changed, or the account was disabled) ends the **whole**
+   * session (ADR-0026 §6: delegated access rides on the person's own sign-in), as does a mail server naming another
+   * mailbox. Anything else is "unavailable" (nothing ended).
+   */
+  async #proveOwn(sessionId: string, s: WebmailSession, via: string, force = false): Promise<void> {
+    const key = `${this.#gateKey(sessionId)}\0${via}`;
+    const now = this.#d.now();
+    const until = this.#viaProven.get(key);
+    if (!force && until !== undefined && until > now) return;
+    const own = ownEntries(s).find((m) => m.username.toLowerCase() === via);
+    if (!own) throw new WebmailDelegationRefusedError("own mailbox not signed in");
+    const end = async (why: string): Promise<never> => {
+      this.#viaProven.delete(key);
+      this.#refreshing.delete(sessionId);
+      this.#d.delegation?.gate.forget(this.#gateKey(sessionId));
+      await this.#d.store.destroy(sessionId);
+      throw new WebmailSignedOutError(why);
+    };
+    let token = own.accessToken;
+    let refreshed: OAuthTokens | null = null;
+    const refresh = async (): Promise<boolean> => {
+      if (!own.refreshToken || refreshed) return false;
+      try {
+        refreshed = await this.#d.oauth.refresh(own.refreshToken);
+      } catch (err) {
+        if (err instanceof GrantRefusedError) return end("own mailbox token revoked");
+        log.warn("webmail: own mailbox refresh failed", { component: "webmail", err });
+        throw new WebmailUnavailableError("mail server unavailable");
+      }
+      token = refreshed.accessToken;
+      return true;
+    };
+    if (own.expiresAt - now <= this.#d.refreshSkewMs) await refresh();
+    let res = await this.#upstream(`${this.#base}/jmap/session`, { headers: this.#auth(token) });
+    if (res.status === 401 && (await refresh())) {
+      await res.body?.cancel();
+      res = await this.#upstream(`${this.#base}/jmap/session`, { headers: this.#auth(token) });
+    }
+    if (res.status === 401 || res.status === 403) {
+      await res.body?.cancel();
+      return end("own mailbox signed out");
+    }
+    if (!res.ok) {
+      await res.body?.cancel();
+      throw new WebmailUnavailableError("mail server unavailable");
+    }
+    const body = (await res.json().catch(() => null)) as { username?: unknown } | null;
+    if (typeof body?.username !== "string" || body.username.toLowerCase() !== via) return end("own mailbox changed");
+    const fresh = refreshed as OAuthTokens | null;
+    if (fresh) {
+      // Keep the refreshed tokens of that own entry (a concurrent change wins; it refreshes again on its own use).
+      await this.#update(sessionId, (cur) => {
+        const swap = (m: MailboxTokens): MailboxTokens =>
+          !m.delegated && m.username === own.username
+            ? { ...m, accessToken: fresh.accessToken, refreshToken: fresh.refreshToken, expiresAt: fresh.expiresAt }
+            : m;
+        return { ...cur, ...swap(cur), others: (cur.others ?? []).map(swap) };
+      }).catch((err: unknown) => {
+        log.warn("webmail: refreshed own tokens not kept", { component: "webmail", err });
+      });
+    }
+    if (this.#viaProven.size > 10_000) this.#viaProven.clear();
+    this.#viaProven.set(key, now + VIA_PROOF_MS);
+  }
+
+  /** For `route()`'s gate: whether the session's active delegated entry may still be used (true when not delegated). */
+  async delegatedActiveAllowed(sessionId: string, s: WebmailSession): Promise<boolean> {
+    return s.delegated ? this.#delegatedOk(sessionId, s, s) : true;
+  }
+
+  /**
+   * Drops delegated entries from the session (their grant is gone): an active one hands over to the mailbox it came
+   * through (or the first own one). Returns the session as written.
+   */
+  async dropDelegated(sessionId: string, usernames: ReadonlySet<string>): Promise<WebmailSession> {
+    return this.#dropDelegated(sessionId, usernames);
+  }
+
+  async #dropDelegated(sessionId: string, usernames: ReadonlySet<string>): Promise<WebmailSession> {
+    this.#d.delegation?.gate.forget(this.#gateKey(sessionId));
+    return this.#update(sessionId, (cur) => {
+      const { others = [], createdAt, version, console: bound, ...active } = cur;
+      const all = [active, ...others].filter((m) => !(m.delegated && usernames.has(m.username)));
+      const stays = all.includes(active);
+      const keep = stays
+        ? active
+        : (all.find((m) => !m.delegated && m.username.toLowerCase() === active.delegated?.via) ??
+          all.find((m) => !m.delegated));
+      if (!keep) throw new WebmailSignedOutError("signed out");
+      return {
+        ...keep,
+        createdAt,
+        version,
+        ...(bound ? { console: bound } : {}),
+        others: all.filter((m) => m !== keep),
+      };
+    });
+  }
+
+  /**
+   * `session()`, except that a delegated active entry whose grant is gone (dropped, 404) leaves the session on the
+   * person's own mailbox: for listing and switching, which must keep working after a revoke.
+   */
+  async #sessionOrOwn(sessionId: string): Promise<WebmailSession | null> {
+    try {
+      return await this.session(sessionId);
+    } catch (err) {
+      if (err instanceof WebmailDelegationRefusedError) return this.session(sessionId);
+      throw err;
+    }
+  }
+
+  /** The active mailbox, refusing a delegated one: for what only the person's own mailbox may do. */
+  async #ownActive(sessionId: string): Promise<WebmailSession> {
+    const s = await this.session(sessionId);
+    if (!s) throw new WebmailSignedOutError("signed out");
+    if (s.delegated) throw new WebmailOwnMailboxOnlyError("own mailbox only");
+    return s;
   }
 
   /**
@@ -491,11 +851,18 @@ export class WebmailService {
       await this.#d.store.destroy(sessionId);
       return null;
     }
-    const access = await this.#d.access.state(s.username);
+    // The session's own mailbox decides whether the session goes on (a delegated active entry is the gate's).
+    const access = await this.#d.access.state(s.delegated?.via ?? s.username);
     if (access !== "ok") {
       this.#refreshing.delete(sessionId);
       await this.#d.store.destroy(sessionId);
       throw new WebmailBlockedError("mailbox unavailable", access);
+    }
+    // A delegated mailbox: the grant now, before any use or refresh of its token (ADR-0026 §6).
+    if (s.delegated && !(await this.#delegatedOk(sessionId, s, s))) {
+      this.#refreshing.delete(sessionId);
+      await this.#dropDelegated(sessionId, new Set([s.username]));
+      throw new WebmailDelegationRefusedError("not granted");
     }
     if (!opts.forceRefresh && s.expiresAt - this.#d.now() > this.#d.refreshSkewMs) return s;
     const pending = this.#refreshing.get(sessionId);
@@ -524,6 +891,11 @@ export class WebmailService {
       return await this.#d.store.read(sessionId);
     } catch (err) {
       if (err instanceof GrantRefusedError) {
+        // A delegated mailbox's password changed: that entry goes, the person's own session stays.
+        if (s.delegated) {
+          await this.#dropDelegated(sessionId, new Set([s.username]));
+          throw new WebmailDelegationRefusedError("token revoked");
+        }
         await this.#d.store.destroy(sessionId);
         return null;
       }
@@ -554,11 +926,15 @@ export class WebmailService {
   async #withSession<T>(
     sessionId: string,
     call: (s: WebmailSession) => Promise<{ status: number; limited: boolean; value: T }>,
+    access: Access = OWN,
   ): Promise<{ session: WebmailSession; value: T }> {
     let s = await this.session(sessionId);
     if (!s) throw new WebmailSignedOutError("signed out");
     for (let attempt = 0; attempt < 2; attempt++) {
       const current = s;
+      // Decided on the very entry whose token is used: a mailbox shared with the person only for reading and managing
+      // (ADR-0026 §6), however the active mailbox changed since the route's gate looked.
+      if (current.delegated && access !== READ) throw new WebmailOwnMailboxOnlyError("own mailbox only");
       let result: { status: number; value: T } | null;
       try {
         result = await this.#d.queue.run(current.username, () =>
@@ -576,6 +952,10 @@ export class WebmailService {
       }
       if (result === null) throw new WebmailBusyError("busy");
       if (result.status === 403) {
+        if (current.delegated) {
+          await this.#dropDelegated(sessionId, new Set([current.username]));
+          throw new WebmailDelegationRefusedError("mailbox unavailable");
+        }
         // Stalwart refuses tokens of a suspended account with 403 (verified on v0.16.27): end the session.
         await this.#d.store.destroy(sessionId);
         throw new WebmailBlockedError("mailbox unavailable");
@@ -585,6 +965,10 @@ export class WebmailService {
       const refreshed = await this.session(sessionId, { forceRefresh: true });
       if (!refreshed) throw new WebmailSignedOutError("signed out");
       s = refreshed;
+    }
+    if (s.delegated) {
+      await this.#dropDelegated(sessionId, new Set([s.username]));
+      throw new WebmailDelegationRefusedError("token refused");
     }
     await this.#d.store.destroy(sessionId);
     throw new WebmailSignedOutError("signed out");
@@ -600,15 +984,23 @@ export class WebmailService {
     destroyIds: string[] = [],
   ): Promise<{ status: number; body: unknown }> {
     if (destroyIds.length > 0) await this.#assertDisposable(sessionId, destroyIds);
-    const { value } = await this.#withSession(sessionId, async (s) => {
-      const res = await this.#upstream(`${this.#base}/jmap/`, {
-        method: "POST",
-        headers: { ...this.#auth(s.accessToken), "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(body),
-      });
-      const json: unknown = await res.json().catch(() => null);
-      return { status: res.status, limited: isLimitError(res.status, json), value: { status: res.status, body: json } };
-    });
+    const { value } = await this.#withSession(
+      sessionId,
+      async (s) => {
+        const res = await this.#upstream(`${this.#base}/jmap/`, {
+          method: "POST",
+          headers: { ...this.#auth(s.accessToken), "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify(body),
+        });
+        const json: unknown = await res.json().catch(() => null);
+        return {
+          status: res.status,
+          limited: isLimitError(res.status, json),
+          value: { status: res.status, body: json },
+        };
+      },
+      READ,
+    );
     if (value.status >= 500) {
       log.warn("webmail upstream error", { component: "webmail", status: value.status });
       throw new WebmailUnavailableError("mail server error");
@@ -628,27 +1020,31 @@ export class WebmailService {
     opts: { full?: boolean } = {},
   ): Promise<MessageView | null> {
     let accountId = "";
-    const res = await this.jmapAs(sessionId, (s) => {
-      accountId = s.accountId;
-      return {
-        using: USING,
-        methodCalls: [
-          [
-            "Email/get",
-            {
-              accountId: s.accountId,
-              ids: [emailId],
-              properties: EMAIL_PROPERTIES,
-              bodyProperties: BODY_PROPERTIES,
-              fetchHTMLBodyValues: true,
-              fetchTextBodyValues: true,
-              maxBodyValueBytes: opts.full ? MAX_FULL_BODY_BYTES : MAX_BODY_BYTES,
-            },
-            "m",
+    const res = await this.jmapAs(
+      sessionId,
+      (s) => {
+        accountId = s.accountId;
+        return {
+          using: USING,
+          methodCalls: [
+            [
+              "Email/get",
+              {
+                accountId: s.accountId,
+                ids: [emailId],
+                properties: EMAIL_PROPERTIES,
+                bodyProperties: BODY_PROPERTIES,
+                fetchHTMLBodyValues: true,
+                fetchTextBodyValues: true,
+                maxBodyValueBytes: opts.full ? MAX_FULL_BODY_BYTES : MAX_BODY_BYTES,
+              },
+              "m",
+            ],
           ],
-        ],
-      };
-    });
+        };
+      },
+      READ,
+    );
     const resp = res as { methodResponses?: [string, { list?: JmapEmail[] }, string][] } | null;
     const [name, args] = resp?.methodResponses?.[0] ?? [];
     if (name !== "Email/get") throw new WebmailUnavailableError("unexpected response");
@@ -659,10 +1055,14 @@ export class WebmailService {
 
   /** A message's raw header fields in order (for the trusted Authentication-Results); empty when it's gone. */
   async headers(sessionId: string, emailId: string): Promise<{ name: string; value: string }[]> {
-    const res = await this.jmapAs(sessionId, (s) => ({
-      using: USING,
-      methodCalls: [["Email/get", { accountId: s.accountId, ids: [emailId], properties: ["headers"] }, "h"]],
-    }));
+    const res = await this.jmapAs(
+      sessionId,
+      (s) => ({
+        using: USING,
+        methodCalls: [["Email/get", { accountId: s.accountId, ids: [emailId], properties: ["headers"] }, "h"]],
+      }),
+      READ,
+    );
     const resp = res as { methodResponses?: [string, { list?: { headers?: unknown }[] }, string][] } | null;
     const [name, args] = resp?.methodResponses?.[0] ?? [];
     if (name !== "Email/get") throw new WebmailUnavailableError("unexpected response");
@@ -687,7 +1087,7 @@ export class WebmailService {
     const blobs = opts.blobs ?? true;
     const text = async (part: BodyPart, max: number): Promise<string | undefined> => {
       if (!blobs || !part.blobId || part.size > max) return undefined;
-      const res = await this.download(sessionId, accountId, part.blobId, "part");
+      const res = await this.download(sessionId, accountId, part.blobId, "part", READ);
       if (!res.ok) {
         await res.body?.cancel();
         return undefined;
@@ -706,7 +1106,7 @@ export class WebmailService {
     let total = 0;
     for (const part of blobs ? inlineImageParts(email) : []) {
       if (part.size > MAX_INLINE_IMAGE || total + part.size > MAX_INLINE_TOTAL || !part.blobId) continue;
-      const blob = await this.download(sessionId, accountId, part.blobId, "inline");
+      const blob = await this.download(sessionId, accountId, part.blobId, "inline", READ);
       if (!blob.ok) {
         await blob.body?.cancel();
         continue;
@@ -747,42 +1147,54 @@ export class WebmailService {
     toText: (html: string) => string = (h) => h,
   ): Promise<MessageView | null> {
     let accountId = "";
-    const r = await this.#call(sessionId, (s) => {
-      accountId = s.accountId;
-      return [["Email/get", { accountId: s.accountId, ids: [emailId], properties: ["attachments"] }, "g"]];
-    });
+    const r = await this.#call(
+      sessionId,
+      (s) => {
+        accountId = s.accountId;
+        return [["Email/get", { accountId: s.accountId, ids: [emailId], properties: ["attachments"] }, "g"]];
+      },
+      USING,
+      undefined,
+      { access: READ },
+    );
     const parent = ((r.get("g")?.list ?? []) as { attachments: BodyPart[] | null }[])[0];
     const part = parent?.attachments?.find((p) => p.blobId === blobId && /^message\/rfc822$/i.test(p.type));
     if (!part) return null;
-    const parsed = await this.#call(sessionId, (s) => [
-      [
-        "Email/parse",
-        {
-          accountId: s.accountId,
-          blobIds: [blobId],
-          properties: [
-            "from",
-            "to",
-            "cc",
-            "replyTo",
-            "subject",
-            "sentAt",
-            "receivedAt",
-            "messageId",
-            "references",
-            "htmlBody",
-            "textBody",
-            "attachments",
-            "bodyValues",
-          ],
-          bodyProperties: BODY_PROPERTIES,
-          fetchHTMLBodyValues: true,
-          fetchTextBodyValues: true,
-          maxBodyValueBytes: MAX_BODY_BYTES,
-        },
-        "p",
+    const parsed = await this.#call(
+      sessionId,
+      (s) => [
+        [
+          "Email/parse",
+          {
+            accountId: s.accountId,
+            blobIds: [blobId],
+            properties: [
+              "from",
+              "to",
+              "cc",
+              "replyTo",
+              "subject",
+              "sentAt",
+              "receivedAt",
+              "messageId",
+              "references",
+              "htmlBody",
+              "textBody",
+              "attachments",
+              "bodyValues",
+            ],
+            bodyProperties: BODY_PROPERTIES,
+            fetchHTMLBodyValues: true,
+            fetchTextBodyValues: true,
+            maxBodyValueBytes: MAX_BODY_BYTES,
+          },
+          "p",
+        ],
       ],
-    ]);
+      USING,
+      undefined,
+      { access: READ },
+    );
     const email = (parsed.get("p")?.parsed as Record<string, Partial<JmapEmail>> | undefined)?.[blobId];
     if (!email) return null;
     const full: JmapEmail = {
@@ -811,13 +1223,19 @@ export class WebmailService {
   /** The original message (RFC 5322 source) as a stream; null when the id isn't in this mailbox. */
   async raw(sessionId: string, emailId: string): Promise<Response | null> {
     let accountId = "";
-    const r = await this.#call(sessionId, (s) => {
-      accountId = s.accountId;
-      return [["Email/get", { accountId: s.accountId, ids: [emailId], properties: ["blobId", "size"] }, "g"]];
-    });
+    const r = await this.#call(
+      sessionId,
+      (s) => {
+        accountId = s.accountId;
+        return [["Email/get", { accountId: s.accountId, ids: [emailId], properties: ["blobId", "size"] }, "g"]];
+      },
+      USING,
+      undefined,
+      { access: READ },
+    );
     const e = ((r.get("g")?.list ?? []) as { blobId: string; size: number }[])[0];
     if (!e) return null;
-    return this.download(sessionId, accountId, e.blobId, "message.eml");
+    return this.download(sessionId, accountId, e.blobId, "message.eml", READ);
   }
 
   /**
@@ -826,20 +1244,26 @@ export class WebmailService {
    */
   async original(sessionId: string, emailId: string, maxBytes: number): Promise<OriginalMessage | null> {
     let accountId = "";
-    const r = await this.#call(sessionId, (s) => {
-      accountId = s.accountId;
-      return [
-        [
-          "Email/get",
-          {
-            accountId: s.accountId,
-            ids: [emailId],
-            properties: ["blobId", "size", "receivedAt", "sentAt", "messageId", "from", "to", "cc", "subject"],
-          },
-          "g",
-        ],
-      ];
-    });
+    const r = await this.#call(
+      sessionId,
+      (s) => {
+        accountId = s.accountId;
+        return [
+          [
+            "Email/get",
+            {
+              accountId: s.accountId,
+              ids: [emailId],
+              properties: ["blobId", "size", "receivedAt", "sentAt", "messageId", "from", "to", "cc", "subject"],
+            },
+            "g",
+          ],
+        ];
+      },
+      USING,
+      undefined,
+      { access: READ },
+    );
     const e = (
       (r.get("g")?.list ?? []) as {
         blobId: string;
@@ -854,7 +1278,7 @@ export class WebmailService {
       }[]
     )[0];
     if (!e) return null;
-    const res = await this.download(sessionId, accountId, e.blobId, "message.eml");
+    const res = await this.download(sessionId, accountId, e.blobId, "message.eml", READ);
     if (!res.ok || !res.body) {
       await res.body?.cancel();
       return null;
@@ -891,16 +1315,28 @@ export class WebmailService {
   }
 
   /** Server-built JMAP request for the signed-in account (no allow-list: the BFF wrote it). */
-  async jmapAs(sessionId: string, build: (s: WebmailSession) => JmapRequestBody): Promise<unknown> {
-    const { value } = await this.#withSession(sessionId, async (s) => {
-      const res = await this.#upstream(`${this.#base}/jmap/`, {
-        method: "POST",
-        headers: { ...this.#auth(s.accessToken), "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(build(s)),
-      });
-      const json: unknown = await res.json().catch(() => null);
-      return { status: res.status, limited: isLimitError(res.status, json), value: { status: res.status, body: json } };
-    });
+  async jmapAs(
+    sessionId: string,
+    build: (s: WebmailSession) => JmapRequestBody,
+    access: Access = OWN,
+  ): Promise<unknown> {
+    const { value } = await this.#withSession(
+      sessionId,
+      async (s) => {
+        const res = await this.#upstream(`${this.#base}/jmap/`, {
+          method: "POST",
+          headers: { ...this.#auth(s.accessToken), "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify(build(s)),
+        });
+        const json: unknown = await res.json().catch(() => null);
+        return {
+          status: res.status,
+          limited: isLimitError(res.status, json),
+          value: { status: res.status, body: json },
+        };
+      },
+      access,
+    );
     if (value.status !== 200) {
       log.warn("webmail upstream error", { component: "webmail", status: value.status });
       throw new WebmailUnavailableError("mail server error");
@@ -912,14 +1348,25 @@ export class WebmailService {
    * Streams a blob of the signed-in account (`accountId` must be theirs: the caller passes the session's). The
    * response body is returned unread so attachments stream through without buffering.
    */
-  async download(sessionId: string, accountId: string, blobId: string, name: string): Promise<Response> {
-    const { value } = await this.#withSession(sessionId, async (s) => {
-      if (s.accountId !== accountId) return { status: 404, limited: false, value: new Response(null, { status: 404 }) };
-      const url = `${this.#base}/jmap/download/${encodeURIComponent(accountId)}/${encodeURIComponent(blobId)}/${encodeURIComponent(name)}?accept=application%2Foctet-stream`;
-      const res = await this.#upstream(url, { headers: this.#auth(s.accessToken) });
-      if (res.status === 401 || res.status === 403 || res.status === 429) await res.body?.cancel();
-      return { status: res.status, limited: res.status === 429, value: res };
-    });
+  async download(
+    sessionId: string,
+    accountId: string,
+    blobId: string,
+    name: string,
+    access: Access = OWN,
+  ): Promise<Response> {
+    const { value } = await this.#withSession(
+      sessionId,
+      async (s) => {
+        if (s.accountId !== accountId)
+          return { status: 404, limited: false, value: new Response(null, { status: 404 }) };
+        const url = `${this.#base}/jmap/download/${encodeURIComponent(accountId)}/${encodeURIComponent(blobId)}/${encodeURIComponent(name)}?accept=application%2Foctet-stream`;
+        const res = await this.#upstream(url, { headers: this.#auth(s.accessToken) });
+        if (res.status === 401 || res.status === 403 || res.status === 429) await res.body?.cancel();
+        return { status: res.status, limited: res.status === 429, value: res };
+      },
+      access,
+    );
     return value;
   }
 
@@ -935,7 +1382,7 @@ export class WebmailService {
      * the undo hold): if the person switched mailbox meanwhile, act on `expectAccount` with its own tokens (it's still
      * signed in to this session) instead of refusing.
      */
-    opts: { inactive?: boolean } = {},
+    opts: { inactive?: boolean; access?: Access } = {},
   ): Promise<Map<string, Record<string, unknown>>> {
     if (opts.inactive && expectAccount !== undefined) {
       const current = await this.session(sessionId);
@@ -943,12 +1390,20 @@ export class WebmailService {
         return this.#callOther(current, expectAccount, build, using);
       }
     }
-    const res = (await this.jmapAs(sessionId, (s) => {
-      if (expectAccount !== undefined && s.accountId !== expectAccount) {
-        throw new WebmailRefusedError("Your active mailbox changed. Try again.");
-      }
-      return { using, methodCalls: build(s) };
-    })) as {
+    const res = (await this.jmapAs(
+      sessionId,
+      (s) => {
+        if (expectAccount !== undefined && s.accountId !== expectAccount) {
+          throw new WebmailRefusedError("Your active mailbox changed. Try again.");
+        }
+        // Belt and braces where the token is picked: contacts, submission and quota are never a shared mailbox's.
+        if (s.delegated && using.some((u) => OWN_ONLY_CAPABILITIES.has(u))) {
+          throw new WebmailOwnMailboxOnlyError("own mailbox only");
+        }
+        return { using, methodCalls: build(s) };
+      },
+      opts.access ?? OWN,
+    )) as {
       methodResponses?: [string, Record<string, unknown>, string][];
     } | null;
     const out = new Map<string, Record<string, unknown>>();
@@ -975,6 +1430,8 @@ export class WebmailService {
   ): Promise<Map<string, Record<string, unknown>>> {
     const t = (session.others ?? []).find((o) => o.accountId === account);
     if (!t) throw new WebmailRefusedError("That mailbox isn't signed in here any more.");
+    // Server-internal follow-ups act only on the session's own mailboxes.
+    if (t.delegated) throw new WebmailOwnMailboxOnlyError("own mailbox only");
     await this.#assertAllowed(t.username);
     let token = t.accessToken;
     if (t.expiresAt - this.#d.now() <= this.#d.refreshSkewMs && t.refreshToken) {
@@ -1020,8 +1477,8 @@ export class WebmailService {
    * a server-internal caller (tests, the BFF itself).
    */
   async #pin(sessionId: string, account: string | undefined): Promise<WebmailSession> {
-    const s = await this.session(sessionId);
-    if (!s) throw new WebmailSignedOutError("signed out");
+    // Drafts, sending, undo and uploads: the person's own mailbox only until send rights are used (ADR-0026 slice 13).
+    const s = await this.#ownActive(sessionId);
     if (account !== undefined && s.accountId !== account) {
       throw new WebmailRefusedError("Your active mailbox changed. Try again.");
     }
@@ -1040,9 +1497,13 @@ export class WebmailService {
     const accountId = await this.#accountId(sessionId);
     const hit = this.#roles.get(accountId);
     if (hit && this.#d.now() - hit.at < META_TTL_MS) return hit.roles;
-    const r = await this.#call(sessionId, (s) => [
-      ["Mailbox/get", { accountId: s.accountId, ids: null, properties: ["role"] }, "m"],
-    ]);
+    const r = await this.#call(
+      sessionId,
+      (s) => [["Mailbox/get", { accountId: s.accountId, ids: null, properties: ["role"] }, "m"]],
+      USING,
+      undefined,
+      { access: READ },
+    );
     const roles: Roles = {};
     for (const m of (r.get("m")?.list ?? []) as { id: string; role: string | null }[]) {
       if (m.role && ["inbox", "drafts", "sent", "archive", "junk", "trash"].includes(m.role)) {
@@ -1055,7 +1516,8 @@ export class WebmailService {
 
   /** The active mailbox's sending identities (its address, aliases, masked aliases), cached for a minute. */
   async identities(sessionId: string): Promise<Identity[]> {
-    const accountId = await this.#accountId(sessionId);
+    // A delegated mailbox's identities need a send right (ADR-0026 §6); none is used yet.
+    const accountId = (await this.#ownActive(sessionId)).accountId;
     const hit = this.#identities.get(accountId);
     if (hit && this.#d.now() - hit.at < META_TTL_MS) return hit.list;
     const r = await this.#call(
@@ -1064,6 +1526,8 @@ export class WebmailService {
         ["Identity/get", { accountId: s.accountId, ids: null, properties: ["name", "email", "textSignature"] }, "i"],
       ],
       USING_SUBMISSION,
+      // Cached under this account: the answer must be this account's, whatever became active meanwhile.
+      accountId,
     );
     const list = ((r.get("i")?.list ?? []) as (Identity & { textSignature?: string | null })[]).map((i) => ({
       id: i.id,
@@ -1084,9 +1548,13 @@ export class WebmailService {
   async #assertDisposable(sessionId: string, ids: string[]): Promise<void> {
     const roles = await this.roles(sessionId);
     const disposable = new Set([roles.trash, roles.junk].filter((x): x is string => x !== undefined));
-    const r = await this.#call(sessionId, (s) => [
-      ["Email/get", { accountId: s.accountId, ids, properties: ["mailboxIds"] }, "g"],
-    ]);
+    const r = await this.#call(
+      sessionId,
+      (s) => [["Email/get", { accountId: s.accountId, ids, properties: ["mailboxIds"] }, "g"]],
+      USING,
+      undefined,
+      { access: READ },
+    );
     const found = (r.get("g")?.list ?? []) as { id: string; mailboxIds: Record<string, boolean> }[];
     const ok =
       found.length > 0 &&
@@ -1794,8 +2262,7 @@ export class WebmailService {
    * mailbox's own address first, then any other address that has one. Plain text, and the HTML when one is set.
    */
   async legacySignature(sessionId: string): Promise<{ text: string; html: string } | null> {
-    const s = await this.session(sessionId);
-    if (!s) throw new WebmailSignedOutError("signed out");
+    const s = await this.#ownActive(sessionId);
     const r = await this.#call(
       sessionId,
       (x) => [
@@ -1806,6 +2273,7 @@ export class WebmailService {
         ],
       ],
       USING_SUBMISSION,
+      s.accountId,
     );
     const list = (r.get("i")?.list ?? []) as {
       email: string;
@@ -1856,7 +2324,7 @@ export class WebmailService {
    * credentials (`ManagedSieve`): customer mailboxes can't manage their own Sieve, so the script is ours alone.
    */
   async mailRules(sessionId: string): Promise<{ accountId: string; rules: MailRules; state: RulesState }> {
-    const accountId = await this.#accountId(sessionId);
+    const accountId = (await this.#ownActive(sessionId)).accountId;
     const script = await this.#d.sieve.read(accountId);
     if (script === null) return { accountId, rules: DEFAULT_RULES, state: "none" };
     return {
@@ -1875,8 +2343,7 @@ export class WebmailService {
     account: string,
     rules: Omit<MailRules, "include">,
   ): Promise<{ contactsUsed: number }> {
-    const s = await this.session(sessionId);
-    if (!s) throw new WebmailSignedOutError("signed out");
+    const s = await this.#ownActive(sessionId);
     if (s.accountId !== account) throw new WebmailRefusedError("Your active mailbox changed. Try again.");
     // We own the one script; there is nothing of the person's to include (they can't write Sieve).
     // Forwarding only to the control-plane confirmed target: whoever calls (settings, the contacts refresh) can't

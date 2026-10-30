@@ -3,8 +3,13 @@ import "server-only";
 
 import { db, pgMailboxStatusLookup } from "@anhourmail/adapters/postgres";
 import {
+  delegatedMailboxesFor,
+  delegationCheck,
+  DelegationGate,
   MailboxAccessGate,
+  openDelegatedMailbox,
   PasswordChangeGate,
+  webmailAccess,
   WebmailSettingsService,
   WebmailSignaturesService,
 } from "@anhourmail/core/webmail";
@@ -89,6 +94,21 @@ export function mailboxAccessGate(): MailboxAccessGate {
   return accessGate;
 }
 
+let delegationGateInstance: DelegationGate | null = null;
+/**
+ * The delegation gate (ADR-0026 §6): every use of a delegated mailbox asks core for the grant now ("has the right"
+ * cached ≤ 10 s per session and mailbox). Its mailbox checks use the access lookup uncached.
+ */
+export function delegationGate(): DelegationGate {
+  if (!delegationGateInstance) {
+    const lookup = pgMailboxStatusLookup(db());
+    delegationGateInstance = new DelegationGate(
+      delegationCheck(container().deps, { state: async (address) => webmailAccess(await lookup(address)) }),
+    );
+  }
+  return delegationGateInstance;
+}
+
 let instance: WebmailService | null = null;
 
 /** The webmail BFF service (lazy, one per server process; rebuilt when this module reloads in dev). */
@@ -121,6 +141,21 @@ export function webmail(): WebmailService {
         (await container().deps.uow.run((r) => r.security.sessions(userId, new Date()))).some(
           (x) => x.id === sessionId,
         ),
+      // Delegated mailboxes (ADR-0026): listed and opened by core, used only through the gate.
+      delegation: {
+        list: (owners) => delegatedMailboxesFor(container().deps, owners),
+        open: (input, signIn, req) => {
+          const lookup = pgMailboxStatusLookup(db());
+          return openDelegatedMailbox(
+            container().deps,
+            { state: async (address) => webmailAccess(await lookup(address)) },
+            input,
+            signIn,
+            req,
+          );
+        },
+        gate: delegationGate(),
+      },
       stalwartUrl,
       access: mailboxAccessGate(),
       quota: redisSlidingQuota(redis()),

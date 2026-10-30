@@ -30,6 +30,17 @@ vi.mock("../webmail/access-block", () => ({
       : null,
 }));
 
+// The delegation gate itself is tested in webmail/delegation-gate.test.ts; here only whether route() consults it.
+vi.mock("../webmail/delegation-gate", () => ({
+  delegationBlock: async (req: Request, mode: string | undefined) =>
+    req.headers.get("cookie")?.includes("am.webmail=delegated") && mode !== "allowed"
+      ? Response.json(
+          { error: { code: mode ? "not_found" : "own_mailbox_only", message: "x" } },
+          { status: mode ? 404 : 403 },
+        )
+      : null,
+}));
+
 const params = { params: Promise.resolve({}) };
 const noDns = { lookup: async () => [] };
 let uow: MemoryUnitOfWork;
@@ -276,5 +287,29 @@ describe("webmail control-plane access", () => {
     expect((await handler({ session: "webmail" })(get("am.webmail=fine"), params)).status).toBe(200);
     // Console routes never consult it.
     expect((await handler({})(get("am.webmail=suspended"), params)).status).toBe(200);
+  });
+
+  it("consults the delegation gate on webmail routes with the route's mode, before the handler and the password gate", async () => {
+    let ran = 0;
+    const handler = (opts: Parameters<typeof route>[1]) =>
+      route(async () => {
+        ran += 1;
+        return ok(true);
+      }, opts);
+    const own = await handler({ session: "webmail" })(get("am.webmail=delegated"), params);
+    expect(own.status).toBe(403);
+    expect(await own.json()).toMatchObject({ error: { code: "own_mailbox_only" } });
+    const gone = await handler({ session: "webmail", delegated: "full_access" })(get("am.webmail=delegated"), params);
+    expect(gone.status).toBe(404);
+    expect(ran).toBe(0);
+    expect(
+      (await handler({ session: "webmail", delegated: "allowed" })(get("am.webmail=delegated"), params)).status,
+    ).toBe(200);
+    // A blocked mailbox is answered first; console routes never consult the gate.
+    expect(
+      (await handler({ session: "webmail" })(get("am.webmail=suspended;am.webmail=delegated"), params)).status,
+    ).toBe(401);
+    expect((await handler({})(get("am.webmail=delegated"), params)).status).toBe(200);
+    expect(ran).toBe(2);
   });
 });

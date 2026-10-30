@@ -22,7 +22,11 @@ export type PasswordGateDeps = {
 };
 
 const defaults = (): PasswordGateDeps => ({
-  username: async (id) => (await webmail().store.read(id))?.username ?? null,
+  // The session's own mailbox: a delegated active entry's password is never the delegate's to change (ADR-0026).
+  username: async (id) => {
+    const s = await webmail().store.read(id);
+    return s ? (s.delegated?.via ?? s.username) : null;
+  },
   required: (address) => passwordChangeGate().required(address),
 });
 

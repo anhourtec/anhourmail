@@ -28,7 +28,11 @@ export type AccessBlockDeps = {
 };
 
 const defaults = (): AccessBlockDeps => ({
-  username: async (id) => (await webmail().store.read(id))?.username ?? null,
+  // The session's own mailbox: a delegated active entry (ADR-0026) is the delegation gate's, and never ends the session.
+  username: async (id) => {
+    const s = await webmail().store.read(id);
+    return s ? (s.delegated?.via ?? s.username) : null;
+  },
   consoleEnded: async (id) => {
     const s = await webmail().store.read(id);
     return s ? webmail().consoleEnded(s) : false;

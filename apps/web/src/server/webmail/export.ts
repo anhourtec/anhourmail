@@ -5,7 +5,7 @@ import { MAIL_EXPORT_PART_BYTES } from "@anhourmail/shared/data-lifecycle";
 import { log } from "@anhourmail/server/log";
 import { ZipWriter, zipSegment } from "@anhourmail/server/zip";
 
-import { WebmailBlockedError, type WebmailService, WebmailRefusedError } from "./service";
+import { ownMailbox, WebmailBlockedError, type WebmailService, WebmailRefusedError } from "./service";
 
 /**
  * Mail export from the webmail (ADR-0025 "Mail"): the signed-in mailbox's mail as one `.mbox` file per folder (mboxrd,
@@ -91,8 +91,10 @@ export async function mailExportStream(
   opts: { folderId?: string },
   onDone: (address: string, summary: MailExportSummary) => Promise<void>,
 ): Promise<ReadableStream<Uint8Array>> {
-  const s = await svc.session(sessionId);
-  if (!s) throw new WebmailRefusedError("Sign in again to export this mailbox.");
+  const read = await svc.session(sessionId);
+  if (!read) throw new WebmailRefusedError("Sign in again to export this mailbox.");
+  // The person's own mailbox only (ADR-0026 §6); every later call refuses a shared one too (the service's default).
+  const s = ownMailbox(read);
   const accountId = s.accountId;
   const address = s.username;
   const pinned = (current: { accountId: string }) => {

@@ -12,6 +12,8 @@ import { webmailCookie } from "./instance";
 import {
   WebmailBlockedError,
   WebmailBusyError,
+  WebmailDelegationRefusedError,
+  WebmailOwnMailboxOnlyError,
   WebmailQuotaError,
   WebmailRefusedError,
   WebmailSignedOutError,
@@ -69,6 +71,11 @@ export function blockedNoticeForLink(secret: string, value: string | undefined, 
   return reason === "unavailable" ? null : blockedNoticeFor(reason);
 }
 
+/** The refusal for a delegated mailbox (the same words as core's `DelegatedMailboxRefusedError`). */
+export const DELEGATION_REFUSED = "You don't have access to this mailbox.";
+/** What a mailbox shared with the person can't do in their webmail (ADR-0026 §6 "What each right allows"). */
+export const OWN_MAILBOX_ONLY = "This isn't available in a mailbox shared with you. Switch to your own mailbox first.";
+
 /** Maps webmail BFF errors to the `{ error: { code, message } }` envelope; null when `err` isn't one of ours. */
 export function webmailErrorResponse(err: unknown): Response | null {
   const body = (code: string, message: string, status: number) =>
@@ -85,6 +92,9 @@ export function webmailErrorResponse(err: unknown): Response | null {
     return res;
   }
   if (err instanceof WebmailRefusedError) return body("refused", err.message, 400);
+  // One answer for every refused delegated mailbox (ADR-0026 §6): it never says whether an address exists.
+  if (err instanceof WebmailDelegationRefusedError) return body("not_found", DELEGATION_REFUSED, 404);
+  if (err instanceof WebmailOwnMailboxOnlyError) return body("own_mailbox_only", OWN_MAILBOX_ONLY, 403);
   if (err instanceof WebmailQuotaError) return body("rate_limited", err.message, 429);
   if (err instanceof WebmailSignInError) {
     return body("invalid_credentials", "Mailbox address or password is wrong.", 401);

@@ -20,6 +20,18 @@ export type MailboxTokens = {
   refreshToken: string | null;
   /** Access token expiry, epoch ms. */
   expiresAt: number;
+  /**
+   * Set when this is another person's mailbox opened through a delegation grant (ADR-0026 §6): the tokens are that
+   * mailbox's own, and every use is checked against the grant first (`DelegationGate`). Absent for the session's own
+   * signed-in mailboxes.
+   */
+  delegated?: {
+    mailboxId: string;
+    /** The delegate (console user id). */
+    granteeUserId: string;
+    /** The delegate's own signed-in mailbox the grant comes through (lowercase). */
+    via: string;
+  };
 };
 
 /**
@@ -34,7 +46,10 @@ export type WebmailSession = MailboxTokens & {
    * session ends (sign-out, "sign out everywhere", a revoke, a password reset), this webmail session ends too.
    */
   console?: { userId: string; sessionId: string };
-  /** Other signed-in mailboxes (not active). At most `MAX_MAILBOXES - 1`. */
+  /**
+   * Other signed-in mailboxes (not active): at most `MAX_MAILBOXES - 1` of the session's own, plus at most
+   * `DELEGATED_MAILBOXES_PER_PERSON` delegated ones (`delegated` set).
+   */
   others?: MailboxTokens[];
   /**
    * Write version (compare-and-set): a write succeeds only if the stored version is still the one this copy was

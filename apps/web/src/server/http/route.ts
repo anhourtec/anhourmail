@@ -14,13 +14,15 @@ import { API_CSP } from "../console-csp";
 import { container } from "../container";
 import { env } from "../env";
 import { mailboxAccessBlock } from "../webmail/access-block";
+import { delegationBlock, type DelegationMode } from "../webmail/delegation-gate";
 import { PASSWORD_CHANGE_REQUIRED, passwordChangeBlock } from "../webmail/password-gate";
 
 /**
  * Every API handler goes through `route()` (CLAUDE.md rules 12–14):
  *   request id + one access-log line, rate limit (tier per route), same-origin check on writes (CSRF for
  *   cookie auth: writes must come from this origin), the webmail's control-plane access check (suspended person or
- *   mailbox, deleting, gone) and first-sign-in password change (webmail routes), domain-error → HTTP mapping.
+ *   mailbox, deleting, gone), the delegation gate (a mailbox shared with the person, ADR-0026) and first-sign-in
+ *   password change (webmail routes), domain-error → HTTP mapping.
  * Permission and ownership checks happen in the service layer (packages/core), never only here.
  */
 
@@ -46,6 +48,8 @@ const STATUS: Record<string, number> = {
   // Console → webmail handoff (ADR-0024): a code we don't know (or already used), and a refusal with a reason.
   handoff_invalid: 400,
   handoff_refused: 409,
+  // The mail server was busy with a mailbox (a delegated open's credential slot, ADR-0026): try again.
+  unavailable: 503,
 };
 
 export type RouteOptions = {
@@ -57,6 +61,13 @@ export type RouteOptions = {
    * password change itself and sign-out set it; every other webmail route answers 403 `password_change_required`.
    */
   passwordChange?: "allowed";
+  /**
+   * Webmail routes only, while the active mailbox is one shared with the person (a delegated entry, ADR-0026 §6):
+   * `"full_access"` — the route reads and manages that mailbox, and the grant is checked now (404 and the entry dropped
+   * when it is gone); `"allowed"` — the route works whichever mailbox is active (listing, switching, signing out).
+   * Unset: refused with 403 `own_mailbox_only` (sending, settings, contacts, export…).
+   */
+  delegated?: DelegationMode;
   /**
    * The handler's own `Cache-Control` is kept (profile photos, cached privately under a versioned URL). Every other
    * response is `no-store`.
@@ -168,13 +179,18 @@ export function route(handler: Handler, opts: RouteOptions = {}) {
           // A blocked mailbox first (every webmail route, sign-out and the password change included), then the
           // password change the mailbox still owes.
           const unavailable = opts.session === "webmail" ? await mailboxAccessBlock(req) : null;
+          // Then a mailbox shared with the person: the grant now, or the person's own mailbox for this route.
+          const shared = !unavailable && opts.session === "webmail" ? await delegationBlock(req, opts.delegated) : null;
           const blocked =
-            !unavailable && opts.session === "webmail" && opts.passwordChange !== "allowed"
+            !unavailable && !shared && opts.session === "webmail" && opts.passwordChange !== "allowed"
               ? await passwordChangeBlock(req)
               : null;
           if (unavailable) {
             errorCode = "mailbox_unavailable";
             res = unavailable;
+          } else if (shared) {
+            errorCode = "delegation";
+            res = shared;
           } else if (blocked) {
             errorCode = PASSWORD_CHANGE_REQUIRED;
             res = blocked;

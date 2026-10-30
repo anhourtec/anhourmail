@@ -17,7 +17,13 @@ import { log } from "@anhourmail/server/log";
 import { forwardingConfirmEmail } from "../mail/system-email";
 import { type Identity, sendingTier } from "./compose";
 import { type Junk, type JunkInput, type MailRules, type Vacation, VacationInput, zoneOffset } from "./sieve";
-import { type RulesState, WebmailRefusedError, WebmailSignedOutError, type WebmailService } from "./service";
+import {
+  ownMailbox,
+  type RulesState,
+  WebmailRefusedError,
+  WebmailSignedOutError,
+  type WebmailService,
+} from "./service";
 import { cleanSignature, identitySignature, textAsHtml } from "./signature-html";
 
 /**
@@ -105,8 +111,8 @@ export class WebmailSettings {
   ) {}
 
   async #address(sessionId: string): Promise<string> {
-    const s = await this.d.mail.session(sessionId);
-    if (!s) throw new WebmailSignedOutError("signed out");
+    // The person's own mailbox only, decided on this one read (a mailbox shared with them never, ADR-0026 §6).
+    const s = ownMailbox(await this.d.mail.session(sessionId));
     return s.username;
   }
 
@@ -115,8 +121,8 @@ export class WebmailSettings {
    * lookup). Every writer uses this so a mailbox switched in another tab can't aim a change at the wrong account.
    */
   async #pinned(sessionId: string, account: string): Promise<{ address: string; accountId: string }> {
-    const s = await this.d.mail.session(sessionId);
-    if (!s) throw new WebmailSignedOutError("signed out");
+    // The person's own mailbox only, decided on this one read (a mailbox shared with them never, ADR-0026 §6).
+    const s = ownMailbox(await this.d.mail.session(sessionId));
     if (s.accountId !== account) throw new WebmailRefusedError("Your active mailbox changed. Try again.");
     return { address: s.username, accountId: s.accountId };
   }
@@ -153,8 +159,8 @@ export class WebmailSettings {
     patch: unknown,
     req: RequestMeta,
   ): Promise<WebmailPreferences> {
-    const s = await this.d.mail.session(sessionId);
-    if (!s) throw new WebmailSignedOutError("signed out");
+    // The person's own mailbox only, decided on this one read (a mailbox shared with them never, ADR-0026 §6).
+    const s = ownMailbox(await this.d.mail.session(sessionId));
     if (s.accountId !== account) throw new WebmailRefusedError("Your active mailbox changed. Try again.");
     return this.d.settings.updatePreferences(s.username, patch, req);
   }
