@@ -1,6 +1,6 @@
 # 09 — Roadmap
 
-Last updated: 2026-10-29. Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
+Last updated: 2026-10-30. Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
 
 ## Path to production (as of 2026-10-29)
 
@@ -45,7 +45,9 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
   2026-10-29** (`plans.ts` `ALIAS_CREATIONS_PER_YEAR`, `ALIASES_PER_MAILBOX`; `03-anti-spam-and-abuse.md`).
 - **Leavers and delegation:** removing a member offers to convert their mailbox to a shared mailbox and turn their
   sign-in off; admins grant Full access, Send as or Send on behalf on any mailbox to chosen people, and delegated
-  mailboxes open in the delegate's webmail (pulls the `10-collaboration.md` delegation work forward).
+  mailboxes open in the delegate's webmail (pulls the `10-collaboration.md` delegation work forward). **Sign-in part
+  built 2026-10-30:** removing someone releases their mailboxes as shared addresses with a new password nobody is
+  shown and their app passwords revoked (07-security.md "Leavers"); delegation is next.
 - **Names:** the mailbox display name is the one source; a person's own mailbox follows their profile name unless an
   admin sets another; the webmail sender name shows the same value (CLAUDE.md rule 61).
 
