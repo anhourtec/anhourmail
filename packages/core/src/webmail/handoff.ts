@@ -302,6 +302,9 @@ export async function redeemWebmailHandoff<T>(
       if (grant.expiresAt <= now.getTime()) return refuse("expired");
       if (typeof person === "string") return refuse(person);
       if (person.actingAs) return refuse("act_as");
+      // The account lock serialises this with a removal (`removeMember`), so a person removed meanwhile is refused
+      // instead of getting tokens minted under the password that cuts them off.
+      await repos.accounts.lock(grant.accountId);
       const m = await repos.mailboxes.get(grant.accountId, grant.mailboxId);
       if (m?.userId !== person.userId) return refuse("not_found");
       const unavailable: RedeemRefusal | null = usable(m);
