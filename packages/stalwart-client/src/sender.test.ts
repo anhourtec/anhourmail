@@ -4,7 +4,11 @@ import { describe, expect, it } from "vitest";
 import { StalwartTransport } from "./client";
 import { StalwartManagement } from "./management";
 import {
+  allRecipientsLocalExpression,
   applySenderIdentityPolicy,
+  INBOUND_HEADERS_SCRIPT,
+  INBOUND_HEADERS_SIEVE,
+  INTERNAL_MAIL_HEADER,
   SENDER_IDENTITY_DATA_SCRIPT_EXPRESSION,
   SENDER_IDENTITY_SCRIPT,
   SENDER_IDENTITY_SIEVE,
@@ -36,24 +40,95 @@ function fake(scripts: { id: string; name: string; contents?: string; isActive?:
 }
 
 describe("sender identity policy", () => {
-  it("creates the script, wires it to authenticated DATA and keeps mustMatchSender on", async () => {
+  it("creates both scripts before wiring them to DATA, and keeps mustMatchSender on", async () => {
     const { mgmt, sets } = fake([]);
-    expect(await applySenderIdentityPolicy(mgmt)).toEqual({ scriptId: "new1" });
-    const created = sets.find(([n]) => n === "x:SieveSystemScript/set")?.[1].create as Record<string, { name: string }>;
-    expect(created.s?.name).toBe(SENDER_IDENTITY_SCRIPT);
+    expect(await applySenderIdentityPolicy(mgmt)).toEqual({ scriptId: "new1", inboundScriptId: "new1" });
+    const created = sets
+      .filter(([n]) => n === "x:SieveSystemScript/set")
+      .map(([, a]) => (a.create as Record<string, { name: string; contents: string }>).s);
+    expect(created.map((c) => c?.name)).toEqual([SENDER_IDENTITY_SCRIPT, INBOUND_HEADERS_SCRIPT]);
+    expect(created[1]?.contents).toBe(INBOUND_HEADERS_SIEVE);
     const data = sets.find(([n]) => n === "x:MtaStageData/set")?.[1].update as Record<string, { script: unknown }>;
     expect(data.singleton?.script).toEqual(SENDER_IDENTITY_DATA_SCRIPT_EXPRESSION);
+    expect(sets.findIndex(([n]) => n === "x:MtaStageData/set")).toBe(2);
     expect(sets.some(([n]) => n === "x:MtaStageAuth/set")).toBe(true);
   });
 
-  it("is idempotent when the script is already current, and repairs a drifted one", async () => {
-    const current = fake([{ id: "s1", name: SENDER_IDENTITY_SCRIPT, contents: SENDER_IDENTITY_SIEVE, isActive: true }]);
+  it("runs the sender-identity script for authenticated sessions and the inbound one for all others", () => {
+    expect(SENDER_IDENTITY_DATA_SCRIPT_EXPRESSION).toEqual({
+      match: { "0": { if: "!is_empty(authenticated_as)", then: `'${SENDER_IDENTITY_SCRIPT}'` } },
+      else: `'${INBOUND_HEADERS_SCRIPT}'`,
+    });
+  });
+
+  it("inbound script removes the internal-mail marker and nothing else", () => {
+    expect(INBOUND_HEADERS_SIEVE).toMatch(/^require \["editheader"\];/);
+    const actions = INBOUND_HEADERS_SIEVE.split("\n").filter((l) => l.trim() !== "" && !l.startsWith("#"));
+    expect(actions).toEqual(['require ["editheader"];', `deleteheader "${INTERNAL_MAIL_HEADER}";`]);
+  });
+
+  it("is idempotent when the scripts are already current, and repairs drifted ones", async () => {
+    const current = fake([
+      { id: "s1", name: SENDER_IDENTITY_SCRIPT, contents: SENDER_IDENTITY_SIEVE, isActive: true },
+      { id: "s2", name: INBOUND_HEADERS_SCRIPT, contents: INBOUND_HEADERS_SIEVE.trimEnd(), isActive: true },
+    ]);
     await applySenderIdentityPolicy(current.mgmt);
     expect(current.sets.some(([n]) => n === "x:SieveSystemScript/set")).toBe(false);
-    const drifted = fake([{ id: "s1", name: SENDER_IDENTITY_SCRIPT, contents: "old", isActive: false }]);
+    const drifted = fake([
+      { id: "s1", name: SENDER_IDENTITY_SCRIPT, contents: "old", isActive: false },
+      { id: "s2", name: INBOUND_HEADERS_SCRIPT, contents: INBOUND_HEADERS_SIEVE, isActive: false },
+    ]);
     await applySenderIdentityPolicy(drifted.mgmt);
-    const upd = drifted.sets.find(([n]) => n === "x:SieveSystemScript/set")?.[1].update as Record<string, unknown>;
-    expect(upd.s1).toEqual({ contents: SENDER_IDENTITY_SIEVE, isActive: true });
+    const upd = drifted.sets
+      .filter(([n]) => n === "x:SieveSystemScript/set")
+      .map(([, a]) => a.update as Record<string, unknown>);
+    expect(upd).toEqual([
+      { s1: { contents: SENDER_IDENTITY_SIEVE, isActive: true } },
+      { s2: { contents: INBOUND_HEADERS_SIEVE, isActive: true } },
+    ]);
+  });
+
+  it("without a key, removes any internal-mail marker and adds none", () => {
+    expect(SENDER_IDENTITY_SIEVE).toContain(`deleteheader "${INTERNAL_MAIL_HEADER}";`);
+    expect(SENDER_IDENTITY_SIEVE).not.toContain("addheader");
+  });
+
+  it("with a key, adds the marker last, bound to the envelope sender and one Message-ID in the web app's form", () => {
+    const script = senderIdentitySieve({ onBehalfKey: KEY });
+    // The formula `internalMailTag` (@anhourmail/core/webmail) recomputes; its unit test states the same.
+    const tag = `hash('${KEY}|' + hash('${KEY}|internal-mail-v1|' + to_lowercase(envelope.from) + '|' + header.message-id, 'sha256'), 'sha256')`;
+    expect(script).toContain(`let "internaltag" "${tag}";`);
+    const order = [
+      '"from" "${envelope.from}"',
+      'deleteheader "Authentication-Results";',
+      `deleteheader "${INTERNAL_MAIL_HEADER}";`,
+      `let "internallocal" "${allRecipientsLocalExpression()}";`,
+      'if allof (string :is "${internallocal}" "1", header :count "eq" :comparator "i;ascii-numeric" "message-id" "1")',
+      'if string :regex "${internalid}" "^[A-Za-z0-9._%+=-]{1,200}@[A-Za-z0-9.-]{1,200}$"',
+      'let "internaltag"',
+      'if string :regex "${internaltag}" "^[0-9a-f]{64}$"',
+      `addheader "${INTERNAL_MAIL_HEADER}" "\${internaltag}";`,
+    ].map((needle) => script.indexOf(needle));
+    expect(order.every((i) => i > 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(script.match(/addheader/g)).toHaveLength(1);
+  });
+
+  it("marks only mail whose recipients are all local, checking each by index up to the limit", () => {
+    const expr = allRecipientsLocalExpression(3);
+    expect(expr).toBe(
+      [
+        "count(envelope.to) >= 1",
+        "count(envelope.to) <= 3",
+        ...[0, 1, 2].map(
+          (i) =>
+            `(is_empty(envelope.to[${String(i)}]) || is_local_domain(email_part(envelope.to[${String(i)}], 'domain')))`,
+        ),
+      ].join(" && "),
+    );
+    // The default covers Stalwart's default recipient limit; more recipients means no marker.
+    expect(allRecipientsLocalExpression().match(/is_local_domain/g)).toHaveLength(100);
+    expect(allRecipientsLocalExpression()).toContain("count(envelope.to) <= 100");
   });
 
   it("script compares header From and Sender to the envelope sender and needs exactly one From", () => {
@@ -151,7 +226,10 @@ describe("sender identity policy", () => {
     const upd = strict.sets.find(([n]) => n === "x:SieveSystemScript/set")?.[1].update as Record<string, unknown>;
     expect(upd.s1).toEqual({ contents: keyed, isActive: true });
     // As stored by Stalwart: without the final newline.
-    const current = fake([{ id: "s1", name: SENDER_IDENTITY_SCRIPT, contents: keyed.trimEnd(), isActive: true }]);
+    const current = fake([
+      { id: "s1", name: SENDER_IDENTITY_SCRIPT, contents: keyed.trimEnd(), isActive: true },
+      { id: "s2", name: INBOUND_HEADERS_SCRIPT, contents: INBOUND_HEADERS_SIEVE.trimEnd(), isActive: true },
+    ]);
     await applySenderIdentityPolicy(current.mgmt, { onBehalfKey: KEY });
     expect(current.sets.some(([n]) => n === "x:SieveSystemScript/set")).toBe(false);
   });

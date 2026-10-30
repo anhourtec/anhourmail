@@ -35,7 +35,51 @@ export const SENDER_ON_BEHALF_HEADER = "X-AnhourMail-On-Behalf";
 /** The tag's expiry (UTC, `YYYY-MM-DDTHH:MM:SSZ`), bound into the tag; checked against the server's clock, removed. */
 export const SENDER_ON_BEHALF_EXPIRES_HEADER = "X-AnhourMail-On-Behalf-Expires";
 
+/**
+ * The internal-mail marker (ADR-0019 update 2026-10-30): with a key, the script adds it to every authenticated
+ * submission it accepts whose recipients are all local (after removing any the client sent), bound to the envelope
+ * sender and the Message-ID; the
+ * `inbound-headers` script removes it from everything arriving on an unauthenticated session. The webmail recomputes it
+ * (`internalMailTag` in `@anhourmail/core/webmail`) to treat a locally submitted message's From as verified.
+ */
+export const INTERNAL_MAIL_HEADER = "X-AnhourMail-Internal";
+
+/** The system script run at DATA for unauthenticated sessions (port 25): removes headers only our server may add. */
+export const INBOUND_HEADERS_SCRIPT = "inbound-headers";
+
+/**
+ * Removes the internal-mail marker from mail arriving from outside, so a copy of one from a genuine message (or a
+ * made-up one) never reaches a mailbox. Nothing else is touched: inbound checks and their results are unaffected.
+ */
+export const INBOUND_HEADERS_SIEVE = `require ["editheader"];
+
+# AnhourMail inbound headers (ADR-0019 update 2026-10-30). Runs at DATA for unauthenticated sessions only
+# (MtaStageData.script). Only our own server adds this header, to mail an account submitted here; never accept one
+# from outside.
+deleteheader "${INTERNAL_MAIL_HEADER}";
+`;
+
 const ON_BEHALF_KEY = /^[0-9a-f]{64}$/;
+
+/**
+ * The most recipients a marked message may have (Stalwart's default `MtaStageRcpt.maxRecipients`). The script checks
+ * every recipient's domain by index, so a message with more gets no marker (fail safe: its readers are asked first).
+ */
+export const INTERNAL_MAIL_MAX_RECIPIENTS = 100;
+
+/**
+ * True ("1") only when the message has 1..max envelope recipients and every one is on a domain this server hosts.
+ * Verified on v0.16.27: `envelope.to` is the recipient array in a DATA-stage `let`, `envelope.to[i]` past its end
+ * reads as empty, `||` short-circuits, and `is_local_domain` works there. No marker for mail that leaves the server.
+ */
+export function allRecipientsLocalExpression(max = INTERNAL_MAIL_MAX_RECIPIENTS): string {
+  const each = Array.from(
+    { length: max },
+    (_, i) =>
+      `(is_empty(envelope.to[${String(i)}]) || is_local_domain(email_part(envelope.to[${String(i)}], 'domain')))`,
+  );
+  return [`count(envelope.to) >= 1`, `count(envelope.to) <= ${String(max)}`, ...each].join(" && ");
+}
 
 /**
  * The script text. Without `onBehalfKey` every Sender that differs from the envelope sender is refused (the ADR-0019
@@ -88,6 +132,24 @@ ${refuse}
     if not header :is "${SENDER_ON_BEHALF_HEADER}" "\${onbehalf}" {
 ${refuse}
     }`;
+  // From is exactly the envelope sender by now; bind the marker to it and to the one Message-ID in the web app's form
+  // (an unreadable one reads as "", so the form is checked first; no marker otherwise). Only for mail that stays here:
+  // every recipient on a domain we host, so outside recipients never receive a marker.
+  const internalMarker =
+    key === undefined
+      ? ""
+      : `let "internallocal" "${allRecipientsLocalExpression()}";
+if allof (string :is "\${internallocal}" "1", header :count "eq" :comparator "i;ascii-numeric" "message-id" "1") {
+  let "internalid" "header.message-id";
+  if string :regex "\${internalid}" "^[A-Za-z0-9._%+=-]{1,200}@[A-Za-z0-9.-]{1,200}$" {
+    let "internaltag" "hash('${key}|' + hash('${key}|internal-mail-v1|' + to_lowercase(envelope.from) + '|' + header.message-id, 'sha256'), 'sha256')";
+    # A failed expression leaves the variable empty: add only a real digest.
+    if string :regex "\${internaltag}" "^[0-9a-f]{64}$" {
+      addheader "${INTERNAL_MAIL_HEADER}" "\${internaltag}";
+    }
+  }
+}
+`;
   return `require [${requires}];
 
 # AnhourMail sender identity (ADR-0019). Runs at DATA for authenticated submissions only (MtaStageData.script).
@@ -127,29 +189,36 @@ deleteheader "${SENDER_ON_BEHALF_EXPIRES_HEADER}";
 # Stalwart stamps no Authentication-Results on authenticated submissions, so any such header here was written by
 # the sender and could claim checks our server never ran (RFC 8601 section 5). Remove them all.
 deleteheader "Authentication-Results";
-`;
+
+# The internal-mail marker is ours alone: whatever the client sent is removed${key === undefined ? " (no key, so none is added)." : ", then ours is added."}
+deleteheader "${INTERNAL_MAIL_HEADER}";
+${internalMarker}`;
 }
 
 /** The script without the on-behalf exception (every differing Sender refused). */
 export const SENDER_IDENTITY_SIEVE = senderIdentitySieve();
 
-/** The DATA-stage expression: run the script for authenticated sessions only (inbound MX mail is unaffected). */
+/**
+ * The DATA-stage expression: the sender-identity script for authenticated sessions, the inbound-headers script for
+ * everything else (port 25; it only removes the internal-mail marker, so inbound checks are unaffected).
+ */
 export const SENDER_IDENTITY_DATA_SCRIPT_EXPRESSION = {
   match: { "0": { if: "!is_empty(authenticated_as)", then: `'${SENDER_IDENTITY_SCRIPT}'` } },
-  else: "false",
+  else: `'${INBOUND_HEADERS_SCRIPT}'`,
 } as const;
 
 type ScriptRow = { id: string; name: string; contents?: string; isActive?: boolean };
 
 /**
- * Installs or updates the script and wires it into the DATA stage, keeping `mustMatchSender` on. `onBehalfKey`
- * (`SENDER_DELEGATION_KEY`) compiles in the send-on-behalf exception; without it the strict script is installed.
- * Idempotent. Callers run `reloadSettings()` afterwards (the DATA-stage expression is compiled).
+ * Installs or updates the sender-identity and inbound-headers scripts and wires them into the DATA stage, keeping
+ * `mustMatchSender` on. `onBehalfKey` (`SENDER_DELEGATION_KEY`) compiles in the send-on-behalf exception and the
+ * internal-mail marker; without it the strict script is installed and no marker is added. Idempotent. Callers run
+ * `reloadSettings()` afterwards (the DATA-stage expression is compiled).
  */
 export async function applySenderIdentityPolicy(
   mgmt: StalwartManagement,
   opts: { onBehalfKey?: string | undefined } = {},
-): Promise<{ scriptId: string }> {
+): Promise<{ scriptId: string; inboundScriptId: string }> {
   const contents = senderIdentitySieve(opts); // throws on a malformed key, naming no value
   try {
     return await applyPolicy(mgmt, contents);
@@ -162,35 +231,53 @@ export async function applySenderIdentityPolicy(
   }
 }
 
-async function applyPolicy(mgmt: StalwartManagement, contents: string): Promise<{ scriptId: string }> {
+async function upsertScript(
+  mgmt: StalwartManagement,
+  scripts: readonly ScriptRow[],
+  name: string,
+  description: string,
+  contents: string,
+): Promise<string> {
   const t = mgmt.transport;
-  const scripts = await t.getAll<ScriptRow>("x:SieveSystemScript", ["name", "contents", "isActive"]);
-  const existing = scripts.find((s) => s.name === SENDER_IDENTITY_SCRIPT);
-  let scriptId: string;
+  const existing = scripts.find((s) => s.name === name);
   if (existing) {
-    scriptId = existing.id;
     // Stalwart stores the text without its final newline (verified on v0.16.27), so compare without trailing space.
     if (existing.contents?.trimEnd() !== contents.trimEnd() || existing.isActive !== true) {
       await t.set("x:SieveSystemScript", {
         update: { [existing.id]: { contents, isActive: true } },
       });
     }
-  } else {
-    const { created } = await t.set("x:SieveSystemScript", {
-      create: {
-        s: {
-          name: SENDER_IDENTITY_SCRIPT,
-          description: "Header From and Sender must equal the authenticated envelope sender (ADR-0019, ADR-0026)",
-          isActive: true,
-          contents,
-        },
-      },
-    });
-    const id = created.s?.id;
-    if (!id) throw new Error("sender-identity script was not created");
-    scriptId = id;
+    return existing.id;
   }
+  const { created } = await t.set("x:SieveSystemScript", {
+    create: { s: { name, description, isActive: true, contents } },
+  });
+  const id = created.s?.id;
+  if (!id) throw new Error(`${name} script was not created`);
+  return id;
+}
+
+async function applyPolicy(
+  mgmt: StalwartManagement,
+  contents: string,
+): Promise<{ scriptId: string; inboundScriptId: string }> {
+  const scripts = await mgmt.transport.getAll<ScriptRow>("x:SieveSystemScript", ["name", "contents", "isActive"]);
+  const scriptId = await upsertScript(
+    mgmt,
+    scripts,
+    SENDER_IDENTITY_SCRIPT,
+    "Header From and Sender must equal the authenticated envelope sender (ADR-0019, ADR-0026)",
+    contents,
+  );
+  // Both scripts exist before the expression names them.
+  const inboundScriptId = await upsertScript(
+    mgmt,
+    scripts,
+    INBOUND_HEADERS_SCRIPT,
+    "Remove the internal-mail marker from mail arriving from outside (ADR-0019)",
+    INBOUND_HEADERS_SIEVE,
+  );
   await mgmt.updateSingleton("x:MtaStageData", { script: SENDER_IDENTITY_DATA_SCRIPT_EXPRESSION });
   await mgmt.updateSingleton("x:MtaStageAuth", { mustMatchSender: { match: {}, else: "true" } });
-  return { scriptId };
+  return { scriptId, inboundScriptId };
 }

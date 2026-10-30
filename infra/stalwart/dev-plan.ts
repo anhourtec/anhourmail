@@ -84,7 +84,9 @@ export async function applyDevMailPlan(
     if (await mgmt.ensureListener(l)) restartNeeded = true;
   }
   // Header From must equal the authenticated envelope sender, with the keyed send-on-behalf exception (ADR-0019,
-  // ADR-0026 §8). Also a production setting (with production's own key).
+  // ADR-0026 §8); the same key binds the internal-mail marker added to submissions, and the inbound-headers script
+  // removes that marker from mail arriving on port 25 (ADR-0019 update "internal mail"). Also a production setting
+  // (with production's own key).
   await applySenderIdentityPolicy(mgmt, {
     onBehalfKey: opts.senderDelegationKey ?? resolveSenderDelegationKey(process.env),
   });
