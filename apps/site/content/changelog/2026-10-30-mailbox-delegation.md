@@ -12,8 +12,9 @@ summary: Owners and admins can let people read a mailbox, send as it or send on 
 - **Shared with you.** A mailbox you can read appears under **Shared with you** in your webmail, without its password
   or a second sign-in. **Open another mailbox** opens one by address in a tab of its own, and your other tabs stay on
   your mailbox. See [Mailboxes shared with you](/docs/webmail#mailboxes-shared-with-you).
-- **Send from it.** Choose the mailbox in **From** when you write. Its copy goes to that mailbox's Sent folder, and
-  messages sent on its behalf read "Name on behalf of" the mailbox. See
+- **Send from it.** Choose the mailbox in **From** when you write, or open it and use **New email**, **Reply** or
+  **Forward** there: **From** starts as the mailbox. Its copy goes to that mailbox's Sent folder, and messages sent on
+  its behalf read "Name on behalf of" the mailbox. With **Read and manage** only, **New email** says why it's off. See
   [Sending as or on behalf of a mailbox](/docs/webmail#sending-as-or-on-behalf-of-a-mailbox).
 - **Shared mailboxes.** A mailbox that belongs to nobody is a shared mailbox: no sign-in of its own and no seat. A
   person's mailbox can be converted to one, and back. When you remove someone, you can give a colleague full access to
