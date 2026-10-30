@@ -57,7 +57,7 @@ export default async function AddUserPage({ params }: { params: Promise<{ accoun
         <>
           {a.reason} Upgrade to add users, or{" "}
           <Link href={`${mailboxes}?new=1`} className="text-primary underline-offset-2 hover:underline">
-            add a shared address
+            add a shared mailbox
           </Link>{" "}
           instead.
         </>

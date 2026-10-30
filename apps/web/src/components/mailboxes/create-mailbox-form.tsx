@@ -24,7 +24,7 @@ type Options = {
 };
 
 /**
- * New shared address (in the "Add a shared address" panel): a mailbox that isn't one person's console sign-in, like
+ * New shared mailbox (in the "Add a shared mailbox" panel): a mailbox that isn't one person's console sign-in, like
  * support@ — local part @ one of the account's active domains or the platform domain (a free address, with its own
  * naming rules and the plan's allowance), optionally belonging to a member, with a quota and the password it signs in
  * to the webmail with (typed or generated, shown once). The panel stays open after
@@ -211,7 +211,7 @@ export function CreateMailboxForm({
       )}
       <button type="submit" disabled={pending || poolFull} className={`${primaryButtonClass} w-fit`}>
         <Plus className="size-4" aria-hidden />
-        {pending ? "Creating…" : "Create shared address"}
+        {pending ? "Creating…" : "Create shared mailbox"}
       </button>
     </form>
   );
