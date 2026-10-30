@@ -60,6 +60,7 @@ export const AUDIT_ACTIONS = [
   "mailbox.created",
   "mailbox.renamed",
   "mailbox.made_user",
+  "mailbox.converted_to_shared",
   "mailbox.suspended",
   "mailbox.unsuspended",
   "mailbox.deleted",

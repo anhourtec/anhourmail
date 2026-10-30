@@ -58,6 +58,7 @@ import { PgWebmailSettingsRepository } from "./webmail-settings";
 import { PgAvatarRepository } from "./avatars";
 import { PgActAsRepository } from "./act-as";
 import { PgDataLifecycleRepository } from "./data-lifecycle";
+import { PgDelegationRepository } from "./delegation";
 import { isUniqueViolation } from "./errors";
 import {
   accountMembership,
@@ -1621,6 +1622,7 @@ const repositories = (x: Executor): Repositories => ({
   avatars: new PgAvatarRepository(x),
   actAs: new PgActAsRepository(x),
   dataLifecycle: new PgDataLifecycleRepository(x),
+  delegation: new PgDelegationRepository(x),
   suspensions: new PgSuspensionRepository(x),
   audit: new PgAuditRepository(x),
   access: new PgAccessRepository(x),

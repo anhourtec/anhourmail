@@ -16,6 +16,7 @@
     "./aliases": "./src/aliases/index.ts",
     "./avatars": "./src/avatars/index.ts",
     "./data": "./src/data/index.ts",
+    "./delegation": "./src/delegation/index.ts",
     "./app-passwords": "./src/app-passwords/index.ts",
     "./webmail": "./src/webmail/index.ts",
     "./people": "./src/people/index.ts",

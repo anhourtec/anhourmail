@@ -1,6 +1,6 @@
 # Audit
 
-Last updated: 2026-10-30 (`account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
+Last updated: 2026-10-30 (mailbox delegation, ADR-0026: `delegation.granted` / `delegation.revoked` per change, `mailbox.converted_to_shared`, `MutationOutcome.also`; `account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
 
 Every meaningful action is recorded, tamper-evident, searchable and visible to the right people. Audit is a core module, not a logging side effect.
 
@@ -19,7 +19,7 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `auth` | `auth.sign_in`, `auth.sign_in_failed`, `auth.sign_out`, `auth.password_changed`, `auth.password_reset`, `auth.password_reset_requested`, `auth.two_factor_enabled`, `auth.two_factor_disabled`, `auth.app_password_created`, `auth.app_password_revoked`, `auth.session_revoked`, `auth.locked_out`, `auth.mail_client_sign_in`, `auth.mail_client_sign_in_failed`, `auth.two_factor_reset`, `auth.backup_code_used`, `auth.sessions_revoked_all`, `auth.new_device`, `auth.passkey_added`, `auth.passkey_renamed`, `auth.passkey_removed`, `auth.recovery_codes_regenerated`, `auth.identity_confirmed`, `auth.email_verification_sent`, `auth.email_verified`, `auth.login_deleted` |
 | `account` | `account.created`, `account.deleted`, `account.updated`, `account.invite_sent`, `account.invite_accepted`, `account.invite_resent`, `account.invite_revoked`, `account.member_added`, `account.user_added`, `account.profile_changed`, `account.avatar_changed`, `account.avatar_removed`, `account.member_removed`, `account.role_changed`, `account.ownership_transferred`, `account.sign_in_policy_changed`, `account.sign_in_factor_added` |
 | `domain` | `domain.added`, `domain.verified`, `domain.verify_failed`, `domain.removed`, `domain.dns_state_changed`, `domain.released`, `domain.expired` |
-| `mailbox` | `mailbox.created`, `mailbox.renamed`, `mailbox.made_user`, `mailbox.suspended`, `mailbox.unsuspended`, `mailbox.deleted`, `mailbox.quota_changed`, `mailbox.deletion_scheduled`, `mailbox.restored`, `mailbox.password_reset`, `mailbox.password_changed`, `mailbox.avatar_changed`, `mailbox.avatar_removed` |
+| `mailbox` | `mailbox.created`, `mailbox.renamed`, `mailbox.made_user`, `mailbox.converted_to_shared`, `mailbox.suspended`, `mailbox.unsuspended`, `mailbox.deleted`, `mailbox.quota_changed`, `mailbox.deletion_scheduled`, `mailbox.restored`, `mailbox.password_reset`, `mailbox.password_changed`, `mailbox.avatar_changed`, `mailbox.avatar_removed` |
 | `alias` | `alias.created`, `alias.toggled`, `alias.deleted` |
 | `masked_alias` | `masked_alias.created`, `masked_alias.toggled`, `masked_alias.deleted` |
 | `catch_all` | `catch_all.changed` |
@@ -154,7 +154,27 @@ another worker records nothing of its own outcome; if that outcome was the last 
 `userId`, `role`, `profileFields` — names only — and `appPasswordsRevoked`, how many of the mailbox's app passwords
 were moved to revoking). One entry covers the console login, the membership, the owner link, the display name, the
 new generated password (never recorded) and the app password revocation. Denied entries: a role the actor may not grant
-(`forbidden`), a staff act-as session (`act_as`) and a missing step-up (`step_up_required`).
+(`forbidden`), a staff act-as session (`act_as`) and a missing step-up (`step_up_required`). A right the new person
+held on the mailbox as a delegate is revoked with it (`delegation.revoked`, reason `became_owner`); everyone else's
+grants stay.
+
+Mailbox delegation (ADR-0026, `packages/core/src/delegation`): **one entry per change**, in the mailbox's account log,
+target = the mailbox (label its address), meta `mailboxId`, `granteeUserId`, `grantee` (their sign-in address,
+masked), `right` (`full_access`, `send_as`, `send_on_behalf`) and `reason`. `delegation.granted` reasons: `admin` (the
+Delegation tab's batch), `member_removed` (the removal's "Give full access to …"), `converted_to_shared`.
+`delegation.revoked` reasons: `admin`, `member_removed` (the person left: removed, or deleted their own login — then
+written in each account they left), `mailbox_deleted` (the deletion was scheduled, or a purge found one left; a restore
+doesn't bring them back), `became_owner` ("Make this a user"), `role_changed` (the mailbox's person became an Owner,
+or a Member got an admin role — `changeMemberRole` or "Make this a user" with an admin role — and the grant wasn't
+made by a current Owner; `account.role_changed` meta `grantsRevoked`). A batch is one mutation: its main entry is the first
+change of its action (`delegation.granted` when it adds anyone, else `delegation.revoked`, meta `changes` = how many
+changed) and every other change follows as its own entry in the same transaction (`MutationOutcome.also`); a batch where
+nothing of the main action changed records `granted` / `revoked` counts on the main entry instead. Denied entries:
+`forbidden` (no `delegation.manage.any`, or guard rail 8), `act_as`, `step_up_required`; `plan_limit`, `not_found` (a
+person outside the account), `conflict` (own mailbox, limits, mailbox being deleted) and `bad_request` are `failed`.
+**Convert to shared mailbox**: `mailbox.converted_to_shared` (target = the mailbox; meta `formerUserId`, `former`
+masked, `status`, `appPasswordsRevoked`, `grants` — how many it wrote) plus one `delegation.granted` per grant; never the
+generated password.
 
 Profile details: `account.profile_changed` (target = the person, label their sign-in email; meta: `fields` — the names
 of the optional profile fields that changed, never their values — and `self`). An admin's edit is written to that
@@ -221,7 +241,9 @@ address, meta = role; never the token), `account.invite_accepted` (meta: role, `
 the signed-in person, or `system`/`invite` when the link created the login), `account.role_changed` (meta:
 `previousRole`, `newRole` — `from`/`to` are redacted keys) and `account.member_removed` (meta: role, how many of their
 mailboxes became unassigned, `mailboxesSignedOut` — mailboxes given a new generated password so the person's sign-in
-is off, never the password — and `appPasswordsRevoked`). A User Administrator's attempt on an Owner, an admin or an admin-role invite is recorded as
+is off, never the password — `appPasswordsRevoked`, `grantsRevoked` — the delegation grants they held, each also its
+own `delegation.revoked` entry — and `delegated`, how many grants the removal's "Give full access to …" wrote, each a
+`delegation.granted` entry). A User Administrator's attempt on an Owner, an admin or an admin-role invite is recorded as
 `denied` in the account. An invite opened by a different signed-in address is recorded as `denied` in the
 **platform** scope with the invited address masked, so a non-member's address and id never land in the inviting
 account's log. `staff.account_viewed` is written in the viewed account's scope each time staff open its summary;

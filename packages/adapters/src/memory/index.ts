@@ -50,7 +50,9 @@ import type { AccountRole, PlatformRole } from "@anhourmail/shared/rbac";
 
 import { memoryActAs, type MemoryActAsRow } from "./act-as";
 import type { AccountDeletion } from "@anhourmail/core/data";
+import type { DelegationGrant } from "@anhourmail/core/delegation";
 import { memoryDataLifecycle, type MemoryExportRow } from "./data-lifecycle";
+import { memoryDelegation } from "./delegation";
 
 /**
  * In-memory adapter for unit tests (ADR-0008). Same contract as Postgres (src/contract): `run` is atomic —
@@ -136,6 +138,8 @@ export type MemoryState = {
   dataExports: MemoryExportRow[];
   /** Accounts waiting to be deleted (Postgres: `account_deletion`). */
   accountDeletions: AccountDeletion[];
+  /** Mailbox delegation grants (Postgres: `mailbox_delegation`, ADR-0026). */
+  delegations: DelegationGrant[];
 };
 
 export const emptyState = (): MemoryState => ({
@@ -181,6 +185,7 @@ export const emptyState = (): MemoryState => ({
   actAsSessions: [],
   dataExports: [],
   accountDeletions: [],
+  delegations: [],
 });
 
 const EPOCH = new Date(0);
@@ -632,6 +637,7 @@ function repositories(s: MemoryState): Repositories {
       s.mailboxPasswords = s.mailboxPasswords.filter((p) => p.mailboxId !== id); // columns of the row
       s.mailboxStorage = s.mailboxStorage.filter((x) => x.mailboxId !== id); // columns of the row
       s.catchAll = s.catchAll.filter((c) => c.mailboxId !== id); // ON DELETE SET NULL
+      s.delegations = s.delegations.filter((g) => g.mailboxId !== id); // ON DELETE CASCADE
       return true;
     },
   };
@@ -697,6 +703,8 @@ function repositories(s: MemoryState): Repositories {
     remove: async (accountId, userId) => {
       const before = s.memberships.length;
       s.memberships = s.memberships.filter((x) => !(x.accountId === accountId && x.userId === userId));
+      // The membership foreign key cascades to the person's grants in that account.
+      s.delegations = s.delegations.filter((g) => !(g.accountId === accountId && g.granteeUserId === userId));
       return s.memberships.length < before;
     },
     userByEmail: async (email) => {
@@ -1143,6 +1151,7 @@ function repositories(s: MemoryState): Repositories {
     avatars,
     actAs: memoryActAs(s),
     dataLifecycle: memoryDataLifecycle(s),
+    delegation: memoryDelegation(s),
     suspensions,
     webmailSettings,
     appPasswords,

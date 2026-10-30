@@ -8,6 +8,7 @@ import type { AppPasswordRepository } from "./app-passwords/repository";
 import type { AuditRepository } from "./audit/repository";
 import type { AvatarRepository } from "./avatars/repository";
 import type { DataLifecycleRepository } from "./data/repository";
+import type { DelegationRepository } from "./delegation/repository";
 import type { CatchAllRepository, DomainRepository } from "./domains/repository";
 import type { MailboxPasswordRepository, MailboxRepository, PlatformAddressRepository } from "./mailboxes/repository";
 import type { MailboxStorageRepository } from "./mailboxes/storage";
@@ -47,6 +48,7 @@ export type Repositories = {
   avatars: AvatarRepository;
   actAs: ActAsRepository;
   dataLifecycle: DataLifecycleRepository;
+  delegation: DelegationRepository;
 };
 
 /**

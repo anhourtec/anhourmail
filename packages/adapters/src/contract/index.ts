@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { ConflictError, type UnitOfWork } from "@anhourmail/core";
 import { type AuditEntryInput, type AuditQuery, verifyChain } from "@anhourmail/core/audit";
 import { type ClaimedJob, STALE_RUNNING_MS } from "@anhourmail/core/provisioning";
+import type { DelegationRight } from "@anhourmail/shared/delegation";
 
 /** `createUser` makes a console user the adapter can reference (memberships need one in Postgres). */
 export type AdapterFactory = () => Promise<{
@@ -2185,6 +2186,139 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         expect(await uow.run((r) => r.access.memberships(userId))).toEqual([]);
         expect(await uow.run((r) => r.dataLifecycle.deleteAccount(accountId))).toBe(false);
         expect(await uow.run((r) => r.dataLifecycle.accountCreatedAt(accountId))).toBeNull();
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("delegation: grants per mailbox and person, scoped, idempotent, revoked singly or all, gone with what they hang on", async () => {
+      const { uow, cleanup, createUser } = await factory();
+      try {
+        const tag = randomUUID().slice(0, 8);
+        const a = await uow.run((r) => r.accounts.create({ name: `Contract delegation A ${tag}`, plan: "plus" }));
+        const b = await uow.run((r) => r.accounts.create({ name: `Contract delegation B ${tag}`, plan: "plus" }));
+        const owner = await createUser(`dlg-owner-${tag}@example.com`);
+        const kim = await createUser(`dlg-kim-${tag}@example.com`);
+        const lee = await createUser(`dlg-lee-${tag}@example.com`);
+        await uow.run(async (r) => {
+          await r.accounts.addMember({ accountId: a.id, userId: owner, role: "owner" });
+          await r.accounts.addMember({ accountId: a.id, userId: kim, role: "member" });
+          await r.accounts.addMember({ accountId: a.id, userId: lee, role: "member" });
+          await r.accounts.addMember({ accountId: b.id, userId: kim, role: "owner" });
+        });
+        const box = (accountId: string, local: string, userId: string | null) => ({
+          id: randomUUID(),
+          accountId,
+          userId,
+          address: `${local}-${tag}@delegation.example.ca`,
+          status: "active" as const,
+          quotaBytes: 1024,
+          stalwartId: null,
+          lastError: null,
+          purgeAfter: null,
+          createdAt: new Date(),
+        });
+        const shared = box(a.id, "shared", null);
+        const owners = box(a.id, "owner", owner);
+        const inB = box(b.id, "kim", kim);
+        for (const m of [shared, owners, inB]) await uow.run((r) => r.mailboxes.insert(m));
+        const t0 = new Date("2026-10-30T10:00:00Z");
+        const at = (s: number) => new Date(t0.getTime() + s * 1000);
+        const grant = (mailboxId: string, granteeUserId: string, right: DelegationRight, s: number, accountId = a.id) =>
+          uow.run((r) =>
+            r.delegation.grant({ accountId, mailboxId, granteeUserId, right, grantedBy: owner, at: at(s) }),
+          );
+
+        expect(await grant(shared.id, kim, "send_as", 1)).toBe(true);
+        expect(await grant(shared.id, kim, "full_access", 2)).toBe(true);
+        expect(await grant(shared.id, kim, "full_access", 3)).toBe(false); // already held: idempotent
+        expect(await grant(shared.id, lee, "send_on_behalf", 4)).toBe(true);
+        expect(await grant(owners.id, kim, "full_access", 0)).toBe(true);
+        // The person must be a member of the account, and the mailbox must be in it (the composite foreign keys): Kim is
+        // in both accounts, yet a row tying account A to account B's mailbox is refused, and so is the reverse.
+        await expect(grant(inB.id, lee, "full_access", 5, b.id)).rejects.toThrow();
+        await expect(grant(inB.id, kim, "full_access", 6, a.id)).rejects.toThrow();
+        await expect(grant(shared.id, kim, "send_on_behalf", 7, b.id)).rejects.toThrow();
+        expect(await uow.run((r) => r.delegation.listForGrantee(b.id, kim))).toEqual([]);
+
+        // Ordered by right, then oldest first; scoped to the account.
+        const onShared = await uow.run((r) => r.delegation.listForMailbox(a.id, shared.id));
+        expect(onShared.map((g) => [g.granteeUserId, g.right])).toEqual([
+          [kim, "full_access"],
+          [kim, "send_as"],
+          [lee, "send_on_behalf"],
+        ]);
+        expect(onShared[0]).toMatchObject({
+          accountId: a.id,
+          mailboxId: shared.id,
+          grantedBy: owner,
+          createdAt: at(2),
+        });
+        expect(typeof onShared[0]?.id).toBe("string");
+        expect(await uow.run((r) => r.delegation.listForMailbox(b.id, shared.id))).toEqual([]);
+        expect(await uow.run((r) => r.delegation.listForMailbox(a.id, "not-a-uuid"))).toEqual([]);
+        expect(
+          (await uow.run((r) => r.delegation.listForGrantee(a.id, kim))).map((g) => [g.mailboxId, g.right]),
+        ).toEqual([
+          [owners.id, "full_access"],
+          [shared.id, "full_access"],
+          [shared.id, "send_as"],
+        ]);
+        expect(await uow.run((r) => r.delegation.listForGrantee(b.id, kim))).toEqual([]);
+        expect(await uow.run((r) => r.delegation.listForGrantee("not-a-uuid", kim))).toEqual([]);
+        expect(await uow.run((r) => r.delegation.rightsOf(a.id, shared.id, kim))).toEqual(["full_access", "send_as"]);
+        expect(await uow.run((r) => r.delegation.rightsOf(b.id, shared.id, kim))).toEqual([]);
+        expect(await uow.run((r) => r.delegation.rightsOf(a.id, shared.id, owner))).toEqual([]);
+        expect(await uow.run((r) => r.delegation.rightsOf(a.id, "not-a-uuid", kim))).toEqual([]);
+
+        // A grant rolls back with its unit of work.
+        await expect(
+          uow.run(async (r) => {
+            await r.delegation.grant({
+              accountId: a.id,
+              mailboxId: owners.id,
+              granteeUserId: lee,
+              right: "send_as",
+              grantedBy: null,
+              at: at(9),
+            });
+            throw new Error("boom");
+          }),
+        ).rejects.toThrow("boom");
+        expect(await uow.run((r) => r.delegation.rightsOf(a.id, owners.id, lee))).toEqual([]);
+
+        // Revoke one: conditional and scoped.
+        expect(await uow.run((r) => r.delegation.revoke(b.id, shared.id, kim, "send_as"))).toBe(false);
+        expect(await uow.run((r) => r.delegation.revoke(a.id, "not-a-uuid", kim, "send_as"))).toBe(false);
+        expect(await uow.run((r) => r.delegation.revoke(a.id, shared.id, kim, "send_as"))).toBe(true);
+        expect(await uow.run((r) => r.delegation.revoke(a.id, shared.id, kim, "send_as"))).toBe(false);
+
+        // Revoke everything a person holds, or everything on a mailbox, and say what went.
+        expect(await uow.run((r) => r.delegation.revokeAllForGrantee(b.id, kim))).toEqual([]);
+        const kims = await uow.run((r) => r.delegation.revokeAllForGrantee(a.id, kim));
+        expect(kims.map((g) => [g.mailboxId, g.right])).toEqual([
+          [owners.id, "full_access"],
+          [shared.id, "full_access"],
+        ]);
+        expect(await uow.run((r) => r.delegation.revokeAllForMailbox(b.id, shared.id))).toEqual([]);
+        expect(await uow.run((r) => r.delegation.revokeAllForMailbox(a.id, "not-a-uuid"))).toEqual([]);
+        const all = await uow.run((r) => r.delegation.revokeAllForMailbox(a.id, shared.id));
+        expect(all.map((g) => [g.granteeUserId, g.right])).toEqual([[lee, "send_on_behalf"]]);
+        expect(await uow.run((r) => r.delegation.listForMailbox(a.id, shared.id))).toEqual([]);
+
+        // Backstop cascades: with the membership, and with the mailbox row.
+        expect(await grant(shared.id, kim, "full_access", 10)).toBe(true);
+        expect(await grant(owners.id, lee, "send_as", 11)).toBe(true);
+        expect(await uow.run((r) => r.people.remove(a.id, kim))).toBe(true);
+        expect(await uow.run((r) => r.delegation.listForGrantee(a.id, kim))).toEqual([]);
+        await uow.run((r) => r.mailboxes.transition(owners.id, ["active"], "deleting", new Date(Date.UTC(1990, 0, 1))));
+        expect(await uow.run((r) => r.mailboxes.deleteIfDue(owners.id, new Date()))).toBe(true);
+        expect(await uow.run((r) => r.delegation.listForGrantee(a.id, lee))).toEqual([]);
+
+        // And with the account.
+        expect(await grant(shared.id, lee, "full_access", 12)).toBe(true);
+        expect(await uow.run((r) => r.dataLifecycle.deleteAccount(a.id))).toBe(true);
+        expect(await uow.run((r) => r.delegation.listForGrantee(a.id, lee))).toEqual([]);
       } finally {
         await cleanup();
       }

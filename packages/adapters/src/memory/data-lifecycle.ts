@@ -22,6 +22,7 @@ export function memoryDataLifecycle(s: MemoryState): DataLifecycleRepository {
     const mailboxIds = new Set(s.mailboxes.filter((m) => m.accountId === accountId).map((m) => m.id));
     s.accounts = s.accounts.filter((a) => a.id !== accountId);
     s.memberships = s.memberships.filter((m) => m.accountId !== accountId);
+    s.delegations = s.delegations.filter((g) => g.accountId !== accountId);
     s.invites = s.invites.filter((i) => i.accountId !== accountId);
     s.inviteSends = s.inviteSends.filter((i) => i.accountId !== accountId);
     s.domains = s.domains.filter((d) => d.accountId !== accountId);
@@ -176,6 +177,7 @@ export function memoryDataLifecycle(s: MemoryState): DataLifecycleRepository {
       s.userStates = without(s.userStates, userId);
       s.personSuspensions = without(s.personSuspensions, userId);
       s.memberships = s.memberships.filter((m) => m.userId !== userId);
+      s.delegations = s.delegations.filter((g) => g.granteeUserId !== userId); // with the memberships
       s.platformRoles = s.platformRoles.filter((r) => r.userId !== userId);
       s.sessions = s.sessions.filter((x) => x.userId !== userId);
       s.passkeys = s.passkeys.filter((x) => x.userId !== userId);
