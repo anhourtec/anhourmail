@@ -329,6 +329,11 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         expect((await uow.run((r) => r.mailboxes.get(a.id, loose.id)))?.userId).toBe(other);
         expect(await uow.run((r) => r.mailboxes.assignOwner(loose.id, userId))).toBe(false);
         expect(await uow.run((r) => r.mailboxes.assignOwner(randomUUID(), userId))).toBe(false);
+        // A leaver: only the current owner's link is released, once.
+        expect(await uow.run((r) => r.mailboxes.releaseOwner(loose.id, userId))).toBe(false);
+        expect(await uow.run((r) => r.mailboxes.releaseOwner(loose.id, other))).toBe(true);
+        expect((await uow.run((r) => r.mailboxes.get(a.id, loose.id)))?.userId).toBeNull();
+        expect(await uow.run((r) => r.mailboxes.releaseOwner(loose.id, other))).toBe(false);
 
         // Aliases: account-scoped, counted by kind, unique addresses (a duplicate is a conflict, not a crash).
         const alias = {

@@ -25,6 +25,11 @@ export type MailboxRepository = {
    * to someone (or doesn't exist), so two concurrent links can't both apply.
    */
   assignOwner(id: string, userId: string): Promise<boolean>;
+  /**
+   * Unlinks a mailbox from the person it belongs to (they left the account), making it person-less. Conditional: false
+   * when it no longer belongs to `userId` (or doesn't exist).
+   */
+  releaseOwner(id: string, userId: string): Promise<boolean>;
   /** Sets or clears (null) the display name. */
   setDisplayName(id: string, displayName: string | null): Promise<void>;
   /**

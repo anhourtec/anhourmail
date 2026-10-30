@@ -962,6 +962,15 @@ class PgMailboxRepository implements MailboxRepository {
     return rows.length > 0;
   }
 
+  async releaseOwner(id: string, userId: string): Promise<boolean> {
+    const rows = await this.x
+      .update(mailbox)
+      .set({ userId: null })
+      .where(and(eq(mailbox.id, id), eq(mailbox.userId, userId)))
+      .returning({ id: mailbox.id });
+    return rows.length > 0;
+  }
+
   async setDisplayName(id: string, displayName: string | null): Promise<void> {
     await this.x.update(mailbox).set({ displayName }).where(eq(mailbox.id, id));
   }
