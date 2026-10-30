@@ -28,5 +28,5 @@ export const GET = route(
       return view ? ok(withSenderKey(view, secret, s.username, undefined)) : notFound();
     });
   },
-  { session: "webmail", limit: "webmail" },
+  { session: "webmail", limit: "webmail", delegated: "full_access" },
 );

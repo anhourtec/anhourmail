@@ -28,11 +28,15 @@ export const POST = route(
       const s = await webmail().session(id);
       if (!s) return unauthorized();
       const roles = await webmail().roles(id);
-      const check = checkJmapRequest(JSON.parse(text) as unknown, s.accountId, { draftsId: roles.drafts });
+      const check = checkJmapRequest(JSON.parse(text) as unknown, s.accountId, {
+        draftsId: roles.drafts,
+        // A mailbox shared with the person (ADR-0026 §6): no send right is used yet (slice 13).
+        ...(s.delegated ? { delegated: { send: false } } : {}),
+      });
       if (!check.ok) return badRequest(check.message);
       const res = await webmail().jmap(id, check.body, check.destroyIds);
       return NextResponse.json(res.body, { status: res.status });
     });
   },
-  { session: "webmail", limit: "webmail" },
+  { session: "webmail", limit: "webmail", delegated: "full_access" },
 );

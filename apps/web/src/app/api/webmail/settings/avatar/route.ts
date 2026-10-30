@@ -6,6 +6,7 @@ import { container } from "@/server/container";
 import { ok, route } from "@/server/http/route";
 import { handleWebmail, unauthorized } from "@/server/webmail/http";
 import { webmail, webmailSessionId } from "@/server/webmail/instance";
+import { ownMailbox } from "@/server/webmail/service";
 
 /**
  * Settings → Account → You: the photo of the active mailbox's person (the same photo as their console Profile page),
@@ -17,9 +18,9 @@ export const POST = route(
     const id = webmailSessionId(req.headers.get("cookie"));
     if (!id) return unauthorized();
     return handleWebmail(async () => {
-      // A live session before the body is read (see withAvatarUpload).
-      const s = await webmail().session(id);
-      if (!s) return unauthorized();
+      // A live session before the body is read (see withAvatarUpload); the person's own mailbox only, decided on this
+      // read, so switching to a shared one while the body streams changes nothing (ADR-0026 §6).
+      const s = ownMailbox(await webmail().session(id));
       return withAvatarUpload(req, async (bytes) => {
         const ref = await setWebmailAvatar(container().deps, avatarImages(), s.username, bytes, meta);
         return ok({ url: avatarUrl("/api/webmail/avatars", ref) });
@@ -34,8 +35,7 @@ export const DELETE = route(
     const id = webmailSessionId(req.headers.get("cookie"));
     if (!id) return unauthorized();
     return handleWebmail(async () => {
-      const s = await webmail().session(id);
-      if (!s) return unauthorized();
+      const s = ownMailbox(await webmail().session(id));
       await removeWebmailAvatar(container().deps, s.username, meta);
       return ok({ url: null });
     });

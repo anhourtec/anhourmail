@@ -799,6 +799,14 @@ export const ROUTES: readonly RouteSpec[] = [
     file: "app/api/webmail/mailboxes/active/route.ts",
     guard: "webmail",
   },
+  // Open a mailbox shared with the person (ADR-0026 §6): the grant is the authorisation, checked by core; every
+  // refusal is the same 404, audited in the person's own account.
+  {
+    method: "POST",
+    path: "/api/webmail/mailboxes/delegated",
+    file: "app/api/webmail/mailboxes/delegated/route.ts",
+    guard: "webmail",
+  },
   // Profile photos in the webmail (ADR-0022): the session's mailboxes' photos, lookups and images (same account only).
   { method: "GET", path: "/api/webmail/avatars", file: "app/api/webmail/avatars/route.ts", guard: "webmail" },
   {

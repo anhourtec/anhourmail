@@ -43,5 +43,5 @@ export const GET = route(
       return ok(withSenderKey(view, secret, s.username, auth));
     });
   },
-  { session: "webmail", limit: "webmail" },
+  { session: "webmail", limit: "webmail", delegated: "full_access" },
 );

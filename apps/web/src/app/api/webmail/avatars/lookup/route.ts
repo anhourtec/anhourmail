@@ -39,5 +39,5 @@ export const POST = route(
       });
     });
   },
-  { session: "webmail", limit: "webmail" },
+  { session: "webmail", limit: "webmail", delegated: "full_access" },
 );

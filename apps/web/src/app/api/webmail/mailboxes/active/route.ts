@@ -16,8 +16,13 @@ export const PUT = route(
     if (!parsed.success) return badRequest("Choose a mailbox.");
     return handleWebmail(async () => {
       const s = await webmail().switchMailbox(id, parsed.data.address.trim().toLowerCase());
-      return ok({ active: s.username, others: (s.others ?? []).map((m) => m.username) });
+      return ok({
+        active: s.username,
+        activeShared: s.delegated !== undefined,
+        // The session's own mailboxes; shared ones are listed by GET (ADR-0026 "Shared with you").
+        others: (s.others ?? []).filter((m) => !m.delegated).map((m) => m.username),
+      });
     });
   },
-  { session: "webmail", limit: "write" },
+  { session: "webmail", limit: "write", delegated: "allowed" },
 );

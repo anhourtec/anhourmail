@@ -34,7 +34,8 @@ export const GET = route(
         accounts: {
           [s.accountId]: {
             name: s.username,
-            isPersonal: true,
+            // A mailbox shared with the person (ADR-0026) is not their own.
+            isPersonal: s.delegated === undefined,
             isReadOnly: false,
             accountCapabilities: { "urn:ietf:params:jmap:mail": {} },
           },
@@ -49,5 +50,5 @@ export const GET = route(
       });
     });
   },
-  { session: "webmail", limit: "webmail" },
+  { session: "webmail", limit: "webmail", delegated: "full_access" },
 );

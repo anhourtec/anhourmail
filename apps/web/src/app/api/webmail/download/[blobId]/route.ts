@@ -22,7 +22,7 @@ export const GET = route(
     return handleWebmail(async () => {
       const s = await webmail().session(id);
       if (!s) return unauthorized();
-      const upstream = await webmail().download(id, s.accountId, blobId, "attachment");
+      const upstream = await webmail().download(id, s.accountId, blobId, "attachment", "read");
       if (upstream.status === 404) {
         await upstream.body?.cancel();
         return notFound();
@@ -49,5 +49,5 @@ export const GET = route(
       return new Response(upstream.body, { status: 200, headers });
     });
   },
-  { session: "webmail", limit: "webmailDownload" },
+  { session: "webmail", limit: "webmailDownload", delegated: "full_access" },
 );

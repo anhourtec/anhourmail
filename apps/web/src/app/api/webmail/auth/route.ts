@@ -76,5 +76,5 @@ export const DELETE = route(
     res.headers.append("Set-Cookie", webmailCookie("", 0));
     return res;
   },
-  { session: "webmail", passwordChange: "allowed" },
+  { session: "webmail", passwordChange: "allowed", delegated: "allowed" },
 );

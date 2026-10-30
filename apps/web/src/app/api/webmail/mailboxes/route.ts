@@ -21,7 +21,7 @@ export const GET = route(
       return m ? ok(m) : unauthorized();
     });
   },
-  { session: "webmail", limit: "webmail" },
+  { session: "webmail", limit: "webmail", delegated: "allowed" },
 );
 
 const Add = z.object({ address: z.email().max(254), password: z.string().min(1).max(1024) });
@@ -48,7 +48,12 @@ export const POST = route(
     return handleWebmail(async () => {
       try {
         const s = await webmail().addMailbox(id, address, parsed.data.password);
-        return ok({ active: s.username, others: (s.others ?? []).map((m) => m.username) });
+        return ok({
+          active: s.username,
+          activeShared: s.delegated !== undefined,
+          // The session's own mailboxes; shared ones are listed by GET (ADR-0026 "Shared with you").
+          others: (s.others ?? []).filter((m) => !m.delegated).map((m) => m.username),
+        });
       } catch (err) {
         if (err instanceof WebmailSignInError) {
           await recordFailure(failures, "webmailSignInAddress", LIMITS.webmailSignInAddress, subject);
@@ -57,5 +62,5 @@ export const POST = route(
       }
     });
   },
-  { session: "webmail", limit: "webmailSignIn" },
+  { session: "webmail", limit: "webmailSignIn", delegated: "allowed" },
 );

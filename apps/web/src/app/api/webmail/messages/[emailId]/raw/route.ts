@@ -33,5 +33,5 @@ export const GET = route(
       });
     });
   },
-  { session: "webmail", limit: "webmailDownload" },
+  { session: "webmail", limit: "webmailDownload", delegated: "full_access" },
 );

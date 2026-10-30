@@ -24,5 +24,5 @@ export const GET = route(
       return avatarResponse(await webmailAvatarImage(container().deps, [m.active, ...m.others], owner), req);
     });
   },
-  { session: "webmail", limit: "webmail", cache: "handler" },
+  { session: "webmail", limit: "webmail", cache: "handler", delegated: "full_access" },
 );
