@@ -396,7 +396,10 @@ test("every common body type reads natively in the reader's flow", async ({ page
     page.getByRole("menuitem", { name: "Show original" }).click(),
   ]);
   await expect(original.getByRole("heading", { name: "Original message" })).toBeVisible();
-  await expect(original.getByLabel("Message source")).toContainText("Message-ID: <sample-latin1@demo-family.test>");
+  // By id: while the dev server streams the page, a second (hidden) copy of the block can briefly exist.
+  await expect(original.locator("#original-source:visible")).toContainText(
+    "Message-ID: <sample-latin1@demo-family.test>",
+  );
   await expect(original.getByRole("link", { name: "Download original" })).toBeVisible();
   await original.close();
   expect(consoleErrors).toEqual([]);
