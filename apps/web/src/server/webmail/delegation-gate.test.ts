@@ -154,6 +154,7 @@ describe("webmail delegation gate", () => {
       "GET avatars/[kind]/[id]/route.ts",
       "POST avatars/lookup/route.ts",
       "GET avatars/route.ts",
+      "GET bootstrap/route.ts",
       "GET download/[blobId]/route.ts",
       "POST img/route.ts",
       "POST jmap/route.ts",

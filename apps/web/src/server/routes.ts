@@ -713,6 +713,7 @@ export const ROUTES: readonly RouteSpec[] = [
     probeStatus: 400,
   },
   { method: "GET", path: "/api/webmail/session", file: "app/api/webmail/session/route.ts", guard: "webmail" },
+  { method: "GET", path: "/api/webmail/bootstrap", file: "app/api/webmail/bootstrap/route.ts", guard: "webmail" },
   { method: "POST", path: "/api/webmail/jmap", file: "app/api/webmail/jmap/route.ts", guard: "webmail" },
   {
     method: "GET",

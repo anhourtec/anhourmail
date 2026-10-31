@@ -33,8 +33,10 @@ import {
   webmailRedirectUri,
 } from "@anhourmail/stalwart-client";
 
+import { firstLoad } from "../webmail/bootstrap";
+import { PinnedMailboxMissingError, withPinnedMailbox } from "../webmail/pin";
 import { memoryKv, WebmailSessionStore } from "../webmail/session-store";
-import { WebmailService, WebmailSignedOutError } from "../webmail/service";
+import { WebmailDelegationRefusedError, WebmailService, WebmailSignedOutError } from "../webmail/service";
 import { stalwartOAuthPort } from "./stalwart-oauth";
 
 const STALWART_URL = process.env.STALWART_URL ?? "http://127.0.0.1:43080";
@@ -138,11 +140,77 @@ function world() {
   });
   return {
     svc,
+    revoke: () => {
+      s.delegations.splice(0, s.delegations.length);
+    },
     skip: (ms: number) => {
       offset += ms;
     },
   };
 }
+
+// Before the password reset below: it ends Kim's sign-in for good.
+describe("the webmail first load on the dev Stalwart", () => {
+  const input = { start: "inbox", grouping: "conversations" as const, attachments: false };
+
+  it("loads the person's own mailbox, a pinned shared one only once opened, and nothing once the grant goes", async () => {
+    const t = world();
+    const req = { requestId: `int-dlg-${tag}`, ip, userAgent: null };
+    const { sessionId, session } = await asClient(() => t.svc.signIn(kimAddress, KIM_PASSWORD));
+
+    // Own mailbox: its folders, the Inbox opened, the session document for its account, the sync states.
+    const own = await asClient(() => firstLoad(t.svc, sessionId, input));
+    expect(own?.session.username).toBe(kimAddress);
+    expect(own?.session.primaryAccounts["urn:ietf:params:jmap:mail"]).toBe(session.accountId);
+    const inbox = own?.folders.find((f) => f.role === "inbox");
+    expect(own?.view).toEqual({ kind: "folder", id: inbox?.id });
+    expect(own?.list).toMatchObject({ total: 0, rows: [], pinned: [] });
+    expect(own?.state.email).not.toBe("");
+    expect(own?.state.mailbox).not.toBe("");
+    expect(JSON.stringify(own)).not.toMatch(/Bearer|refreshToken|accessToken/);
+
+    // A tab pinned to the shared mailbox before it was opened: the one delegation refusal (the route answers 404).
+    await expect(
+      asClient(() => withPinnedMailbox(deskAddress, () => firstLoad(t.svc, sessionId, input))),
+    ).rejects.toBeInstanceOf(PinnedMailboxMissingError);
+
+    // Opened for a tab (not made active): the pinned first load is that mailbox's own (folder ids are per account, so a
+    // folder the URL names is looked up in the shared mailbox only; one it doesn't have opens its Inbox).
+    const opened = await asClient(() => t.svc.openDelegated(sessionId, deskAddress, req, { activate: false }));
+    const desk = [opened, ...(opened.others ?? [])].find((m) => m.username === deskAddress);
+    const pinned = await asClient(() =>
+      withPinnedMailbox(deskAddress, () => firstLoad(t.svc, sessionId, { ...input, folder: "no-such-folder" })),
+    );
+    expect(pinned?.session.username).toBe(deskAddress);
+    expect(pinned?.session.primaryAccounts["urn:ietf:params:jmap:mail"]).toBe(desk?.accountId);
+    expect(desk?.accountId).not.toBe(session.accountId);
+    const deskInbox = pinned?.folders.find((f) => f.role === "inbox");
+    expect(pinned?.view).toEqual({ kind: "folder", id: deskInbox?.id });
+    const sent = await asClient(() =>
+      withPinnedMailbox(deskAddress, () => firstLoad(t.svc, sessionId, { ...input, folder: "sent" })),
+    );
+    expect(sent?.view).toEqual({ kind: "folder", id: sent?.folders.find((f) => f.role === "sent")?.id });
+
+    // The pin changed nothing for Kim's other tabs: unpinned, her own mailbox still loads.
+    const again = await asClient(() => firstLoad(t.svc, sessionId, input));
+    expect(again?.session.username).toBe(kimAddress);
+
+    // The grant goes: past the gate's 10 s, the pinned tab is refused, and Kim's own first load still works.
+    t.revoke();
+    t.skip(11_000);
+    await expect(
+      asClient(() => withPinnedMailbox(deskAddress, () => firstLoad(t.svc, sessionId, input))),
+    ).rejects.toBeInstanceOf(WebmailDelegationRefusedError);
+    expect((await asClient(() => firstLoad(t.svc, sessionId, input)))?.session.username).toBe(kimAddress);
+  }, 60_000);
+
+  it("answers null once signed out", async () => {
+    const t = world();
+    const { sessionId } = await asClient(() => t.svc.signIn(kimAddress, KIM_PASSWORD));
+    await t.svc.signOut(sessionId);
+    expect(await asClient(() => firstLoad(t.svc, sessionId, input))).toBeNull();
+  }, 60_000);
+});
 
 describe("a shared mailbox in the webmail on the dev Stalwart", () => {
   it("ends the whole session once the person's own mailbox password is reset", async () => {
