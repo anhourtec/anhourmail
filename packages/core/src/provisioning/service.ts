@@ -2,6 +2,7 @@
 import { isSystemLocalPart } from "@anhourmail/shared/addresses";
 
 import { turnOffCatchAllFor } from "../domains/catch-all";
+import { mailboxNameOf } from "../people/names";
 import { mutation } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 import type { MailServer } from "./ports";
@@ -172,7 +173,14 @@ async function apply(deps: Deps, mail: MailServer, job: ClaimedJob): Promise<voi
   if (owner !== null && owner !== first.accountId) throw new Error("domain belongs to another account");
   // Read again right before talking to the mail server, under a confirmed claim, so what we apply is the latest intent
   // (status and suspension, quota, aliases, sender name, a waiting password).
-  const mailbox = await held((r) => r.directory.getMailbox(job.subjectId));
+  const mailbox = await held(async (r) => {
+    const state = await r.directory.getMailbox(job.subjectId);
+    if (!state) return null;
+    // The sender name as it stands: the custom display name, else the mailbox person's name (people/names.ts).
+    const row = await r.mailboxes.get(state.accountId, state.id);
+    const sender = row ? (await mailboxNameOf(r, row)).name : state.displayName;
+    return { ...state, senderName: sender };
+  });
   if (!mailbox) throw new Error("mailbox not found");
   const deleting = mailbox.status === "deleting";
   // A deleted mailbox that never reached the mail server has nothing to take off it; one whose grace period has
@@ -197,7 +205,9 @@ async function apply(deps: Deps, mail: MailServer, job: ClaimedJob): Promise<voi
     quotaBytes: mailbox.quotaBytes,
     // Suspended and deleting mailboxes keep their mail but nobody can sign in, and their mail is refused.
     suspended: mailbox.status === "suspended" || deleting,
-    description: mailbox.displayName,
+    // Stalwart names the identities it creates (first sign-in, a new alias) after it; existing ones are renamed by the
+    // webmail on its next request (people/names.ts, ADR-0014 update 2026-10-31).
+    description: mailbox.senderName,
     // A deleting mailbox's aliases go with it: off the mail server, still reserved in the control plane.
     aliases: deleting
       ? []

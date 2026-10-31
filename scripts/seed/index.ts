@@ -140,7 +140,20 @@ const domainOf = (address: string) => address.split("@")[1] ?? "";
 async function upsertMailbox(
   db: Db,
   mgmt: StalwartManagement,
-  m: { address: string; password: string; accountId: string; userId: string | null; quotaBytes: number },
+  m: {
+    address: string;
+    password: string;
+    accountId: string;
+    userId: string | null;
+    quotaBytes: number;
+    /**
+     * Its sender name on the mail server (the account description): the person's name for a person's mailbox (which
+     * follows it, display_name null), else the mailbox's own display name (core `people/names.ts`).
+     */
+    senderName: string | null;
+    /** A person-less mailbox's own display name. */
+    displayName?: string | null;
+  },
   aliases: { address: string; kind: "alias" | "masked"; description: string }[] = [],
 ): Promise<string> {
   const stalwartId = await mgmt.upsertUser({
@@ -149,6 +162,7 @@ async function upsertMailbox(
     password: await hashPassword(m.password),
     resetPassword: true,
     quotaBytes: m.quotaBytes,
+    description: m.senderName,
     aliases: aliases.map((a) => ({
       name: local(a.address),
       domain: domainOf(a.address),
@@ -167,6 +181,7 @@ async function upsertMailbox(
       stalwartId,
       quotaBytes: m.quotaBytes,
       passwordCredentialId,
+      displayName: m.displayName ?? null,
     })
     .onConflictDoUpdate({
       target: schema.mailbox.address,
@@ -177,6 +192,7 @@ async function upsertMailbox(
         quotaBytes: m.quotaBytes,
         passwordCredentialId,
         pendingPasswordHash: null,
+        displayName: m.displayName ?? null,
       },
     })
     .returning();
@@ -389,6 +405,7 @@ for (const p of people) {
         accountId: owningAccount,
         userId,
         quotaBytes: quota(p.account ? ACCOUNTS[p.account.key].plan : "plus"),
+        senderName: p.name,
       },
       aliases,
     );
@@ -586,6 +603,7 @@ if (demo) {
       accountId: accountIds.get("family") ?? "",
       userId: null,
       quotaBytes: quota("plus"),
+      senderName: null,
     });
     await db
       .update(schema.mailbox)
@@ -603,6 +621,8 @@ if (demo) {
     accountId: familyId,
     userId: null,
     quotaBytes: quota("plus"),
+    senderName: "Family front desk",
+    displayName: "Family front desk",
   });
   const deskGrants: [string, "full_access" | "send_as"][] = [
     [`member@${fam}`, "full_access"],

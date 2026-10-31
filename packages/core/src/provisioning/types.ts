@@ -47,7 +47,7 @@ export type MailboxState = {
   stalwartId: string | null;
   /** Set while `deleting`: when the scheduler removes it for good. */
   purgeAfter: Date | null;
-  /** The sender name, applied as the mail server account's description (null: none). */
+  /** The custom display name (null: the mailbox follows its person's name, or has none; see people/names.ts). */
   displayName: string | null;
   aliases: AliasState[];
   /**

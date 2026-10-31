@@ -383,7 +383,8 @@ describe("app passwords on Stalwart", () => {
     expect((await dav(address, "REPORT", "/dav/pal/", search("plain"), "0")).status).toBe(403);
     const open = await dav(`plain@${domain}`, "REPORT", "/dav/pal/", search("owner"), "0");
     expect(open.status).toBe(207);
-    expect(open.text).toContain(`owner@${domain}`);
+    // Found by its principal path (the display name is the account description, now the mailbox's sender name).
+    expect(open.text).toContain(`/dav/pal/${encodeURIComponent(`owner@${domain}`)}/`);
     const cup =
       '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal/></d:prop></d:propfind>';
     const homeSet =

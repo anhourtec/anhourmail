@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * "Add a user" end to end: `addUser` writes the mailbox, the console login, the membership and the flags in Postgres;
- * the provisioning job creates the account on the real Stalwart (compose stack) with the display name as its
- * description, and the generated password signs in to the mailbox, whose sending identity carries the name.
+ * the provisioning job creates the account on the real Stalwart (compose stack) with the person's name (the mailbox's
+ * sender name, which it follows) as its description, and the generated password signs in to the mailbox, whose sending identity carries the name.
  */
 import { randomUUID } from "node:crypto";
 
@@ -123,7 +123,8 @@ describe("add a user against Postgres and Stalwart", () => {
     // Stalwart: the account exists with the display name as its description, and the password signs in.
     await drain(added.mailbox.id);
     const [box] = await db.select().from(schema.mailbox).where(eq(schema.mailbox.id, added.mailbox.id));
-    expect(box).toMatchObject({ status: "active", displayName: "Jane Doe", mustChangePassword: true });
+    // The mailbox follows the person's name (no copy stored); the mail server gets that name as its description.
+    expect(box).toMatchObject({ status: "active", displayName: null, mustChangePassword: true });
     const [account0] = await mgmt.transport.getAll<{ id: string; description?: string }>(
       "x:Account",
       ["description"],

@@ -164,6 +164,35 @@ function setup(clock = fixedClock("2026-10-21T12:00:00Z")) {
 }
 
 describe("provisioning jobs", () => {
+  it("writes the sender name that follows the mailbox's person, and a custom one over it", async () => {
+    const { d } = setup();
+    const mail = fakeMailServer();
+    const s = d.uow.state;
+    s.userEmails.ada = "ada@example.test";
+    s.userNames.ada = "Ada Lovelace";
+    const m1 = s.mailboxes.find((m) => m.id === "m1");
+    if (!m1) throw new Error("no mailbox");
+    m1.userId = "ada";
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    await runNextJob(d, mail);
+    expect(mail.boxes[0]?.description).toBe("Ada Lovelace");
+    m1.displayName = "Support desk";
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(mail.boxes[0]?.description).toBe("Support desk");
+    // Cleared: back to the person's name; without a person, none.
+    m1.displayName = null;
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(mail.boxes[0]?.description).toBe("Ada Lovelace");
+    m1.userId = null;
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(mail.boxes[0]?.description).toBeNull();
+  });
+
   it("applies a domain and a mailbox (with aliases) and records the external ids", async () => {
     const { d } = setup();
     const mail = fakeMailServer();
