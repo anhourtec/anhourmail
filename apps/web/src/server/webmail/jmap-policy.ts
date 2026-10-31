@@ -80,7 +80,14 @@ export function setsSenderFields(args: unknown, depth = 0): boolean {
   return false;
 }
 
-/** Validates a parsed JMAP request against the allow-list for `accountId`. */
+/**
+ * Whether a parsed request may carry an `Email/set` (the one call the Drafts folder id matters to). Anything that
+ * isn't a well-formed list of calls counts as one, so the policy always gets the id when in doubt.
+ */
+export function writesEmail(input: unknown): boolean {
+  if (!isRecord(input) || !Array.isArray(input.methodCalls)) return true;
+  return input.methodCalls.some((c) => !Array.isArray(c) || typeof c[0] !== "string" || c[0] === "Email/set");
+}
 
 /** Keywords the proxy never sets: `$draft` (drafts are only made by the BFF) and the BFF's own marker. */
 const DRAFT_KEYWORD = "keywords/$draft";

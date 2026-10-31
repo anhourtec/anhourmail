@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 
 import { route } from "@/server/http/route";
-import { checkJmapRequest, MAX_REQUEST_BYTES } from "@/server/webmail/jmap-policy";
+import { checkJmapRequest, MAX_REQUEST_BYTES, writesEmail } from "@/server/webmail/jmap-policy";
 import { BodyTooLargeError, badRequest, handleWebmail, readCappedText, unauthorized } from "@/server/webmail/http";
 import { webmail, webmailSessionId } from "@/server/webmail/instance";
 
@@ -27,8 +27,11 @@ export const POST = route(
     return handleWebmail(async () => {
       const s = await webmail().session(id);
       if (!s) return unauthorized();
-      const roles = await webmail().roles(id);
-      const check = checkJmapRequest(JSON.parse(text) as unknown, s.accountId, {
+      const parsed = JSON.parse(text) as unknown;
+      // The Drafts folder matters only to `Email/set` (nothing may be moved into it): a read-only request doesn't wait
+      // for the folder roles (a mail-server call when they aren't cached).
+      const roles = writesEmail(parsed) ? await webmail().roles(id) : {};
+      const check = checkJmapRequest(parsed, s.accountId, {
         draftsId: roles.drafts,
         // A mailbox shared with the person (ADR-0026 §6): no send right is used yet (slice 13).
         ...(s.delegated ? { delegated: { send: false } } : {}),
