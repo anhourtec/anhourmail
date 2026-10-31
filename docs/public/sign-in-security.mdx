@@ -1,10 +1,11 @@
 ---
 title: Sign-in security
-description: Protect your AnhourMail console sign-in with an authenticator app, recovery codes and passkeys, and see where you're signed in.
+description: Your AnhourMail console sign-in is your password first, then a passkey or authenticator app code if you've set one up; see where you're signed in.
 ---
 
-Your password gets you into the AnhourMail console. You can add more protection on your **Security** page: open the
-menu under your initials in the top-right corner and choose **Security**.
+You always sign in to the AnhourMail console with your email and password first. If you've added a passkey or an
+authenticator app, the console then asks for a second step. You set these up on your **Security** page: open the menu
+under your initials in the top-right corner and choose **Security**.
 
 These settings protect the console. Mail apps (phone, desktop) keep signing in with app passwords, as before.
 
@@ -45,46 +46,70 @@ Each code works once: if you sign in twice within the same 30 seconds, wait for 
 
 To turn it off, choose **Turn off** and enter your password and a current code (or a recovery code).
 
+## The second step
+
+After your password, the console shows **Two-step sign-in** with the way you set up: **Use your passkey** if you have a
+passkey, or a box for the code from your authenticator app. If you have both, **Use your passkey instead** and **Use
+your authenticator app instead** switch between them. **Start again** goes back to the password.
+
 ## Recovery codes
 
-When you turn on two-factor sign-in you get <Value of="recoveryCodeCount" /> recovery codes. If you lose your
-authenticator app, choose **Use a recovery code instead** when signing in and type one of them. Each code works once.
+When you add your first second step — a passkey or an authenticator app — you get <Value of="recoveryCodeCount" />
+recovery codes. If you lose your passkey or authenticator app, choose **Use a recovery code instead** on the second
+step and type one of them. Each code works once.
 
 - Keep them somewhere safe, such as a password manager. **Copy** and **Download** help you save them.
 - We store only a scrambled (hashed) form of each code, so we can't show them to you again.
 - Your Security page shows how many are left and warns you when <Value of="recoveryCodeWarnAt" /> or fewer remain.
   **New recovery codes** gives you a fresh set and stops the old ones working.
+- If your second step is a passkey, your codes are under **Recovery codes** on your Security page. If you added a
+  passkey before recovery codes came with it, choose **Create recovery codes** there.
+- Turning on an authenticator app gives you a new set once it's set up. Turning it off while you keep a passkey keeps
+  your codes.
 
 ## Trust this browser
 
-On the second step you can tick **Trust this browser for <Value of="trustedDeviceDays" /> days**. That browser then
-skips the code step until the time runs out. **Sign out everywhere else** on your Security page makes every browser ask
+On the second step — passkey or code — you can tick **Trust this browser for <Value of="trustedDeviceDays" /> days**.
+That browser then skips the second step until the time runs out (unless your account requires a passkey: then the
+passkey is always asked). **Sign out everywhere else** on your Security page makes every browser ask
 again, and so do turning two-factor sign-in off and resetting your password. Resetting your password also signs you out
 everywhere.
 
 Passkeys keep working after a password reset. Afterwards your Security page asks you to check them and remove any you
 don't recognise. If you think someone else got into your login, tick **Also remove all passkeys** when you reset your
-password, or when you choose **Sign out everywhere else**. If your account requires passkeys, they can't be removed
+password, or when you choose **Sign out everywhere else** (which then asks for your console password). When every
+passkey is removed, we email you and the Owners of your accounts, and it shows in those accounts' audit logs. If your account requires passkeys, they can't be removed
 this way: ask an Owner of the account for help.
 
 ## Passkeys and security keys
 
-A passkey signs you in with your fingerprint, face, device PIN or a security key, without a password or code. It's the
-strongest protection against phishing: it only works on the real AnhourMail console address.
+A passkey is a second step after your password: your fingerprint, face, device PIN or a security key confirms it's
+you. It's the strongest protection against phishing: it only works on the real AnhourMail console address. A passkey
+never signs you in on its own; the password always comes first.
 
 - **Add a passkey** on your Security page, give it a name (for example "Work laptop"), and follow your browser's
-  prompts. If you signed in more than a few minutes ago, or with only your password while you have an authenticator app or a
-  passkey, you're asked for a code first (or to sign in with your passkey). We email you
+  prompts. If it's your first second step, save the recovery codes shown next. If you signed in more than a few minutes ago, you're asked for your console password first. We email you
   whenever a passkey is added, so you'd know if someone else did it.
-- **Rename** or **Remove** a passkey from the list. Removing it here stops it signing you in to AnhourMail.
-- To sign in with one, choose **Sign in with a passkey** on the sign-in page. You can also use it instead of a code on
-  the second step.
+- **Rename** or **Remove** a passkey from the list. Removing it here stops it working as your second step. Removing
+  a passkey asks for your console password if you signed in more than a few minutes ago. When your last second step
+  goes, trusted browsers are forgotten too. When your last passkey goes, we email you and the Owners of your accounts.
+- To use it, sign in with your email and password, then choose **Use your passkey**.
+- **Lost your passkey?** Use a recovery code (or your authenticator app) on the second step. Without any recovery
+  codes, choose **Lost your passkey? Reset your password** on the second step, and tick **Also remove all passkeys**
+  when you set the new password.
 
 Your passkey has to check that it's you (PIN, fingerprint or face). Security keys without a PIN set can't be added.
 
+## Confirm it's you
+
+Some actions open mail or change who can get in — making an app password, setting a mailbox password, adding or
+removing a passkey, giving someone access to a mailbox, exporting or deleting data, and for Anhourtec staff, suspensions and
+support access. If you signed in more than a few minutes ago, the console asks **Confirm it's you** first: enter your
+**console password**. It's the same however you signed in. After several wrong passwords you're signed out.
+
 ## Wrong codes
 
-After several wrong codes the sign-in attempt ends and you start again. If wrong codes keep coming, sign-in with a
+After several wrong codes or passkey attempts the sign-in attempt ends and you start again. If wrong codes keep coming, sign-in with a
 second step is locked for <Value of="secondStepLockMinutes" /> minutes. Every refused attempt shows in your recent
 activity.
 
@@ -107,9 +132,10 @@ Security page:
 
 - **Two-factor sign-in**: a second step after the password (authenticator app or recovery code), or a passkey. The
   password alone no longer signs in.
-- **A passkey or security key**: people sign in with their passkey.
+- **A passkey or security key**: after the password, people use their passkey as the second step.
 
-Before you can require something, you need it yourself, and you need to have signed in that way. When someone sets up their first way to sign in because of the requirement, they and the account's Owners get
+Before you can require something, you need it yourself, and you need to have signed in that way (for a passkey
+requirement: with your passkey as the second step). When someone sets up their first way to sign in because of the requirement, they and the account's Owners get
 an email, so an unexpected change stands out. Anyone in the account who doesn't have it yet is taken to their
 Security page after signing in, and the rest of the console opens once they've set it up. The change is recorded in the
 account's [audit log](/docs/audit-log). Removing your last passkey or turning off your authenticator app is refused

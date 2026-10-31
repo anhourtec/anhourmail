@@ -23,3 +23,11 @@ HourMail was slow because it used IMAP per request from the server (`research/le
 - Browser talks to Stalwart directly with its OAuth token: rejected (token in the browser, CORS, no control).
 - Separate webmail app: rejected for v1 (two deployables, duplicated auth). The host split gives the isolation without it.
 - Same origin for console and webmail: rejected (blast radius of an HTML-rendering bug).
+
+## Update 2026-10-31 — first load inside the page
+
+The webmail page now runs the BFF's first load on the server once it has checked the session (folders, counts and the
+opened view's first window, summaries only) and streams it inside the page, so the inbox needs no browser round trip
+after the app's code loads; `GET /api/webmail/bootstrap` serves the same answer to mailbox-scoped tabs and as the
+fallback. It goes through the same `WebmailService` path as the proxy (the user's token, queue and checks), and the
+browser still never holds a Stalwart token or talks to Stalwart. Details: `05-webmail.md` "First load".

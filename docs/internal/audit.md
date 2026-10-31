@@ -1,6 +1,6 @@
 # Audit
 
-Last updated: 2026-10-31 (accepted exceptions: queue-only data migrations 0031/0032 and the bootstrap's file storage cleanup; names as one source: `account.profile_changed` `name`, `via: webmail`; `identity.changed` retired; 2026-10-30: `platform.mail_rules_upgraded` for the managed-script upgrade; mailbox delegation, ADR-0026: `delegation.sent_as`, `delegation.sent_on_behalf`, `delegation.send_failed`, `delegation.send_cancelled` and `delegation.tagged_copy_left` for sending from a delegated mailbox, slice 13; `delegation.mailbox_opened` for opening a delegated mailbox in the webmail; `delegation.granted` / `delegation.revoked` per change, `mailbox.converted_to_shared`, `MutationOutcome.also`; `account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
+Last updated: 2026-10-31 (password-first sign-in, ADR-0028: `auth.second_step_started`, `password+passkey`, password-only step-up; accepted exceptions: queue-only data migrations 0031/0032 and the bootstrap's file storage cleanup; names as one source: `account.profile_changed` `name`, `via: webmail`; `identity.changed` retired; 2026-10-30: `platform.mail_rules_upgraded` for the managed-script upgrade; mailbox delegation, ADR-0026: `delegation.sent_as`, `delegation.sent_on_behalf`, `delegation.send_failed`, `delegation.send_cancelled` and `delegation.tagged_copy_left` for sending from a delegated mailbox, slice 13; `delegation.mailbox_opened` for opening a delegated mailbox in the webmail; `delegation.granted` / `delegation.revoked` per change, `mailbox.converted_to_shared`, `MutationOutcome.also`; `account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
 
 Every meaningful action is recorded, tamper-evident, searchable and visible to the right people. Audit is a core module, not a logging side effect.
 
@@ -16,8 +16,8 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 
 | Area | Actions |
 | --- | --- |
-| `auth` | `auth.sign_in`, `auth.sign_in_failed`, `auth.sign_out`, `auth.password_changed`, `auth.password_reset`, `auth.password_reset_requested`, `auth.two_factor_enabled`, `auth.two_factor_disabled`, `auth.app_password_created`, `auth.app_password_revoked`, `auth.session_revoked`, `auth.locked_out`, `auth.mail_client_sign_in`, `auth.mail_client_sign_in_failed`, `auth.two_factor_reset`, `auth.backup_code_used`, `auth.sessions_revoked_all`, `auth.new_device`, `auth.passkey_added`, `auth.passkey_renamed`, `auth.passkey_removed`, `auth.recovery_codes_regenerated`, `auth.identity_confirmed`, `auth.email_verification_sent`, `auth.email_verified`, `auth.login_deleted` |
-| `account` | `account.created`, `account.deleted`, `account.updated`, `account.invite_sent`, `account.invite_accepted`, `account.invite_resent`, `account.invite_revoked`, `account.member_added`, `account.user_added`, `account.profile_changed`, `account.avatar_changed`, `account.avatar_removed`, `account.member_removed`, `account.role_changed`, `account.ownership_transferred`, `account.sign_in_policy_changed`, `account.sign_in_factor_added` |
+| `auth` | `auth.sign_in`, `auth.sign_in_failed`, `auth.second_step_started`, `auth.sign_out`, `auth.password_changed`, `auth.password_reset`, `auth.password_reset_requested`, `auth.two_factor_enabled`, `auth.two_factor_disabled`, `auth.app_password_created`, `auth.app_password_revoked`, `auth.session_revoked`, `auth.locked_out`, `auth.mail_client_sign_in`, `auth.mail_client_sign_in_failed`, `auth.two_factor_reset`, `auth.backup_code_used`, `auth.sessions_revoked_all`, `auth.new_device`, `auth.passkey_added`, `auth.passkey_renamed`, `auth.passkey_removed`, `auth.recovery_codes_regenerated`, `auth.identity_confirmed`, `auth.email_verification_sent`, `auth.email_verified`, `auth.login_deleted` |
+| `account` | `account.created`, `account.deleted`, `account.updated`, `account.invite_sent`, `account.invite_accepted`, `account.invite_resent`, `account.invite_revoked`, `account.member_added`, `account.user_added`, `account.profile_changed`, `account.avatar_changed`, `account.avatar_removed`, `account.member_removed`, `account.role_changed`, `account.ownership_transferred`, `account.sign_in_policy_changed`, `account.sign_in_factor_added`, `account.sign_in_factor_removed` |
 | `domain` | `domain.added`, `domain.verified`, `domain.verify_failed`, `domain.removed`, `domain.dns_state_changed`, `domain.released`, `domain.expired` |
 | `mailbox` | `mailbox.created`, `mailbox.renamed`, `mailbox.made_user`, `mailbox.converted_to_shared`, `mailbox.suspended`, `mailbox.unsuspended`, `mailbox.deleted`, `mailbox.quota_changed`, `mailbox.deletion_scheduled`, `mailbox.restored`, `mailbox.password_reset`, `mailbox.password_changed`, `mailbox.avatar_changed`, `mailbox.avatar_removed` |
 | `alias` | `alias.created`, `alias.toggled`, `alias.deleted` |
@@ -53,21 +53,35 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 
 <!-- END generated: audit actions -->
 
-Sign-in security (`07-security.md` "Sign-in factors"): the identity layer reports `auth.sign_in` (meta `method`:
-`password`, `password+totp`, `password+recovery_code`, `passkey`; `trustedDevice`/`trustDevice` when relevant),
-`auth.sign_in_failed` (`denied` with the code, e.g. `invalid_code`, `code_reused`, `invalid_email_or_password`),
+Sign-in security (`07-security.md` "Sign-in factors", ADR-0028): the identity layer reports
+`auth.second_step_started` when the password was right and a second step follows (meta `methods`: `passkey`, `totp`,
+`recovery_code`), `auth.sign_in` (meta `method`: `password`, `password+totp`, `password+recovery_code`,
+`password+passkey`; `passkey` on entries from before 2026-10-31; `trustedDevice`/`trustDevice` when relevant),
+`auth.sign_in_failed` (`denied` with the code, e.g. `invalid_code`, `code_reused`, `invalid_email_or_password`; for
+the passkey step `password_first` (no password step), `passkey_not_found` (not the person's own passkey),
+`too_many_attempts`, `invalid_two_factor_cookie`, or the passkey check's own code),
 `auth.locked_out`, `auth.sign_out`, `auth.two_factor_enabled` / `_disabled` (refusals `denied`), `auth.backup_code_used`
-(meta `codesLeft`), `auth.recovery_codes_regenerated` and `auth.passkey_added` (meta passkey id and name), all in the
+(meta `codesLeft`), `auth.recovery_codes_regenerated` (meta `with: passkey` for a passkey-only person's codes, `firstFactor` when they came
+with a first passkey; refusals `denied` `invalid_password`; `auth.two_factor_disabled` meta `recoveryCodesKept` when a
+passkey keeps them) and `auth.passkey_added` (meta passkey id and name), all in the
 **platform** scope with the person as the target, so their own Security page lists them (`getSecurityOverview`). The
 person's own changes through core services — `auth.session_revoked`, `auth.sessions_revoked_all` (meta counts),
 `auth.passkey_renamed` (`previousName`/`newName`), `auth.passkey_removed` — commit with their audit row. Never codes,
 secrets, credential ids or public keys (redaction keys include `totpCode`, `publicKey`, `attestationObject`, …).
 `account.sign_in_factor_added` (identity layer, in each requiring account's scope, meta `factor`) records someone's
 first sign-in factor set up while the account requires one; they and the Owners are emailed.
-`auth.identity_confirmed` is a step-up before adding a passkey (meta `method`; refusals `denied`). A sign-in refused
+`auth.identity_confirmed` is a step-up ("Confirm it's you") before a sensitive action, with the console password only
+(meta `method: password`; refusals `denied` `invalid_credentials`). A sign-in refused
 by an account requirement is `auth.sign_in_failed` denied `sign_in_requirement` (meta `method`); a session ended later
 for the same reason is `auth.session_revoked` by the identity layer (meta `reason`, `method`); so is a session signed
-out after 5 failed step-ups (reason `step_up_failures`). Removing every passkey
+out after 5 wrong console passwords in it — step-up, new recovery codes, turning an authenticator on or off, new
+authenticator codes, changing the password (reason `password_failures`, meta `where`; ADR-0028). Refusals audited as
+denied: `auth.identity_confirmed` `password_only` / `account_temporarily_locked`; `auth.recovery_codes_regenerated`
+`use_authenticator_codes` / `no_second_factor` / `authenticator_setup_pending` / `invalid_password`;
+`auth.two_factor_enabled` `no_setup_pending` (a signed-in code with no set-up of this session pending);
+`auth.passkey_removed` and `auth.sessions_revoked_all` `step_up_required` (removing passkeys needs a fresh step-up;
+meta `trustedDevicesForgotten` when the last second factor went). `account.sign_in_factor_removed` (identity layer, in
+each of the person's accounts, meta `factor`, `passkeysRemoved`, `via`) records every passkey being removed by a reset, "sign out everywhere else" or removing the last one (`via`: `password_reset`, `sign_out_everywhere`, `single`); the person and those accounts' Owners are emailed. Removing every passkey
 with "sign out everywhere else" or a reset shows as `passkeysRemoved` in that entry's meta.
 `auth.password_reset` (identity layer) and `auth.password_changed` (the person) commit together with signing out the
 other sessions and forgetting trusted browsers (meta `otherSessionsRevoked`, `sessions`, `trustedDevices`).

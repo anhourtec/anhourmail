@@ -26,8 +26,8 @@ One decision per file, numbered, never rewritten. A later ADR supersedes an earl
 | [0020](0020-app-passwords-issued-by-the-control-plane.md)    | App passwords issued by the control plane, limited per credential              | Accepted (amended 2026-10-23, updated 2026-10-28) |
 | [0021](0021-free-platform-domain-addresses.md)               | Free addresses on the platform domain: rules, allowance, no reuse              | Accepted (updated 2026-10-24)                     |
 | [0022](0022-profile-photos.md)                               | Profile photos stored once, re-encoded by us, served same-origin               | Accepted (updated 2026-10-29)                     |
-| [0023](0023-staff-support-access-act-as.md)                  | Staff support access ("act as"): read-only, time-boxed, normal checks          | Accepted                                          |
-| [0024](0024-console-to-webmail-session-handoff.md)           | Console → webmail handoff: browser-bound code, throwaway mail credential       | Accepted                                          |
+| [0023](0023-staff-support-access-act-as.md)                  | Staff support access ("act as"): read-only, time-boxed, normal checks          | Accepted (updated 2026-10-31)                     |
+| [0024](0024-console-to-webmail-session-handoff.md)           | Console → webmail handoff: browser-bound code, throwaway mail credential       | Accepted (updated 2026-10-31)                     |
 | [0025](0025-data-export-and-account-deletion.md)             | Data export (sealed control-plane archive; mail streamed) and account deletion | Accepted                                          |
 | [0026](0026-mailbox-delegation-and-shared-mailboxes.md)      | Mailbox delegation and shared mailboxes through BFF-held mailbox tokens        | Accepted                                          |
 | [0027](0027-image-senders-list.md)                           | Safe senders load images; own Sent mail loads images                           | Proposed                                          |

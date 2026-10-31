@@ -1,6 +1,6 @@
 # 05 — Webmail
 
-Last updated: 2026-10-31 (customer mailboxes have no file storage; remote images: the person's own mail in Sent loads once with no unverified line or remember choice; sender name = the one source in the control plane, identities renamed to it; mailboxes shared with you: no "Shared with you" list or in-place switch in the UI — they open only with Open another mailbox, in a tab named after the mailbox, with Your mailbox in its account menu; no banner; a session left on a shared mailbox goes back to the own one; the account menu tidied (maintainer decision); forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
+Last updated: 2026-10-31 (first load: session, folders and the opened view's first window in one answer, streamed inside the page for the person's own mailbox, `GET /api/webmail/bootstrap` otherwise; this browser's copy of the first view painted at once; `Server-Timing` on the webmail API; customer mailboxes have no file storage; remote images: the person's own mail in Sent loads once with no unverified line or remember choice; sender name = the one source in the control plane, identities renamed to it; mailboxes shared with you: no "Shared with you" list or in-place switch in the UI — they open only with Open another mailbox, in a tab named after the mailbox, with Your mailbox in its account menu; no banner; a session left on a shared mailbox goes back to the own one; the account menu tidied (maintainer decision); forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
 notifications; quoted replies; compose image placeholders; first-sign-in password step; sign-in links not pre-filled).
 
 **Status (2026-10-22): slice 1 is built** — webmail sign-in (OAuth code flow + PKCE, tokens sealed server-side), the
@@ -458,7 +458,7 @@ Stalwart JMAP (Core, Mail, Submission, Blob, Quota, Sieve, WebSocket push)
 
 ### Sync
 
-- On load: render from IndexedDB immediately, then `Mailbox/changes`, `Email/changes`, `Thread/changes` from the stored `state` strings. Fall back to `/query` + `/get` on `cannotCalculateChanges`.
+- On load: render from IndexedDB immediately, then `Mailbox/changes`, `Email/changes`, `Thread/changes` from the stored `state` strings. Fall back to `/query` + `/get` on `cannotCalculateChanges`. **Built so far (2026-10-31, "First load" below):** the first view (folders, counts, the opened view's first window) is painted from IndexedDB and replaced by one first-load request; per-type `*/changes` against stored states across visits is still to come.
 - Lists use `Email/query` with `collapseThreads`, windowed (`position`/`limit` around the viewport), and `Email/queryChanges` to patch the open list without refetching.
 - List rows fetch summary properties only (from, subject, preview, receivedAt, keywords, size, hasAttachment). Bodies load on open (`bodyValues` for the chosen part, `maxBodyValueBytes`), with the next/previous message prefetched.
 - Batch method calls with back-references (≤ 16 per request, the server's `maxCallsInRequest`).
@@ -466,6 +466,90 @@ Stalwart JMAP (Core, Mail, Submission, Blob, Quota, Sieve, WebSocket push)
   heavy requests got 16–20 × 200 and the rest `400 urn:ietf:params:jmap:error:limit`. The BFF keeps a **per-user
   queue with ≤ 4 in flight** and retries `limit` errors with jittered backoff; we may raise the server value to 8
   once measured, but the queue stays (the browser never fans out directly).
+
+### First load (2026-10-31)
+
+Measured on pre-staging from a client ~400 ms away, the inbox took six round trips one after another (4.5–6 s): the
+JMAP session (fetched twice, by two callers at once), then `Mailbox/get`, then the pinned section, then the list and
+the Priority count, with the person's mailboxes, the From picker, signatures, contacts and photos competing for the
+same connections and the same ≤ 4-in-flight mail-server queue. Now:
+
+- **One request.** `GET /api/webmail/bootstrap?start=…&grouping=…&chips=…[&folder=…]` (`server/webmail/bootstrap.ts`,
+  `firstLoad`) answers with the JMAP session document (the client primes its `JmapClient` with it, so no
+  `/api/webmail/session` fetch follows), the folders with counts, the `Email` and `Mailbox` states (the 30 s change
+  check starts from them instead of asking for them), the Priority count, and the opened view's first window (its
+  pinned section too). The BFF makes two mail-server calls: `Mailbox/get` + the `Email` state, then — once Trash and Junk
+  are known, which a result reference can't express inside a filter — the count and the window (`Email/query` →
+  `Email/get` → `Thread/get` with `#ids` back-references, ≤ 7 calls). Both go through `WebmailService.jmap` with the
+  session's own token, queue, refresh and delegated read rules, exactly like the proxy; an answer for another account
+  (the active mailbox changed meanwhile) is refused. The list calls and their parsing are shared with the browser
+  (`components/webmail/list-query.ts`), so both build the same windows. The route is `session: "webmail"`,
+  `delegated: "full_access"` (a tab pinned to a shared mailbox gets that mailbox's first view, the grant checked now;
+  unopened or revoked → the one 404), tier `webmail`. Malformed parameters → 400; a mail-server failure → 503 and the
+  app falls back to the step-by-step load.
+- **Inside the page for the person's own mailbox.** The webmail page (`app/webmail/page.tsx`) has already checked the
+  session (access, console session, the first-sign-in password step, a shared mailbox handed back) and read the
+  preferences, so it starts the same first load on the server (`server/webmail/page-first-load.ts`, `pageFirstLoad`,
+  counted against the route's own `webmail` bucket) and passes the promise to the app, which React streams inside the
+  page once it resolves; the page itself isn't held up (the skeleton streams first). The inbox then needs **no request
+  of its own** after the app's code has loaded. Over the budget, or on any failure, it resolves to null and the app
+  asks the route. (A `<link rel="preload">` was tried first: a hint from a page below a `loading.tsx` boundary only
+  reaches the browser inside the RSC payload, after the app's code has loaded, so it saved nothing.) Mailbox-scoped
+  tabs ask the route, with their pin.
+- **Instant paint from this browser's copy.** The last first view of each of the person's own mailboxes signed in on
+  this browser is kept in IndexedDB (`components/webmail/view-cache.ts`, database `anhourmail-webmail`, store
+  `first-view`, keyed by the mailbox address): folders with counts, the Priority count and the opened view's first
+  window — **list summaries only** (sender, recipients, subject, the preview line, keywords, thread size, and when the
+  list shows attachment chips the attachments' names, types, sizes and blob ids), **never a body or an attachment's
+  content**, as "Client architecture" above allows.
+  - **Sealed under the session's view key** (AES-GCM, the address as additional data). The key is 32 random bytes the
+    server makes on first use and keeps sealed in Redis next to the webmail session record (`am:wm:vk:…`, the same
+    lifetime, deleted with the record: `WebmailSessionStore.viewKey`). Only the webmail page of a checked session gets
+    it (a prop, `Cache-Control: no-store`); the app imports it as a non-extractable `CryptoKey` and keeps it in memory,
+    never in browser storage. Once the session ends the key is gone, so whatever is on disk can't be read; an entry
+    another session sealed doesn't open and is deleted when read. A sign-in through the console handoff relies on
+    this too: it is a new session with a new key, so other addresses' entries stay unreadable (and are deleted when
+    read) rather than being cleared at handoff.
+  - Painted the moment the app starts — after the page has checked the session, only for the mailbox the page shows —
+    then replaced by the first load's answer; if the person moves on first, only the counts are updated. Rewritten
+    from each first load and when the tab is hidden or closed (only after a first load answered for this page's
+    mailbox, and only while the list shows that view as it opens). Never kept for a mailbox shared with the person.
+  - **Cleared entirely** on sign-out, on adding or switching a mailbox, whenever the server answers that the session
+    ended, and when the sign-in page opens. A clear bumps an epoch in localStorage and is announced on a
+    `BroadcastChannel`, so **every open tab** of the browser stops writing (a tab hidden or closed after another tab
+    signed out writes nothing back; e2e `webmail-first-load.spec.ts` proves it from a page that doesn't load the app).
+  - Entries older than 14 days or of another shape are removed when read. Without IndexedDB or WebCrypto (a private
+    window, storage blocked, plain http on a LAN address) the app simply loads from the server. Decision recorded
+    here: the browser already holds these summaries on screen, the copy is unreadable without the live session, and
+    rule 24 (no mail content in Postgres, logs, analytics, audit or error reports) is unaffected.
+- **Only the mailbox the page shows.** The app asks for its first load with `expect=<address>`; the route and the
+  page's own first load answer 409 `mailbox_changed` when the session's active mailbox is another (another tab
+  switched it), and the client also refuses an answer for another address, or a shared mailbox in the person's own
+  page (`isPersonal`), before using any of it; the page then reloads instead of showing or storing it.
+- **Later, not on the way to the mail.** The person's mailboxes, the From picker, signatures and contacts are asked
+  for once the first view has been painted (`afterPaint` in `webmail-app.tsx`); profile photos once the folders show
+  (`usePhotoSync(…, ready)`); a mailbox-scoped tab still asks for its own entry at once (New email depends on it). The
+  JMAP client shares one session fetch between callers asking at once (`JmapClient.session`, `prime`).
+- **Not cached.** Webmail pages (their HTML and RSC payloads) are `Cache-Control: no-store`, set in `proxy.ts`.
+- **Server-side.** Every webmail API response carries `Server-Timing` (`server/http/server-timing.ts`, set in
+  `route()`): `total`, `rate` (rate limit), `access`, `delegation`, `password` (the gates), `kv` / `kvhit` (session
+  record reads from Redis, and those answered from the request's own copy), `db` (control-plane lookups), `refresh`
+  (token refresh), `queue` (waiting for a mail-server slot), `stalwart` (mail-server calls) and `handler`, each with a
+  count when more than one — fixed names and numbers only, never ids, addresses, tokens or content (rule 24). The same
+  fields go to one `request timing` log line at debug level. Measured on the dev stack, a webmail request read the
+  sealed session record from Redis five to seven times (three gates, the handler, the token check); now once per
+  request (`withSessionReads` in `session-store.ts`: copies are shared within one request only while no session record
+  has been written in this process since, for at most 2 s, and never after the response — deferred work reads afresh;
+  every reader gets its own clone). Every gate and check still runs on every request. The JMAP proxy reads the folder
+  roles (a mail-server call when not cached) only for requests carrying `Email/set`, the one call the Drafts id
+  matters to.
+- **Measured (dev stack, Chromium with 400 ms added round-trip time, 1440 wide, owner@demo-family.test, median of
+  runs):** first list row 5.25 s before → 2.72 s after. Before, the API waterfall after the app's code loaded was
+  session → `Mailbox/get` → pinned → list + Priority, plus a second and in development a third and fourth session
+  fetch, with mailboxes, From picker, signatures, contacts and photos in the same burst (12 requests at once against
+  the browser's six connections to a host over HTTP/1.1). After, no API request precedes the first row; the remaining
+  ~2.4 s are the development server's unbundled scripts over HTTP/1.1, which production serves bundled over HTTP/2.
+  Server-side, each webmail request spent 5–15 ms of its 10–60 ms in session reads before and ~1 ms after.
 
 ### Session acquisition (answered in Phase 1, ADR-0018)
 

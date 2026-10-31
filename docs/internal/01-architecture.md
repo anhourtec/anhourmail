@@ -1,6 +1,6 @@
 # 01 — Architecture
 
-Last updated: 2026-10-31 (ADR-0027 proposed: Safe senders load images, own Sent mail loads images; names as one source: sender name in the control plane, mirrored to Stalwart; webmail: no "Shared with you" list or in-place switch, shared mailboxes open only in their own tab, maintainer decision; mailbox delegation, ADR-0026: writing from a shared mailbox's view through an own-mailbox pin; the webmail UI and tabs pinned to a shared mailbox per request, slice 14; sending as and on behalf of a delegated mailbox from the webmail BFF, slice 13; the webmail BFF opens delegated mailboxes behind the delegation gate; grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
+Last updated: 2026-10-31 (console sign-in password first, passkeys only a second step, ADR-0028; webmail first load streamed inside the page (one request otherwise), the IndexedDB first-view copy, `Server-Timing` and shared session reads; ADR-0027 proposed: Safe senders load images, own Sent mail loads images; names as one source: sender name in the control plane, mirrored to Stalwart; webmail: no "Shared with you" list or in-place switch, shared mailboxes open only in their own tab, maintainer decision; mailbox delegation, ADR-0026: writing from a shared mailbox's view through an own-mailbox pin; the webmail UI and tabs pinned to a shared mailbox per request, slice 14; sending as and on behalf of a delegated mailbox from the webmail BFF, slice 13; the webmail BFF opens delegated mailboxes behind the delegation gate; grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
 
 ## Overview
 
@@ -91,12 +91,12 @@ mail clients ─► Stalwart 465/587/993/995 (TLS by Stalwart itself)    MX traf
 
 Two identities, deliberately separate:
 
-|             | Console identity                                                         | Mailbox identity                                                                                                                                                |
-| ----------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Lives in    | Postgres via better-auth                                                 | Stalwart directory                                                                                                                                              |
-| Who         | A person (user) with memberships in accounts and optional platform roles | One mailbox (`name@domain`)                                                                                                                                     |
-| Credentials | Email + password + optional TOTP/passkey (better-auth)                   | Mailbox password (initial, set by provisioning, hashed by Stalwart), app passwords for clients (issued by the control plane for the mailbox's person, ADR-0020) |
-| Used by     | Console, webmail (via BFF)                                               | IMAP/SMTP/JMAP clients                                                                                                                                          |
+|             | Console identity                                                                                         | Mailbox identity                                                                                                                                                |
+| ----------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Lives in    | Postgres via better-auth                                                                                 | Stalwart directory                                                                                                                                              |
+| Who         | A person (user) with memberships in accounts and optional platform roles                                 | One mailbox (`name@domain`)                                                                                                                                     |
+| Credentials | Email + password, then a second step when set up: passkey, TOTP or recovery code (better-auth; ADR-0028) | Mailbox password (initial, set by provisioning, hashed by Stalwart), app passwords for clients (issued by the control plane for the mailbox's person, ADR-0020) |
+| Used by     | Console, webmail (via BFF)                                                                               | IMAP/SMTP/JMAP clients                                                                                                                                          |
 
 We **never store mailbox passwords** (rule 23). Stalwart hashes them.
 
@@ -230,8 +230,15 @@ Built in Phase 4 slice 1 (2026-10-22; ADR-0018):
    30 days absolute). The browser holds only the opaque id in an HttpOnly, SameSite=Lax cookie (`__Host-am.webmail` on
    https, `am.webmail` in dev). Tokens refresh a minute before expiry (one refresh per session at a time); a refused
    grant or a second 401 ends the session. Stalwart has no revocation endpoint, so sign-out drops our copy.
-4. The browser calls same-origin `/api/webmail/session` (a JMAP Session document pointing at the proxy) and
-   `/api/webmail/jmap`. The proxy checks the request against an allow-list (core + mail capabilities, read/list
+4. The first view comes with the page: once the webmail page has checked the session it runs the first load on the
+   server (`server/webmail/page-first-load.ts` → `server/webmail/bootstrap.ts`: the JMAP Session document pointing at
+   the proxy, the folders, sync states and the opened view's first window, in two mail-server calls; `05-webmail.md`
+   "First load") and streams it inside the page, while the app paints this browser's IndexedDB copy of that first
+   view. Mailbox-scoped tabs, and the app when the page couldn't include it, ask same-origin
+   `/api/webmail/bootstrap`. After that the browser calls `/api/webmail/jmap` (and `/api/webmail/session` only if no
+   first load worked). Every webmail API response carries `Server-Timing` with fixed phase names
+   (`server/http/server-timing.ts`), and the gates and handler of one request share one read of the session record
+   (`withSessionReads`). The proxy checks the request against an allow-list (core + mail capabilities, read/list
    methods, `Email/set` for keyword updates only; ≤ 16 calls; ≤ 256 KB; `accountId` must be the session's), attaches the Bearer token, and
    forwards through a **per-user queue with ≤ 4 in flight**, retrying `limit` errors with jittered backoff. Message
    bodies come from `/api/webmail/messages/:id`, **sanitised on the server** (`server/webmail/sanitize.ts`) and shown in

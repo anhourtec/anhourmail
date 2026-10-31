@@ -1,6 +1,6 @@
 # 09 — Roadmap
 
-Last updated: 2026-10-31 (names as one source and the file-storage lockdown deployed at 6545a16; safe senders to load images and own Sent mail images, ADR-0027). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
+Last updated: 2026-10-31 (webmail first load: inside the page, IndexedDB first-view copy, `Server-Timing`; names as one source and the file-storage lockdown deployed at 6545a16; safe senders to load images and own Sent mail images, ADR-0027). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
 
 ## Path to production (as of 2026-10-29)
 
@@ -192,8 +192,10 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
   multipart/alternative, quoted replies), actions, restore from Trash, search, several mailboxes, contacts, automatic
   refresh with a new-mail chime and desktop notifications, settings part 1 (incl. automatic replies, confirmed
   forwarding, junk, managed Sieve), remote images through the privacy proxy, the rich-text composer, named
-  signatures, profile photos, Archive. Console → webmail handoff built 2026-10-29 (ADR-0024). Not built: push sync
-  (polling today), settings part 2, calendar.
+  signatures, profile photos, Archive. Console → webmail handoff built 2026-10-29 (ADR-0024). First load built
+  2026-10-31 (folders and the first window inside the page, an IndexedDB copy of the first view, `Server-Timing`;
+  `05-webmail.md` "First load"; waits for the next deploy). Not built: push sync (polling today), per-type
+  `*/changes` sync across visits, settings part 2, calendar, the Playwright performance tests the exit needs.
 - **Exit:** performance budgets met in Playwright perf tests; XSS corpus (HTML email test suite) passes; Playwright MCP pass light/dark at 1440/390 as every role that can open webmail.
 
 ## Phase 5 — Billing and migration

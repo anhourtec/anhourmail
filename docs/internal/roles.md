@@ -1,6 +1,6 @@
 # Roles and permissions
 
-Last updated: 2026-10-31 (webmail sender name route; names edited through the profile rule; matrix unchanged; 2026-10-30: mailbox delegation, ADR-0026: mailboxes shared with the person in the webmail; console routes and RBAC harness rows; `delegation.manage.any` for User Administrators with guard rail 8; data export and account deletion, ADR-0025; staff support access / act-as, ADR-0023; profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
+Last updated: 2026-10-31 (password-first sign-in and password-only step-up, ADR-0028, matrix unchanged; webmail sender name route; names edited through the profile rule; matrix unchanged; 2026-10-30: mailbox delegation, ADR-0026: mailboxes shared with the person in the webmail; console routes and RBAC harness rows; `delegation.manage.any` for User Administrators with guard rail 8; data export and account deletion, ADR-0025; staff support access / act-as, ADR-0023; profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
 
 **Source of truth: `packages/shared/src/rbac`.** That code is canonical: the permission list, the role → permission matrix, critical-permission flags and guard rails. The UI (what to show), the API (what to allow) and the RBAC harness (`npm run test:rbac`) all derive from it. This document explains the matrix for people. If the two disagree, the code wins, and this file is updated in the same change (rule 35).
 
@@ -193,8 +193,9 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
    - removing someone keeps their mailboxes (they show as unassigned) but revokes the app passwords on them; the Free plan can't add people, and an account
      holds at most `MAX_PEOPLE` people counting unexpired invites.
 10. **Sign-in requirements** (`packages/core/src/security`): `account.security.manage` ★ (Owners only) sets what
-    everyone in the account must use to sign in — nothing extra, two-factor sign-in (authenticator app or passkey) or
-    a passkey. The Owner must meet it first (409). A person missing what any of their accounts requires
+    everyone in the account must use as the second step after their password (ADR-0028) — nothing extra, two-factor
+    sign-in (authenticator app or passkey) or a passkey. The Owner must meet it first (409). "Confirm it's you"
+    (step-up) is the console password for every role and session; the matrix is unchanged. A person missing what any of their accounts requires
     (`UserActor.mustEnrol`) passes only `self` permissions until they set it up: every other permission answers **403**
     `enrolment_required` (another account's ids stay **404**), and console pages send them to their Security page.
     Removing a factor a requirement depends on is refused (409). Their own Security page (`self.security.manage`) lists
