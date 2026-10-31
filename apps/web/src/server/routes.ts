@@ -898,6 +898,19 @@ export const ROUTES: readonly RouteSpec[] = [
     file: "app/api/webmail/settings/junk/route.ts",
     guard: "webmail",
   },
+  // "Always for <sender>" / "Stop loading" from a message: Safe senders (ADR-0027 §4), own mailbox only.
+  {
+    method: "POST",
+    path: "/api/webmail/settings/junk/safe",
+    file: "app/api/webmail/settings/junk/safe/route.ts",
+    guard: "webmail",
+  },
+  {
+    method: "DELETE",
+    path: "/api/webmail/settings/junk/safe",
+    file: "app/api/webmail/settings/junk/safe/route.ts",
+    guard: "webmail",
+  },
   {
     method: "POST",
     path: "/api/webmail/settings/forwarding",

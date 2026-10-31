@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { z } from "zod";
 
-import type { RequestMeta } from "@anhourmail/core";
+import { NotFoundError, type RequestMeta } from "@anhourmail/core";
 import { maskEmail } from "@anhourmail/core/audit";
 import type { WebmailSenderName } from "@anhourmail/core/people";
 import {
@@ -11,21 +11,25 @@ import {
   type WebmailSettingsService,
   type WebmailSignaturesService,
 } from "@anhourmail/core/webmail";
+import { fromAddress, matchSafeSender, MAX_SENDER_ENTRIES, type SafeSenderMatch } from "@anhourmail/shared/senders";
 import { SIGNATURE_HTML_MAX, type SignatureSet } from "@anhourmail/shared/signatures";
 import type { WebmailPreferences } from "@anhourmail/shared/webmail";
 import { log } from "@anhourmail/server/log";
 
 import { forwardingConfirmEmail } from "../mail/system-email";
 import { type Identity, sendingTier } from "./compose";
-import { type Junk, type JunkInput, type MailRules, type Vacation, VacationInput, zoneOffset } from "./sieve";
+import { type Junk, JunkInput, type MailRules, type Vacation, VacationInput, zoneOffset } from "./sieve";
 import {
   ownMailbox,
   type RulesState,
+  WebmailConflictError,
   WebmailRefusedError,
+  WebmailSenderBlockedError,
   WebmailSignedOutError,
   type WebmailService,
 } from "./service";
 import { cleanSignature, identitySignature, textAsHtml } from "./signature-html";
+import { isJmapId } from "./view";
 
 /**
  * Webmail settings (docs/internal/05-webmail.md "Settings"): the one place that joins the control plane
@@ -45,6 +49,26 @@ type MailServer = Pick<
   | "mirrorSignature"
 >;
 type Mailer = { send(message: ReturnType<typeof forwardingConfirmEmail>): Promise<void> };
+
+/**
+ * A message's From in the person's own active mailbox and whether it is verified (`sender-check.ts`), read with the
+ * session's token; null when the session can't see that message.
+ */
+type MessageSender = (sessionId: string, emailId: string) => Promise<{ from: string | null; verified: boolean } | null>;
+
+/** "Always for <sender>" adds the From's address; "Stop loading" removes whichever entry it matched. */
+export type SafeSenderChange = "add" | "remove";
+
+/** What a Safe senders change from a message answers: the entry the From matches now (null: none). */
+export type SafeSenderResult = { safeSender: SafeSenderMatch | null; changed: boolean };
+
+/** `POST|DELETE /api/webmail/settings/junk/safe`: the message, never an address (the server reads its From). */
+export const SafeSenderInput = z.object({ emailId: z.string().max(255).refine(isJmapId) }).strict();
+
+export const SAFE_SENDER_UNVERIFIED =
+  "Images from this sender can't be remembered because we couldn't confirm who sent it.";
+export const SAFE_SENDERS_FULL = "Your Safe senders list is full. Remove some entries in Settings first.";
+const SETTINGS_CHANGED = "Your settings changed in another window. Try again.";
 
 /** The mailbox's sender name (core `WebmailSenderName`): the one source, and whether the webmail may change it. */
 export type SenderNameView = WebmailSenderName;
@@ -116,6 +140,8 @@ export class WebmailSettings {
       signatures: WebmailSignaturesService;
       senderNames: SenderNames;
       mailer: Mailer;
+      /** Reads a message's From for Safe senders changes made from it. */
+      messageSender: MessageSender;
       webmailUrl: string;
       /** The deployment's public site host, for the footer of the confirmation email. */
       siteHost: string;
@@ -330,17 +356,126 @@ export class WebmailSettings {
     return input.vacation;
   }
 
+  /** The current rules and the version they were read at (for a compare-and-swap write). */
+  async #rulesAt(sessionId: string): Promise<{ rules: Omit<MailRules, "include">; at: { ifInState?: string | null } }> {
+    const { rules, version } = await this.d.mail.mailRules(sessionId);
+    const { include: _include, ...rest } = rules;
+    return { rules: rest, at: version === undefined ? {} : { ifInState: version } };
+  }
+
   async saveJunk(sessionId: string, account: string, junk: z.infer<typeof JunkInput>, req: RequestMeta): Promise<Junk> {
     const { address } = await this.#pinned(sessionId, account);
-    const rules = await this.#rules(sessionId);
-    await this.d.mail.saveMailRules(sessionId, account, { ...rules, junk });
-    await this.d.settings.recordMailFlow(
-      address,
-      "junk_rules.changed",
-      { blocked: junk.blocked.length, safe: junk.safe.length, trustedOnly: junk.trustedOnly },
-      req,
-    );
+    // On the version just read: a change saved meanwhile (another window, "Always for" in the reader) isn't lost
+    // silently — this save answers 409 and the person tries again on what is there now.
+    const { rules, at } = await this.#rulesAt(sessionId);
+    await this.d.mail.saveMailRules(sessionId, account, { ...rules, junk }, at);
+    await this.#auditJunk(address, junk, { via: "settings" }, req);
     return junk;
+  }
+
+  /** `junk_rules.changed`, counts and kinds only — never an address or a domain (rule 48). */
+  async #auditJunk(address: string, junk: Junk, extra: Record<string, string>, req: RequestMeta): Promise<void> {
+    const meta = { ...extra, blocked: junk.blocked.length, safe: junk.safe.length, trustedOnly: junk.trustedOnly };
+    // The script lives on the mail server, outside our transaction: written first, audited right after (ADR-0027 §7).
+    // A failed audit after a successful write is logged at error level; the change itself stands.
+    try {
+      await this.d.settings.recordMailFlow(address, "junk_rules.changed", meta, req);
+    } catch (err) {
+      log.error("junk rules change not audited", {
+        component: "webmail",
+        error: err instanceof Error ? err.name : "unknown",
+      });
+    }
+  }
+
+  /**
+   * "Always for <sender>" / "Stop loading" from a message (ADR-0027 §4): reads that message's From with the session's
+   * token (never an address from the browser), re-checks it is verified, and applies one change to Safe senders —
+   * add the address, or remove whichever entry it matched (its address, or its domain). Own mailbox only. A change
+   * that is already true (the address already covered, nothing to remove) succeeds without a write. On a concurrent
+   * change the delta is applied once more on what is there now, then 409.
+   */
+  async changeSafeSender(
+    sessionId: string,
+    account: string,
+    emailId: string,
+    change: SafeSenderChange,
+    req: RequestMeta,
+  ): Promise<SafeSenderResult> {
+    const { address } = await this.#pinned(sessionId, account);
+    const sender = await this.d.messageSender(sessionId, emailId);
+    if (!sender) throw new NotFoundError();
+    // The From in the form verification checked (ASCII domain, nothing mapped): what is added is what was verified.
+    const from = sender.from === null ? null : fromAddress(sender.from);
+    if (!sender.verified || !from?.includes("@")) {
+      throw new WebmailRefusedError(SAFE_SENDER_UNVERIFIED);
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const { rules, at } = await this.#rulesAt(sessionId);
+      const safe = rules.junk.safe;
+      const matched = matchSafeSender(from, safe);
+      let next: string[];
+      let kind: SafeSenderMatch["kind"];
+      if (change === "add") {
+        if (matched) return { safeSender: matched, changed: false };
+        if (matchSafeSender(from, rules.junk.blocked)) {
+          throw new WebmailSenderBlockedError(`${from} is on your blocked list. Remove it there first.`);
+        }
+        if (safe.length >= MAX_SENDER_ENTRIES) throw new WebmailRefusedError(SAFE_SENDERS_FULL);
+        next = [...safe, from];
+        kind = "address";
+      } else {
+        if (!matched) return { safeSender: null, changed: false };
+        next = safe.filter((e) => e !== matched.value);
+        kind = matched.kind;
+      }
+      // Never `parse`: its error would carry an entry into the logs (rule 24).
+      const parsed = JunkInput.safeParse({ ...rules.junk, safe: next });
+      if (!parsed.success) throw new WebmailRefusedError(SAFE_SENDER_UNVERIFIED);
+      const junk = parsed.data;
+      try {
+        await this.d.mail.saveMailRules(sessionId, account, { ...rules, junk }, at);
+      } catch (err) {
+        if (err instanceof WebmailConflictError && attempt === 0) continue;
+        if (err instanceof WebmailConflictError) throw new WebmailConflictError(SETTINGS_CHANGED);
+        throw err;
+      }
+      await this.#auditJunk(
+        address,
+        junk,
+        { via: "message", change: change === "add" ? "added" : "removed", kind },
+        req,
+      );
+      return { safeSender: change === "add" ? { kind: "address", value: from } : null, changed: true };
+    }
+    throw new WebmailConflictError(SETTINGS_CHANGED);
+  }
+
+  /**
+   * A Safe senders change tried in a tab of a mailbox shared with the person (ADR-0026 §6, ADR-0027 §8): the route
+   * answers 403 `own_mailbox_only`; this records the refusal (`denied`) with the person — the mailbox they signed in
+   * with — as the actor, in the shared mailbox's account log. Best effort: never throws.
+   */
+  async refusedInSharedMailbox(sessionId: string, req: RequestMeta): Promise<void> {
+    try {
+      // `session()` checks the delegation grant again now (the gate's own-only refusal didn't): with the grant gone it
+      // throws, and nothing is written into the shared mailbox's account log — the answer stays 403.
+      const s = await this.d.mail.session(sessionId);
+      if (!s?.delegated) return;
+      await this.d.settings.recordMailFlowDenied(
+        s.delegated.via,
+        s.username,
+        "junk_rules.changed",
+        "own_mailbox_only",
+        { via: "message" },
+        req,
+      );
+    } catch (err) {
+      log.warn("shared mailbox refusal not audited", {
+        component: "webmail",
+        error: err instanceof Error ? err.name : "unknown",
+      });
+    }
   }
 
   /**

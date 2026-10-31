@@ -165,6 +165,7 @@ function setup() {
       read: async () => null,
       write: async (accountId) => {
         sieveWrites.push(accountId);
+        return true;
       },
     },
     confirmedForward: async () => null,
@@ -568,6 +569,7 @@ describe("own-mailbox actions can't be aimed at a shared mailbox by switching af
       () => t.svc.mirrorSignature(sessionId, account, null),
       () => t.svc.legacySignature(sessionId),
       () => t.svc.mailRules(sessionId),
+      () => t.svc.ownMessageSender(sessionId, "m1"),
       () => t.svc.saveMailRules(sessionId, account, { vacation: null, forwarding: null, junk: null } as never),
       () => t.svc.saveDraft(sessionId, draft),
       () => t.svc.send(sessionId, "d1", "i1"),
@@ -601,6 +603,7 @@ describe("own-mailbox actions can't be aimed at a shared mailbox by switching af
         set: (address, input, r) => setWebmailSenderName(t.deps, address, input, r),
       },
       mailer: { send: async () => undefined },
+      messageSender: async () => null,
       webmailUrl: "http://localhost:43300",
       siteHost: "localhost",
     });
@@ -633,7 +636,36 @@ describe("own-mailbox actions can't be aimed at a shared mailbox by switching af
     await expect(mailExportStream(t.svc, sessionId, {}, async () => undefined)).rejects.toBeInstanceOf(
       WebmailOwnMailboxOnlyError,
     );
+    // Safe senders from a message (ADR-0027 §8): the shared mailbox's list can't be changed by a delegate.
+    for (const change of ["add", "remove"] as const) {
+      await expect(settings.changeSafeSender(sessionId, own.accountId, "m1", change, req)).rejects.toBeInstanceOf(
+        WebmailOwnMailboxOnlyError,
+      );
+    }
     expect(t.s.audit.filter((e) => e.action !== "delegation.mailbox_opened")).toEqual([]);
+    // The route's refusal is audited as denied: the person (by the mailbox they signed in with) as actor, in the shared
+    // mailbox's account, with nothing about the sender.
+    await settings.refusedInSharedMailbox(sessionId, req);
+    const denied = t.s.audit.filter((e) => e.action === "junk_rules.changed");
+    expect(denied).toHaveLength(1);
+    expect(denied[0]).toMatchObject({
+      result: "denied",
+      errorCode: "own_mailbox_only",
+      target: { id: DESK },
+      meta: { via: "message" },
+    });
+    expect(JSON.stringify(denied[0]?.actor)).toContain("kim@family.test");
+    // Once the grant is gone, nothing more goes into the shared mailbox's account log.
+    await t.svc.switchMailbox(sessionId, "desk@family.test");
+    const grants = t.s.delegations;
+    t.s.delegations = [];
+    await settings.refusedInSharedMailbox(sessionId, req);
+    expect(t.s.audit.filter((e) => e.action === "junk_rules.changed")).toHaveLength(1);
+    t.s.delegations = grants;
+    // Outside a shared mailbox's tab nothing is recorded.
+    await t.svc.switchMailbox(sessionId, "kim@family.test");
+    await settings.refusedInSharedMailbox(sessionId, req);
+    expect(t.s.audit.filter((e) => e.action === "junk_rules.changed")).toHaveLength(1);
   });
 
   it("never caches another mailbox's identities under the account it started with", async () => {

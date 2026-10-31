@@ -4,6 +4,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { MemoryUnitOfWork } from "@anhourmail/adapters/memory";
+import { NotFoundError } from "@anhourmail/core";
 import type { MailMessage } from "@anhourmail/adapters/mail";
 import { setWebmailSenderName, webmailSenderName, webmailSendingNames } from "@anhourmail/core/people";
 import { WebmailSettingsService, WebmailSignaturesService } from "@anhourmail/core/webmail";
@@ -13,10 +14,22 @@ import { memorySlidingQuota } from "@anhourmail/server/rate-limit";
 import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 
 import { checkJmapRequest } from "./jmap-policy";
-import { GrantRefusedError, WebmailRefusedError, WebmailService } from "./service";
+import {
+  GrantRefusedError,
+  WebmailConflictError,
+  WebmailRefusedError,
+  WebmailSenderBlockedError,
+  WebmailService,
+} from "./service";
 import { memoryKv, WebmailSessionStore } from "./session-store";
-import { SenderNameChange, WebmailSettings } from "./settings";
-import { DEFAULT_RULES, parseScript } from "./sieve";
+import {
+  SAFE_SENDER_UNVERIFIED,
+  SAFE_SENDERS_FULL,
+  SafeSenderInput,
+  SenderNameChange,
+  WebmailSettings,
+} from "./settings";
+import { buildScript, DEFAULT_RULES, parseScript } from "./sieve";
 
 const MAIL = "urn:ietf:params:jmap:mail";
 const req = { requestId: "r1", ip: null, userAgent: null };
@@ -40,6 +53,8 @@ function fakeServer() {
     scripts: [] as Script[],
     blobs: new Map<string, string>(),
     cards: new Map<string, { id: string; emails: Record<string, { address: string }> }>(),
+    /** Messages for `Email/get` (from + headers). */
+    emails: new Map<string, { id: string; from: { email: string }[]; headers: { name: string; value: string }[] }>(),
     refuseScripts: false,
     refuseIdentity: false,
     seq: 0,
@@ -104,6 +119,12 @@ function fakeServer() {
       return { created };
     },
     "AddressBook/get": () => ({ list: [{ id: "b", name: "Book", isDefault: true }] }),
+    "Email/get": (a) => ({
+      list: (a.ids as string[]).flatMap((id) => {
+        const e = state.emails.get(id);
+        return e ? [e] : [];
+      }),
+    }),
   };
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -138,6 +159,18 @@ async function setup() {
   // The managed Sieve script, read/written with management credentials in production; an in-memory map here.
   const managed = new Map<string, string>();
   const sieveFail = { fail: false };
+  /** The mail server answers a read without a Sieve state. */
+  const noState = { on: false };
+  /** The account's Sieve state (a counter), moved on by every write. */
+  const versions = new Map<string, number>();
+  /** Runs just before the next reads (one each): a concurrent change between reads. */
+  const beforeRead: (() => void)[] = [];
+  /** Runs just before the next writes (one each): a concurrent change. */
+  const beforeWrite: (() => void)[] = [];
+  const writes: string[] = [];
+  const written: { accountId: string; address: string }[] = [];
+  /** What the next "Always for" / "Stop loading" reads as the message's From (null: the session can't see it). */
+  const messages = new Map<string, { from: string | null; verified: boolean }>();
   /** Accounts whose managed script a user switched off. */
   const inactive = new Set<string>();
   /** Makes the control-plane sender-name lookup fail (the database unreachable). */
@@ -159,14 +192,29 @@ async function setup() {
     quota: memorySlidingQuota(),
     sieve: {
       read: async (accountId) => {
+        beforeRead.shift()?.();
         const content = managed.get(accountId);
-        return content === undefined ? null : { content, active: !inactive.has(accountId) };
+        const state = noState.on ? "" : String(versions.get(accountId) ?? 0);
+        return content === undefined ? null : { content, active: !inactive.has(accountId), state };
       },
-      write: async (accountId, script) => {
+      write: async (accountId, script, ifInState) => {
         if (sieveFail.fail) throw new Error("sieve refused");
+        // Another window's save landing between this change's read and its write.
+        const meanwhile = beforeWrite.shift();
+        if (meanwhile) meanwhile();
+        if (ifInState === null && managed.has(accountId)) return false;
+        // A blind compare (no state given at the read) never lands, as on the real client.
+        if (typeof ifInState === "string" && (ifInState === "" || ifInState !== String(versions.get(accountId) ?? 0)))
+          return false;
         managed.set(accountId, script);
+        versions.set(accountId, (versions.get(accountId) ?? 0) + 1);
         inactive.delete(accountId);
+        writes.push(accountId);
+        return true;
       },
+    },
+    rulesWritten: async (accountId, address) => {
+      written.push({ accountId, address });
     },
     confirmedForward: async (address) => {
       const f = await confirmedSource.core?.forwarding(address);
@@ -218,6 +266,7 @@ async function setup() {
       set: (address, input, r) => setWebmailSenderName(deps, address, input, r),
     },
     mailer,
+    messageSender: async (_sessionId, emailId) => messages.get(emailId) ?? null,
     webmailUrl: "https://mail.example/",
     siteHost: "example.test",
   });
@@ -236,8 +285,15 @@ async function setup() {
     script,
     managed,
     sieveFail,
+    noState,
     inactive,
     namesDown,
+    versions,
+    beforeWrite,
+    beforeRead,
+    writes,
+    written,
+    messages,
     ...fake,
   };
 }
@@ -377,7 +433,12 @@ describe("settings in the mail server", () => {
 
   it("writes and reads back the one managed script with management credentials", async () => {
     const t = await setup();
-    expect(await t.svc.mailRules(t.sessionId)).toEqual({ accountId: "acc1", rules: DEFAULT_RULES, state: "none" });
+    expect(await t.svc.mailRules(t.sessionId)).toEqual({
+      accountId: "acc1",
+      rules: DEFAULT_RULES,
+      state: "none",
+      version: null,
+    });
 
     const { include: _i, ...base } = DEFAULT_RULES;
     await t.svc.saveMailRules(t.sessionId, "acc1", {
@@ -397,6 +458,62 @@ describe("settings in the mail server", () => {
     await expect(t.svc.saveMailRules(t.sessionId, "acc2", base)).rejects.toThrow(/active mailbox/);
     t.sieveFail.fail = true;
     await expect(t.svc.saveMailRules(t.sessionId, "acc1", base)).rejects.toThrow(/didn't accept/);
+  });
+
+  it("falls back to re-reading and comparing the text when the server gives no Sieve state", async () => {
+    const t = await setup();
+    t.noState.on = true;
+    await t.settings.saveJunk(t.sessionId, "acc1", { blocked: [], safe: ["a.example"], trustedOnly: false }, req);
+    await t.settings.saveJunk(t.sessionId, "acc1", { blocked: [], safe: ["b.example"], trustedOnly: false }, req);
+    expect(parseScript(t.script())?.junk.safe).toEqual(["b.example"]);
+    expect((await t.svc.mailRules(t.sessionId)).version).toMatch(/^content-sha256:/);
+    // Another window changes the text between this save's read and its write: 409, and its change stays.
+    // (The second read is the compare right before the write.)
+    t.beforeRead.push(
+      () => undefined,
+      () => {
+        t.managed.set("acc1", `${t.script()}# changed meanwhile\n`);
+      },
+    );
+    await expect(
+      t.settings.saveJunk(t.sessionId, "acc1", { blocked: [], safe: [], trustedOnly: false }, req),
+    ).rejects.toBeInstanceOf(WebmailConflictError);
+    expect(t.beforeRead).toEqual([]);
+    expect(t.script()).toContain("# changed meanwhile");
+  });
+
+  it("reads a message's From for Safe senders only when it has exactly one From address", async () => {
+    const t = await setup();
+    const headers = [{ name: "Subject", value: " Hi " }];
+    t.state.emails.set("one", { id: "one", from: [{ email: " news@shop.example " }], headers });
+    t.state.emails.set("two", { id: "two", from: [{ email: "news@shop.example" }, { email: "x@y.example" }], headers });
+    expect(await t.svc.ownMessageSender(t.sessionId, "one")).toEqual({
+      accountId: "acc1",
+      from: "news@shop.example",
+      headers: [{ name: "Subject", value: "Hi" }],
+    });
+    expect((await t.svc.ownMessageSender(t.sessionId, "two"))?.from).toBeNull();
+    expect(await t.svc.ownMessageSender(t.sessionId, "gone")).toBeNull();
+  });
+
+  it("writes on the version it read, refuses a stale one (409), and reports every write's mailbox", async () => {
+    const t = await setup();
+    const { include: _i, ...base } = DEFAULT_RULES;
+    const junk = { blocked: [], safe: ["jane@example.com"], trustedOnly: false };
+    await t.svc.saveMailRules(t.sessionId, "acc1", { ...base, junk }, { ifInState: null });
+    expect(t.written).toEqual([{ accountId: "acc1", address: "a@x.test" }]);
+    const read = await t.svc.mailRules(t.sessionId);
+    expect(read.version).toBe("1");
+    // A script created meanwhile, or any write since the read: nothing is written.
+    await expect(t.svc.saveMailRules(t.sessionId, "acc1", base, { ifInState: null })).rejects.toBeInstanceOf(
+      WebmailConflictError,
+    );
+    await t.svc.saveMailRules(t.sessionId, "acc1", base);
+    await expect(
+      t.svc.saveMailRules(t.sessionId, "acc1", { ...base, junk }, { ifInState: read.version ?? null }),
+    ).rejects.toThrow(/changed in another window/);
+    expect(parseScript(t.script())?.junk.safe).toEqual([]);
+    expect(t.written).toHaveLength(2);
   });
 
   it("reports rules a user switched off as inactive; the next save turns them back on", async () => {
@@ -584,6 +701,131 @@ describe("webmail settings: control plane and mail server together", () => {
     ).rejects.toThrow(/active mailbox/);
   });
 
+  it("audits a Settings save of the junk lists as made in Settings, and refuses one made on a stale read", async () => {
+    const t = await setup();
+    await t.settings.saveJunk(t.sessionId, "acc1", { blocked: [], safe: ["a.example"], trustedOnly: false }, req);
+    expect(t.uow.state.audit.at(-1)).toMatchObject({
+      action: "junk_rules.changed",
+      result: "success",
+      meta: { via: "settings", blocked: 0, safe: 1, trustedOnly: false },
+    });
+    // "Always for" in the reader lands between this save's read and its write: this save answers 409.
+    t.beforeWrite.push(() => {
+      t.versions.set("acc1", (t.versions.get("acc1") ?? 0) + 1);
+    });
+    await expect(
+      t.settings.saveJunk(t.sessionId, "acc1", { blocked: [], safe: [], trustedOnly: false }, req),
+    ).rejects.toBeInstanceOf(WebmailConflictError);
+    expect(parseScript(t.script())?.junk.safe).toEqual(["a.example"]);
+  });
+
+  it("adds a message's verified From to Safe senders and removes it again, audited with counts and kinds only", async () => {
+    const t = await setup();
+    t.messages.set("m1", { from: "News@Shop.example", verified: true });
+    expect(await t.settings.changeSafeSender(t.sessionId, "acc1", "m1", "add", req)).toEqual({
+      safeSender: { kind: "address", value: "news@shop.example" },
+      changed: true,
+    });
+    expect(parseScript(t.script())?.junk.safe).toEqual(["news@shop.example"]);
+    const added = t.uow.state.audit.at(-1);
+    expect(added).toMatchObject({
+      action: "junk_rules.changed",
+      result: "success",
+      meta: { via: "message", change: "added", kind: "address", blocked: 0, safe: 1, trustedOnly: false },
+    });
+    expect(JSON.stringify(added?.meta)).not.toContain("@");
+    expect(JSON.stringify(added?.meta)).not.toContain("shop.example");
+    expect(t.written.at(-1)).toEqual({ accountId: "acc1", address: "a@x.test" });
+    // Adding it again changes nothing (no write, no audit).
+    const writes = t.writes.length;
+    const audits = t.uow.state.audit.length;
+    expect((await t.settings.changeSafeSender(t.sessionId, "acc1", "m1", "add", req)).changed).toBe(false);
+    expect(t.writes.length).toBe(writes);
+    expect(t.uow.state.audit.length).toBe(audits);
+
+    expect(await t.settings.changeSafeSender(t.sessionId, "acc1", "m1", "remove", req)).toEqual({
+      safeSender: null,
+      changed: true,
+    });
+    expect(parseScript(t.script())?.junk.safe).toEqual([]);
+    expect(t.uow.state.audit.at(-1)).toMatchObject({
+      meta: { via: "message", change: "removed", kind: "address", safe: 0 },
+    });
+    // Nothing left to remove: a no-op.
+    expect((await t.settings.changeSafeSender(t.sessionId, "acc1", "m1", "remove", req)).changed).toBe(false);
+  });
+
+  it("treats an address its domain already covers as safe, and Stop loading removes the domain entry", async () => {
+    const t = await setup();
+    await t.settings.saveJunk(t.sessionId, "acc1", { blocked: [], safe: ["shop.example"], trustedOnly: false }, req);
+    t.messages.set("m1", { from: "news@shop.example", verified: true });
+    expect(await t.settings.changeSafeSender(t.sessionId, "acc1", "m1", "add", req)).toEqual({
+      safeSender: { kind: "domain", value: "shop.example" },
+      changed: false,
+    });
+    expect(parseScript(t.script())?.junk.safe).toEqual(["shop.example"]);
+    await t.settings.changeSafeSender(t.sessionId, "acc1", "m1", "remove", req);
+    expect(parseScript(t.script())?.junk.safe).toEqual([]);
+    expect(t.uow.state.audit.at(-1)).toMatchObject({ meta: { change: "removed", kind: "domain" } });
+  });
+
+  it("refuses an unseen message (404), an unverified From or a full list (400), and a blocked sender (409)", async () => {
+    const t = await setup();
+    await expect(t.settings.changeSafeSender(t.sessionId, "acc1", "nope", "add", req)).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+    t.messages.set("forged", { from: "news@shop.example", verified: false });
+    // A From whose domain isn't plain ASCII is never added, whatever the verification said (it checked another form).
+    t.messages.set("lookalike", { from: "news@shop\u3002example", verified: true });
+    await expect(t.settings.changeSafeSender(t.sessionId, "acc1", "lookalike", "add", req)).rejects.toThrow(
+      SAFE_SENDER_UNVERIFIED,
+    );
+    t.messages.set("nobody", { from: null, verified: true });
+    for (const id of ["forged", "nobody"]) {
+      await expect(t.settings.changeSafeSender(t.sessionId, "acc1", id, "add", req)).rejects.toThrow(
+        SAFE_SENDER_UNVERIFIED,
+      );
+      await expect(t.settings.changeSafeSender(t.sessionId, "acc1", id, "remove", req)).rejects.toBeInstanceOf(
+        WebmailRefusedError,
+      );
+    }
+    t.messages.set("m1", { from: "news@shop.example", verified: true });
+    await t.settings.saveJunk(t.sessionId, "acc1", { blocked: ["shop.example"], safe: [], trustedOnly: false }, req);
+    const blocked = t.settings.changeSafeSender(t.sessionId, "acc1", "m1", "add", req);
+    await expect(blocked).rejects.toBeInstanceOf(WebmailSenderBlockedError);
+    await expect(blocked).rejects.toThrow("news@shop.example is on your blocked list. Remove it there first.");
+    const full = Array.from({ length: 300 }, (_, i) => `s${String(i)}.example`);
+    await t.settings.saveJunk(t.sessionId, "acc1", { blocked: [], safe: full, trustedOnly: false }, req);
+    await expect(t.settings.changeSafeSender(t.sessionId, "acc1", "m1", "add", req)).rejects.toThrow(SAFE_SENDERS_FULL);
+    // Aimed at another mailbox than the active one.
+    await expect(t.settings.changeSafeSender(t.sessionId, "acc2", "m1", "add", req)).rejects.toThrow(/active mailbox/);
+    expect(parseScript(t.script())?.junk.safe).toHaveLength(300);
+  });
+
+  it("applies the change once more on what is there when another window saved meanwhile, then answers 409", async () => {
+    const t = await setup();
+    t.messages.set("m1", { from: "news@shop.example", verified: true });
+    const other = () => {
+      // Another window adds a domain between this change's read and its write.
+      const rules = parseScript(t.script()) ?? DEFAULT_RULES;
+      const next = { ...rules, junk: { ...rules.junk, safe: [...rules.junk.safe, "other.example"] } };
+      t.managed.set(
+        "acc1",
+        buildScript(next, { identities: [], contacts: [], authservIds: [], mailboxDomain: "x.test" }),
+      );
+      t.versions.set("acc1", (t.versions.get("acc1") ?? 0) + 1);
+    };
+    t.beforeWrite.push(other);
+    await t.settings.changeSafeSender(t.sessionId, "acc1", "m1", "add", req);
+    expect(parseScript(t.script())?.junk.safe).toEqual(["other.example", "news@shop.example"]);
+    // Twice in a row: nothing written by this change, 409.
+    t.beforeWrite.push(other, other);
+    await expect(t.settings.changeSafeSender(t.sessionId, "acc1", "m1", "remove", req)).rejects.toThrow(
+      /changed in another window/,
+    );
+    expect(parseScript(t.script())?.junk.safe).toContain("news@shop.example");
+  });
+
   it("forwards only to a confirmed target, and a new request turns the old forwarding off", async () => {
     const t = await setup();
     await expect(t.settings.setForwarding(t.sessionId, "acc1", { enabled: true, keepCopy: true }, req)).rejects.toThrow(
@@ -634,6 +876,13 @@ describe("webmail settings: control plane and mail server together", () => {
     expect(SenderNameChange.safeParse({ signature: "Hi" }).success).toBe(false);
     expect(SenderNameChange.safeParse({}).success).toBe(false);
     expect(SenderNameChange.safeParse({ name: "x".repeat(201) }).success).toBe(false);
+  });
+
+  it("takes only a message id for a Safe senders change, never an address", () => {
+    expect(SafeSenderInput.safeParse({ emailId: "Ma1b2" }).success).toBe(true);
+    expect(SafeSenderInput.safeParse({ emailId: "Ma1b2", address: "x@y.example" }).success).toBe(false);
+    expect(SafeSenderInput.safeParse({ emailId: "a@b.example" }).success).toBe(false);
+    expect(SafeSenderInput.safeParse({}).success).toBe(false);
   });
 });
 

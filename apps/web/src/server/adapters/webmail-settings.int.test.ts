@@ -18,6 +18,7 @@ import { systemClock } from "@anhourmail/core";
 import { setWebmailSenderName, webmailSenderName } from "@anhourmail/core/people";
 import { WebmailSettingsService, WebmailSignaturesService } from "@anhourmail/core/webmail";
 import { memorySlidingQuota } from "@anhourmail/server/rate-limit";
+import { redis } from "@anhourmail/server/redis";
 import { createKeyRing } from "@anhourmail/server/keyring";
 import { stalwartDevAdmin } from "@anhourmail/stalwart-client";
 import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
@@ -26,7 +27,8 @@ import { memoryKv, WebmailSessionStore } from "../webmail/session-store";
 import { WebmailService } from "../webmail/service";
 import { WebmailSettings } from "../webmail/settings";
 import { ourAuthResultsHeader, type RawHeader, trustedAuthservIds } from "../webmail/original";
-import { DEFAULT_RULES, MANAGED_SCRIPT } from "../webmail/sieve";
+import { createSafeSenders, redisRulesVersions, rulesVersionKey } from "../webmail/safe-senders";
+import { DEFAULT_RULES, MANAGED_SCRIPT, parseScript } from "../webmail/sieve";
 import { stalwartOAuthPort } from "./stalwart-oauth";
 
 const STALWART_URL = process.env.STALWART_URL ?? "http://127.0.0.1:43080";
@@ -60,10 +62,23 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   for (const b of [owner, sender, target]) if (b.id) await stalwartDevAdmin().destroy("x:Account", b.id);
+  redis().disconnect();
 });
 
 /** The control-plane settings service the mail service asks for the confirmed forwarding target (set below). */
 let confirmedSource: WebmailSettingsService | null = null;
+
+/** Two web processes' Safe senders caches over the real Redis counter (ADR-0027 §3): this one writes, the other reads. */
+const processA = createSafeSenders({
+  read: (accountId) => stalwartDevAdmin().getSieveScript(accountId, MANAGED_SCRIPT),
+  versions: redisRulesVersions(),
+  timeoutMs: 5_000,
+});
+const processB = createSafeSenders({
+  read: (accountId) => stalwartDevAdmin().getSieveScript(accountId, MANAGED_SCRIPT),
+  versions: redisRulesVersions(),
+  timeoutMs: 5_000,
+});
 
 function mailService() {
   return new WebmailService({
@@ -74,8 +89,10 @@ function mailService() {
     quota: memorySlidingQuota(),
     sieve: {
       read: (accountId) => stalwartDevAdmin().getSieveScript(accountId, MANAGED_SCRIPT),
-      write: (accountId, script) => stalwartDevAdmin().putSieveScript(accountId, MANAGED_SCRIPT, script),
+      write: (accountId, script, ifInState) =>
+        stalwartDevAdmin().putSieveScript(accountId, MANAGED_SCRIPT, script, ifInState),
     },
+    rulesWritten: (accountId, address) => processA.written(accountId, address),
     confirmedForward: async (address) => {
       const f = await confirmedSource?.forwarding(address);
       return f?.status === "confirmed" ? f.address : null;
@@ -114,6 +131,20 @@ async function waitFor(svc: WebmailService, sessionId: string, subject: string):
     await new Promise((r) => setTimeout(r, 1500));
   }
   return [];
+}
+
+/** The id of `who`'s message whose subject contains `subject` (waits for it to arrive). */
+async function idOf(svc: WebmailService, sessionId: string, subject: string): Promise<string> {
+  for (let i = 0; i < 20; i++) {
+    const res = (await svc.jmapAs(sessionId, (s) => ({
+      using: USING,
+      methodCalls: [["Email/query", { accountId: s.accountId, filter: { subject } }, "q"]],
+    }))) as { methodResponses: [string, { ids?: string[] }, string][] };
+    const id = res.methodResponses[0]?.[1].ids?.[0];
+    if (id) return id;
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  throw new Error(`no message "${subject}"`);
 }
 
 /** The ordered header list of `who`'s message whose subject contains `subject` (empty when there is none). */
@@ -213,6 +244,12 @@ describe("webmail settings on the dev Stalwart", () => {
         setWebmailSenderName({ uow, clock: systemClock, platform: PUBLIC_PLATFORM }, address, input, r),
     },
     mailer: { send: async (m) => void sent.push(m) },
+    // The real read of the message's From with the session's token; whether a From is verified is the reader's
+    // check (unit-tested in image-proxy / settings tests): mail between two local test mailboxes counts as verified.
+    messageSender: async (sessionId, emailId) => {
+      const m = await mail.ownMessageSender(sessionId, emailId);
+      return m === null ? null : { from: m.from, verified: m.from !== null };
+    },
     webmailUrl: WEBMAIL_URL,
     siteHost: PUBLIC_PLATFORM.hosts.site,
   });
@@ -278,6 +315,80 @@ describe("webmail settings on the dev Stalwart", () => {
     await settings.saveJunk(ownerSession, account, { blocked: [sender.address], safe: [], trustedOnly: false }, req);
     await send(mail, senderSession, sender.address, owner.address, `int-blocked ${run}`);
     expect(await waitFor(mail, ownerSession, `int-blocked ${run}`)).toEqual(["junk"]);
+    await settings.saveJunk(ownerSession, account, { blocked: [], safe: [], trustedOnly: false }, req);
+  }, 60_000);
+
+  it("Always for adds the sender to Safe senders: its next mail skips Junk, and another process sees the list", async () => {
+    // Only contacts and Safe senders stay out of Junk: the sender's first message goes there.
+    await settings.saveJunk(ownerSession, account, { blocked: [], safe: [], trustedOnly: true }, req);
+    const first = `int-safe-1 ${run}`;
+    await send(mail, senderSession, sender.address, owner.address, first);
+    expect(await waitFor(mail, ownerSession, first)).toEqual(["junk"]);
+    // The other process has the (empty) list cached.
+    expect(await processB.match(account, owner.address, sender.address)).toBeNull();
+    const versionBefore = await redis().get(rulesVersionKey(account, owner.address));
+
+    const emailId = await idOf(mail, ownerSession, first);
+    expect(await settings.changeSafeSender(ownerSession, account, emailId, "add", req)).toEqual({
+      safeSender: { kind: "address", value: sender.address },
+      changed: true,
+    });
+    const script = await stalwartDevAdmin().getSieveScript(account, MANAGED_SCRIPT);
+    expect(script?.active).toBe(true);
+    expect(parseScript(script?.content ?? "")?.junk).toEqual({
+      blocked: [],
+      safe: [sender.address],
+      trustedOnly: true,
+    });
+    expect(uow.state.audit.at(-1)).toMatchObject({
+      action: "junk_rules.changed",
+      meta: { via: "message", change: "added", kind: "address", safe: 1 },
+    });
+    // The write bumped the counter in Redis: the other process reads the script again and sees the sender.
+    expect(await redis().get(rulesVersionKey(account, owner.address))).not.toBe(versionBefore);
+    expect(await processB.match(account, owner.address, sender.address.toUpperCase())).toEqual({
+      kind: "address",
+      value: sender.address,
+    });
+    expect(await processA.match(account, owner.address, sender.address)).not.toBeNull();
+
+    const second = `int-safe-2 ${run}`;
+    await send(mail, senderSession, sender.address, owner.address, second);
+    expect(await waitFor(mail, ownerSession, second)).toEqual(["inbox"]);
+
+    // Stop loading removes it again, and both processes follow.
+    await settings.changeSafeSender(ownerSession, account, emailId, "remove", req);
+    expect(
+      parseScript((await stalwartDevAdmin().getSieveScript(account, MANAGED_SCRIPT))?.content ?? "")?.junk.safe,
+    ).toEqual([]);
+    expect(await processB.match(account, owner.address, sender.address)).toBeNull();
+    // A message this session can't see: not found.
+    await expect(settings.changeSafeSender(ownerSession, account, "Mzzzzzzzz", "add", req)).rejects.toMatchObject({
+      code: "not_found",
+    });
+    await settings.saveJunk(ownerSession, account, { blocked: [], safe: [], trustedOnly: false }, req);
+  }, 90_000);
+
+  it("refuses a rules write based on a stale read on the pinned server (ifInState), and keeps what was saved", async () => {
+    const before = await stalwartDevAdmin().getSieveScript(account, MANAGED_SCRIPT);
+    expect(before?.state).toMatch(/\S/);
+    // Another window saves in between.
+    await settings.saveJunk(
+      ownerSession,
+      account,
+      { blocked: ["meanwhile.example"], safe: [], trustedOnly: false },
+      req,
+    );
+    const stale = await stalwartDevAdmin().putSieveScript(account, MANAGED_SCRIPT, "keep;\n", before?.state ?? "");
+    expect(stale).toBe(false);
+    const now = await stalwartDevAdmin().getSieveScript(account, MANAGED_SCRIPT);
+    expect(parseScript(now?.content ?? "")?.junk.blocked).toEqual(["meanwhile.example"]);
+    // On the current state the same write lands (and keeps the script active).
+    const content = now?.content ?? "";
+    expect(await stalwartDevAdmin().putSieveScript(account, MANAGED_SCRIPT, content, now?.state ?? "")).toBe(true);
+    expect((await stalwartDevAdmin().getSieveScript(account, MANAGED_SCRIPT))?.active).toBe(true);
+    // A null expectation (the read found no script) is refused while one exists.
+    expect(await stalwartDevAdmin().putSieveScript(account, MANAGED_SCRIPT, content, null)).toBe(false);
     await settings.saveJunk(ownerSession, account, { blocked: [], safe: [], trustedOnly: false }, req);
   }, 60_000);
 

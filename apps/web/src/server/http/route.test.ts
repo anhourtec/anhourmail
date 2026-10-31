@@ -314,6 +314,25 @@ describe("webmail control-plane access", () => {
     expect(ran).toBe(2);
   });
 
+  it("lets an own-only route audit the gate's refusal in a shared mailbox, without changing the answer", async () => {
+    const seen: string[] = [];
+    const h = route(async () => ok(true), {
+      session: "webmail",
+      onSharedRefusal: async ({ meta }) => {
+        seen.push(meta.requestId);
+        throw new Error("audit down");
+      },
+    });
+    const res = await h(get("am.webmail=delegated"), params);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: { code: "own_mailbox_only" } });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBe(res.headers.get("X-Request-Id"));
+    // Not refused: never called.
+    expect((await h(get("am.webmail=fine"), params)).status).toBe(200);
+    expect(seen).toHaveLength(1);
+  });
+
   it("runs webmail routes pinned to the tab's shared mailbox, and refuses a pin it can't honour (Open another mailbox)", async () => {
     const seen: (string | null)[] = [];
     const kinds: (string | null)[] = [];

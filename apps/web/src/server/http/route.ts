@@ -73,6 +73,12 @@ export type RouteOptions = {
    */
   delegated?: DelegationMode;
   /**
+   * Webmail routes only, with `delegated` unset: runs when the delegation gate refuses this route in a mailbox shared
+   * with the person (403 `own_mailbox_only`), to audit the refusal (`denied`). Must not throw; it can't change the
+   * answer.
+   */
+  onSharedRefusal?: (ctx: RouteContext) => Promise<void>;
+  /**
    * The handler's own `Cache-Control` is kept (profile photos, cached privately under a versioned URL). Every other
    * response is `no-store`.
    */
@@ -216,6 +222,10 @@ export function route(handler: Handler, opts: RouteOptions = {}) {
                 }
                 if (shared) {
                   errorCode = "delegation";
+                  if (opts.onSharedRefusal && shared.status === 403) {
+                    const meta: RequestMeta = { requestId, ip, userAgent: req.headers.get("user-agent") };
+                    await opts.onSharedRefusal({ req, meta }).catch(() => undefined);
+                  }
                   return shared;
                 }
                 if (blocked) {

@@ -184,6 +184,8 @@ describe("webmail delegation gate", () => {
       "POST settings/password/route.ts",
       "PUT settings/forwarding/route.ts",
       "PUT settings/vacation/route.ts",
+      "POST settings/junk/safe/route.ts",
+      "DELETE settings/junk/safe/route.ts",
       "GET contacts/route.ts",
       "GET export/route.ts",
     ]) {
