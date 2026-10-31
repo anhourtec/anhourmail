@@ -154,6 +154,76 @@ describe("webmail BFF on the dev Stalwart", () => {
     expect(found).toBe(true);
   });
 
+  it("sends and receives an attachment on a mailbox without file storage (email blobs are separate)", async () => {
+    // The per-run mailbox is created now, so it has today's whole lockdown, file storage denials included.
+    const tag = randomBytes(5).toString("hex");
+    const svc = service();
+    const { sessionId, session } = await svc.signIn(RECIPIENT, RECIPIENT_PASSWORD);
+    // The mailbox's own token can't reach file storage (the browser's JMAP proxy also refuses the capability).
+    const files = await svc
+      .jmapAs(sessionId, (s) => ({
+        using: ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:filenode"],
+        methodCalls: [["FileNode/get", { accountId: s.accountId, ids: null }, "f"]],
+      }))
+      .then(
+        (r) => (r as { methodResponses?: [string, { type?: string }, string][] }).methodResponses?.[0],
+        () => undefined,
+      );
+    expect(files?.[0]).toBe("error");
+    expect(files?.[1].type).toBe("forbidden");
+    const identity = (await svc.identities(sessionId)).find((i) => i.email === RECIPIENT);
+    if (!identity) throw new Error("recipient identity missing");
+    const content = `attachment ${tag}`;
+    const blob = await svc.upload(sessionId, new TextEncoder().encode(content), "text/plain");
+    const draft = await svc.saveDraft(sessionId, {
+      identityId: identity.id,
+      to: [{ name: null, email: RECIPIENT }],
+      cc: [],
+      bcc: [],
+      subject: `int-test attachment ${tag}`,
+      text: "With a file attached.",
+      attachments: [{ blobId: blob.blobId, name: "note.txt", type: "text/plain", size: blob.size }],
+    });
+    await svc.send(sessionId, draft.id, identity.id);
+    type Res = { methodResponses: [string, { ids?: string[]; list?: Record<string, unknown>[] }, string][] };
+    const inbox = (
+      (await svc.jmapAs(sessionId, (s) => ({
+        using: ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+        methodCalls: [["Mailbox/query", { accountId: s.accountId, filter: { role: "inbox" } }, "m"]],
+      }))) as Res
+    ).methodResponses[0]?.[1].ids?.[0];
+    if (!inbox) throw new Error("inbox missing");
+    // Delivered: in the Inbox (the Sent copy alone would not prove delivery), with the attachment as a body part.
+    const deadline = Date.now() + 40_000;
+    let part: { blobId: string; name: string } | undefined;
+    while (!part && Date.now() < deadline) {
+      const res = (await svc.jmapAs(sessionId, (s) => ({
+        using: ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+        methodCalls: [
+          ["Email/query", { accountId: s.accountId, filter: { subject: tag, inMailbox: inbox } }, "q"],
+          [
+            "Email/get",
+            {
+              accountId: s.accountId,
+              "#ids": { resultOf: "q", name: "Email/query", path: "/ids" },
+              properties: ["attachments"],
+            },
+            "g",
+          ],
+        ],
+      }))) as Res;
+      const list = (res.methodResponses[1]?.[1].list ?? []) as {
+        attachments: { blobId: string; name: string }[] | null;
+      }[];
+      part = list.flatMap((e) => e.attachments ?? []).find((a) => a.name === "note.txt");
+      if (!part) await new Promise((r) => setTimeout(r, 1500));
+    }
+    expect(part).toBeDefined();
+    const got = await svc.download(sessionId, session.accountId, part?.blobId ?? "", "note.txt");
+    expect(got.status).toBe(200);
+    expect(await got.text()).toBe(content);
+  });
+
   it("delivers mail for an outside address to Mailpit (dev never sends out)", async () => {
     const tag = randomBytes(5).toString("hex");
     const outside = `outside-${tag}@example.com`;

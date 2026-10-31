@@ -27,6 +27,8 @@ import { reconcileManagedScripts } from "@anhourmail/core/webmail";
 import { resumeMailbox, suspendMailbox } from "@anhourmail/core/mailboxes";
 import { enqueueProvisioning, runNextJob } from "@anhourmail/core/provisioning";
 import {
+  clearFileStorage,
+  FILE_STORAGE_PERMISSIONS,
   KNOWN_PERMISSIONS,
   OAuthDeniedError,
   StalwartManagement,
@@ -301,6 +303,10 @@ describe("app passwords on Stalwart", () => {
     const names = (Array.isArray(permEnum) ? permEnum : (permEnum?.variants ?? [])).map((v) => v.name);
     expect(names.length).toBeGreaterThan(100);
     expect(names.filter((n) => !n.startsWith("sys") && !KNOWN_PERMISSIONS.includes(n))).toEqual([]);
+    // Every file permission the server knows is one the customer lockdown denies (an upgrade adding one fails here).
+    expect(names.filter((n) => /file/i.test(n) && !n.startsWith("sys")).sort()).toEqual(
+      [...FILE_STORAGE_PERMISSIONS].sort(),
+    );
 
     const create = (name: string, protocols: string[]) =>
       createAppPassword(deps, issuer, actor, accountId, m.id, { name, protocols }, { sessionId }, meta);
@@ -461,6 +467,169 @@ describe("app passwords on Stalwart", () => {
       [["AddressBook/set", { accountId: stalwartId, create: { b: { name: "Mine" } } }, "s"]],
     );
     expect(books).toEqual(["AddressBook/set"]);
+
+    // No file storage (`FILE_STORAGE_PERMISSIONS`) and no share notifications. An account without the denials ("plain",
+    // what every customer was before 2026-10-31) stores a file and shares it with the customer and with a second
+    // account without the denials ("plain2", the control). The customer reaches none of it, by any path, with the
+    // password or a JMAP app password; nor can it create, share or reach files of its own.
+    const files = ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:filenode"];
+    const blobCaps = ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:blob"];
+    const plainAuth = `Basic ${Buffer.from(`plain@${domain}:${mailboxPassword}`).toString("base64")}`;
+    const plain2Auth = `Basic ${Buffer.from(`plain2@${domain}:${mailboxPassword}`).toString("base64")}`;
+    await mgmt.transport.set("x:Account", {
+      create: {
+        p: {
+          "@type": "User",
+          name: "plain2",
+          domainId,
+          credentials: { "0": { "@type": "Password", secret: await hashPassword(mailboxPassword) } },
+          roles: { "@type": "User" },
+          permissions: { "@type": "Inherit" },
+          quotas: { maxDiskQuota: 1048576 },
+          aliases: {},
+        },
+      },
+    });
+    const plain2Id = (await mgmt.listUsers()).find((u) => u.address === `plain2@${domain}`)?.id ?? "";
+    const jmapRaw = async (auth: string, using: string[], calls: unknown[]) =>
+      (
+        (await (
+          await fetch(`${stalwartUrl}/jmap`, {
+            method: "POST",
+            headers: { Authorization: auth, "Content-Type": "application/json", "X-Forwarded-For": clientAddress },
+            body: JSON.stringify({ using, methodCalls: calls }),
+          })
+        ).json()) as { methodResponses: [string, Record<string, unknown>, string][] }
+      ).methodResponses;
+    const upload = async (auth: string, account: string) =>
+      (
+        await fetch(`${stalwartUrl}/jmap/upload/${account}/`, {
+          method: "POST",
+          headers: { Authorization: auth, "Content-Type": "text/plain", "X-Forwarded-For": clientAddress },
+          body: "file storage probe",
+        })
+      ).json() as Promise<{ blobId: string }>;
+    const plainBlob = await upload(plainAuth, plainId);
+    const made = await jmapRaw(plainAuth, files, [
+      [
+        "FileNode/set",
+        { accountId: plainId, create: { f: { name: "shared.txt", blobId: plainBlob.blobId, parentId: null } } },
+        "c",
+      ],
+    ]);
+    const nodeId = (made[0]?.[1].created as Record<string, { id: string }> | undefined)?.f?.id ?? "";
+    expect(nodeId).not.toBe("");
+    const shareTo = (id: string) => ({ [`shareWith/${id}`]: { mayRead: true } });
+    expect(
+      await call(plainAuth, files, [
+        [
+          "FileNode/set",
+          { accountId: plainId, update: { [nodeId]: { ...shareTo(stalwartId), ...shareTo(plain2Id) } } },
+          "u",
+        ],
+      ]),
+    ).toEqual(["FileNode/set"]);
+    const fileDav = (auth: string, method: string, path: string, body: string | null, depth = "1") =>
+      fetch(`${stalwartUrl}/dav/file/${path}`, {
+        method,
+        headers: {
+          Authorization: auth,
+          Depth: depth,
+          "Content-Type": "application/xml",
+          "X-Forwarded-For": clientAddress,
+        },
+        ...(body === null ? {} : { body }),
+      }).then(async (r) => ({ status: r.status, text: await r.text() }));
+    const sharer = `${encodeURIComponent(`plain@${domain}`)}/`;
+    const propfind = '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/></d:prop></d:propfind>';
+    const sync =
+      '<?xml version="1.0"?><d:sync-collection xmlns:d="DAV:"><d:sync-token/><d:sync-level>1</d:sync-level><d:prop><d:getetag/><d:getcontentlength/></d:prop></d:sync-collection>';
+    /** Every way into the sharer's file for one credential; what each answered. */
+    const reach = async (auth: string) => {
+      const [get, blobGet, blobCopy, lookup] = [
+        ...(await jmapRaw(auth, files, [["FileNode/get", { accountId: plainId, ids: null }, "g"]])),
+        ...(await jmapRaw(auth, blobCaps, [
+          ["Blob/get", { accountId: plainId, ids: [plainBlob.blobId], properties: ["data:asText"] }, "b"],
+          ["Blob/copy", { fromAccountId: plainId, accountId: stalwartId, blobIds: [plainBlob.blobId] }, "c"],
+          ["Blob/lookup", { accountId: plainId, typeNames: ["FileNode"], ids: [plainBlob.blobId] }, "l"],
+        ])),
+      ];
+      const download = await fetch(`${stalwartUrl}/jmap/download/${plainId}/${plainBlob.blobId}/f`, {
+        headers: { Authorization: auth, "X-Forwarded-For": clientAddress },
+      });
+      return {
+        fileNodeGet:
+          get?.[0] === "error" ? `error:${String(get[1].type)}` : `list:${String((get?.[1].list as unknown[]).length)}`,
+        blobGet: blobGet?.[0] === "error" ? `error:${String(blobGet[1].type)}` : "read",
+        blobCopy:
+          blobCopy?.[0] === "error"
+            ? `error:${String(blobCopy[1].type)}`
+            : Object.keys(blobCopy?.[1].copied ?? {}).length > 0
+              ? "copied"
+              : "notCopied",
+        blobLookup: lookup?.[0] === "error" ? `error:${String(lookup[1].type)}` : "answered",
+        download: download.status,
+        davGet: (await fileDav(auth, "GET", `${sharer}shared.txt`, null, "0")).status,
+        davPropfind: (await fileDav(auth, "PROPFIND", sharer, propfind)).status,
+      };
+    };
+    const shut = {
+      fileNodeGet: "error:forbidden",
+      blobGet: "error:forbidden",
+      blobCopy: "notCopied",
+      blobLookup: "error:forbidden",
+      download: 404,
+      davGet: 403,
+      davPropfind: 403,
+    };
+    // The control reads it (so the refusals below are the denials, not a missing share).
+    expect(await reach(plain2Auth)).toMatchObject({ fileNodeGet: "list:1", davGet: 200, davPropfind: 207 });
+    for (const auth of [pw, basic(mailApp.secret)]) expect(await reach(auth)).toEqual(shut);
+    // Known Stalwart behaviour (v0.16.27): the WebDAV sync-collection REPORT (`davSyncCollection`, which CardDAV and
+    // CalDAV sync need) still lists a file shared before the lockdown — names and sizes, never the content. Clearing
+    // the shares (`clearFileStorage`, run by the bootstrap) closes it.
+    const listed = await fileDav(pw, "REPORT", sharer, sync, "0");
+    expect(listed.status).toBe(207);
+    expect(listed.text).toContain("shared.txt");
+    // Share notifications (who shared what) are refused too.
+    expect(
+      await call(
+        pw,
+        ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:principals"],
+        [["ShareNotification/get", { accountId: stalwartId, ids: null }, "n"]],
+      ),
+    ).toEqual(["error:forbidden"]);
+    // Nothing of its own either: no create, query or share, no WebDAV file access, with the password or app passwords.
+    const ownBlob = await upload(pw, stalwartId);
+    for (const auth of [pw, basic(mailApp.secret), basic(phone.secret)]) {
+      expect(
+        await call(auth, files, [
+          ["FileNode/get", { accountId: stalwartId, ids: null }, "g"],
+          ["FileNode/query", { accountId: stalwartId }, "q"],
+          [
+            "FileNode/set",
+            { accountId: stalwartId, create: { f: { name: "mine.txt", blobId: ownBlob.blobId, parentId: null } } },
+            "c",
+          ],
+          ["FileNode/set", { accountId: stalwartId, update: { x: shareTo(plainId) } }, "u"],
+        ]),
+      ).toEqual(["error:forbidden", "error:forbidden", "error:forbidden", "error:forbidden"]);
+    }
+    const own = `${encodeURIComponent(address)}/`;
+    for (const auth of [pw, basic(phone.secret)]) {
+      expect((await fileDav(auth, "PROPFIND", own, propfind)).status).toBe(403);
+      expect((await fileDav(auth, "PUT", `${own}probe.txt`, "probe", "0")).status).toBe(403);
+      expect((await fileDav(auth, "MKCOL", `${own}folder/`, null, "0")).status).toBe(403);
+    }
+    expect((await fileDav(plainAuth, "PROPFIND", sharer, propfind)).status).toBe(207);
+    // The bootstrap's cleanup (administrator credential): shares off, files gone; the REPORT then lists nothing.
+    const cleaned = await clearFileStorage(mgmt, { destroy: true, accountIds: [plainId, stalwartId] });
+    expect(cleaned).toMatchObject({ accounts: 2, accountsWithFiles: 1, sharesCleared: 1, destroyed: 1, remaining: 0 });
+    expect((await fileDav(pw, "REPORT", sharer, sync, "0")).status).toBe(403);
+    expect(await reach(plain2Auth)).toMatchObject({ fileNodeGet: "error:forbidden", davGet: 403 });
+    expect(await clearFileStorage(mgmt, { destroy: true, accountIds: [plainId] })).toMatchObject({
+      accountsWithFiles: 0,
+    });
 
     const contacts = await fetch(`${stalwartUrl}/dav/card/${encodeURIComponent(address)}/`, {
       method: "PROPFIND",
