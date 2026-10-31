@@ -1,6 +1,6 @@
 # 08 — Operations
 
-Last updated: 2026-10-30 (data export and account deletion jobs, ADR-0025).
+Last updated: 2026-10-31 (file storage lockdown deploy step); 2026-10-30 (data export and account deletion jobs, ADR-0025).
 
 ## Environments
 
@@ -112,6 +112,37 @@ compares against the mail server's clock, so the web and mail hosts must run NTP
 Undo for delegated sends is held in one web process: a multi-instance web tier needs a shared store first.
 
 **Deploy step for the internal-mail marker and the forwarding guard (2026-10-30):** run `scripts/deploy.sh --bootstrap-stalwart` once after the deploy: it installs the new submission script (marker), the `inbound-headers` script (strips the marker from port-25 mail) and the DATA expression. The web app needs a usable authserv id in production (`MAIL_AUTHSERV_ID`, a hostname; unset defaults to `mx1.<PLATFORM_DOMAIN>`, which must be what Stalwart stamps in Authentication-Results) and refuses to start without one; set the same value for the web app and the scheduler. About 30 s after the web app starts it upgrades existing forwarding scripts to the guard (audited `platform.mail_rules_upgraded`; at most once a day); the reconciler reports `unguardedForwarding`. Checks that need real DNS are in ADR-0019's "forwarding and DMARC" note.
+
+**Deploy step for the file storage lockdown (migration 0032, 2026-10-31):** customer mailboxes lose the mail server's
+file storage (JMAP FileNode, WebDAV `/dav/file/`) and share notifications (`07-security.md` "App passwords").
+Migration 0032 queues a `mailbox.ensure` for every mailbox with an account on the mail server, which writes the new
+denials; the reconciler's `sieveLockMismatch` catches any it missed (every status but `provisioning`, whose own job
+writes them). The provisioning key's set shrinks with them (it holds exactly what a customer keeps: now 162 + 15 =
+177). Two things follow: a worker or scheduler on the previous release can't write the old lockdown once the role is
+narrowed (verified: `notUpdated`), so its ensures and suspensions would fail and give up; and the new worker refuses
+to start while its key's role is still wider than the set. Changes that don't write permissions (password
+replacement, app password revocation, quota) work with the narrowed key on accounts still on the old lockdown
+(verified). So the release goes out in this order, from the ops directory on the server, with `.env`'s `IMAGE_TAG`
+(and `APP_SRC` checked out at it) already set to the new release — the plan runs from `worker:${IMAGE_TAG}`:
+
+```sh
+# 1. Builds the new images, stops worker + scheduler (and NGINX while the temporary admin exists), narrows the service
+#    roles, issues three new keys, removes every file share, re-locks no-reply/postmaster. Older keys wider than the
+#    new set are reported "prune after switching" (not a failure); NGINX comes back at the end.
+PLAN_ROTATE_KEY=true scripts/deploy.sh --bootstrap-stalwart
+# 2. Copy secrets/stalwart-{provisioning,operations,audit}-key into .env (editor, never echo), then migrate (0032
+#    queues the ensures) and start everything on the new release, with the smoke check.
+scripts/deploy.sh
+# 3. Remove the old keys. PLAN_PURGE_FILES=true also destroys files stored before the lockdown (step 1 printed how many
+#    accounts have any); leave it out to keep them. This stops worker + scheduler again ...
+PLAN_PRUNE_KEYS=true PLAN_PURGE_FILES=true scripts/deploy.sh --bootstrap-stalwart
+# 4. ... so start them again (no rebuild).
+scripts/deploy.sh --skip-build
+```
+
+Deploying the new release before step 1 leaves the worker and scheduler refusing to start until step 1 has run. Step 3
+also covers the pending "bootstrap once after the deploy" for the marker scripts. After step 4, check the reconciler's
+next run reports no `sieveLockMismatch` (`platform.reconciler_drift` absent or without it).
 
 **Server access to the private ops repo:** the server pulls it with a read-only deploy key (an SSH key added under the
 repo's Deploy keys, write access off, `~/.ssh/config` host alias), not a personal token cached on the box.

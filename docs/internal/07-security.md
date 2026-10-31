@@ -1,6 +1,6 @@
 # 07 — Security
 
-Last updated: 2026-10-30 ("Forwarding guard"; "Authentication results in the webmail": the internal-mail marker; "Delegation": sending as and on behalf of a delegated mailbox, the tag never stored and its five-minute expiry, slice 13; opening delegated mailboxes in the webmail and the gate; delegation grants and Convert to shared mailbox, ADR-0026; leavers lose mailbox sign-in; data export and account deletion; staff support access; profile photos).
+Last updated: 2026-10-31 ("App passwords": no file storage on customer mailboxes; "Forwarding guard"; "Authentication results in the webmail": the internal-mail marker; "Delegation": sending as and on behalf of a delegated mailbox, the tag never stored and its five-minute expiry, slice 13; opening delegated mailboxes in the webmail and the gate; delegation grants and Convert to shared mailbox, ADR-0026; leavers lose mailbox sign-in; data export and account deletion; staff support access; profile photos).
 
 ## Threat model
 
@@ -474,6 +474,28 @@ Built 2026-10-22 (ADR-0020). Code: `packages/core/src/app-passwords`, `packages/
   `x:ApiKey/set` and `x:AccountPassword/set`; `Principal/query` (which listed every account on the server before)
   is `forbidden`; mail, identities and contacts still work; the operations key still creates, lists and destroys
   app passwords there. The webmail never calls `x:*` or `Principal/*` with a user's token.
+- **No file storage** (`FILE_STORAGE_PERMISSIONS`, part of `CUSTOMER_DENIALS`; 2026-10-31): Stalwart's JMAP File
+  Storage (`FileNode/*`, capability `urn:ietf:params:jmap:filenode`) and WebDAV files (`/dav/file/`) were open to any
+  customer with the mailbox password, and `FileNode/set { "shareWith/<id>": … }` shared a file with **any** account on
+  the server (it then appeared in that account's session; verified on the dev stack). We don't offer file storage, so
+  all 18 file permissions (`jmapFileNode{Get,Query,QueryChanges,Changes,Create,Update,Destroy,Copy}`,
+  `davFile{Get,Put,Delete,Copy,Move,MkCol,Lock,PropFind,PropPatch,Acl}`) are off on every customer and system mailbox
+  and in no app password scope. Verified: create, share, get and query answer `forbidden`, `/dav/file/` PROPFIND, PUT
+  and MKCOL answer 403, with the password and with app passwords. A file another account shared **before** the change
+  is unreadable to the recipient by every path tried — `FileNode/get`, `Blob/get` and `Blob/lookup` on the sharer's
+  account (`forbidden`), `Blob/copy` from it (`notCopied`), `/jmap/download` (404), WebDAV GET and PROPFIND (403) —
+  except Stalwart's WebDAV `sync-collection` REPORT (`davSyncCollection`, a generic permission CardDAV/CalDAV sync
+  needs), which still lists the shared files' names, sizes and types (never content), and the sharer still shows in
+  the recipient's raw JMAP session (address only; the webmail builds its own session list). Both end when the share
+  is removed: the Stalwart bootstrap removes every file share with the administrator credential (`clearFileStorage`;
+  `PLAN_PURGE_FILES=true` also destroys stored files, which users can no longer see or delete). Share notifications
+  (`jmapShareNotification*`, the record of who shared what) are denied too; the webmail never reads them. No clean
+  server-wide switch exists: a per-account `maxFiles: 0` quota is accepted but means no limit, and `x:FileStorage`
+  limits start at 1 (verified). Email attachments are blobs of the email (`jmapBlob*`, `Email/*`, `emailSend`):
+  upload, send, delivery and download still work (integration tests). Existing accounts get the denials from
+  migration 0032 (one `mailbox.ensure` per mailbox on the mail server) and the reconciler's `sieveLocked` check (every
+  status but `provisioning`); `no-reply`/`postmaster` from the bootstrap, which now always writes their lockdown and
+  checks it. An upgrade that adds a file permission name fails the integration test until it is denied.
 - **Never a webmail or OAuth sign-in:** Stalwart mints an account-wide OAuth token from an app password at
   `/api/auth` (verified), so `StalwartOAuth.signIn` refuses any secret starting `app_` (Stalwart also accepts an app
   password with a `$…` suffix, so nothing tighter is safe). **Production NGINX must not expose Stalwart's `/api/*`,
@@ -676,7 +698,8 @@ Delivery paths re-checked on the dev stack 2026-10-28 (security review needs_val
   all reach the recipient without any results header: the submission Sieve strips them. A planted `Received` stays
   but has nothing trusted below it.
 - **Writing into someone else's folder:** not possible for customers — IMAP `SETACL` ends the connection
-  (`imapAclSet` off) and `Mailbox/set { shareWith }` is `forbidden` (`CUSTOMER_PERMISSIONS`).
+  (`imapAclSet` off) and `Mailbox/set { shareWith }` is `forbidden` (`CUSTOMER_PERMISSIONS`). File storage, which could
+  share files with any account, is off entirely (`FileNode/*`, `/dav/file/`; above).
 - **Writing into one's own mailbox:** IMAP `APPEND` (and JMAP `Email/import`) store a planted `Received` + results pair
   as is, with any internal date, which becomes the JMAP `receivedAt`. So the parser would trust it.
 

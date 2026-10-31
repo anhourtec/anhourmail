@@ -2,7 +2,7 @@
 
 **Status:** Accepted 2026-10-22 · amended 2026-10-23 (credential split, below — supersedes the single management
 key in decision 1) · amended 2026-10-23 (mailbox passwords, below — console-made mailboxes now have a known password)
-· updated 2026-10-28 (mailbox handovers, below)
+· updated 2026-10-28 (mailbox handovers, below) · updated 2026-10-31 (no file storage, below)
 
 ## Context
 
@@ -181,6 +181,13 @@ moves the mailbox's app passwords to `revoking` in the same transaction, since t
 `mailbox.pending_password_by_owner` (migration 0020) marks a waiting hash as the person's own, so applying it is what
 ends the first-sign-in change (`mailbox.must_change_password`). Stalwart still has no "must change" state: IMAP, POP3
 and SMTP keep accepting the administrator's password until the person changes it (accepted residual).
+
+**Update (2026-10-31): no file storage.** Customer accounts could use Stalwart's JMAP File Storage and WebDAV files
+with their own credentials and share files with any account on the server. `CUSTOMER_DENIALS` now also turns off
+the 18 file permissions (`FILE_STORAGE_PERMISSIONS`; `07-security.md` "App passwords") and the 7 share notification
+ones, so a customer mailbox keeps 162 permissions instead of 186 and the provisioning key holds 177 instead of 201 (the tables above give the counts at
+the time of the decision). No app password scope ever allowed them. Existing accounts get the denials from migration
+0032; the key change needs a bootstrap run and key rotation before the deploy (`08-operations.md`).
 
 ## Consequences
 

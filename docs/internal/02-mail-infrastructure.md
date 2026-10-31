@@ -1,6 +1,6 @@
 # 02 — Mail infrastructure
 
-Last updated: 2026-10-30 (internal-mail marker and the inbound-headers script; send-on-behalf tag expiry, ADR-0026 slice 13). Research: `research/stalwart.md`, `research/deliverability.md`.
+Last updated: 2026-10-31 (no file storage on customer mailboxes; the provisioning key's set narrows); 2026-10-30 (internal-mail marker and the inbound-headers script; send-on-behalf tag expiry, ADR-0026 slice 13). Research: `research/stalwart.md`, `research/deliverability.md`.
 
 ## URL and hostname map
 
@@ -164,7 +164,7 @@ Sending limits for free mailboxes are still Phase 6 (03-anti-spam-and-abuse.md "
 
   | Key (setting)                              | Owner account   | Used by           | Can                                                                                                                                                                                                                                                     |
   | ------------------------------------------ | --------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  | Provisioning (`STALWART_PROVISIONING_KEY`) | `svc-provision` | worker, scheduler | Domains, accounts, DKIM keys; the 186 permissions a customer mailbox keeps (so it can grant them); app passwords listed and revoked through `x:Account.credentials`. No `impersonate`                                                                   |
+  | Provisioning (`STALWART_PROVISIONING_KEY`) | `svc-provision` | worker, scheduler | Domains, accounts, DKIM keys; the 162 permissions a customer mailbox keeps (so it can grant them); app passwords listed and revoked through `x:Account.credentials`. No `impersonate`                                                                   |
   | Operations (`STALWART_OPERATIONS_KEY`)     | `svc-ops`       | web               | `impersonate` + app passwords (`sysAppPassword{Create,Get,Query,Destroy}`, `sysApiKey{Get,Query}`) + the managed Sieve script (`jmapSieveScript{Get,Query,Create,Update,Validate}`, `jmapBlobUpload`, `jmapBlobGet`). No account, domain or DKIM access |
   | Audit (`STALWART_AUDIT_KEY`)               | `svc-audit`     | scheduler         | `impersonate` + `jmapSieveScript{Get,Query}` + `jmapBlobGet`: reads managed scripts for the hourly check                                                                                                                                                |
   - **Why the provisioning key holds mail permissions:** Stalwart lets a credential assign only permissions it holds,
@@ -174,6 +174,10 @@ and 175 more`. Without `impersonate` these permissions apply to its own account 
     `Email/query`, `Mailbox/get`, `Blob/get`, `SieveScript/get` and `x:AppPassword/*` are `forbidden` and a known
     message blob id downloads as 404. It still can't grant more than a customer keeps (`roles: Admin`, `Inherit`,
     `Merge +impersonate` → `forbidden`).
+  - **Customer mailboxes keep no file storage** (2026-10-31): `CUSTOMER_DENIALS` turns off every JMAP FileNode and
+    WebDAV file permission (`FILE_STORAGE_PERMISSIONS`) and the share notifications (`07-security.md` "App
+    passwords"), so the provisioning key no longer holds them either. Its key set changed, so the deploy re-runs the Stalwart bootstrap to narrow its role and
+    issue a new provisioning key (`08-operations.md` "Deploy step for the file storage lockdown").
   - **The operations key** with `impersonate`: `Email/query`, `Email/get`, `Mailbox/get` and `Blob/lookup` on a
     customer account → `forbidden`, so it can't find mail. **But `jmapBlobGet` downloads any blob whose id it already
     holds, an email's raw message included** (verified; the integration test asserts it so an upgrade that changes it

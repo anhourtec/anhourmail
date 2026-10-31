@@ -329,6 +329,53 @@ Third round (review run-22, throwaway accounts on two domains, destroyed afterwa
   Address books are created and updated by the webmail (contacts auto-save), so `AddressBook/set { shareWith }`
   stays possible with a mailbox password. Impersonating as the user takes the user's permissions; the admin acting on
   the account by `accountId` doesn't (the dev seed makes sample folders that way).
+
+File storage (2026-10-31, throwaway accounts on a probe domain, destroyed afterwards):
+
+- **File storage was open to customers and could share with anyone.** With a mailbox password, the session listed
+  `urn:ietf:params:jmap:filenode`; `Blob/upload` then `FileNode/set { create: { name, blobId, parentId: null } }`
+  created a file, `FileNode/set { update: { <id>: { "shareWith/<other account id>": { mayRead: true } } } }` was
+  accepted for **any** account on the server, which then listed the sharer's account in its own session and read the
+  file with `FileNode/get`. `PROPFIND /dav/file/<address>/` answered 207 and `PUT` 201. The old denials
+  (`davFileAcl` among them) didn't gate any of it.
+- **Permission names** (`GET /api/schema` `Permission` enum, v0.16.27): `jmapFileNode{Get,Query,QueryChanges,Changes,
+  Create,Update,Destroy,Copy}` and `davFile{Get,Put,Delete,Copy,Move,MkCol,Lock,PropFind,PropPatch,Acl}` — every
+  name mentioning files except the administrative `sysFileStorage{,Get,Update}` (server-wide settings, never on a
+  user). No separate share permission exists. All 18 are in the User role. `FILE_STORAGE_PERMISSIONS` in
+  `packages/stalwart-client/src/management.ts`, denied in `CUSTOMER_DENIALS`.
+- **With them disabled:** `FileNode/get`, `/query` and `/set` (create and the `shareWith` update) → `forbidden`;
+  `/dav/file/` PROPFIND, PUT and MKCOL → 403, with the password and with app passwords (no scope allows them). A
+  share made **before** the denial: the recipient's `FileNode/get` on the sharer's account → `forbidden`, and the
+  sharer's blob downloads as 404; but the sharer's account (address) still appears in the recipient's JMAP session
+  (`isPersonal: false`), and the share record stays stored (the sharer can no longer change or remove it; an
+  administrator could, by `accountId`). Mail methods on that account stay `forbidden`. Email blobs are unaffected:
+  `Blob/upload`, an email with the attachment, delivery and `/jmap/download` of the part still work.
+- **Side doors for a share made before the denial** (2026-10-31, second round): `Blob/get` and `Blob/lookup`
+  (`typeNames: ["FileNode"]`) with the sharer's `accountId` → `forbidden`; `Blob/copy { fromAccountId: sharer }` →
+  `notCopied` `blobNotFound` (also before the denial: a blob id alone never copied); `/jmap/download/<sharer>/<blob>`
+  → 404; WebDAV GET and PROPFIND on `/dav/file/<sharer>/…` → 403. **But `REPORT` `sync-collection` on
+  `/dav/file/<sharer>/` → 207 listing each shared file's href, etag, size and type** (no content): it checks only the
+  generic `davSyncCollection`, which CardDAV/CalDAV sync need. Removing the share (`FileNode/set { shareWith: null }`
+  by the administrator, by `accountId`) → 403, and the sharer drops out of the recipient's session.
+- **Defence in depth that isn't there:** account `quotas.maxFiles: 0` / `maxFolders: 0` are stored but don't limit
+  (an `Inherit` account still created a file and a folder and PUT one over WebDAV); `x:FileStorage.maxFiles` /
+  `maxFolders` have `min: 1` and `maxSize` applies to files only; `x:Sharing.maxShares` has `min: 1`. No switch turns
+  file storage off server-wide, so the permissions are the control.
+- **Share notifications:** `jmapShareNotification{Get,Query,QueryChanges,Changes,Create,Update,Destroy}` (User role)
+  expose who shared what; the webmail doesn't use them, so they are denied too.
+- **The narrowed provisioning key on accounts still on the old lockdown:** `replacePassword`,
+  `revokeAppPasswordCredential`, a quota-only `upsertUser`, suspend and resume (writing the new sets) all work;
+  writing the **old** lockdown (as the previous release's worker would) → `notUpdated` (it would grant file
+  permissions the key no longer holds).
+- **`x:<Object>/get { ids: null }` stops at `maxObjectsInGet` (500) without saying so** (verified 2026-10-31 with 627
+  accounts: 500 returned, no error, no `notFound`). `StalwartTransport.getAll` now pages: a full first page triggers
+  `x:<Object>/query` (`position`/`limit` 500) and gets by id in pages of 500. Before this, every caller that listed
+  accounts (`listUsers`: reconciler, adoption check, file cleanup) saw at most 500. `maxObjectsInSet` is 500 too;
+  `clearFileStorage` batches its sets. `x:ApiKey` `createdAt` is whole seconds, so two keys made in the same second
+  tie; the rotation check tells keys apart by their permission sets instead.
+- **Address books:** denying `jmapAddressBookUpdate` would refuse `AddressBook/set { shareWith }`, but also the
+  webmail's own address-book create/update (contacts auto-save), so it isn't a clean permission denial; the gap stays
+  (see "Sharing" above).
 - **Sieve:** with only `jmapSieveScript{Create,Update}` denied, a user could deactivate our script and then destroy
   it. With `jmapSieveScriptDestroy` and `jmapVacationResponse{Create,Destroy}` also denied, destroy **and** the bare
   deactivate answer `forbidden`.
@@ -342,7 +389,8 @@ Throwaway `twokey-probe.test` and per-run `svc-*.test`/`keys-*.test` domains and
   permissions it holds, compared with the account's effective permissions (role minus `disabledPermissions`, plus
   `enabledPermissions`). Disabling needs nothing. The User role grants 239 permissions (`GET /api/account` as a fresh
   User-role account with `Inherit`); `CUSTOMER_PERMISSIONS` disables 53 of them (plus 5 principal reads the role
-  doesn't list), leaving 186. A key holding those 186 plus `authenticate` and `sys{Domain,Account,DkimSignature}*`
+  doesn't list), leaving 186 (2026-10-31: 77 with the 17 new file storage and 7 share notification denials, leaving 162; key 177). A key
+  holding those 186 plus `authenticate` and `sys{Domain,Account,DkimSignature}*`
   (201 in all) creates a customer mailbox with `CUSTOMER_PERMISSIONS`, suspends (`SUSPENDED_PERMISSIONS`) and resumes
   it. The same key gets `forbidden` "not authorized to grant permissions" for `roles: Admin` on a customer (402
   missing), `permissions: Inherit` (the 58 denials), `Merge +impersonate`, creating an Admin account, `x:Role/set`.

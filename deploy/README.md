@@ -66,6 +66,15 @@ version. CI builds all three on every push (`.cicd/build.sh`).
   the password change and principal look-ups on every customer account (`CUSTOMER_DENIALS` in `CUSTOMER_PERMISSIONS`, also in `SUSPENDED_PERMISSIONS`; the reconciler's `sieveLocked` drift check covers the whole list).
   Run it once after this release too.
 
+- **File storage lockdown (2026-10-31, migration 0032):** customer and system mailboxes lose the mail server's file
+  storage (JMAP FileNode and WebDAV files; `FILE_STORAGE_PERMISSIONS`) and share notifications. The migration queues
+  `mailbox.ensure` for every mailbox on the mail server, so no backfill command is needed. The provisioning key's
+  permission set shrinks: stop the worker and scheduler, re-run the Stalwart bootstrap (it narrows the provisioning
+  service account's role, issues a new key and removes existing file shares with the administrator credential —
+  `clearFileStorage` from `@anhourmail/stalwart-client`), switch to the new key and deploy (migrations, then the worker
+  and scheduler on the new release), then remove the old key (`docs/internal/08-operations.md` "Deploy step for the
+  file storage lockdown"). The worker and scheduler refuse to start while the key can do more than its set.
+
 ## Required production settings (the app refuses to start otherwise)
 
 - `TRUST_PROXY=true` — the app runs only behind our NGINX, which sets `X-Forwarded-For` (the right-most entry is

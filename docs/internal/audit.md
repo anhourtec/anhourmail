@@ -1,6 +1,6 @@
 # Audit
 
-Last updated: 2026-10-31 (names as one source: `account.profile_changed` `name`, `via: webmail`; `identity.changed` retired; 2026-10-30: `platform.mail_rules_upgraded` for the managed-script upgrade; mailbox delegation, ADR-0026: `delegation.sent_as`, `delegation.sent_on_behalf`, `delegation.send_failed`, `delegation.send_cancelled` and `delegation.tagged_copy_left` for sending from a delegated mailbox, slice 13; `delegation.mailbox_opened` for opening a delegated mailbox in the webmail; `delegation.granted` / `delegation.revoked` per change, `mailbox.converted_to_shared`, `MutationOutcome.also`; `account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
+Last updated: 2026-10-31 (accepted exceptions: queue-only data migrations 0031/0032 and the bootstrap's file storage cleanup; names as one source: `account.profile_changed` `name`, `via: webmail`; `identity.changed` retired; 2026-10-30: `platform.mail_rules_upgraded` for the managed-script upgrade; mailbox delegation, ADR-0026: `delegation.sent_as`, `delegation.sent_on_behalf`, `delegation.send_failed`, `delegation.send_cancelled` and `delegation.tagged_copy_left` for sending from a delegated mailbox, slice 13; `delegation.mailbox_opened` for opening a delegated mailbox in the webmail; `delegation.granted` / `delegation.revoked` per change, `mailbox.converted_to_shared`, `MutationOutcome.also`; `account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
 
 Every meaningful action is recorded, tamper-evident, searchable and visible to the right people. Audit is a core module, not a logging side effect.
 
@@ -115,6 +115,16 @@ queued again — or `all: true` and `count` for "revoke all"). Refusals are `den
 code: `step_up_required` (no recent confirmation on that session), `act_as` (staff acting as the person),
 `forbidden` (someone else's mailbox, or a User Administrator on an Owner's or admin's mailbox). The removal from the
 mail server is the worker's job and isn't audited again (a job that gives up writes `platform.provisioning_failed`).
+Accepted exceptions (no audit row), mail-server housekeeping outside the control plane's actions:
+- **Data migrations that only queue `mailbox.ensure`** (0031 sender names, 0032 file storage lockdown) run as SQL, so
+  they can't write through the audit module or extend the hash chain. Each is logged in `migration.md`; the queued jobs
+  are rows in `provisioning_job`, a job that gives up writes `platform.provisioning_failed`, and drift the jobs didn't
+  fix is `platform.reconciler_drift`. The worker command for the same thing, `job:mailbox-backfill`, does audit
+  (`platform.mailboxes_requeued`).
+- **The file storage cleanup in the Stalwart bootstrap** (`clearFileStorage`, ops plan, 2026-10-31) runs with the
+  one-time bootstrap administrator, which has no database access. It prints counts only (accounts, shares cleared,
+  files destroyed); the operator records the run in the private ops log.
+
 Pending custom domains (`02-mail-infrastructure.md` "Pending domains don't hold a name for good"), written by the
 system **in the domain's own account scope** (target = the domain, label its name; meta `reason`, `onMailServer`):
 `domain.released` when a pending claim on the mail server lost its records — `ownership_proven_elsewhere` (another

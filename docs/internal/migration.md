@@ -33,40 +33,41 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 ## Summary
 
-| #    | Migration                           | Commit    | Date       | Change                                                                                                            | Rollback        |
-| ---- | ----------------------------------- | --------- | ---------- | ----------------------------------------------------------------------------------------------------------------- | --------------- |
-| 0031 | `0031_mailbox_sender_name_backfill` | —         | 2026-10-31 | Queue `mailbox.ensure` once per mailbox on the mail server, so its description is the sender name                 | Safe            |
-| 0030 | `0030_mailbox_name_follows_person`  | —         | 2026-10-31 | `mailbox.display_name` equal to its person's name → null (the mailbox follows the person; rule 61)                | Caution         |
-| 0029 | `0029_mailbox_delegation`           | —         | 2026-10-30 | `mailbox_delegation` table: read and manage, send as, send on behalf per mailbox and person (ADR-0026)            | Safe            |
-| 0028 | `0028_alias_creation_year`          | —         | 2026-10-29 | Seed `alias_creation_day` for the rolling year from live aliases (Free yearly cap)                                | Safe            |
-| 0027 | `0027_data_export_account_deletion` | —         | 2026-10-29 | `data_export` (sealed control-plane archives, 7 days) and `account_deletion` (grace period); ADR-0025             | Safe            |
-| 0026 | `0026_act_as_session`               | —         | 2026-10-29 | `act_as_session` table: staff support access sessions (read-only, time-boxed; ADR-0023)                           | Safe            |
-| 0025 | `0025_alias_creation_day`           | —         | 2026-10-29 | `alias_creation_day` table: alias creations per account, UTC day and kind (daily creation cap)                    | Safe            |
-| 0024 | `0024_alias_admin_lock`             | —         | 2026-10-29 | `mail_alias.admin_locked` (an administrator turned the alias off; its own person can't undo it)                   | Safe            |
-| 0023 | `0023_webmail_signature`            | —         | 2026-10-29 | `webmail_signature` (named signatures per mailbox, two default flags); `webmail_preference.signatures_started_at` | Safe            |
-| 0022 | `0022_provisioning_lock_token`      | —         | 2026-10-29 | `provisioning_job.lock_token` (per-claim token; only the claim holding a job may finish it)                       | Safe            |
-| 0021 | `0021_avatar`                       | —         | 2026-10-29 | `avatar` table: one re-encoded profile photo per person or person-less mailbox (ADR-0022)                         | Safe            |
-| 0020 | `0020_mailbox_password_by_owner`    | `f48f5d4` | 2026-10-28 | `mailbox.pending_password_by_owner` (the waiting password is the person's own choice)                             | Safe            |
-| 0019 | `0019_customer_domain_dkim_keys`    | `58fca75` | 2026-10-28 | `customer_domain.dkim_keys` (DKIM public keys per domain, read from the mail server)                              | Safe            |
-| 0018 | `0018_add_user`                     | `8c1c883` | 2026-10-24 | `mailbox.display_name`, `mailbox.must_change_password`; `user_profile.must_change_password` + profile             | Safe            |
-| 0017 | `0017_staff_suspension`             | `f7c18fa` | 2026-10-23 | `mailbox_staff_hold`; suspension reason, note, time and staff id on `customer_account`, `user_profile`            | Safe            |
-| 0016 | `0016_mailbox_storage_used`         | `f7c18fa` | 2026-10-23 | `mailbox.storage_used_bytes`, `mailbox.storage_checked_at` (last storage measurement; sizes only)                 | Safe            |
-| 0015 | `0015_platform_addresses`           | `1411b18` | 2026-10-23 | `retired_platform_address` (platform-domain addresses never reissued to another account)                          | Safe            |
-| 0014 | `0014_mailbox_password_grant`       | `0588120` | 2026-10-23 | `mailbox.pending_password_grant` (the web app's HMAC grant for the waiting hash)                                  | Safe            |
-| 0013 | `0013_mailbox_password`             | `0588120` | 2026-10-23 | `mailbox.pending_password_hash` (argon2id hash waiting for the worker), `mailbox.password_credential_id`          | Safe            |
-| 0012 | `0012_app_passwords_catch_all`      | `42a51fd` | 2026-10-22 | `app_password` (metadata only); `customer_domain.catch_all_mailbox_id`                                            | Safe            |
-| 0011 | `0011_webmail_settings`             | `42a51fd` | 2026-10-22 | `webmail_preference` (display choices per mailbox), `forwarding_target` (one confirmed target each)               | Safe            |
-| 0010 | `0010_session_sign_in_method`       | `716cc76` | 2026-10-22 | `auth_session.sign_in_method` (how the session signed in)                                                         | Safe            |
-| 0009 | `0009_sign_in_security`             | `716cc76` | 2026-10-22 | `auth_two_factor`, `auth_passkey`; `auth_user.two_factor_enabled`; `customer_account.sign_in_policy`              | Safe            |
-| 0008 | `0008_invite_send_log`              | `16f4810` | 2026-10-22 | `invite_send` table (one row per invite email sent) for the per-account daily cap                                 | Safe            |
-| 0007 | `0007_mailbox_lifecycle`            | `db1b1e0` | 2026-10-22 | `mailbox.purge_after`, partial index `mailbox_purge_idx`; `mailbox.status` gains `deleting`                       | Safe            |
-| 0006 | `0006_remove_waitlist`              | `1f7c56c` | 2026-10-22 | Drop `waitlist_entry`; drop `invite.source`, `invite.waitlist_entry_id`                                           | Not recommended |
-| 0005 | `0005_domain_claims`                | `d628175` | 2026-10-21 | Domain names unique per account; across accounts only once claimed (verified)                                     | Caution         |
-| 0004 | `0004_waitlist_opt_in_and_invites`  | `3e75c1f` | 2026-10-21 | Waitlist double opt-in columns; invite source/waitlist link/acceptance                                            | Safe            |
-| 0003 | `0003_provisioning_queue`           | `843be65` | 2026-10-21 | `provisioning_job` table; `customer_domain.stalwart_id/last_error`, `mailbox.last_error`                          | Safe            |
-| 0002 | `0002_user_first_last_name`         | `710e664` | 2026-10-21 | `auth_user.first_name` (not null, default '') and `last_name`                                                     | Safe            |
-| 0001 | `0001_audit_append_only`            | `710e664` | 2026-10-21 | Trigger blocking UPDATE/DELETE/TRUNCATE on `audit_log`                                                            | Caution         |
-| 0000 | `0000_init`                         | `710e664` | 2026-10-21 | Initial control-plane schema (14 tables)                                                                          | Safe            |
+| #    | Migration                            | Commit    | Date       | Change                                                                                                            | Rollback        |
+| ---- | ------------------------------------ | --------- | ---------- | ----------------------------------------------------------------------------------------------------------------- | --------------- |
+| 0032 | `0032_mailbox_file_storage_lockdown` | —         | 2026-10-31 | Queue `mailbox.ensure` once per mailbox on the mail server, so it gets the file storage denials                   | Safe            |
+| 0031 | `0031_mailbox_sender_name_backfill`  | —         | 2026-10-31 | Queue `mailbox.ensure` once per mailbox on the mail server, so its description is the sender name                 | Safe            |
+| 0030 | `0030_mailbox_name_follows_person`   | —         | 2026-10-31 | `mailbox.display_name` equal to its person's name → null (the mailbox follows the person; rule 61)                | Caution         |
+| 0029 | `0029_mailbox_delegation`            | —         | 2026-10-30 | `mailbox_delegation` table: read and manage, send as, send on behalf per mailbox and person (ADR-0026)            | Safe            |
+| 0028 | `0028_alias_creation_year`           | —         | 2026-10-29 | Seed `alias_creation_day` for the rolling year from live aliases (Free yearly cap)                                | Safe            |
+| 0027 | `0027_data_export_account_deletion`  | —         | 2026-10-29 | `data_export` (sealed control-plane archives, 7 days) and `account_deletion` (grace period); ADR-0025             | Safe            |
+| 0026 | `0026_act_as_session`                | —         | 2026-10-29 | `act_as_session` table: staff support access sessions (read-only, time-boxed; ADR-0023)                           | Safe            |
+| 0025 | `0025_alias_creation_day`            | —         | 2026-10-29 | `alias_creation_day` table: alias creations per account, UTC day and kind (daily creation cap)                    | Safe            |
+| 0024 | `0024_alias_admin_lock`              | —         | 2026-10-29 | `mail_alias.admin_locked` (an administrator turned the alias off; its own person can't undo it)                   | Safe            |
+| 0023 | `0023_webmail_signature`             | —         | 2026-10-29 | `webmail_signature` (named signatures per mailbox, two default flags); `webmail_preference.signatures_started_at` | Safe            |
+| 0022 | `0022_provisioning_lock_token`       | —         | 2026-10-29 | `provisioning_job.lock_token` (per-claim token; only the claim holding a job may finish it)                       | Safe            |
+| 0021 | `0021_avatar`                        | —         | 2026-10-29 | `avatar` table: one re-encoded profile photo per person or person-less mailbox (ADR-0022)                         | Safe            |
+| 0020 | `0020_mailbox_password_by_owner`     | `f48f5d4` | 2026-10-28 | `mailbox.pending_password_by_owner` (the waiting password is the person's own choice)                             | Safe            |
+| 0019 | `0019_customer_domain_dkim_keys`     | `58fca75` | 2026-10-28 | `customer_domain.dkim_keys` (DKIM public keys per domain, read from the mail server)                              | Safe            |
+| 0018 | `0018_add_user`                      | `8c1c883` | 2026-10-24 | `mailbox.display_name`, `mailbox.must_change_password`; `user_profile.must_change_password` + profile             | Safe            |
+| 0017 | `0017_staff_suspension`              | `f7c18fa` | 2026-10-23 | `mailbox_staff_hold`; suspension reason, note, time and staff id on `customer_account`, `user_profile`            | Safe            |
+| 0016 | `0016_mailbox_storage_used`          | `f7c18fa` | 2026-10-23 | `mailbox.storage_used_bytes`, `mailbox.storage_checked_at` (last storage measurement; sizes only)                 | Safe            |
+| 0015 | `0015_platform_addresses`            | `1411b18` | 2026-10-23 | `retired_platform_address` (platform-domain addresses never reissued to another account)                          | Safe            |
+| 0014 | `0014_mailbox_password_grant`        | `0588120` | 2026-10-23 | `mailbox.pending_password_grant` (the web app's HMAC grant for the waiting hash)                                  | Safe            |
+| 0013 | `0013_mailbox_password`              | `0588120` | 2026-10-23 | `mailbox.pending_password_hash` (argon2id hash waiting for the worker), `mailbox.password_credential_id`          | Safe            |
+| 0012 | `0012_app_passwords_catch_all`       | `42a51fd` | 2026-10-22 | `app_password` (metadata only); `customer_domain.catch_all_mailbox_id`                                            | Safe            |
+| 0011 | `0011_webmail_settings`              | `42a51fd` | 2026-10-22 | `webmail_preference` (display choices per mailbox), `forwarding_target` (one confirmed target each)               | Safe            |
+| 0010 | `0010_session_sign_in_method`        | `716cc76` | 2026-10-22 | `auth_session.sign_in_method` (how the session signed in)                                                         | Safe            |
+| 0009 | `0009_sign_in_security`              | `716cc76` | 2026-10-22 | `auth_two_factor`, `auth_passkey`; `auth_user.two_factor_enabled`; `customer_account.sign_in_policy`              | Safe            |
+| 0008 | `0008_invite_send_log`               | `16f4810` | 2026-10-22 | `invite_send` table (one row per invite email sent) for the per-account daily cap                                 | Safe            |
+| 0007 | `0007_mailbox_lifecycle`             | `db1b1e0` | 2026-10-22 | `mailbox.purge_after`, partial index `mailbox_purge_idx`; `mailbox.status` gains `deleting`                       | Safe            |
+| 0006 | `0006_remove_waitlist`               | `1f7c56c` | 2026-10-22 | Drop `waitlist_entry`; drop `invite.source`, `invite.waitlist_entry_id`                                           | Not recommended |
+| 0005 | `0005_domain_claims`                 | `d628175` | 2026-10-21 | Domain names unique per account; across accounts only once claimed (verified)                                     | Caution         |
+| 0004 | `0004_waitlist_opt_in_and_invites`   | `3e75c1f` | 2026-10-21 | Waitlist double opt-in columns; invite source/waitlist link/acceptance                                            | Safe            |
+| 0003 | `0003_provisioning_queue`            | `843be65` | 2026-10-21 | `provisioning_job` table; `customer_domain.stalwart_id/last_error`, `mailbox.last_error`                          | Safe            |
+| 0002 | `0002_user_first_last_name`          | `710e664` | 2026-10-21 | `auth_user.first_name` (not null, default '') and `last_name`                                                     | Safe            |
+| 0001 | `0001_audit_append_only`             | `710e664` | 2026-10-21 | Trigger blocking UPDATE/DELETE/TRUNCATE on `audit_log`                                                            | Caution         |
+| 0000 | `0000_init`                          | `710e664` | 2026-10-21 | Initial control-plane schema (14 tables)                                                                          | Safe            |
 
 ## Details
 
@@ -95,6 +96,24 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0032_mailbox_file_storage_lockdown · — · 2026-10-31 · Safe
+
+- Added: —
+- Changed: —
+- Removed: —
+- Data: one queued `mailbox.ensure` in `provisioning_job` for every mailbox on the mail server (`stalwart_id` set),
+  whatever its status. The worker writes the customer lockdown again, which now denies the mail server's file storage
+  (`FILE_STORAGE_PERMISSIONS`: JMAP FileNode and WebDAV files) and share notifications (`07-security.md` "App
+  passwords"): active mailboxes get the lockdown; suspended and deleting ones the suspension (a superset, still in
+  force; one past its grace period is left to the purge); a failed one's job is its retry (it still waits for an
+  administrator's password before turning anything on); a provisioning one already has its own queued ensure (its
+  account is suspended until then). Denials reach an existing account only when its permissions are written, so this
+  applies them on deploy; the hourly reconciler also finds any left (`sieveLockMismatch`) and re-queues them. No audit
+  row (SQL migration; accepted exception in `audit.md`). On a local test database with mailbox rows left by
+  earlier integration runs (their domains long gone from the mail server), those jobs fail with "Unknown domain" and
+  can be marked failed; CI starts from an empty database.
+- Rollback: nothing to undo (the jobs only re-apply the intended state; finished jobs can stay).
 
 ### 0031_mailbox_sender_name_backfill · — · 2026-10-31 · Safe
 
