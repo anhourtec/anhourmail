@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { MemoryUnitOfWork } from "@anhourmail/adapters/memory";
 import type { MailMessage } from "@anhourmail/adapters/mail";
+import { setWebmailSenderName, webmailSenderName, webmailSendingNames } from "@anhourmail/core/people";
 import { WebmailSettingsService, WebmailSignaturesService } from "@anhourmail/core/webmail";
 import { createKeyRing } from "@anhourmail/server/keyring";
 import { setLogSinkForTests } from "@anhourmail/server/log";
@@ -14,7 +15,7 @@ import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 import { checkJmapRequest } from "./jmap-policy";
 import { GrantRefusedError, WebmailRefusedError, WebmailService } from "./service";
 import { memoryKv, WebmailSessionStore } from "./session-store";
-import { IdentityChange, WebmailSettings } from "./settings";
+import { SenderNameChange, WebmailSettings } from "./settings";
 import { DEFAULT_RULES, parseScript } from "./sieve";
 
 const MAIL = "urn:ietf:params:jmap:mail";
@@ -139,7 +140,11 @@ async function setup() {
   const sieveFail = { fail: false };
   /** Accounts whose managed script a user switched off. */
   const inactive = new Set<string>();
+  /** Makes the control-plane sender-name lookup fail (the database unreachable). */
+  const namesDown = { down: false };
   const confirmedSource: { core?: WebmailSettingsService } = {};
+  const uow = new MemoryUnitOfWork();
+  const deps = { uow, clock: { now: () => new Date() }, platform: PUBLIC_PLATFORM };
   const svc = new WebmailService({
     store: new WebmailSessionStore(memoryKv(), createKeyRing([{ id: "k", key: randomBytes(32) }])),
     oauth: {
@@ -169,13 +174,22 @@ async function setup() {
     },
     fetch: fake.fetchImpl,
     defer: () => undefined,
+    senderName: (address) => {
+      if (namesDown.down) return Promise.reject(new Error("database unreachable"));
+      return webmailSendingNames(deps, address);
+    },
   });
   const { sessionId } = await svc.signIn("a@x.test", "right");
-  const uow = new MemoryUnitOfWork();
+  // The mailbox belongs to Ada, a member of its account only: its sender name is her name (rule 61).
+  const accountId = randomUUID();
+  const mailboxId = randomUUID();
+  uow.state.userEmails.ada = "ada@console.test";
+  uow.state.userNames.ada = "Ada Lovelace";
+  uow.state.memberships.push({ userId: "ada", accountId, role: "member" });
   uow.state.mailboxes.push({
-    id: randomUUID(),
-    accountId: randomUUID(),
-    userId: null,
+    id: mailboxId,
+    accountId,
+    userId: "ada",
     address: "a@x.test",
     status: "active",
     quotaBytes: 1,
@@ -192,13 +206,17 @@ async function setup() {
       sent.push(m);
     },
   };
-  const core = new WebmailSettingsService({ uow, clock: { now: () => new Date() }, platform: PUBLIC_PLATFORM });
+  const core = new WebmailSettingsService(deps);
   confirmedSource.core = core;
   const signatures = new WebmailSignaturesService({ uow, clock: { now: () => new Date() }, platform: PUBLIC_PLATFORM });
   const settings = new WebmailSettings({
     mail: svc,
     settings: core,
     signatures,
+    senderNames: {
+      get: (address) => webmailSenderName(deps, address),
+      set: (address, input, r) => setWebmailSenderName(deps, address, input, r),
+    },
     mailer,
     webmailUrl: "https://mail.example/",
     siteHost: "example.test",
@@ -208,6 +226,8 @@ async function setup() {
     svc,
     sessionId,
     uow,
+    accountId,
+    mailboxId,
     sent,
     mailer,
     core,
@@ -217,6 +237,7 @@ async function setup() {
     managed,
     sieveFail,
     inactive,
+    namesDown,
     ...fake,
   };
 }
@@ -227,18 +248,131 @@ describe("settings in the mail server", () => {
     expect(await t.svc.quota(t.sessionId)).toEqual({ used: 1234, limit: 5000 });
   });
 
-  it("changes the sender name of own identities only", async () => {
+  it("names every identity with the mailbox's sender name from the control plane, renaming them on the server", async () => {
     const t = await setup();
-    const out = await t.svc.updateIdentity(t.sessionId, "acc1", "i1", { name: "Sam" });
-    expect(out).toMatchObject({ id: "i1", name: "Sam" });
-    expect(t.state.identities.get("i1")).toMatchObject({ name: "Sam", textSignature: "" });
-    expect((await t.svc.identities(t.sessionId)).find((i) => i.id === "i1")?.name).toBe("Sam");
-    await expect(t.svc.updateIdentity(t.sessionId, "acc1", "other", { name: "x" })).rejects.toThrow(
-      /isn't one of yours/,
-    );
-    await expect(t.svc.updateIdentity(t.sessionId, "acc2", "i1", { name: "x" })).rejects.toThrow(/active mailbox/);
+    const list = await t.svc.identities(t.sessionId);
+    expect(list.map((i) => i.name)).toEqual(["Ada Lovelace", "Ada Lovelace"]);
+    // Renamed on the mail server too (the session's own token), signatures untouched.
+    expect(t.state.identities.get("i1")).toMatchObject({ name: "Ada Lovelace", textSignature: "" });
+    expect(t.state.identities.get("i2")).toMatchObject({ name: "Ada Lovelace", textSignature: "Hi there" });
+    // A change in the control plane (the console Profile) shows on the next read, inside the cache minute.
+    t.uow.state.userNames.ada = "Ada King";
+    expect((await t.svc.identities(t.sessionId)).map((i) => i.name)).toEqual(["Ada King", "Ada King"]);
+    expect(t.state.identities.get("i2")?.name).toBe("Ada King");
+  });
+
+  it("gives a masked alias no name, on the server too, while a plain alias keeps the sender name", async () => {
+    const t = await setup();
+    const alias = (address: string, kind: "alias" | "masked") => ({
+      id: randomUUID(),
+      accountId: t.accountId,
+      mailboxId: t.mailboxId,
+      address,
+      kind,
+      enabled: true,
+      adminLocked: false,
+      description: null,
+      createdAt: new Date(),
+    });
+    t.uow.state.aliases.push(alias("hello@x.test", "masked"));
+    t.state.identities.set("i3", {
+      id: "i3",
+      name: "Shop",
+      email: "shop@x.test",
+      textSignature: "",
+      htmlSignature: "",
+    });
+    t.uow.state.aliases.push(alias("shop@x.test", "alias"));
+    expect((await t.svc.identities(t.sessionId)).map((i) => [i.email, i.name])).toEqual([
+      ["a@x.test", "Ada Lovelace"],
+      ["hello@x.test", ""],
+      ["shop@x.test", "Ada Lovelace"],
+    ]);
+    expect(t.state.identities.get("i2")).toMatchObject({ name: "", textSignature: "Hi there" });
+    expect(t.state.identities.get("i3")?.name).toBe("Ada Lovelace");
+    // A new name in the control plane renames the address and the plain alias, never the masked one.
+    t.uow.state.userNames.ada = "Ada King";
+    expect((await t.svc.identities(t.sessionId)).map((i) => i.name)).toEqual(["Ada King", "", "Ada King"]);
+    expect(t.state.identities.get("i2")?.name).toBe("");
+  });
+
+  it("sends with no name at all while the control plane can't be read, never the mail server's names", async () => {
+    const t = await setup();
+    // The mail server still names every identity after the person (e.g. a masked alias not yet renamed).
+    const i2 = t.state.identities.get("i2");
+    if (!i2) throw new Error("no identity");
+    t.state.identities.set("i2", { ...i2, name: "Ada Lovelace" });
+    t.namesDown.down = true;
+    expect((await t.svc.identities(t.sessionId)).map((i) => i.name)).toEqual(["", ""]);
+    // Nothing renamed on the server and nothing cached: the next read with the control plane back has the real names.
+    expect(t.state.identities.get("i2")?.name).toBe("Ada Lovelace");
+    t.namesDown.down = false;
+    expect((await t.svc.identities(t.sessionId)).map((i) => i.name)).toEqual(["Ada Lovelace", "Ada Lovelace"]);
+  });
+
+  it("follows an admin's custom display name, and none clears the names", async () => {
+    const t = await setup();
+    const box = t.uow.state.mailboxes.find((m) => m.id === t.mailboxId);
+    if (!box) throw new Error("no mailbox");
+    box.displayName = "Support desk";
+    expect((await t.svc.identities(t.sessionId)).map((i) => i.name)).toEqual(["Support desk", "Support desk"]);
+    box.displayName = null;
+    box.userId = null;
+    expect((await t.svc.identities(t.sessionId)).map((i) => i.name)).toEqual(["", ""]);
+    expect(t.state.identities.get("i2")?.name).toBe("");
+  });
+
+  it("still sends as the control-plane name when the server refuses the rename, and tries again", async () => {
+    const t = await setup();
     t.state.refuseIdentity = true;
-    await expect(t.svc.updateIdentity(t.sessionId, "acc1", "i1", { name: "x" })).rejects.toThrow(/wasn't saved/);
+    expect((await t.svc.identities(t.sessionId)).map((i) => i.name)).toEqual(["Ada Lovelace", "Ada Lovelace"]);
+    expect(t.state.identities.get("i2")?.name).toBe("Hello");
+    t.state.refuseIdentity = false;
+    expect((await t.svc.refreshIdentities(t.sessionId, "acc1")).map((i) => i.name)).toEqual([
+      "Ada Lovelace",
+      "Ada Lovelace",
+    ]);
+    expect(t.state.identities.get("i2")?.name).toBe("Ada Lovelace");
+  });
+
+  it("shows the sender name in the overview, and refuses a change the webmail may not make", async () => {
+    const t = await setup();
+    expect((await t.settings.overview(t.sessionId)).sender).toEqual({
+      name: "Ada Lovelace",
+      source: "person",
+      editable: true,
+    });
+    await expect(t.settings.updateSenderName(t.sessionId, "acc2", { name: "X" }, req)).rejects.toThrow(
+      /active mailbox/,
+    );
+    // An admin's custom display name is read-only here (403, audited as denied; the person's name is untouched).
+    const box = t.uow.state.mailboxes.find((m) => m.id === t.mailboxId);
+    if (!box) throw new Error("no mailbox");
+    box.displayName = "Support desk";
+    expect((await t.settings.overview(t.sessionId)).sender).toMatchObject({
+      name: "Support desk",
+      source: "custom",
+      editable: false,
+      reason: expect.stringMatching(/admin/) as unknown,
+    });
+    await expect(t.settings.updateSenderName(t.sessionId, "acc1", { name: "X" }, req)).rejects.toThrow(/admin/);
+    expect(t.uow.state.audit.at(-1)).toMatchObject({
+      action: "account.profile_changed",
+      result: "denied",
+      errorCode: "admin_set",
+    });
+    expect(t.uow.state.userNames.ada).toBe("Ada Lovelace");
+    // In another account too: changed only from the console.
+    box.displayName = null;
+    t.uow.state.memberships.push({ userId: "ada", accountId: randomUUID(), role: "member" });
+    await expect(t.settings.updateSenderName(t.sessionId, "acc1", { name: "X" }, req)).rejects.toThrow(/console/);
+    expect(t.uow.state.audit.at(-1)).toMatchObject({ result: "denied", errorCode: "other_account" });
+  });
+
+  it("leaves identities alone for an address the control plane doesn't hold", async () => {
+    const t = await setup();
+    t.uow.state.mailboxes.length = 0;
+    expect((await t.svc.identities(t.sessionId)).map((i) => i.name)).toEqual(["a@x.test", "Hello"]);
   });
 
   it("writes and reads back the one managed script with management credentials", async () => {
@@ -434,8 +568,17 @@ describe("webmail settings: control plane and mail server together", () => {
     const junk = t.uow.state.audit.at(-1);
     expect(junk).toMatchObject({ action: "junk_rules.changed", meta: { blocked: 1, safe: 0, trustedOnly: false } });
     expect(JSON.stringify(junk)).not.toContain("bad@spam.example");
-    await t.settings.updateIdentity(t.sessionId, "acc1", "i1", { name: "Sam" }, req);
-    expect(t.uow.state.audit.at(-1)).toMatchObject({ action: "identity.changed", meta: { fields: ["name"] } });
+    const named = await t.settings.updateSenderName(t.sessionId, "acc1", { name: "Sam Lee" }, req);
+    expect(named.sender).toMatchObject({ name: "Sam Lee", source: "person", editable: true });
+    expect(named.identities.map((i) => i.name)).toEqual(["Sam Lee", "Sam Lee"]);
+    expect(t.uow.state.userNames.ada).toBe("Sam Lee");
+    const renamed = t.uow.state.audit.at(-1);
+    expect(renamed).toMatchObject({
+      action: "account.profile_changed",
+      result: "success",
+      meta: { fields: ["name"], self: true, via: "webmail" },
+    });
+    expect(JSON.stringify(renamed)).not.toContain("Sam Lee");
     await expect(
       t.settings.saveJunk(t.sessionId, "acc2", { blocked: [], safe: [], trustedOnly: false }, req),
     ).rejects.toThrow(/active mailbox/);
@@ -487,10 +630,10 @@ describe("webmail settings: control plane and mail server together", () => {
   });
 
   it("validates sender names (signatures are named signatures now, not identity fields)", () => {
-    expect(IdentityChange.parse({ name: ' Sam "S" <x>\n' })).toEqual({ name: "Sam S x" });
-    expect(IdentityChange.safeParse({ signature: "Hi" }).success).toBe(false);
-    expect(IdentityChange.safeParse({}).success).toBe(false);
-    expect(IdentityChange.safeParse({ name: "x".repeat(101) }).success).toBe(false);
+    expect(SenderNameChange.parse({ name: ' Sam "S" <x>\n' })).toEqual({ name: "Sam S x" });
+    expect(SenderNameChange.safeParse({ signature: "Hi" }).success).toBe(false);
+    expect(SenderNameChange.safeParse({}).success).toBe(false);
+    expect(SenderNameChange.safeParse({ name: "x".repeat(201) }).success).toBe(false);
   });
 });
 

@@ -849,9 +849,9 @@ export const ROUTES: readonly RouteSpec[] = [
     guard: "webmail",
   },
   {
-    method: "PATCH",
-    path: "/api/webmail/settings/identities/:identityId",
-    file: "app/api/webmail/settings/identities/[identityId]/route.ts",
+    method: "PUT",
+    path: "/api/webmail/settings/sender-name",
+    file: "app/api/webmail/settings/sender-name/route.ts",
     guard: "webmail",
   },
   // Named signatures and their defaults (docs/internal/05-webmail.md "Signatures"): the session's own mailbox only.

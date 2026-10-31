@@ -15,6 +15,7 @@ import { hashPassword } from "@anhourmail/adapters/auth";
 import { MemoryUnitOfWork } from "@anhourmail/adapters/memory";
 import type { MailMessage } from "@anhourmail/adapters/mail";
 import { systemClock } from "@anhourmail/core";
+import { setWebmailSenderName, webmailSenderName } from "@anhourmail/core/people";
 import { WebmailSettingsService, WebmailSignaturesService } from "@anhourmail/core/webmail";
 import { memorySlidingQuota } from "@anhourmail/server/rate-limit";
 import { createKeyRing } from "@anhourmail/server/keyring";
@@ -206,6 +207,11 @@ describe("webmail settings on the dev Stalwart", () => {
     mail,
     settings: core,
     signatures: new WebmailSignaturesService({ uow, clock: systemClock, platform: PUBLIC_PLATFORM }),
+    senderNames: {
+      get: (address) => webmailSenderName({ uow, clock: systemClock, platform: PUBLIC_PLATFORM }, address),
+      set: (address, input, r) =>
+        setWebmailSenderName({ uow, clock: systemClock, platform: PUBLIC_PLATFORM }, address, input, r),
+    },
     mailer: { send: async (m) => void sent.push(m) },
     webmailUrl: WEBMAIL_URL,
     siteHost: PUBLIC_PLATFORM.hosts.site,

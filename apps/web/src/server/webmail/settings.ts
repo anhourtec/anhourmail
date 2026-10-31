@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { RequestMeta } from "@anhourmail/core";
 import { maskEmail } from "@anhourmail/core/audit";
+import type { WebmailSenderName } from "@anhourmail/core/people";
 import {
   FORWARDING_LINK_HOURS,
   type ForwardingView,
@@ -39,15 +40,26 @@ type MailServer = Pick<
   | "quota"
   | "mailRules"
   | "saveMailRules"
-  | "updateIdentity"
+  | "refreshIdentities"
   | "legacySignature"
   | "mirrorSignature"
 >;
 type Mailer = { send(message: ReturnType<typeof forwardingConfirmEmail>): Promise<void> };
 
+/** The mailbox's sender name (core `WebmailSenderName`): the one source, and whether the webmail may change it. */
+export type SenderNameView = WebmailSenderName;
+
+/** The control plane's sender names (core `webmailSenderName` / `setWebmailSenderName`). */
+type SenderNames = {
+  get(address: string): Promise<WebmailSenderName | null>;
+  set(address: string, input: { name: string }, req: RequestMeta): Promise<WebmailSenderName>;
+};
+
 export type SettingsOverview = {
   accountId: string;
   address: string;
+  /** The sender name on mail from this mailbox; null for an address the control plane doesn't hold. */
+  sender: SenderNameView | null;
   preferences: WebmailPreferences;
   identities: Identity[];
   quota: { used: number; limit: number | null };
@@ -57,21 +69,20 @@ export type SettingsOverview = {
   forwardingTarget: ForwardingView | null;
 };
 
-/** A sender name: one line, no characters that change how it's read in a header. */
-export const IdentityChange = z
+/** A sender name: one line, no characters that change how it's read in a header (the service checks the rest). */
+export const SenderNameChange = z
   .object({
     name: z
       .string()
-      .max(100)
+      .max(200)
       .transform((s) =>
         s
           .replace(/[\p{Cc}"<>]/gu, " ")
           .replace(/\s+/g, " ")
           .trim(),
-      )
-      .optional(),
+      ),
   })
-  .refine((v) => v.name !== undefined, { message: "Nothing to change." });
+  .strict();
 
 /** The longest signature request body: the HTML cap plus room for JSON escaping and the name. */
 export const MAX_SIGNATURE_BODY = SIGNATURE_HTML_MAX * 2 + 4096;
@@ -103,6 +114,7 @@ export class WebmailSettings {
       mail: MailServer;
       settings: WebmailSettingsService;
       signatures: WebmailSignaturesService;
+      senderNames: SenderNames;
       mailer: Mailer;
       webmailUrl: string;
       /** The deployment's public site host, for the footer of the confirmation email. */
@@ -129,16 +141,18 @@ export class WebmailSettings {
 
   async overview(sessionId: string): Promise<SettingsOverview> {
     const address = await this.#address(sessionId);
-    const [preferences, identities, quota, rules, forwardingTarget] = await Promise.all([
+    const [preferences, identities, quota, rules, forwardingTarget, sender] = await Promise.all([
       this.d.settings.preferences(address),
       this.d.mail.identities(sessionId),
       this.d.mail.quota(sessionId),
       this.d.mail.mailRules(sessionId),
       this.d.settings.forwarding(address),
+      this.d.senderNames.get(address),
     ]);
     return {
       accountId: rules.accountId,
       address,
+      sender,
       preferences,
       identities,
       quota,
@@ -165,25 +179,21 @@ export class WebmailSettings {
     return this.d.settings.updatePreferences(s.username, patch, req);
   }
 
-  async updateIdentity(
+  /**
+   * "Sender name": changes the one source (core `setWebmailSenderName`: the mailbox person's name, audited as their
+   * profile change), then renames the mailbox's identities on the mail server with the session's token right away.
+   * Refused (403) when an admin set the mailbox's name, or the person is in another account too.
+   */
+  async updateSenderName(
     sessionId: string,
     account: string,
-    identityId: string,
-    change: z.infer<typeof IdentityChange>,
+    change: z.infer<typeof SenderNameChange>,
     req: RequestMeta,
-  ): Promise<Identity> {
+  ): Promise<{ sender: SenderNameView; identities: Identity[] }> {
     const { address } = await this.#pinned(sessionId, account);
-    const updated = await this.d.mail.updateIdentity(sessionId, account, identityId, {
-      ...(change.name !== undefined ? { name: change.name } : {}),
-    });
-    const fields = change.name !== undefined ? ["name"] : [];
-    await this.d.settings.recordMailFlow(
-      address,
-      "identity.changed",
-      { fields, identity: maskEmail(updated.email) },
-      req,
-    );
-    return updated;
+    const sender = await this.d.senderNames.set(address, { name: change.name }, req);
+    const identities = await this.d.mail.refreshIdentities(sessionId, account);
+    return { sender, identities };
   }
 
   // ---- signatures (docs/internal/05-webmail.md "Signatures") ---------------------------------------------------
