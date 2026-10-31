@@ -262,6 +262,8 @@ function fakeStalwart() {
     ]),
     cards: new Map<string, Record<string, unknown> & { id: string }>(),
     failContacts: false,
+    /** Every `Identity/set` update the service sent (the names it renamed identities to). */
+    identityUpdates: [] as Record<string, unknown>[],
   };
   const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
     "AddressBook/get": () => ({ list: [...state.books.values()] }),
@@ -323,6 +325,11 @@ function fakeStalwart() {
     "Identity/get": () => ({
       list: [identity, { id: "i2", name: "a@x.test", email: "hello@x.test" }],
     }),
+    "Identity/set": (a) => {
+      const update = a.update as Record<string, unknown>;
+      state.identityUpdates.push(update);
+      return { updated: Object.fromEntries(Object.keys(update).map((id) => [id, null])) };
+    },
     "Email/get": (a) => ({ list: (a.ids as string[]).map((id) => state.emails.get(id)).filter(Boolean) }),
     "Email/set": (a) => {
       const created: Record<string, { id: string }> = {};
@@ -416,6 +423,7 @@ function setup(
   allowed: (a: string) => boolean = () => true,
   quota: SlidingQuotaStore = memorySlidingQuota(),
   holdSeconds?: (address: string) => Promise<number>,
+  senderName?: (address: string) => Promise<{ name: string | null; masked?: readonly string[] } | null>,
 ) {
   const fake = fakeStalwart();
   const deferred: { fn: () => void; ms: number }[] = [];
@@ -447,6 +455,7 @@ function setup(
       deferred.push({ fn, ms });
     },
     ...(holdSeconds ? { holdSeconds } : {}),
+    ...(senderName ? { senderName } : {}),
   });
   return { svc, deferred, afterHold, ...fake };
 }
@@ -564,6 +573,26 @@ describe("compose and send through the BFF", () => {
       size: 3,
     });
     expect(t.state.uploads).toEqual([{ type: "image/png", size: 3 }]);
+  });
+
+  it("names a masked alias with no name and sends from it with none; the address and plain aliases get the name", async () => {
+    // hello@ is one of the mailbox's masked aliases in the control plane (any case).
+    const names = async (address: string) =>
+      address === "a@x.test" ? { name: "Ada Lovelace", masked: ["HELLO@x.test"] } : null;
+    const t = setup(undefined, undefined, undefined, names);
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    expect((await t.svc.identities(sessionId)).map((i) => [i.email, i.name])).toEqual([
+      ["a@x.test", "Ada Lovelace"],
+      ["hello@x.test", ""],
+    ]);
+    // Renamed on the mail server: the address to the sender name, the masked alias to no name (it was its address).
+    expect(t.state.identityUpdates).toEqual([{ i1: { name: "Ada Lovelace" }, i2: { name: "" } }]);
+    const masked = await t.svc.saveDraft(sessionId, draft({ identityId: "i2" }));
+    expect(t.state.emails.get(masked.id)?.from).toEqual([{ name: null, email: "hello@x.test" }]);
+    await t.svc.send(sessionId, masked.id, "i2");
+    expect(t.state.emails.get(masked.id)?.from).toEqual([{ name: null, email: "hello@x.test" }]);
+    const own = await t.svc.saveDraft(sessionId, draft());
+    expect(t.state.emails.get(own.id)?.from).toEqual([{ name: "Ada Lovelace", email: "a@x.test" }]);
   });
 
   it("caches identities and folder roles per mailbox", async () => {

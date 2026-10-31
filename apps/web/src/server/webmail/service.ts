@@ -287,6 +287,13 @@ export type WebmailDeps = {
   /** The managed Sieve script (automatic replies, forwarding, junk rules), via management credentials. */
   sieve: ManagedSieve;
   /**
+   * The sender name of a mailbox in the control plane (core `webmailSendingNames`; rule 61), by its address: what its
+   * identities are named and what it sends as. `masked`: the mailbox's masked alias addresses, whose identities are
+   * named and send with no name (ADR-0014 update 2026-10-31). Null for an address we don't hold. Absent: identities
+   * keep their names.
+   */
+  senderName?: (address: string) => Promise<{ name: string | null; masked?: readonly string[] } | null>;
+  /**
    * The mailbox's confirmed forwarding target in the control plane (`forwarding_target`), or null. Every rules write
    * keeps a redirect only to this address — never what the script comment or the caller says.
    */
@@ -405,11 +412,35 @@ function delegatedEntries(s: WebmailSession): MailboxTokens[] {
   return [s, ...(s.others ?? [])].filter((m) => m.delegated !== undefined);
 }
 
+/** A mailbox's sender name from the control plane, and its masked alias addresses (lower-cased). */
+/** `#wantedNames` couldn't read the control plane: identities go out with no name until it can (fail closed). */
+const UNAVAILABLE = Symbol("sender names unavailable");
+
+type WantedNames = { name: string | null; masked: ReadonlySet<string> };
+
+/**
+ * The name an identity should carry: none (`""`, never the person's name) for a masked alias, so a website can't tie
+ * it to the person; the mailbox's sender name for its own address and its plain aliases.
+ */
+function wantedFor(w: WantedNames, i: Pick<Identity, "email">): string | null {
+  return w.masked.has(i.email.trim().toLowerCase()) ? "" : w.name;
+}
+
+/** An identity already carries the sender name `wanted` (none: empty, or just its address; `""`: empty only). */
+function sameName(i: Identity, wanted: string | null): boolean {
+  const have = i.name.trim();
+  if (wanted === null) return have === "" || have.toLowerCase() === i.email.toLowerCase();
+  return have === wanted;
+}
+
+/** Every identity in a cached list carries its wanted name. */
+const named = (list: Identity[], w: WantedNames): boolean => list.every((i) => i.name === (wantedFor(w, i) ?? ""));
+
 export class WebmailService {
   readonly #d: Required<
-    Omit<WebmailDeps, "sleep" | "handoffSignIn" | "consoleSessionAlive" | "delegation" | "onBehalfKey">
+    Omit<WebmailDeps, "sleep" | "handoffSignIn" | "consoleSessionAlive" | "delegation" | "onBehalfKey" | "senderName">
   > &
-    Pick<WebmailDeps, "sleep" | "handoffSignIn" | "consoleSessionAlive" | "delegation" | "onBehalfKey">;
+    Pick<WebmailDeps, "sleep" | "handoffSignIn" | "consoleSessionAlive" | "delegation" | "onBehalfKey" | "senderName">;
   /** Console sessions seen alive recently (handoff-born webmail sessions), until when. */
   readonly #consoleAlive = new Map<string, number>();
   readonly #base: string;
@@ -2231,8 +2262,16 @@ export class WebmailService {
       const theirSent = boxes.find((b) => b.role === "sent")?.id;
       if (!theirDrafts || !theirSent) throw new WebmailUnavailableError("no Drafts or Sent folder");
       // Its own address, never one of its aliases: the From is the mailbox itself.
-      const theirs = ((meta.get("i")?.list ?? []) as Identity[]).find((i) => i.email.toLowerCase() === want);
-      if (!theirs) throw new WebmailUnavailableError("the mailbox has no sending identity");
+      const found = ((meta.get("i")?.list ?? []) as Identity[]).find((i) => i.email.toLowerCase() === want);
+      if (!found) throw new WebmailUnavailableError("the mailbox has no sending identity");
+      // Sent with the mailbox's sender name from the control plane (rule 61), not whatever its identity still says.
+      const theirNames = this.#d.senderName ? await this.#wantedNames(want) : undefined;
+      const theirs =
+        theirNames === undefined
+          ? found
+          : theirNames === UNAVAILABLE
+            ? { ...found, name: "" }
+            : { ...found, name: wantedFor(theirNames, found) ?? "" };
       const attachments = await this.#copyAttachments(sessionId, ownAccount, entry, input.attachments);
 
       // Charged to the stricter limits, per mailbox sent from and per session, failing closed (rule 27).
@@ -2596,29 +2635,99 @@ export class WebmailService {
     return roles;
   }
 
-  /** The active mailbox's sending identities (its address, aliases, masked aliases), cached for a minute. */
+  /**
+   * The active mailbox's sending identities (its address, aliases, masked aliases), cached for a minute, each named
+   * with the mailbox's sender name from the control plane (the one source, `senderName`; rule 61) — except masked
+   * aliases, which carry and send with no name (ADR-0014 update 2026-10-31). Identities the mail
+   * server has under another name are renamed here with the session's own token — the web app's management key can't
+   * write identities (ADR-0014 update 2026-10-31) — so other JMAP mail apps see the same name; a rename that fails is
+   * logged and tried again on the next read, and the webmail sends with the control-plane name either way.
+   */
   async identities(sessionId: string): Promise<Identity[]> {
     // A delegated mailbox's identities need a send right (ADR-0026 §6); none is used yet.
-    const accountId = (await this.#ownActive(sessionId)).accountId;
+    const s = await this.#ownActive(sessionId);
+    const accountId = s.accountId;
+    const wanted = this.#d.senderName ? await this.#wantedNames(s.username) : undefined;
     const hit = this.#identities.get(accountId);
-    if (hit && this.#d.now() - hit.at < META_TTL_MS) return hit.list;
+    if (
+      wanted !== UNAVAILABLE &&
+      hit &&
+      this.#d.now() - hit.at < META_TTL_MS &&
+      (wanted === undefined || named(hit.list, wanted))
+    ) {
+      return hit.list;
+    }
     const r = await this.#call(
       sessionId,
-      (s) => [
-        ["Identity/get", { accountId: s.accountId, ids: null, properties: ["name", "email", "textSignature"] }, "i"],
+      (x) => [
+        ["Identity/get", { accountId: x.accountId, ids: null, properties: ["name", "email", "textSignature"] }, "i"],
       ],
       USING_SUBMISSION,
       // Cached under this account: the answer must be this account's, whatever became active meanwhile.
       accountId,
     );
-    const list = ((r.get("i")?.list ?? []) as (Identity & { textSignature?: string | null })[]).map((i) => ({
+    const found = ((r.get("i")?.list ?? []) as (Identity & { textSignature?: string | null })[]).map((i) => ({
       id: i.id,
       name: i.name,
       email: i.email,
       signature: i.textSignature ?? "",
     }));
+    // The control plane can't say which addresses are masked aliases right now: send from every address with no name
+    // (never the mail server's, which may be the person's) and keep nothing, so the next read gets the real names.
+    if (wanted === UNAVAILABLE) return found.map((i) => ({ ...i, name: "" }));
+    if (wanted !== undefined) await this.#rename(sessionId, accountId, found, wanted);
+    const list = wanted === undefined ? found : found.map((i) => ({ ...i, name: wantedFor(wanted, i) ?? "" }));
     this.#identities.set(accountId, { at: this.#d.now(), list });
     return list;
+  }
+
+  /**
+   * The mailbox's sender name in the control plane (null: none) and its masked aliases; undefined when the control
+   * plane doesn't hold this mailbox, `UNAVAILABLE` when it can't be read now.
+   */
+  async #wantedNames(address: string): Promise<WantedNames | typeof UNAVAILABLE | undefined> {
+    try {
+      const v = await this.#d.senderName?.(address);
+      if (v === null || v === undefined) return undefined;
+      return { name: v.name, masked: new Set((v.masked ?? []).map((a) => a.trim().toLowerCase())) };
+    } catch (err) {
+      log.warn("webmail sender name unavailable", { component: "webmail", err });
+      return UNAVAILABLE;
+    }
+  }
+
+  /**
+   * Renames the identities whose name on the mail server isn't the wanted one (`wantedFor`; none: an empty name). Best
+   * effort.
+   */
+  async #rename(sessionId: string, accountId: string, list: Identity[], wanted: WantedNames): Promise<void> {
+    const stale = list.filter((i) => !sameName(i, wantedFor(wanted, i)));
+    if (stale.length === 0) return;
+    try {
+      const r = await this.#call(
+        sessionId,
+        (x) => [
+          [
+            "Identity/set",
+            {
+              accountId: x.accountId,
+              update: Object.fromEntries(stale.map((i) => [i.id, { name: wantedFor(wanted, i) ?? "" }])),
+            },
+            "u",
+          ],
+        ],
+        USING_SUBMISSION,
+        accountId,
+      );
+      const refused = Object.values((r.get("u")?.notUpdated ?? {}) as Record<string, { type?: unknown }>);
+      if (refused.length > 0) {
+        const type = refused[0]?.type;
+        log.warn("identity name not saved", { component: "webmail", type: typeof type === "string" ? type : "" });
+      }
+    } catch (err) {
+      if (err instanceof WebmailSignedOutError) throw err;
+      log.warn("identity rename failed", { component: "webmail", err });
+    }
   }
 
   async #identity(sessionId: string, identityId: string): Promise<Identity> {
@@ -3336,30 +3445,12 @@ export class WebmailService {
   }
 
   /**
-   * Changes the sender name of one of the mailbox's own identities. Signatures are named signatures now
-   * (`mirrorSignature` copies the default into every identity).
+   * The identities again, right after the mailbox's sender name changed in the control plane: the cache is dropped, so
+   * they are renamed now (`identities`) rather than within the minute.
    */
-  async updateIdentity(
-    sessionId: string,
-    account: string,
-    identityId: string,
-    change: { name?: string },
-  ): Promise<Identity> {
+  async refreshIdentities(sessionId: string, account: string): Promise<Identity[]> {
     this.#identities.delete(account);
-    const own = (await this.identities(sessionId)).find((i) => i.id === identityId);
-    if (!own) throw new WebmailRefusedError("That address isn't one of yours.");
-    const patch: Record<string, string> = {};
-    if (change.name !== undefined) patch.name = change.name;
-    const r = await this.#call(
-      sessionId,
-      (x) => [["Identity/set", { accountId: x.accountId, update: { [identityId]: patch } }, "u"]],
-      USING_SUBMISSION,
-      account,
-    );
-    this.#identities.delete(account);
-    const updated = r.get("u")?.updated as Record<string, unknown> | undefined;
-    if (!updated || !(identityId in updated)) throw new WebmailRefusedError("That change wasn't saved.");
-    return { ...own, ...(change.name !== undefined ? { name: change.name } : {}) };
+    return this.identities(sessionId);
   }
 
   /**

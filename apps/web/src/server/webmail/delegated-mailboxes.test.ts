@@ -7,6 +7,7 @@ import { MemoryUnitOfWork } from "@anhourmail/adapters/memory";
 import { DelegatedMailboxRefusedError, type Deps, ForbiddenError } from "@anhourmail/core";
 import type { DelegationRight } from "@anhourmail/core/delegation";
 import type { Mailbox } from "@anhourmail/core/mailboxes";
+import { setWebmailSenderName, webmailSenderName } from "@anhourmail/core/people";
 import {
   authorizeDelegatedSend,
   delegatedMailboxesFor,
@@ -563,7 +564,7 @@ describe("own-mailbox actions can't be aimed at a shared mailbox by switching af
       () => t.svc.exportContacts(sessionId),
       () => t.svc.quota(sessionId),
       () => t.svc.identities(sessionId),
-      () => t.svc.updateIdentity(sessionId, account, "i1", { name: "x" }),
+      () => t.svc.refreshIdentities(sessionId, account),
       () => t.svc.mirrorSignature(sessionId, account, null),
       () => t.svc.legacySignature(sessionId),
       () => t.svc.mailRules(sessionId),
@@ -595,6 +596,10 @@ describe("own-mailbox actions can't be aimed at a shared mailbox by switching af
       mail: t.svc,
       settings: new WebmailSettingsService(t.deps),
       signatures: new WebmailSignaturesService(t.deps),
+      senderNames: {
+        get: (address) => webmailSenderName(t.deps, address),
+        set: (address, input, r) => setWebmailSenderName(t.deps, address, input, r),
+      },
       mailer: { send: async () => undefined },
       webmailUrl: "http://localhost:43300",
       siteHost: "localhost",

@@ -16,6 +16,7 @@ import {
   WebmailSettingsService,
   WebmailSignaturesService,
 } from "@anhourmail/core/webmail";
+import { setWebmailSenderName, webmailSenderName, webmailSendingNames } from "@anhourmail/core/people";
 import { keyRingFromEnv } from "@anhourmail/server/keyring";
 import { type FailureStore, redisFailureStore, redisSlidingQuota } from "@anhourmail/server/rate-limit";
 import { redis } from "@anhourmail/server/redis";
@@ -189,6 +190,9 @@ export function webmail(): WebmailService {
       // The managed Sieve script is written with management credentials (internal network only, rule 21), never
       // the user's token: customer mailboxes can't manage their own Sieve (CUSTOMER_PERMISSIONS).
       sieve: managedSieve(),
+      // The one source for the sender name (rule 61): what the identities are named and what mail is sent as; the
+      // mailbox's masked aliases send with no name.
+      senderName: (address) => webmailSendingNames(container().deps, address),
       confirmedForward: async (address) => {
         const f = await settingsService().forwarding(address);
         return f?.status === "confirmed" ? f.address : null;
@@ -226,6 +230,10 @@ export function webmailSettings(): WebmailSettings {
     mail: webmail(),
     settings: settingsService(),
     signatures: new WebmailSignaturesService(container().deps),
+    senderNames: {
+      get: (address) => webmailSenderName(container().deps, address),
+      set: (address, input, req) => setWebmailSenderName(container().deps, address, input, req),
+    },
     mailer: container().mailer,
     webmailUrl: env().WEBMAIL_URL,
     siteHost: platform().hosts.site,
