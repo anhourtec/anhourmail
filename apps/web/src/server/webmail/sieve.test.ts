@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 
+import { matchSafeSender } from "@anhourmail/shared/senders";
+
 import {
   buildScript,
   DEFAULT_RULES,
@@ -94,6 +96,41 @@ describe("Sieve quoting", () => {
     expect(includable("my filters")).toBe(true);
     expect(includable("anhourmail")).toBe(false);
     expect(includable('x"; keep; #')).toBe(false);
+  });
+
+  it("gives the image check the same verdict as the compiled junk tests for every From (ADR-0027 §2)", () => {
+    const safe = JunkInput.parse({
+      blocked: ["blocked.example"],
+      safe: ["Jane@Example.com", "@partner.example", "bücher.example"],
+      trustedOnly: false,
+    }).safe;
+    const script = code(buildScript(rules({ junk: { blocked: ["blocked.example"], safe, trustedOnly: false } }), ctx));
+    // The safe branch's tests, evaluated as Sieve does: `:all :is` on the whole address, `:domain :is` on the
+    // domain, `i;unicode-casemap` (case-insensitive), no subdomains.
+    const lists = (kind: "all" | "domain") =>
+      JSON.parse(
+        new RegExp(`if anyof \\(.*?address :${kind} :comparator "i;unicode-casemap" :is "from" (\\[[^\\]]*\\])`).exec(
+          script,
+        )?.[1] ?? "[]",
+      ) as string[];
+    const sieveSafe = (from: string) => {
+      const f = from.toLowerCase();
+      return lists("all").includes(f) || lists("domain").includes(f.slice(f.lastIndexOf("@") + 1));
+    };
+    expect(lists("all")).toEqual(["jane@example.com"]);
+    expect(lists("domain")).toEqual(["partner.example", "xn--bcher-kva.example"]);
+    for (const from of [
+      "jane@example.com",
+      "JANE@EXAMPLE.COM",
+      "bob@example.com",
+      "bob@partner.example",
+      "bob@news.partner.example",
+      "jane@mail.example.com",
+      "info@xn--bcher-kva.example",
+      "x@notpartner.example",
+    ]) {
+      expect({ from, safe: matchSafeSender(from, safe) !== null }).toEqual({ from, safe: sieveSafe(from) });
+    }
   });
 
   it("validates automatic replies: dates in order, a message when on, single-line subject", () => {

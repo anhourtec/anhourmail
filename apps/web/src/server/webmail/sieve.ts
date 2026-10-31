@@ -2,6 +2,7 @@
 import { z } from "zod";
 
 import { forwardingGuard, GUARD_EXTENSIONS } from "@anhourmail/core/webmail";
+import { MAX_SENDER_ENTRIES, SENDER_ADDRESS, senderEntry } from "@anhourmail/shared/senders";
 import { MANAGED_SIEVE_SCRIPT, MANAGED_SIEVE_SETTINGS_PREFIX } from "@anhourmail/shared/webmail";
 
 /**
@@ -20,8 +21,8 @@ import { MANAGED_SIEVE_SCRIPT, MANAGED_SIEVE_SETTINGS_PREFIX } from "@anhourmail
  */
 
 export const MANAGED_SCRIPT = MANAGED_SIEVE_SCRIPT;
-/** Entries in each of the blocked and safe lists. */
-export const MAX_SENDER_ENTRIES = 300;
+/** Entries in each of the blocked and safe lists (one source: `@anhourmail/shared/senders`). */
+export { MAX_SENDER_ENTRIES, senderEntry };
 /** Stalwart's `maxSizeScript` is 102,400 bytes; we stay under it with room to spare. */
 export const MAX_SCRIPT_BYTES = 95_000;
 /** At most this many contact addresses are written into the script (for "contacts only" rules). */
@@ -32,9 +33,7 @@ export const VACATION_DAYS = 3;
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const ZONE = /^[+-](?:0\d|1[0-4])[0-5]\d$/;
-const DOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
-const ADDRESS =
-  /^[^\s@"<>()[\]\\,;:]{1,64}@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+const ADDRESS = SENDER_ADDRESS;
 /** A script name we may include: what mail apps commonly use, nothing that needs escaping. */
 const SCRIPT_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,99}$/;
 
@@ -42,15 +41,6 @@ const SCRIPT_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,99}$/;
 function clean(s: string, lines: boolean): string {
   const unified = s.replace(/\r\n?/g, "\n");
   return (lines ? unified.replace(/[^\P{Cc}\n]/gu, "") : unified.replace(/\p{Cc}/gu, " ")).trim();
-}
-
-/** "jane@example.com" stays an address; "@example.com" and "example.com" become the domain "example.com". */
-export function senderEntry(input: string): string | null {
-  const v = input.trim().toLowerCase();
-  if (v.length === 0 || v.length > 254) return null;
-  if (v.startsWith("@")) return DOMAIN.test(v.slice(1)) ? v.slice(1) : null;
-  if (v.includes("@")) return ADDRESS.test(v) ? v : null;
-  return DOMAIN.test(v) ? v : null;
 }
 
 const entries = z

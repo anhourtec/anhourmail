@@ -19,6 +19,7 @@
     "./credits": "./src/credits.generated.ts",
     "./rbac": "./src/rbac/index.ts",
     "./security": "./src/security.ts",
+    "./senders": "./src/senders.ts",
     "./signatures": "./src/signatures.ts",
     "./storage": "./src/storage.ts",
     "./webmail": "./src/webmail.ts"
