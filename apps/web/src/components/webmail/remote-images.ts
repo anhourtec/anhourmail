@@ -130,7 +130,8 @@ export function loadsWithoutAsking(
  * - `remembered`: already remembered — load, and offer "Stop loading from this sender" afterwards;
  * - `unverified`: the From isn't verified (no sender key), so it can't be remembered — load once and say why
  *   (`domain` is the From address's domain, or null when there is none);
- * - `none`: nothing to remember (no image settings here, or every message's images load anyway).
+ * - `none`: nothing to remember (no image settings here, every message's images load anyway, or the message is the
+ *   person's own: it sits in their Sent folder, so there is no sender to confirm or remember).
  */
 export type RememberOffer =
   | { kind: "choose"; sender: string }
@@ -162,12 +163,17 @@ export function shownAddress(address: string): string {
   return at > 0 ? `${local}@${shownDomain(address.slice(at + 1))}` : local;
 }
 
+/**
+ * `own` is true for a message in the mailbox's Sent folder (decided from its mailbox, never from the From address,
+ * which anyone can forge into an inbox): its images still wait for "Load images", but nothing is said or remembered.
+ */
 export function rememberOffer(
   policy: ImagePolicy | undefined,
   senderKey: string | null,
   from: string | undefined,
+  own = false,
 ): RememberOffer {
-  if (policy === undefined) return { kind: "none" };
+  if (policy === undefined || own) return { kind: "none" };
   if (senderKey !== null) {
     if (policy.senders.includes(senderKey)) return { kind: "remembered" };
     return from ? { kind: "choose", sender: shownAddress(from) } : { kind: "none" };

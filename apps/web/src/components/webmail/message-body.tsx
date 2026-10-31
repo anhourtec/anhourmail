@@ -765,6 +765,7 @@ export function MessageContent({
   onViewFull,
   images,
   reload,
+  own = false,
 }: {
   view: MessageView;
   client: MailClient;
@@ -776,11 +777,13 @@ export function MessageContent({
   images?: ImageOptions;
   /** Loads this message again (fresh image links); defaults to the reader's own message. */
   reload?: () => Promise<MessageView | null>;
+  /** The message is in this mailbox's Sent folder: the image notice says nothing about confirming the sender. */
+  own?: boolean;
 }) {
   const [nested, setNested] = useState<AttachmentView | null>(null);
   const again = useCallback(() => (reload ? reload() : client.message(view.id)), [reload, client, view.id]);
   const remote = useRemoteImages(view, client, again, images);
-  const offer = rememberOffer(images?.policy, view.senderKey, view.from[0]?.email);
+  const offer = rememberOffer(images?.policy, view.senderKey, view.from[0]?.email, own);
   return (
     <div className="flex flex-col gap-4">
       {view.blockedImages + view.blockedTrackers > 0 && (
@@ -795,7 +798,7 @@ export function MessageContent({
             void remote.load();
           }}
           onRemember={(on) => {
-            if (view.senderKey === null || !images) return;
+            if (view.senderKey === null || !images || own) return;
             images.onRemember(view.senderKey, on);
           }}
         />

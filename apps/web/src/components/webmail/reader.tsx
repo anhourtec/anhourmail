@@ -177,6 +177,7 @@ function MessageCard({
   images,
   canAnswer = true,
   canReply = canAnswer,
+  inSent = false,
 }: {
   summary: Summary;
   view: MessageView | "missing" | undefined;
@@ -198,6 +199,8 @@ function MessageCard({
   canAnswer?: boolean;
   /** Whether Reply is offered (in a shared mailbox, only with a right to send from it). */
   canReply?: boolean;
+  /** The message is in this mailbox's Sent folder (its own mail, decided by mailbox, never by From). */
+  inSent?: boolean;
 }) {
   const [details, setDetails] = useState(false);
   const from = summary.from?.[0];
@@ -345,6 +348,7 @@ function MessageCard({
           paneHeight={paneHeight}
           onCompose={onComposeTo}
           onViewFull={onViewFull}
+          own={inSent}
           {...(images ? { images } : {})}
         />
       )}
@@ -898,6 +902,8 @@ export function Reader({
   const chipIds = thread
     ? [...new Set(thread.flatMap((e) => Object.keys(e.mailboxIds).filter((id) => e.mailboxIds[id])))]
     : [];
+  // This mailbox's Sent folder (a shared mailbox's own, in its tab): mail there is the mailbox's own.
+  const sentId = folders.find((f) => f.role === "sent")?.id;
   const chips = chipIds
     .map((id) => folders.find((f) => f.id === id))
     .filter((f): f is Folder => f !== undefined && f.role !== "sent" && f.role !== "drafts");
@@ -1057,6 +1063,7 @@ export function Reader({
                     images={images}
                     canAnswer={canAnswer}
                     canReply={canReply}
+                    inSent={sentId !== undefined && e.mailboxIds[sentId] === true}
                     collapsible={thread.length > 1}
                     onCollapse={() => {
                       setExpanded((s) => {

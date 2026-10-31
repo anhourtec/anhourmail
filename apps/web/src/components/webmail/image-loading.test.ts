@@ -101,6 +101,24 @@ describe("loading images into the message frame", () => {
     expect(rememberOffer(ask, key, undefined)).toEqual({ kind: "none" });
   });
 
+  it("says nothing about confirming or remembering the sender of the person's own sent mail", () => {
+    const key = "k".repeat(22);
+    const ask = { mode: "ask", senders: [] } as const;
+    // In the Sent folder: no "can't confirm" line and no remember choice, whatever the From or sender key.
+    expect(rememberOffer(ask, null, "me@anhourmail.com", true)).toEqual({ kind: "none" });
+    expect(rememberOffer({ mode: "contacts", senders: [] }, null, undefined, true)).toEqual({ kind: "none" });
+    expect(rememberOffer(ask, key, "me@anhourmail.com", true)).toEqual({ kind: "none" });
+    expect(rememberOffer({ mode: "ask", senders: [key] }, key, "me@anhourmail.com", true)).toEqual({ kind: "none" });
+    // Its images still wait for "Load images": being sent mail doesn't load them by itself.
+    expect(loadsWithoutAsking(ask, null, "me@anhourmail.com", new Set(["me@anhourmail.com"]))).toBe(false);
+    // An inbox message with a forged own From isn't the person's own: unchanged unverified behaviour.
+    expect(rememberOffer(ask, null, "me@anhourmail.com")).toEqual({ kind: "unverified", domain: "anhourmail.com" });
+    expect(rememberOffer(ask, null, "me@anhourmail.com", false)).toEqual({
+      kind: "unverified",
+      domain: "anhourmail.com",
+    });
+  });
+
   it("knows the raster types the proxy serves", () => {
     expect(isLoadedImageType("image/png")).toBe(true);
     expect(isLoadedImageType("image/svg+xml")).toBe(false);
