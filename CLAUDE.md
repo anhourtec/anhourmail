@@ -92,7 +92,9 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 
 Pre-staging has run on one VM since 2026-10-23 from the private ops repository (`anhourmail-ops`, following the
 local-only `deploy.md`); it was last deployed on 2026-10-31 at 6545a16 (names as one source, mail-server file storage switched off for
-customers, delegation's webmail side, the forwarding guard, the SEO pass). The work plan stops before Phase 6. The next
+customers, delegation's webmail side, the forwarding guard, the SEO pass). Pushed since, for the next deploy:
+password-first console sign-in with a passkey second step and password-only step-up (ADR-0028), the faster webmail
+first load, and safe senders loading images with own Sent mail loading images (ADR-0027). The work plan stops before Phase 6. The next
 phases, in order, with exit criteria, are in `docs/internal/09-roadmap.md` "Path to production":
 
 1. pre-staging on one VM (real DNS, certificates, rDNS, external mail, backups and a restore drill);
@@ -403,4 +405,5 @@ an app container direct access to Stalwart's management listener.
 | 2026-10-29 | Nishchayjeet Singh (Nish) | Rule 61: profile data (name, avatar, sender name) has one source and stays in sync across console and webmail                      |
 | 2026-10-30 | Nishchayjeet Singh (Nish) | "Where we are and what's next": pre-staging redeployed at 300440a; delegation's webmail side waits for the next deploy             |
 | 2026-10-30 | Nishchayjeet Singh (Nish) | Rule 62: no marketing or bulk mail from our own domains; bulk only from customers' verified domains; blocklist response            |
-| 2026-10-31 | Nishchayjeet Singh (Nish) | "Where we are and what's next": 3c74f23 pushed for pre-staging; names as one source built                                          |
+| 2026-10-31 | Nishchayjeet Singh (Nish) | "Where we are and what's next": pre-staging deployed at 6545a16 (names, file storage lockdown)                                     |
+| 2026-11-01 | Nishchayjeet Singh (Nish) | "Where we are and what's next": password-first sign-in, faster webmail, safe-sender images pushed                                  |
