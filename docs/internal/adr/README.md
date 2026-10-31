@@ -30,3 +30,4 @@ One decision per file, numbered, never rewritten. A later ADR supersedes an earl
 | [0024](0024-console-to-webmail-session-handoff.md)           | Console → webmail handoff: browser-bound code, throwaway mail credential       | Accepted                                          |
 | [0025](0025-data-export-and-account-deletion.md)             | Data export (sealed control-plane archive; mail streamed) and account deletion | Accepted                                          |
 | [0026](0026-mailbox-delegation-and-shared-mailboxes.md)      | Mailbox delegation and shared mailboxes through BFF-held mailbox tokens        | Accepted                                          |
+| [0027](0027-image-senders-list.md)                           | "Always load images from": a visible per-mailbox list, sealed in Postgres      | Proposed                                          |
