@@ -283,6 +283,26 @@ describe("a person's photo (People page)", () => {
     ]);
   });
 
+  it("someone with a platform role, even in this account only, is refused like someone in another account", async () => {
+    const { d, s, as, audit } = world();
+    s.platformRoles.push({ userId: "solo", role: "global_admin" });
+    const images = fakeImages();
+    await expect(setPersonAvatar(d, images, as("owner"), ACCOUNT_A, "solo", PNG, req)).rejects.toThrow(
+      OTHER_ACCOUNT_PROFILE,
+    );
+    await expect(removePersonAvatar(d, as("owner"), ACCOUNT_A, "solo", req)).rejects.toThrow(OTHER_ACCOUNT_PROFILE);
+    expect(images.calls).toBe(0);
+    expect(s.avatars).toEqual([]);
+    expect(
+      [...audit("account.avatar_changed"), ...audit("account.avatar_removed")].map((e) => [e.result, e.errorCode]),
+    ).toEqual([
+      ["denied", "other_account"],
+      ["denied", "other_account"],
+    ]);
+    // Their own photo is still theirs to change.
+    expect(await setPersonAvatar(d, images, as("solo"), ACCOUNT_A, "solo", PNG, req)).toMatchObject({ kind: "person" });
+  });
+
   it("someone outside the account, or not in it, is a 404 (never confirms them)", async () => {
     const { d, as } = world();
     const images = fakeImages();
@@ -401,6 +421,17 @@ describe("the webmail", () => {
     ).toEqual([
       [`account:${ACCOUNT_A}`, "denied", "other_account"],
       [`account:${ACCOUNT_A}`, "denied", "other_account"],
+    ]);
+  });
+
+  it("a person holding a platform role is refused from the webmail too, and their photo shows as not editable", async () => {
+    const { d, s, audit } = world();
+    s.platformRoles.push({ userId: "solo", role: "global_admin" });
+    await expect(setWebmailAvatar(d, fakeImages(), "solo@a.test", PNG, req)).rejects.toThrow(WEBMAIL_OTHER_ACCOUNT);
+    expect(s.avatars).toEqual([]);
+    expect(audit("account.avatar_changed").map((e) => [e.result, e.errorCode])).toEqual([["denied", "other_account"]]);
+    expect(await webmailOwnAvatars(d, ["solo@a.test"])).toEqual([
+      { address: "solo@a.test", owner: { kind: "person", id: "solo" }, ref: null, editable: false },
     ]);
   });
 

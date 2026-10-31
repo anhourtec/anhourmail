@@ -13,6 +13,7 @@ import {
   ValidationError,
 } from "../errors";
 import { mutation, type MutationSpec } from "../mutation";
+import { holdsPlatformRole } from "../people/names";
 import {
   ACTING_PROFILE,
   actingAsStaff,
@@ -359,7 +360,8 @@ async function webmailRefusal(repos: Repositories, m: AvatarMailbox): Promise<Re
   if (m.userId === null) return null;
   const accounts = await personAccounts(repos, m.userId);
   if (!accounts.includes(m.accountId)) return "not_member";
-  return accounts.length > 1 ? "other_account" : null;
+  // Staff (any platform role) count as being elsewhere too (`holdsPlatformRole`).
+  return accounts.length > 1 || (await holdsPlatformRole(repos, m.userId)) ? "other_account" : null;
 }
 
 async function webmailChange(deps: Deps, address: string, req: RequestMeta, change: Change) {
