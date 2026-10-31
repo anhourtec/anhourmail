@@ -23,6 +23,8 @@ export type E2eUsers = {
   firstSignIn: Record<string, { owner: string; domain: string }>;
   /** Per browser project: the profile photos journey's person and their own mailbox (on the mail server). */
   avatars: Record<string, { person: string; mailbox: string; mailboxPassword: string }>;
+  /** Per browser project: the names journey's person and their own mailbox, which follows their name (rule 61). */
+  names: Record<string, { person: string; mailbox: string; mailboxPassword: string }>;
   /** Per browser project: the data export and deletion journey's account (Owner, Member) and a login that leaves. */
   data: Record<string, { accountName: string; owner: string; member: string; leaver: string }>;
   /** Per browser project: the alias limits journey's Free account (its Owner, mailbox, and the day its year filled). */

@@ -68,6 +68,7 @@ if (mode === "create") {
   const suspension: Record<string, { accountName: string; owner: string; member: string }> = {};
   const firstSignIn: Record<string, { owner: string; domain: string }> = {};
   const avatars: Record<string, { person: string; mailbox: string; mailboxPassword: string }> = {};
+  const names: Record<string, { person: string; mailbox: string; mailboxPassword: string }> = {};
   const aliasLimits: Record<string, { owner: string; mailbox: string; day: string }> = {};
   const actAs: Record<string, { accountName: string; accountId: string; owner: string; member: string }> = {};
   const data: Record<string, { accountName: string; owner: string; member: string; leaver: string }> = {};
@@ -244,6 +245,39 @@ if (mode === "create") {
       quotaBytes: 50 * 1024 * 1024,
     });
     avatars[project] = { person: avPerson.email, mailbox: `me@${avDomain}`, mailboxPassword: avPassword };
+    // Names journey (rule 61): a person (Owner of their own account) whose own mailbox follows their name, so a name
+    // changed on the console Profile shows as the webmail's sender name and back.
+    const [nmAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} Names ${project}`, plan: "plus" })
+      .returning();
+    if (!nmAccount) throw new Error("names account not created");
+    const nmPerson = await addLogin(`nm-${project}-person`);
+    await db.insert(schema.accountMembership).values({ accountId: nmAccount.id, userId: nmPerson.id, role: "owner" });
+    const nmDomain = `${run}-nm-${project}.test`;
+    const nmPassword = `${randomBytes(12).toString("base64url")}-E2e`;
+    await db.insert(schema.customerDomain).values({
+      accountId: nmAccount.id,
+      name: nmDomain,
+      status: "active",
+      verifyToken: `${run}-nm-${project}`,
+      stalwartId: await mgmt.upsertDomain({ name: nmDomain }),
+    });
+    await db.insert(schema.mailbox).values({
+      accountId: nmAccount.id,
+      userId: nmPerson.id,
+      address: `me@${nmDomain}`,
+      stalwartId: await mgmt.upsertUser({
+        name: "me",
+        domain: nmDomain,
+        password: await hashPassword(nmPassword),
+        quotaBytes: 50 * 1024 * 1024,
+        description: `nm-${project}-person`,
+      }),
+      status: "active",
+      quotaBytes: 50 * 1024 * 1024,
+    });
+    names[project] = { person: nmPerson.email, mailbox: `me@${nmDomain}`, mailboxPassword: nmPassword };
     // Delegation journey (ADR-0026): a Plus account with a verified domain and mailboxes on the mail server — a shared
     // mailbox (nobody's), a colleague's mailbox to convert to shared and a leaver's mailbox to hand over on removal —
     // and the person who gets access (the delegate).
@@ -429,6 +463,7 @@ if (mode === "create") {
         actAs,
         firstSignIn,
         avatars,
+        names,
         data,
         aliasLimits,
         delegation,
