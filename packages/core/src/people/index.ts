@@ -4,3 +4,4 @@ export * from "./profile-service";
 export type * from "./repository";
 export * from "./service";
 export * from "./availability";
+export * from "./names";
