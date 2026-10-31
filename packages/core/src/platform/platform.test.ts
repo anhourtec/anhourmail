@@ -85,7 +85,14 @@ describe("viewAccount", () => {
     expect(out.people.map((p) => p.email)).toEqual(["kid@a.test"]);
     expect(out.domains).toEqual([{ id: "33333333-3333-4333-8333-333333333333", name: "a.test", status: "active" }]);
     expect(out.mailboxes).toEqual([
-      { id: "44444444-4444-4444-8444-444444444444", address: "kid@a.test", status: "active", quotaBytes: 5 },
+      {
+        id: "44444444-4444-4444-8444-444444444444",
+        address: "kid@a.test",
+        status: "active",
+        quotaBytes: 5,
+        purgeAfter: null,
+        applyFailed: false,
+      },
     ]);
     expect(out.pendingInvites).toBe(0);
     const [entry] = s.audit;
@@ -96,6 +103,16 @@ describe("viewAccount", () => {
       result: "success",
       target: { type: "account", id: ACCOUNT_A, label: "Family A" },
     });
+  });
+
+  it("shows a deleted mailbox's restore date and whether the worker gave up applying it", async () => {
+    const { d, s } = world();
+    const purge = new Date("2026-11-30T00:00:00Z");
+    const m = s.mailboxes[0];
+    if (m === undefined) throw new Error("fixture");
+    Object.assign(m, { status: "deleting", purgeAfter: purge, lastError: "unreachable" });
+    const out = await viewAccount(d, support, ACCOUNT_A, req);
+    expect(out.mailboxes[0]).toMatchObject({ status: "deleting", purgeAfter: purge, applyFailed: true });
   });
 
   it("records staff as staff even when they also belong to the account (rule 49)", async () => {

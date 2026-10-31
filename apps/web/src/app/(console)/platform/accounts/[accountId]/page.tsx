@@ -200,7 +200,10 @@ export default async function CustomerAccountPage({ params }: { params: Promise<
                 <td className={`${listClass.td} font-mono font-medium text-[14px] break-all`}>{m.address}</td>
                 <td className={`${listClass.td} am-num hidden sm:table-cell`}>{m.quotaBytes / GB} GB</td>
                 <td className={listClass.td}>
-                  <MailboxStatus status={m.status} />
+                  <MailboxStatus status={m.status} applyFailed={m.applyFailed} />
+                  {m.status === "deleting" && m.purgeAfter !== null && (
+                    <p className="am-small mt-1">Restorable until {dateFmt.format(m.purgeAfter)}</p>
+                  )}
                 </td>
               </tr>
             ))}

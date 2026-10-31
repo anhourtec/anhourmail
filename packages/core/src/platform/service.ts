@@ -51,7 +51,16 @@ export type AccountDetail = {
   summary: AccountSummary;
   people: { userId: string; name: string; email: string; role: AccountRole; joinedAt: Date; suspended: boolean }[];
   domains: { id: string; name: string; status: string }[];
-  mailboxes: { id: string; address: string; status: MailboxStatus; quotaBytes: number }[];
+  mailboxes: {
+    id: string;
+    address: string;
+    status: MailboxStatus;
+    quotaBytes: number;
+    /** When a deleted mailbox is purged (restorable until then); null otherwise. */
+    purgeAfter: Date | null;
+    /** The worker gave up applying its last change (`lastError` set; the message itself isn't shown to staff). */
+    applyFailed: boolean;
+  }[];
   pendingInvites: number;
 };
 
@@ -99,6 +108,8 @@ export async function viewAccount(
             address: m.address,
             status: m.status,
             quotaBytes: m.quotaBytes,
+            purgeAfter: m.purgeAfter,
+            applyFailed: m.lastError !== null,
           })),
           pendingInvites: (await repos.invites.listPending(accountId)).filter((i) => i.expiresAt > now).length,
         },
