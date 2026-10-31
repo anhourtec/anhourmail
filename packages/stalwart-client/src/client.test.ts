@@ -344,6 +344,24 @@ describe("managed Sieve script (management credentials)", () => {
     expect(await m.putSieveScriptIfUnchanged("acc1", "anhourmail", "x;\n", "")).toBe(false); // never blind
   });
 
+  it("saves a person's change only on the Sieve state it was read at, and still makes the script active", async () => {
+    const s = sieveServer();
+    const m = new StalwartManagement(transport(s.fetchImpl));
+    // No script at the read: a create, unless one appeared meanwhile.
+    expect(await m.putSieveScript("acc1", "anhourmail", "keep;\n", null)).toBe(true);
+    expect(await m.putSieveScript("acc1", "anhourmail", "other;\n", null)).toBe(false);
+    const read = await m.getSieveScript("acc1", "anhourmail");
+    for (const x of s.scripts) x.isActive = false;
+    expect(await m.putSieveScript("acc1", "anhourmail", "discard;\n", read?.state ?? "")).toBe(true);
+    expect(await m.getSieveScript("acc1", "anhourmail")).toMatchObject({ content: "discard;\n", active: true });
+    // The read is stale now: refused, and the saved text stays.
+    expect(await m.putSieveScript("acc1", "anhourmail", "lost;\n", read?.state ?? "")).toBe(false);
+    expect((await m.getSieveScript("acc1", "anhourmail"))?.content).toBe("discard;\n");
+    expect(await m.putSieveScript("acc1", "anhourmail", "x;\n", "")).toBe(false);
+    // Unconditional writes are unchanged.
+    expect(await m.putSieveScript("acc1", "anhourmail", "keep;\n")).toBe(true);
+  });
+
   it("creates new accounts locked even when the caller doesn't say", async () => {
     const s = sieveServer();
     const m = new StalwartManagement(transport(s.fetchImpl));

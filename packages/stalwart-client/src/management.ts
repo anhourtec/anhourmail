@@ -872,25 +872,49 @@ export class StalwartManagement {
 
   /**
    * Writes the mailbox's managed script `name` with `content` and makes it the active one (creating or updating the
-   * one script with that name). Returns nothing; throws on refusal.
+   * one script with that name). Throws on refusal.
+   *
+   * `ifInState` makes it a compare-and-swap (a person's settings save, ADR-0027 §4): a string is the account's Sieve
+   * state from the read the change was based on, sent as JMAP `ifInState` (honoured by v0.16.27: a stale state is
+   * refused with `stateMismatch` and nothing changes); `null` means the read found no script, so a script created
+   * meanwhile is a change too. Either way the answer is false when something changed since; true once written.
+   * Without it the write is unconditional (always true).
    */
-  async putSieveScript(accountId: string, name: string, content: string): Promise<void> {
+  async putSieveScript(accountId: string, name: string, content: string, ifInState?: string | null): Promise<boolean> {
     const blobId = await this.transport.uploadBlob(accountId, "application/sieve", content);
     const got = await this.transport.rawCall(SIEVE_USING, [
       ["SieveScript/get", { accountId, properties: ["name"] }, "g"],
     ]);
     const existing = (got.get("g")?.list ?? []) as { id: string; name: string }[];
     const ours = existing.find((s) => s.name === name);
+    if (ifInState === null && ours) return false;
+    if (typeof ifInState === "string" && (ifInState === "" || !ours)) return false;
+    const guard = typeof ifInState === "string" ? { ifInState } : {};
     const call = ours
-      ? { accountId, update: { [ours.id]: { blobId } }, onSuccessActivateScript: ours.id }
+      ? { accountId, ...guard, update: { [ours.id]: { blobId } }, onSuccessActivateScript: ours.id }
       : { accountId, create: { s: { name, blobId } }, onSuccessActivateScript: "#s" };
-    const res = (await this.transport.rawCall(SIEVE_USING, [["SieveScript/set", call, "s"]])).get("s") ?? {};
+    let res: Record<string, unknown>;
+    try {
+      res = (await this.transport.rawCall(SIEVE_USING, [["SieveScript/set", call, "s"]])).get("s") ?? {};
+    } catch (err) {
+      if (
+        typeof ifInState === "string" &&
+        err instanceof StalwartError &&
+        err.kind === "method" &&
+        err.message.includes("stateMismatch")
+      )
+        return false;
+      throw err;
+    }
     const failed = (
       ours
         ? (res.notUpdated as Record<string, { type?: string }> | undefined)?.[ours.id]
         : (res.notCreated as Record<string, { type?: string }> | undefined)?.s
     ) as { type?: string } | undefined;
+    // A script of that name created meanwhile by someone else.
+    if (failed && ifInState === null && failed.type === "alreadyExists") return false;
     if (failed) throw new StalwartError(`SieveScript/set ${failed.type ?? "failed"}`, "set", failed);
+    return true;
   }
 }
 
