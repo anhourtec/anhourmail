@@ -31,6 +31,8 @@ export type SeedAuth = {
   passkeys?: { id: string; name: string; createdAt: Date }[];
   /** Two-factor on, with this many unused recovery codes. */
   recoveryCodes?: number;
+  /** Recovery codes without an authenticator app (someone whose second factor is a passkey; ADR-0028). */
+  passkeyRecoveryCodes?: number;
   trustedDevices?: number;
   /** Step-up markers ("confirmed it's you") for console sessions. */
   stepUps?: { sessionId: string; expiresAt: Date }[];
@@ -1312,6 +1314,17 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
           totp: false,
           passkeys: 1,
           recoveryCodesLeft: 0,
+        });
+        // Recovery codes without an authenticator app (a passkey is the second factor; ADR-0028).
+        const kim = await createUser(`sec-kim-${randomUUID()}@example.com`);
+        await seedAuth(kim, {
+          passkeys: [{ id: randomUUID(), name: "Key", createdAt: at(-10) }],
+          passkeyRecoveryCodes: 7,
+        });
+        expect(await uow.run((r) => r.security.factors(kim))).toEqual({
+          totp: false,
+          passkeys: 1,
+          recoveryCodesLeft: 7,
         });
         const live = await uow.run((r) => r.security.sessions(sam, now));
         expect(live.map((x) => x.id)).toEqual([s2, s1]);

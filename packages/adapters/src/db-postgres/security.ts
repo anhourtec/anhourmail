@@ -55,7 +55,12 @@ export class PgSecurityRepository implements SecurityRepository {
       .from(authPasskey)
       .where(eq(authPasskey.userId, userId));
     const totp = (user?.enabled ?? false) && tf?.verified === true;
-    return { totp, passkeys: keys?.n ?? 0, recoveryCodesLeft: totp ? recoveryCodesLeft(tf.codes) : 0 };
+    const passkeys = keys?.n ?? 0;
+    // Without a verified authenticator, the row holds the recovery codes of someone whose second factor is a passkey
+    // (ADR-0028; a half-finished authenticator set-up keeps the codes they had). With no second factor left, codes
+    // are worth nothing (there is no second step) and a new first factor issues fresh ones.
+    const codes = tf && (totp || passkeys > 0) ? recoveryCodesLeft(tf.codes) : 0;
+    return { totp, passkeys, recoveryCodesLeft: codes };
   }
 
   async sessions(userId: string, now: Date): Promise<SessionRecord[]> {

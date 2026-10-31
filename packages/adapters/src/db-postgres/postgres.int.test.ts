@@ -80,6 +80,17 @@ describeAdapterContract("postgres", async () => {
           verified: true,
         });
       }
+      if (input.passkeyRecoveryCodes !== undefined) {
+        await db.insert(schema.authTwoFactor).values({
+          id: randomUUID(),
+          userId,
+          secret: "sealed-secret",
+          backupCodes: JSON.stringify(
+            Array.from({ length: input.passkeyRecoveryCodes }, () => hashRecoveryCode(randomUUID())),
+          ),
+          verified: false,
+        });
+      }
       for (let i = 0; i < (input.trustedDevices ?? 0); i++) {
         await db.insert(schema.authVerification).values({
           id: randomUUID(),

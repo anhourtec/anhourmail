@@ -852,12 +852,11 @@ function repositories(s: MemoryState): Repositories {
 
   const security: SecurityRepository = {
     factors: async (userId) => {
-      const tf = s.twoFactor.find((t) => t.userId === userId && t.verified);
-      return {
-        totp: tf !== undefined,
-        passkeys: s.passkeys.filter((p) => p.userId === userId).length,
-        recoveryCodesLeft: tf?.recoveryCodesLeft ?? 0,
-      };
+      // A row without a verified authenticator holds the recovery codes of someone whose second factor is a passkey.
+      const tf = s.twoFactor.find((t) => t.userId === userId);
+      const totp = tf?.verified === true;
+      const passkeys = s.passkeys.filter((p) => p.userId === userId).length;
+      return { totp, passkeys, recoveryCodesLeft: tf && (totp || passkeys > 0) ? tf.recoveryCodesLeft : 0 };
     },
     sessions: async (userId, now) =>
       s.sessions

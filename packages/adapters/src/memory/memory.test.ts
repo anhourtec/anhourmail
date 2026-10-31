@@ -72,6 +72,9 @@ describeAdapterContract("memory", async () => {
       if (input.recoveryCodes !== undefined) {
         s.twoFactor.push({ userId, verified: true, recoveryCodesLeft: input.recoveryCodes });
       }
+      if (input.passkeyRecoveryCodes !== undefined) {
+        s.twoFactor.push({ userId, verified: false, recoveryCodesLeft: input.passkeyRecoveryCodes });
+      }
       for (let i = 0; i < (input.trustedDevices ?? 0); i++) s.trustedDevices.push({ userId, id: randomUUID() });
       for (const x of input.stepUps ?? []) s.stepUps.push({ userId, ...x });
     },
