@@ -151,7 +151,7 @@ export function ConvertToShared({
       )}
       {stepUp ? (
         <StepUpForm
-          why="Converting a mailbox replaces a password in use, so it needs your console password or a code from the last few minutes."
+          why="Converting a mailbox replaces a password in use, so it needs your console password."
           onConfirmed={convert}
           onCancel={() => {
             setStepUp(false);

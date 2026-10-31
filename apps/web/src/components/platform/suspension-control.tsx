@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 "use client";
 
-import { Ban, RotateCcw, ShieldCheck } from "lucide-react";
+import { Ban, RotateCcw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 
 import { SUSPENSION_REASONS } from "@anhourmail/shared/platform";
 
 import { callApi } from "../api";
-import { PasswordInput } from "../password-input";
-import { authCall } from "../security/webauthn";
+import { StepUpForm } from "../security/step-up-form";
 import { dangerButtonClass, inputClass, primaryButtonClass, secondaryButtonClass } from "../ui-classes";
 
 const NOTE_MAX = 1000;
@@ -66,23 +65,6 @@ export function SuspensionControl({
     router.refresh();
   }
 
-  async function confirm(secret: { password: string } | { code: string }) {
-    setBusy(true);
-    setError(null);
-    const res = await authCall("/step-up", { method: "POST", body: secret });
-    setBusy(false);
-    if (!res.ok) {
-      setError(
-        res.status === 429 || res.code === "STEP_UP_NEEDS_FACTOR" || res.code === "STEP_UP_SESSION_ENDED"
-          ? res.message
-          : "That isn't right. Try your password or a current code again.",
-      );
-      return;
-    }
-    setStepUp(false);
-    await submit();
-  }
-
   if (!open) {
     return (
       <button
@@ -100,59 +82,14 @@ export function SuspensionControl({
 
   if (stepUp) {
     return (
-      <form
-        role="dialog"
-        aria-labelledby={`${id}-confirm`}
-        onSubmit={(e) => {
-          e.preventDefault();
-          const form = new FormData(e.currentTarget);
-          const pw = form.get("console-password");
-          const code = form.get("code");
-          if (typeof pw === "string" && pw !== "") void confirm({ password: pw });
-          else if (typeof code === "string" && code.trim() !== "") void confirm({ code: code.trim() });
-          else setError("Enter your password or a code.");
+      <StepUpForm
+        why="Suspensions change who can sign in, so they need your console password."
+        onConfirmed={async () => {
+          setStepUp(false);
+          await submit();
         }}
-        className="flex w-full max-w-md flex-col gap-3 rounded-xl border p-4"
-      >
-        <div className="flex gap-3">
-          <ShieldCheck className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden />
-          <div className="flex flex-col gap-1">
-            <h4 id={`${id}-confirm`} className="am-h4">
-              Confirm it&apos;s you
-            </h4>
-            <p className="am-small">
-              Suspensions change who can sign in, so they need your console password or a code from the last few
-              minutes.
-            </p>
-          </div>
-        </div>
-        <label htmlFor={`${id}-cpw`} className="am-h4">
-          Console password
-        </label>
-        <PasswordInput
-          id={`${id}-cpw`}
-          name="console-password"
-          autoComplete="current-password"
-          className={inputClass}
-        />
-        <label htmlFor={`${id}-code`} className="am-small">
-          Or a code from your authenticator app, or a recovery code
-        </label>
-        <input id={`${id}-code`} name="code" autoComplete="one-time-code" className={`${inputClass} font-mono`} />
-        {error && (
-          <p role="alert" className="am-small text-destructive">
-            {error}
-          </p>
-        )}
-        <div className="flex flex-wrap gap-2">
-          <button type="submit" disabled={busy} className={primaryButtonClass}>
-            {busy ? "Checking…" : "Confirm"}
-          </button>
-          <button type="button" onClick={close} className={secondaryButtonClass}>
-            Cancel
-          </button>
-        </div>
-      </form>
+        onCancel={close}
+      />
     );
   }
 

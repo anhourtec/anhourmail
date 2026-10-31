@@ -99,7 +99,7 @@ export function ActAsStart({ accountId, accountName }: { accountId: string; acco
   if (stepUp) {
     return (
       <StepUpForm
-        why="Support access opens a customer's account, so it needs your console password or a code from the last few minutes."
+        why="Support access opens a customer's account, so it needs your console password."
         onConfirmed={async () => {
           setStepUp(false);
           await submit();
@@ -276,7 +276,7 @@ export function ActAsBanner({
         <div className="mt-3">
           {stepUp ? (
             <StepUpForm
-              why="Extending support access needs your console password or a code from the last few minutes."
+              why="Extending support access needs your console password."
               onConfirmed={async () => {
                 setStepUp(false);
                 await renew();

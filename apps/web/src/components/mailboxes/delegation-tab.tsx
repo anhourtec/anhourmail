@@ -277,7 +277,7 @@ export function DelegationTab({
 
             {stepUp?.right === right && (
               <StepUpForm
-                why="Giving or taking away access to a mailbox needs your console password or a code from the last few minutes."
+                why="Giving or taking away access to a mailbox needs your console password."
                 onConfirmed={() => apply(right, stepUp.batch, stepUp.done)}
                 onCancel={() => {
                   setStepUp(null);

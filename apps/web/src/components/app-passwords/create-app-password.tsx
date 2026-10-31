@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 "use client";
 
-import { Check, Copy, Plus, ShieldCheck } from "lucide-react";
+import { Check, Copy, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 
@@ -15,8 +15,7 @@ import {
 
 import { callApi } from "../api";
 import { Checkbox } from "../console/data-list";
-import { PasswordInput } from "../password-input";
-import { authCall } from "../security/webauthn";
+import { StepUpForm } from "../security/step-up-form";
 import { inputClass, primaryButtonClass, secondaryButtonClass } from "../ui-classes";
 
 type Created = { appPassword: { name: string }; secret: string; address: string };
@@ -75,7 +74,7 @@ function Reveal({ created, onDone }: { created: Created; onDone: () => void }) {
 
 /**
  * "Create an app password" for one of the person's own mailboxes: a name and what it can be used for, then a recent
- * confirmation that it's them (password or a code) if the server asks, then the password, shown once.
+ * confirmation that it's them (their console password) if the server asks, then the password, shown once.
  */
 export function CreateAppPassword({
   accountId,
@@ -121,23 +120,6 @@ export function CreateAppPassword({
     router.refresh();
   }
 
-  async function confirm(secret: { password: string } | { code: string }) {
-    setPending(true);
-    setError(null);
-    const res = await authCall("/step-up", { method: "POST", body: secret });
-    setPending(false);
-    if (!res.ok) {
-      setError(
-        res.status === 429 || res.code === "STEP_UP_NEEDS_FACTOR" || res.code === "STEP_UP_SESSION_ENDED"
-          ? res.message
-          : "That isn't right. Try your password or a current code again.",
-      );
-      return;
-    }
-    setStepUp(false);
-    await create();
-  }
-
   if (created) {
     return (
       <Reveal
@@ -167,50 +149,15 @@ export function CreateAppPassword({
 
   if (stepUp) {
     return (
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          const form = new FormData(e.currentTarget);
-          const password = form.get("password");
-          const code = form.get("code");
-          if (typeof password === "string" && password !== "") void confirm({ password });
-          else if (typeof code === "string" && code.trim() !== "") void confirm({ code: code.trim() });
-          else setError("Enter your password or a code.");
+      <StepUpForm
+        why="An app password opens your mail, so making one needs your console password."
+        confirmLabel="Confirm and create"
+        onConfirmed={async () => {
+          setStepUp(false);
+          await create();
         }}
-        className="flex max-w-md flex-col gap-3 rounded-xl border p-4"
-      >
-        <div className="flex gap-3">
-          <ShieldCheck className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden />
-          <div className="flex flex-col gap-1">
-            <h4 className="am-h4">Confirm it&apos;s you</h4>
-            <p className="am-small">
-              An app password opens your mail, so making one needs your console password or a code from the last few
-              minutes.
-            </p>
-          </div>
-        </div>
-        <label htmlFor={`${id}-pw`} className="am-h4">
-          Console password
-        </label>
-        <PasswordInput id={`${id}-pw`} name="password" autoComplete="current-password" className={inputClass} />
-        <label htmlFor={`${id}-code`} className="am-small">
-          Or a code from your authenticator app, or a recovery code
-        </label>
-        <input id={`${id}-code`} name="code" autoComplete="one-time-code" className={`${inputClass} font-mono`} />
-        {error && (
-          <p role="alert" className="am-small text-destructive">
-            {error}
-          </p>
-        )}
-        <div className="flex flex-wrap gap-2">
-          <button type="submit" disabled={pending} className={primaryButtonClass}>
-            {pending ? "Checking…" : "Confirm and create"}
-          </button>
-          <button type="button" onClick={reset} className={secondaryButtonClass}>
-            Cancel
-          </button>
-        </div>
-      </form>
+        onCancel={reset}
+      />
     );
   }
 

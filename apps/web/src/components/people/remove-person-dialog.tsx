@@ -135,7 +135,7 @@ export function RemovePersonDialog({
         )}
         {stepUp && (
           <StepUpForm
-            why="Giving someone access to a mailbox needs your console password or a code from the last few minutes."
+            why="Giving someone access to a mailbox needs your console password."
             onConfirmed={async () => {
               const err = await remove();
               if (err !== null) setError(err);

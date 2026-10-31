@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 "use client";
 
-import { Check, Copy, ShieldCheck, UserPlus } from "lucide-react";
+import { Check, Copy, UserPlus } from "lucide-react";
 import Link from "next/link";
 import { type ReactNode, type SyntheticEvent, useId, useState } from "react";
 
@@ -18,8 +18,7 @@ import {
   ProfileSummary,
   type ProfileValues,
 } from "../people/profile-fields";
-import { PasswordInput } from "../password-input";
-import { authCall } from "../security/webauthn";
+import { StepUpForm } from "../security/step-up-form";
 import { inputClass, primaryButtonClass, secondaryButtonClass } from "../ui-classes";
 import { MailboxPasswordField } from "./mailbox-password-field";
 
@@ -566,7 +565,10 @@ export function AddUserWizard({
               </section>
             )}
             {stepUp && (
-              <ConfirmItsYou
+              <StepUpForm
+                nested
+                why="This sets a new password on a mailbox that's already in use, so it needs your console password."
+                confirmLabel="Confirm and finish"
                 onConfirmed={() => {
                   void finish();
                 }}
@@ -728,101 +730,6 @@ function Summary({ title, onEdit, children }: { title: string; onEdit: () => voi
       >
         Edit
       </button>
-    </div>
-  );
-}
-
-/**
- * The step-up for "Make this a user" (a new password on a mailbox already in use): the console password or a current
- * code, sent to `/step-up`; then the caller retries. Not a nested form: it sits inside the wizard's form.
- */
-function ConfirmItsYou({ onConfirmed, onCancel }: { onConfirmed: () => void; onCancel: () => void }) {
-  const id = useId();
-  const [pw, setPw] = useState("");
-  const [code, setCode] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function confirm() {
-    const secret = pw !== "" ? { password: pw } : code.trim() !== "" ? { code: code.trim() } : null;
-    if (!secret) {
-      setError("Enter your password or a code.");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    const res = await authCall("/step-up", { method: "POST", body: secret });
-    setBusy(false);
-    if (!res.ok) {
-      setError(
-        res.status === 429 || res.code === "STEP_UP_NEEDS_FACTOR" || res.code === "STEP_UP_SESSION_ENDED"
-          ? res.message
-          : "That isn't right. Try your password or a current code again.",
-      );
-      return;
-    }
-    setPw("");
-    setCode("");
-    onConfirmed();
-  }
-
-  return (
-    <div className="flex max-w-md flex-col gap-3 rounded-xl border p-4">
-      <div className="flex gap-3">
-        <ShieldCheck className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden />
-        <div className="flex flex-col gap-1">
-          <h3 className="am-h4">Confirm it&apos;s you</h3>
-          <p className="am-small">
-            This sets a new password on a mailbox that&apos;s already in use, so it needs your console password or a
-            code from the last few minutes.
-          </p>
-        </div>
-      </div>
-      <label htmlFor={`${id}-cpw`} className="am-h4">
-        Console password
-      </label>
-      <PasswordInput
-        id={`${id}-cpw`}
-        name="console-password"
-        autoComplete="current-password"
-        value={pw}
-        onChange={(e) => {
-          setPw(e.target.value);
-        }}
-        className={inputClass}
-      />
-      <label className="flex flex-col gap-1.5">
-        <span className="am-small">Or a code from your authenticator app, or a recovery code</span>
-        <input
-          name="code"
-          autoComplete="one-time-code"
-          value={code}
-          onChange={(e) => {
-            setCode(e.target.value);
-          }}
-          className={`${inputClass} font-mono`}
-        />
-      </label>
-      {error && (
-        <p role="alert" className="am-small text-destructive">
-          {error}
-        </p>
-      )}
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => {
-            void confirm();
-          }}
-          className={primaryButtonClass}
-        >
-          {busy ? "Checking…" : "Confirm and finish"}
-        </button>
-        <button type="button" onClick={onCancel} className={secondaryButtonClass}>
-          Cancel
-        </button>
-      </div>
     </div>
   );
 }
