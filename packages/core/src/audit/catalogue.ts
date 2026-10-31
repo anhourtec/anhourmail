@@ -7,6 +7,7 @@ export const AUDIT_ACTIONS = [
   // auth
   "auth.sign_in",
   "auth.sign_in_failed",
+  "auth.second_step_started",
   "auth.sign_out",
   "auth.password_changed",
   "auth.password_reset",
@@ -49,6 +50,7 @@ export const AUDIT_ACTIONS = [
   "account.ownership_transferred",
   "account.sign_in_policy_changed",
   "account.sign_in_factor_added",
+  "account.sign_in_factor_removed",
   // mail configuration
   "domain.added",
   "domain.verified",

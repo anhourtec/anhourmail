@@ -7,8 +7,8 @@ import type { AuditAction } from "../audit/catalogue";
 import { actionLabel, describeActor, partialIp } from "../audit/labels";
 import { maskEmail } from "../audit/record";
 import type { AuditResult } from "../audit/types";
-import { ConflictError, NotFoundError, ValidationError } from "../errors";
-import { mutation } from "../mutation";
+import { ConflictError, NotFoundError, StepUpRequiredError, ValidationError } from "../errors";
+import { type MutationOutcome, mutation } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 import type { MissingFactor, PasskeyRecord, SecurityFactors, SessionRecord } from "./entity";
 import {
@@ -16,6 +16,7 @@ import {
   missingAfterRemoving,
   missingFactor,
   passkeyName,
+  PASSWORDLESS_ENDED,
   sessionRefusal,
   strictestPolicy,
 } from "./rules";
@@ -199,6 +200,8 @@ export async function sessionRefusalFor(
   method: SignInMethod | null,
 ): Promise<string | null> {
   if (await repos.access.isSuspended(userId)) return PERSON_SUSPENDED_MESSAGE;
+  // Passwordless passkey sessions from before ADR-0028 end under every policy.
+  if (method === "passkey") return PASSWORDLESS_ENDED;
   const policy = strictestPolicy(await repos.security.policies(userId));
   if (policy === "none") return null;
   return sessionRefusal(policy, await repos.security.factors(userId), method);
@@ -297,7 +300,7 @@ export async function revokeOtherSessions(
   input: { currentSessionId: string; removePasskeys?: boolean },
   req: RequestMeta,
 ): Promise<{ sessions: number; trustedDevices: number; passkeysRemoved: number }> {
-  return mutation(
+  const out = await mutation(
     deps,
     actor,
     req,
@@ -307,7 +310,11 @@ export async function revokeOtherSessions(
       accountId: null,
       target: selfTarget(actor),
     },
-    async (r) => {
+    async (
+      r,
+    ): Promise<
+      MutationOutcome<{ sessions: number; trustedDevices: number; passkeysRemoved: number } | "step_up_required">
+    > => {
       const me = userOf(actor);
       let passkeysRemoved = 0;
       if (input.removePasskeys === true) {
@@ -315,6 +322,10 @@ export async function revokeOtherSessions(
         const f = await r.security.factors(me.userId);
         if (missingFactor(policy, { ...f, passkeys: 0 })) {
           throw new ConflictError("Your account requires a passkey or second step: keep at least one way to meet it.");
+        }
+        // Removing every passkey needs a fresh step-up (the console password, ADR-0028), like removing one.
+        if (!(await r.security.stepUpFresh(me.userId, input.currentSessionId, deps.clock.now()))) {
+          return { result: "step_up_required" as const, denied: { code: "step_up_required" } };
         }
         passkeysRemoved = await removeAllPasskeys(r, me.userId);
       }
@@ -326,6 +337,8 @@ export async function revokeOtherSessions(
       };
     },
   );
+  if (out === "step_up_required") throw new StepUpRequiredError();
+  return out;
 }
 
 /** Renames one of the person's passkeys. 404 if it isn't theirs. */
@@ -354,29 +367,47 @@ export async function renamePasskey(
 
 /**
  * Removes one of the person's passkeys. Refused (409) when an account requires a passkey (or two-factor sign-in) and
- * this is the last factor that meets it. 404 if it isn't theirs.
+ * this is the last factor that meets it. 404 if it isn't theirs. Needs a fresh step-up of this console session (the
+ * console password, ADR-0028; 403 `step_up_required`, audited), like adding one or turning the authenticator off.
  */
 export async function removePasskey(
   deps: Deps,
   actor: Actor,
-  input: { passkeyId: string },
+  input: { passkeyId: string; sessionId: string | null },
   req: RequestMeta,
-): Promise<void> {
-  await mutation(
+): Promise<{ passkeysLeft: number }> {
+  const out = await mutation(
     deps,
     actor,
     req,
     { action: "auth.passkey_removed", permission: "self.security.manage", accountId: null, target: selfTarget(actor) },
-    async (r) => {
+    async (r): Promise<MutationOutcome<{ passkeysLeft: number } | "step_up_required">> => {
       const me = userOf(actor);
       const existing = (await r.security.passkeys(me.userId)).find((p) => p.id === input.passkeyId);
       if (!existing) throw new NotFoundError("Passkey not found.");
       const refusal = await factorRemovalRefusal(r, me.userId, "passkey");
       if (refusal) throw new ConflictError(refusal);
+      if (!input.sessionId || !(await r.security.stepUpFresh(me.userId, input.sessionId, deps.clock.now()))) {
+        return { result: "step_up_required" as const, denied: { code: "step_up_required" } };
+      }
       await r.security.removePasskey(me.userId, input.passkeyId);
-      return { result: undefined, meta: { passkeyId: existing.id, passkeyName: existing.name } };
+      // With no second factor left, a trusted browser would skip nothing tomorrow but still skip a factor added later:
+      // forget them all, as turning the authenticator off does.
+      const left = await r.security.factors(me.userId);
+      const trustedDevicesForgotten =
+        !left.totp && left.passkeys === 0 ? await r.security.forgetTrustedDevices(me.userId) : 0;
+      return {
+        result: { passkeysLeft: left.passkeys },
+        meta: {
+          passkeyId: existing.id,
+          passkeyName: existing.name,
+          ...(trustedDevicesForgotten > 0 ? { trustedDevicesForgotten } : {}),
+        },
+      };
     },
   );
+  if (out === "step_up_required") throw new StepUpRequiredError();
+  return out;
 }
 
 /**
@@ -409,8 +440,8 @@ export async function setSignInPolicy(
       if (!missing && sessionRefusal(input.policy, ownFactors, me.signInMethod ?? null)) {
         throw new ConflictError(
           input.policy === "passkey"
-            ? "Sign in with your passkey first, then require one for everyone."
-            : "Sign in with your second step or passkey first, then require it for everyone.",
+            ? "Sign in again using your passkey on the second step, then require one for everyone."
+            : "Sign in again with a second step (passkey or authenticator app), then require it for everyone.",
         );
       }
       if (missing) {
@@ -540,6 +571,60 @@ export async function noteFactorAdded(
         target: { type: "user", id: input.userId, label: maskEmail(input.email) },
       },
       async () => ({ result: undefined, meta: { factor: input.factor, firstFactor: true } }),
+    );
+    for (const o of a.owners)
+      if (!notify.some((n) => n.email === o)) notify.push({ email: o, accountName: a.name, owner: true });
+  }
+  return { notify };
+}
+
+/**
+ * After someone's passkeys were all removed (a password reset with "also remove all passkeys", "sign out everywhere
+ * else" with it, or removing their last one): record it in each account they belong to (visible to its admins, rule 49) and return who to tell —
+ * the person and those accounts' Owners — so a takeover that strips the second factor is visible.
+ */
+export async function notePasskeysRemoved(
+  deps: Deps,
+  input: {
+    userId: string;
+    email: string;
+    passkeysRemoved: number;
+    /** A password reset or "sign out everywhere else" with "also remove all passkeys", or removing the last one. */
+    via: "password_reset" | "sign_out_everywhere" | "single";
+  },
+  req: RequestMeta,
+): Promise<{ notify: { email: string; accountName: string | null; owner: boolean }[] }> {
+  if (input.passkeysRemoved <= 0) return { notify: [] };
+  const accounts = await deps.uow.run(async (r) => {
+    const memberships = await r.access.memberships(input.userId);
+    const names = await r.access.accountNames(memberships.map((m) => m.accountId));
+    const out: { accountId: string; name: string | null; owners: string[] }[] = [];
+    for (const m of memberships) {
+      const owners = (await r.access.members(m.accountId))
+        .filter((x) => x.role === "owner" && x.userId !== input.userId)
+        .map((x) => x.email);
+      out.push({ accountId: m.accountId, name: names[m.accountId] ?? null, owners });
+    }
+    return out;
+  });
+  const notify: { email: string; accountName: string | null; owner: boolean }[] = [
+    { email: input.email, accountName: null, owner: false },
+  ];
+  for (const a of accounts) {
+    await mutation(
+      deps,
+      { kind: "system", name: "identity" },
+      req,
+      {
+        action: "account.sign_in_factor_removed",
+        permission: "self.profile.read",
+        accountId: a.accountId,
+        target: { type: "user", id: input.userId, label: maskEmail(input.email) },
+      },
+      async () => ({
+        result: undefined,
+        meta: { factor: "passkey", passkeysRemoved: input.passkeysRemoved, via: input.via },
+      }),
     );
     for (const o of a.owners)
       if (!notify.some((n) => n.email === o)) notify.push({ email: o, accountName: a.name, owner: true });

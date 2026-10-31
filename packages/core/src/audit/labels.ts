@@ -84,6 +84,7 @@ const NOUN: Partial<Record<AuditArea, string>> = {
 const EXPLICIT: Partial<Record<AuditAction, string>> = {
   "auth.sign_in": "Signed in",
   "auth.sign_in_failed": "Sign-in failed",
+  "auth.second_step_started": "Password accepted, second step asked",
   "auth.sign_out": "Signed out",
   "auth.password_changed": "Password changed",
   "auth.password_reset": "Password reset",
@@ -125,6 +126,7 @@ const EXPLICIT: Partial<Record<AuditAction, string>> = {
   "account.ownership_transferred": "Ownership transferred",
   "account.sign_in_policy_changed": "Sign-in requirement changed",
   "account.sign_in_factor_added": "Person set up their first sign-in factor",
+  "account.sign_in_factor_removed": "Person's passkeys were all removed",
   "mailbox.unsuspended": "Mailbox resumed",
   "mailbox.made_user": "Mailbox made into a user",
   "mailbox.converted_to_shared": "Mailbox converted to a shared mailbox",

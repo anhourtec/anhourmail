@@ -25,20 +25,27 @@ export function missingFactor(policy: SignInPolicy, f: SecurityFactors): Missing
 /**
  * Whether a session signed in with `method` may use the console under `policy` (null = yes, else the refusal):
  * - `two_factor`: anything but the password alone (a trusted browser counts: it was trusted after a second step);
- * - `passkey`: only a passkey sign-in.
+ * - `passkey`: only a sign-in whose second step was a passkey (`password+passkey`).
  * Someone who doesn't have the required factor yet may sign in with the password: the enrolment gate keeps them on
- * their Security page until they set it up.
+ * their Security page until they set it up. A passwordless `passkey` session (from before ADR-0028) is refused under
+ * every policy: it ends, and the person signs in again.
  */
 export function sessionRefusal(policy: SignInPolicy, f: SecurityFactors, method: SignInMethod | null): string | null {
   const m = method ?? "password";
+  if (m === "passkey") return PASSWORDLESS_ENDED;
   if (policy === "none" || missingFactor(policy, f) !== null) return null;
   if (policy === "two_factor") {
     return m === "password"
-      ? "Your account requires a second step. Sign in with your passkey or set up an authenticator app."
+      ? "Your account requires a second step. Sign in again and use your passkey or authenticator app."
       : null;
   }
-  return m === "passkey" ? null : "Your account requires a passkey. Sign in with your passkey.";
+  return m === "password+passkey"
+    ? null
+    : "Your account requires a passkey. Sign in again and use your passkey on the second step.";
 }
+
+/** Why a passwordless passkey session from before ADR-0028 ends. */
+export const PASSWORDLESS_ENDED = "Sign in again with your password, then your passkey.";
 
 /** What would be missing after removing a factor (null = removing it is fine). */
 export function missingAfterRemoving(

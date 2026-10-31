@@ -3,7 +3,14 @@ import { describe, expect, it } from "vitest";
 
 import { ACCOUNT_A, ACCOUNT_B, anonymous, deps, fixedClock, req, user } from "../__tests__/helpers";
 import type { UserActor } from "../actor";
-import { ConflictError, ForbiddenError, NotFoundError, UnauthenticatedError, ValidationError } from "../errors";
+import {
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  StepUpRequiredError,
+  UnauthenticatedError,
+  ValidationError,
+} from "../errors";
 import {
   describeDevice,
   missingAfterRemoving,
@@ -19,6 +26,7 @@ import {
   afterPasswordChange,
   endSessionForRequirement,
   noteFactorAdded,
+  notePasskeysRemoved,
   removePasskey,
   sessionRefusalFor,
   renamePasskey,
@@ -95,6 +103,13 @@ function world() {
   });
   s.twoFactor.push({ userId: "sam", verified: true, recoveryCodesLeft: 2 });
   s.trustedDevices.push({ userId: "sam", id: "t1" }, { userId: "lee", id: "t2" });
+  // Both confirmed it's them a moment ago in these console sessions (step-up, ADR-0028).
+  const fresh = new Date(NOW.getTime() + 5 * 60_000);
+  s.stepUps.push(
+    { userId: "sam", sessionId: "s-step", expiresAt: fresh },
+    { userId: "lee", sessionId: "s-step", expiresAt: fresh },
+    { userId: "sam", sessionId: "s-here", expiresAt: fresh },
+  );
   const as = (id: string): UserActor => {
     const u = user({
       id,
@@ -102,8 +117,8 @@ function world() {
         .filter((m) => m.userId === id)
         .map((m) => [m.accountId, m.role] as [string, typeof m.role]),
     });
-    // Signed in with a passkey unless a test says otherwise.
-    return { ...u, email: `${id}@example.test`, signInMethod: "passkey" };
+    // Signed in with the password and a passkey unless a test says otherwise.
+    return { ...u, email: `${id}@example.test`, signInMethod: "password+passkey" };
   };
   return { d, s, as };
 }
@@ -293,7 +308,9 @@ describe("passkeys", () => {
     await expect(renamePasskey(d, as("sam"), { passkeyId: "pk-lee", name: "Mine" }, req)).rejects.toThrow(
       NotFoundError,
     );
-    await expect(removePasskey(d, as("sam"), { passkeyId: "pk-lee" }, req)).rejects.toThrow(NotFoundError);
+    await expect(removePasskey(d, as("sam"), { passkeyId: "pk-lee", sessionId: "s-step" }, req)).rejects.toThrow(
+      NotFoundError,
+    );
     await expect(renamePasskey(d, as("sam"), { passkeyId: "pk-1", name: "" }, req)).rejects.toThrow(ValidationError);
     expect(s.passkeys.find((p) => p.id === "pk-lee")?.name).toBe("Key");
   });
@@ -301,13 +318,51 @@ describe("passkeys", () => {
   it("removes a passkey unless an account requirement depends on it", async () => {
     const { d, s, as } = world();
     s.accounts[0] = { id: ACCOUNT_A, name: "Family A", plan: "plus", signInPolicy: "passkey" };
-    await expect(removePasskey(d, as("sam"), { passkeyId: "pk-1" }, req)).rejects.toThrow(ConflictError);
+    await expect(removePasskey(d, as("sam"), { passkeyId: "pk-1", sessionId: "s-step" }, req)).rejects.toThrow(
+      ConflictError,
+    );
     expect(s.passkeys.some((p) => p.id === "pk-1")).toBe(true);
     // Two-factor is still met by the authenticator app.
     s.accounts[0] = { id: ACCOUNT_A, name: "Family A", plan: "plus", signInPolicy: "two_factor" };
-    await removePasskey(d, as("sam"), { passkeyId: "pk-1" }, req);
+    expect(await removePasskey(d, as("sam"), { passkeyId: "pk-1", sessionId: "s-step" }, req)).toEqual({
+      passkeysLeft: 0,
+    });
     expect(s.passkeys.some((p) => p.id === "pk-1")).toBe(false);
     expect(s.audit.at(-1)).toMatchObject({ action: "auth.passkey_removed", meta: { passkeyName: "Laptop" } });
+    // Sam keeps the authenticator app: trusted browsers stay.
+    expect(s.trustedDevices.some((t) => t.userId === "sam")).toBe(true);
+  });
+
+  it("removing a passkey needs a fresh step-up of this session; a stolen session without one is refused", async () => {
+    const { d, s, as } = world();
+    for (const sessionId of [null, "s-stolen"]) {
+      await expect(removePasskey(d, as("sam"), { passkeyId: "pk-1", sessionId }, req)).rejects.toThrow(
+        StepUpRequiredError,
+      );
+    }
+    expect(s.passkeys.some((p) => p.id === "pk-1")).toBe(true);
+    expect(s.audit.at(-1)).toMatchObject({ action: "auth.passkey_removed", result: "denied" });
+    s.stepUps = [];
+    await expect(
+      revokeOtherSessions(d, as("sam"), { currentSessionId: "s-here", removePasskeys: true }, req),
+    ).rejects.toThrow(StepUpRequiredError);
+    expect(s.passkeys.some((p) => p.userId === "sam")).toBe(true);
+    // Signing the others out alone needs none.
+    expect((await revokeOtherSessions(d, as("sam"), { currentSessionId: "s-here" }, req)).passkeysRemoved).toBe(0);
+  });
+
+  it("removing the last second factor forgets every trusted browser (ADR-0028)", async () => {
+    const { d, s, as } = world();
+    // Lee's only passkey: none left, so the route announces it (`notePasskeysRemoved` via "single").
+    expect(await removePasskey(d, as("lee"), { passkeyId: "pk-lee", sessionId: "s-step" }, req)).toEqual({
+      passkeysLeft: 0,
+    });
+    expect(s.trustedDevices.some((t) => t.userId === "lee")).toBe(false);
+    expect(s.trustedDevices.some((t) => t.userId === "sam")).toBe(true);
+    expect(s.audit.at(-1)).toMatchObject({
+      action: "auth.passkey_removed",
+      meta: { passkeyId: "pk-lee", trustedDevicesForgotten: 1 },
+    });
   });
 });
 
@@ -466,19 +521,32 @@ describe("sign-in method and requirements", () => {
   it("two-factor accepts any second step or a passkey, never the password alone (once they have a factor)", () => {
     expect(sessionRefusal("none", f(false, 1), "password")).toBeNull();
     expect(sessionRefusal("two_factor", f(false, 1), "password")).toMatch(
-      /Sign in with your passkey or set up an authenticator app/,
+      /requires a second step\. Sign in again and use your passkey or authenticator app/,
     );
     expect(sessionRefusal("two_factor", f(false, 1), null)).not.toBeNull();
-    for (const m of ["password+totp", "password+recovery_code", "password+trusted_device", "passkey"] as const) {
+    for (const m of [
+      "password+totp",
+      "password+recovery_code",
+      "password+trusted_device",
+      "password+passkey",
+    ] as const) {
       expect(sessionRefusal("two_factor", f(true, 1), m)).toBeNull();
     }
     // Nothing set up yet: the password signs in, and the enrolment gate keeps them on their Security page.
     expect(sessionRefusal("two_factor", f(false, 0), "password")).toBeNull();
   });
 
-  it("a passkey requirement needs a passkey sign-in once they have one", () => {
-    expect(sessionRefusal("passkey", f(true, 1), "password+totp")).toMatch(/Sign in with your passkey/);
-    expect(sessionRefusal("passkey", f(true, 1), "passkey")).toBeNull();
+  it("a passkey requirement needs a passkey second step once they have one (ADR-0028)", () => {
+    expect(sessionRefusal("passkey", f(true, 1), "password+totp")).toMatch(/use your passkey on the second step/);
+    expect(sessionRefusal("passkey", f(true, 1), "password+recovery_code")).not.toBeNull();
+    expect(sessionRefusal("passkey", f(true, 1), "password+trusted_device")).not.toBeNull();
+    expect(sessionRefusal("passkey", f(false, 1), "password")).not.toBeNull();
+    expect(sessionRefusal("passkey", f(true, 1), "password+passkey")).toBeNull();
+    // Passwordless sessions from before the change are refused under every policy: people sign in again.
+    for (const policy of ["none", "two_factor", "passkey"] as const) {
+      expect(sessionRefusal(policy, f(true, 1), "passkey")).toMatch(/Sign in again with your password/);
+      expect(sessionRefusal(policy, f(false, 0), "passkey")).not.toBeNull();
+    }
     expect(sessionRefusal("passkey", f(true, 0), "password+totp")).toBeNull();
   });
 
@@ -495,7 +563,8 @@ describe("sign-in method and requirements", () => {
       aaguid: null,
     });
     expect(await d.uow.run((r) => sessionRefusalFor(r, "kim", "password"))).not.toBeNull();
-    expect(await d.uow.run((r) => sessionRefusalFor(r, "kim", "passkey"))).toBeNull();
+    expect(await d.uow.run((r) => sessionRefusalFor(r, "kim", "password+passkey"))).toBeNull();
+    expect(await d.uow.run((r) => sessionRefusalFor(r, "kim", "passkey"))).not.toBeNull();
     expect(await d.uow.run((r) => sessionRefusalFor(r, "lee", "password"))).toBeNull();
     s.sessions.push({
       userId: "kim",
@@ -524,10 +593,10 @@ describe("sign-in method and requirements", () => {
     const sam = as("sam");
     await expect(
       setSignInPolicy(d, { ...sam, signInMethod: "password+totp" }, { accountId: ACCOUNT_A, policy: "passkey" }, req),
-    ).rejects.toThrow(/Sign in with your passkey first/);
+    ).rejects.toThrow(/using your passkey on the second step/);
     await expect(
       setSignInPolicy(d, { ...sam, signInMethod: "password" }, { accountId: ACCOUNT_A, policy: "two_factor" }, req),
-    ).rejects.toThrow(/second step or passkey first/);
+    ).rejects.toThrow(/with a second step \(passkey or authenticator app\)/);
     await setSignInPolicy(
       d,
       { ...sam, signInMethod: "password+totp" },
@@ -638,5 +707,65 @@ describe("password reset can't strip a required factor; first factors are announ
         )
       ).notify,
     ).toEqual([]);
+  });
+});
+
+describe("all passkeys removed (ADR-0028)", () => {
+  it("records it in each of the person's accounts and tells them and those accounts' Owners", async () => {
+    const { d, s } = world();
+    const kim = { userId: "kim", email: "kim@example.test", via: "password_reset" as const };
+    expect((await notePasskeysRemoved(d, { ...kim, passkeysRemoved: 0 }, req)).notify).toEqual([]);
+    const { notify } = await notePasskeysRemoved(d, { ...kim, passkeysRemoved: 2 }, req);
+    // The person, then the Owners of their accounts (Sam owns Family A), never twice.
+    expect(notify[0]).toEqual({ email: "kim@example.test", accountName: null, owner: false });
+    expect(notify.slice(1).map((n) => [n.accountName, n.owner])).toEqual([["Family A", true]]);
+    expect(s.audit.at(-1)).toMatchObject({
+      scope: `account:${ACCOUNT_A}`,
+      action: "account.sign_in_factor_removed",
+      target: { type: "user", id: "kim" },
+      meta: { factor: "passkey", passkeysRemoved: 2, via: "password_reset" },
+    });
+    // Removing the last one on its own is announced the same way.
+    const single = await notePasskeysRemoved(d, { ...kim, passkeysRemoved: 1, via: "single" }, req);
+    expect(single.notify.map((n) => n.owner)).toEqual([false, true]);
+    expect(s.audit.at(-1)).toMatchObject({
+      action: "account.sign_in_factor_removed",
+      meta: { passkeysRemoved: 1, via: "single" },
+    });
+  });
+});
+
+describe("a reset that removes every passkey (ADR-0028)", () => {
+  it("signs everything out, forgets trusted browsers, and leaves recovery codes worth nothing", async () => {
+    const { d, s } = world();
+    // Lee's second factor is a passkey, with recovery codes and a trusted browser.
+    s.twoFactor.push({ userId: "lee", verified: false, recoveryCodesLeft: 10 });
+    s.sessions.push({
+      userId: "lee",
+      id: "s-lee",
+      createdAt: NOW,
+      lastActiveAt: NOW,
+      expiresAt: later(7),
+      ip: null,
+      userAgent: null,
+    });
+    expect(await d.uow.run((r) => r.security.factors("lee"))).toEqual({
+      totp: false,
+      passkeys: 1,
+      recoveryCodesLeft: 10,
+    });
+    const out = await afterPasswordChange(
+      d,
+      { userId: "lee", email: "lee@example.test", via: "reset", keepSessionId: null, removePasskeys: true },
+      req,
+    );
+    expect(out).toMatchObject({ passkeysRemoved: 1, trustedDevices: 1 });
+    expect(s.trustedDevices.some((t) => t.userId === "lee")).toBe(false);
+    expect(s.sessions.some((x) => x.userId === "lee")).toBe(false);
+    expect(await d.uow.run((r) => r.security.factors("lee"))).toEqual({
+      totp: false,
+      passkeys: 0,
+      recoveryCodesLeft: 0,
+    });
   });
 });
