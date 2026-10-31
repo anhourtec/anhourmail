@@ -44,6 +44,9 @@ export function isOverQuotaError(err: unknown): boolean {
   );
 }
 
+/** The pinned server's `maxObjectsInGet` (JMAP session `urn:ietf:params:jmap:core`). */
+const MAX_OBJECTS_IN_GET = 500;
+
 export class StalwartTransport {
   readonly #baseUrl: string;
   readonly #authHeader: string;
@@ -184,8 +187,31 @@ export class StalwartTransport {
     ids: string[] | null = null,
     accountId?: string,
   ): Promise<T[]> {
-    const args = { ids, properties, ...(accountId === undefined ? {} : { accountId }) };
-    const res = (await this.call([[`${object}/get`, args, "g"]])).get("g") ?? {};
-    return (res.list ?? []) as T[];
+    const scope = accountId === undefined ? {} : { accountId };
+    const get = async (want: string[] | null): Promise<T[]> => {
+      const res = (await this.call([[`${object}/get`, { ids: want, properties, ...scope }, "g"]])).get("g") ?? {};
+      return (res.list ?? []) as T[];
+    };
+    if (ids !== null) {
+      const out: T[] = [];
+      for (let i = 0; i < ids.length; i += MAX_OBJECTS_IN_GET)
+        out.push(...(await get(ids.slice(i, i + MAX_OBJECTS_IN_GET))));
+      return out;
+    }
+    // `ids: null` answers at most the server's `maxObjectsInGet` (500 on v0.16.27) and silently drops the rest
+    // (verified: 500 of 627 accounts). A full page means there may be more: list every id with `/query`, then get them
+    // in pages.
+    const first = await get(null);
+    if (first.length < MAX_OBJECTS_IN_GET) return first;
+    const all: string[] = [];
+    for (let position = 0; ; position += MAX_OBJECTS_IN_GET) {
+      const q = (await this.call([[`${object}/query`, { position, limit: MAX_OBJECTS_IN_GET, ...scope }, "q"]])).get(
+        "q",
+      );
+      const page = (q?.ids ?? []) as string[];
+      all.push(...page);
+      if (page.length < MAX_OBJECTS_IN_GET) break;
+    }
+    return this.getAll<T>(object, properties, all, accountId);
   }
 }

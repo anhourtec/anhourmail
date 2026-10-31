@@ -45,6 +45,33 @@ describe("StalwartTransport", () => {
     expect((s.calls[0]?.body as { using: string[] }).using).toContain("urn:stalwart:jmap");
   });
 
+  it("lists past the server's 500-object get limit with /query, then gets in pages of 500", async () => {
+    const all = Array.from({ length: 1234 }, (_, i) => ({ id: `a${String(i)}`, name: `n${String(i)}` }));
+    const s = fakeServer({
+      // Like the real server: `ids: null` answers only the first 500.
+      "x:Account/get": (args) => ({
+        list: args.ids === null ? all.slice(0, 500) : all.filter((a) => (args.ids as string[]).includes(a.id)),
+      }),
+      "x:Account/query": (args) => {
+        const position = Number(args.position);
+        return { ids: all.slice(position, position + Number(args.limit)).map((a) => a.id) };
+      },
+    });
+    const got = await transport(s.fetchImpl).getAll("x:Account", ["name"]);
+    expect(got).toHaveLength(1234);
+    const gets = s.calls.map((c) => (c.body as { methodCalls: [string, { ids: unknown }][] }).methodCalls[0]);
+    expect(gets.filter((m) => m?.[0] === "x:Account/query")).toHaveLength(3);
+    expect(
+      gets
+        .filter((m) => m?.[0] === "x:Account/get" && Array.isArray(m[1].ids))
+        .map((m) => (m?.[1].ids as unknown[]).length),
+    ).toEqual([500, 500, 234]);
+    // Fewer than a full page: one call, as before.
+    const small = fakeServer({ "x:Domain/get": () => ({ list: [{ id: "d", name: "x.test" }] }) });
+    expect(await transport(small.fetchImpl).getAll("x:Domain", ["name"])).toHaveLength(1);
+    expect(small.calls).toHaveLength(1);
+  });
+
   it("uses bearer auth for API keys", async () => {
     const s = fakeServer({});
     const t = new StalwartTransport({ baseUrl: "http://s", auth: { type: "bearer", token: "k" }, fetch: s.fetchImpl });
