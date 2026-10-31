@@ -18,6 +18,8 @@ import { DELEGATION_REFUSED } from "../webmail/http";
 import { delegationBlock, type DelegationMode } from "../webmail/delegation-gate";
 import { PASSWORD_CHANGE_REQUIRED, passwordChangeBlock } from "../webmail/password-gate";
 import { PinnedMailboxMissingError, REFUSED_HEADER, requestPin, withPinnedMailbox } from "../webmail/pin";
+import { withSessionReads } from "../webmail/session-store";
+import { serverTimingHeader, timed, type Timings, timingFields, withTimings } from "./server-timing";
 
 /**
  * Every API handler goes through `route()` (CLAUDE.md rules 12–14):
@@ -145,12 +147,19 @@ function sessionCookie(req: Request, kind: "console" | "webmail" = "console"): s
   return m?.[1] ?? null;
 }
 
+/** The request context plus a fresh set of `Server-Timing` phases for one request. */
+const runTimed = <T>(context: RequestContext, fn: (timings: Timings) => Promise<T>): Promise<T> =>
+  withTimings((timings) => runWithRequestContext(context, () => fn(timings)));
+
+/** Webmail routes share one read of the session record across the gates and the handler (`withSessionReads`). */
+const sharedReads = <T>(webmail: boolean, fn: () => Promise<T>): Promise<T> => (webmail ? withSessionReads(fn) : fn());
+
 export function route(handler: Handler, opts: RouteOptions = {}) {
   return async (req: Request, ctx: Params): Promise<Response> => {
     const requestId = requestIdFrom(req.headers);
     const started = performance.now();
     const context: RequestContext = { requestId };
-    return runWithRequestContext(context, async () => {
+    return runTimed(context, async (timings) => {
       const path = new URL(req.url).pathname;
       let res: Response;
       let errorCode: string | undefined;
@@ -163,12 +172,14 @@ export function route(handler: Handler, opts: RouteOptions = {}) {
           throw new ValidationError("Missing client address.");
         }
         const params: RouteParams = (await ctx.params) ?? {};
-        const rl = await checkRateLimit(
-          container().counter,
-          // One bucket per route, not per id: `/api/webmail/messages/:emailId`, whatever the id.
-          `${limitName}:${req.method} ${routeTemplate(path, params)}`,
-          LIMITS[limitName],
-          LIMITS[limitName].by === "ip" ? `ip:${ip ?? "direct"}` : callerKey(sessionCookie(req, opts.session), ip),
+        const rl = await timed("rate", () =>
+          checkRateLimit(
+            container().counter,
+            // One bucket per route, not per id: `/api/webmail/messages/:emailId`, whatever the id.
+            `${limitName}:${req.method} ${routeTemplate(path, params)}`,
+            LIMITS[limitName],
+            LIMITS[limitName].by === "ip" ? `ip:${ip ?? "direct"}` : callerKey(sessionCookie(req, opts.session), ip),
+          ),
         );
         if (!rl.allowed) {
           errorCode = "rate_limited";
@@ -182,35 +193,40 @@ export function route(handler: Handler, opts: RouteOptions = {}) {
           // mailbox on its compose requests: the gates and the handler all see that mailbox as the active one, and the
           // session's real active mailbox is left alone.
           const pin = opts.session === "webmail" ? requestPin(req) : null;
-          res = await withPinnedMailbox(
-            pin?.address ?? null,
-            async () => {
-              // A blocked mailbox first (every webmail route, sign-out and the password change included), then the
-              // password change the mailbox still owes.
-              const unavailable = opts.session === "webmail" ? await mailboxAccessBlock(req) : null;
-              // Then a mailbox shared with the person: the grant now, or the person's own mailbox for this route.
-              const shared =
-                !unavailable && opts.session === "webmail" ? await delegationBlock(req, opts.delegated) : null;
-              const blocked =
-                !unavailable && !shared && opts.session === "webmail" && opts.passwordChange !== "allowed"
-                  ? await passwordChangeBlock(req)
-                  : null;
-              if (unavailable) {
-                errorCode = "mailbox_unavailable";
-                return unavailable;
-              }
-              if (shared) {
-                errorCode = "delegation";
-                return shared;
-              }
-              if (blocked) {
-                errorCode = PASSWORD_CHANGE_REQUIRED;
-                return blocked;
-              }
-              const meta: RequestMeta = { requestId, ip, userAgent: req.headers.get("user-agent") };
-              return handler({ req, meta }, params);
-            },
-            pin?.kind,
+          res = await sharedReads(opts.session === "webmail", () =>
+            withPinnedMailbox(
+              pin?.address ?? null,
+              async () => {
+                // A blocked mailbox first (every webmail route, sign-out and the password change included), then the
+                // password change the mailbox still owes.
+                const unavailable =
+                  opts.session === "webmail" ? await timed("access", () => mailboxAccessBlock(req)) : null;
+                // Then a mailbox shared with the person: the grant now, or the person's own mailbox for this route.
+                const shared =
+                  !unavailable && opts.session === "webmail"
+                    ? await timed("delegation", () => delegationBlock(req, opts.delegated))
+                    : null;
+                const blocked =
+                  !unavailable && !shared && opts.session === "webmail" && opts.passwordChange !== "allowed"
+                    ? await timed("password", () => passwordChangeBlock(req))
+                    : null;
+                if (unavailable) {
+                  errorCode = "mailbox_unavailable";
+                  return unavailable;
+                }
+                if (shared) {
+                  errorCode = "delegation";
+                  return shared;
+                }
+                if (blocked) {
+                  errorCode = PASSWORD_CHANGE_REQUIRED;
+                  return blocked;
+                }
+                const meta: RequestMeta = { requestId, ip, userAgent: req.headers.get("user-agent") };
+                return timed("handler", () => handler({ req, meta }, params));
+              },
+              pin?.kind,
+            ),
           );
           for (const [k, v] of Object.entries(rl.headers)) res.headers.set(k, v);
         }
@@ -239,11 +255,17 @@ export function route(handler: Handler, opts: RouteOptions = {}) {
       }
       if (opts.cache !== "handler" || !res.headers.has("Cache-Control")) res.headers.set("Cache-Control", "no-store");
       const status = res.status;
+      const durationMs = performance.now() - started;
+      if (opts.session === "webmail") {
+        // Where the time went: fixed phase names, durations and counts only (no ids or content; rule 24).
+        res.headers.set("Server-Timing", serverTimingHeader(timings, durationMs));
+        log.debug("request timing", { component: "http", path: logPath(path), ...timingFields(timings, durationMs) });
+      }
       log.at(status >= 500 ? "error" : status >= 400 && status !== 401 && status !== 404 ? "warn" : "info", "request", {
         method: req.method,
         path: logPath(path),
         status,
-        durationMs: Math.round(performance.now() - started),
+        durationMs: Math.round(durationMs),
         ...(errorCode ? { errorCode } : {}),
       });
       return res;
