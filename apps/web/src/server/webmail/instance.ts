@@ -27,6 +27,8 @@ import { container } from "../container";
 import { env, senderDelegationKey } from "../env";
 import { platform } from "../platform";
 import { trustedAuthservIds } from "./original";
+import { safeSenders } from "./safe-senders";
+import { fromVerified } from "./sender-check";
 import { type SessionKv, WebmailSessionStore } from "./session-store";
 import { type OAuthPort, WebmailService } from "./service";
 import { WebmailSettings } from "./settings";
@@ -203,6 +205,8 @@ export function webmail(): WebmailService {
       // The managed Sieve script is written with management credentials (internal network only, rule 21), never
       // the user's token: customer mailboxes can't manage their own Sieve (CUSTOMER_PERMISSIONS).
       sieve: managedSieve(),
+      // Every managed-script write bumps the rules version the reader's Safe senders check uses (ADR-0027 §3).
+      rulesWritten: (accountId, address) => safeSenders().written(accountId, address),
       // The one source for the sender name (rule 61): what the identities are named and what mail is sent as; the
       // mailbox's masked aliases send with no name.
       senderName: (address) => webmailSendingNames(container().deps, address),
@@ -252,6 +256,11 @@ export function webmailSettings(): WebmailSettings {
       set: (address, input, req) => setWebmailSenderName(container().deps, address, input, req),
     },
     mailer: container().mailer,
+    // The From of a message in the person's own mailbox, verified as the reader verifies it (ADR-0027 §4).
+    messageSender: async (sessionId, emailId) => {
+      const m = await webmail().ownMessageSender(sessionId, emailId);
+      return m === null ? null : { from: m.from, verified: fromVerified(m.headers, m.from) };
+    },
     webmailUrl: env().WEBMAIL_URL,
     siteHost: platform().hosts.site,
   });

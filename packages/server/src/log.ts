@@ -145,6 +145,9 @@ export const REDACT_KEYS: readonly string[] = [
   "cc",
   "bcc",
   "recipients",
+  // Safe senders (ADR-0027): a backstop, no log line carries an entry
+  "safesender",
+  "safesenders",
 ];
 
 const REDACT = new Set(REDACT_KEYS);
