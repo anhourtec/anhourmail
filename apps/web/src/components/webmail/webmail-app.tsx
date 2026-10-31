@@ -274,6 +274,26 @@ function Mailroom({
   useEffect(() => {
     canWriteRef.current = canWrite;
   });
+  // One source (rule 61): a sender name changed elsewhere (the console Profile, an admin) reaches the From picker when
+  // this tab is shown again; the server renames the identities on that read.
+  useEffect(() => {
+    if (sharedMode) return;
+    const check = () => {
+      if (document.visibilityState !== "visible") return;
+      client
+        .identities()
+        .then((list) => {
+          setIdentities((cur) => (JSON.stringify(cur) === JSON.stringify(list) ? cur : list));
+        })
+        .catch(() => undefined);
+    };
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, [client, sharedMode]);
   /** The mailbox's named signatures and defaults (null until loaded; the composer then adds the default). */
   const [signatures, setSignatures] = useState<SignatureSet | null>(null);
   /** Your own addresses (lowercase): the mailbox and its sender identities. */
@@ -1527,6 +1547,7 @@ function Mailroom({
   const sidebar = (rail: boolean) => (
     <Sidebar
       folders={folders}
+      senderName={sharedMode ? null : identities.find((i) => i.email.toLowerCase() === shownAddress)?.name}
       view={section === "mail" ? view : null}
       contactsCurrent={section === "contacts"}
       onContacts={openContacts}

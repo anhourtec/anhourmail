@@ -170,6 +170,7 @@ export function Sidebar({
   ownHref,
   compose = "ready",
   composeBlockedReason,
+  senderName,
 }: {
   folders: Folder[] | null;
   view: View | null;
@@ -200,6 +201,8 @@ export function Sidebar({
    */
   compose?: "ready" | "loading" | "blocked";
   composeBlockedReason?: string;
+  /** The active mailbox's sender name (the one source, rule 61); its address's local part until known or when none. */
+  senderName?: string | null | undefined;
 }) {
   const blockedId = useId();
   // The tiles: the session's own mailboxes, or the one mailbox a scoped tab shows.
@@ -278,7 +281,9 @@ export function Sidebar({
         </div>
         {!collapsed && (
           <div className="flex min-w-0 flex-col gap-0.5 border-sidebar-border border-t pt-3">
-            <span className="truncate font-medium text-[14px]">{localName(mailboxes.active)}</span>
+            <span className="truncate font-medium text-[14px]" data-testid="mailbox-name">
+              {senderName?.trim() ? senderName : localName(mailboxes.active)}
+            </span>
             <Tooltip label={mailboxes.active}>
               <span className="truncate font-mono text-[12px] text-muted-foreground">{mailboxes.active}</span>
             </Tooltip>

@@ -7,7 +7,7 @@ import type { WebmailPreferences } from "@anhourmail/shared/webmail";
 import type { BookView, ContactInput, ContactView } from "@/server/webmail/contacts";
 import type { DelegatedSender, MailboxList, SendResult } from "@/server/webmail/service";
 import type { Junk, Vacation } from "@/server/webmail/sieve";
-import type { SettingsOverview, SignatureResult } from "@/server/webmail/settings";
+import type { SenderNameView, SettingsOverview, SignatureResult } from "@/server/webmail/settings";
 import type { Address, MessageView } from "@/server/webmail/view";
 
 import { isLoadedImageType } from "./remote-images";
@@ -54,7 +54,7 @@ export type ListRow = Summary & {
 /** How the list groups mail: whole conversations (one row each) or every message on its own row. */
 export type Grouping = WebmailPreferences["grouping"];
 export type Identity = { id: string; name: string; email: string; signature?: string };
-export type { SettingsOverview, SignatureResult };
+export type { SenderNameView, SettingsOverview, SignatureResult };
 export type Attachment = { blobId: string; name: string; type: string; size: number };
 export type DraftPayload = {
   replaces?: string;
@@ -1016,11 +1016,12 @@ export function createMailClient(
         headers: { [ACCOUNT]: await accountId() },
         body: JSON.stringify(patch),
       }),
-    updateIdentity: (account: string, id: string, change: { name: string }) =>
-      bff<Identity>(`${origin}/api/webmail/settings/identities/${encodeURIComponent(id)}`, {
-        method: "PATCH",
+    /** The mailbox's sender name: its person's name, the one source (refused when an admin set it). */
+    updateSenderName: (account: string, name: string) =>
+      bff<{ sender: SenderNameView; identities: Identity[] }>(`${origin}/api/webmail/settings/sender-name`, {
+        method: "PUT",
         headers: { [ACCOUNT]: account },
-        body: JSON.stringify(change),
+        body: JSON.stringify({ name }),
       }),
     /** The active mailbox's named signatures and defaults (the first read brings the old signature over). */
     signatures: () => bff<SignatureSet>(`${origin}/api/webmail/settings/signatures`),

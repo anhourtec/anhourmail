@@ -2,7 +2,7 @@
 "use client";
 
 import { ExternalLink, HardDrive, LogOut, MailCheck, Plus, TriangleAlert, X } from "lucide-react";
-import { type SyntheticEvent, useId, useState } from "react";
+import { type SyntheticEvent, useEffect, useId, useState } from "react";
 
 import type { SignatureSet } from "@anhourmail/shared/signatures";
 import { UNDO_SEND_SECONDS, type WebmailPreferences } from "@anhourmail/shared/webmail";
@@ -16,7 +16,13 @@ import { PersonPhoto } from "../../person-photo";
 import { PhotoEditor } from "../../photo-editor";
 import { photoChanged, useOwnPhoto } from "../avatars";
 import { initials } from "../format";
-import { type Identity, type MailClient, RefusedError, type SettingsOverview } from "../mail-client";
+import {
+  type Identity,
+  type MailClient,
+  RefusedError,
+  type SenderNameView,
+  type SettingsOverview,
+} from "../mail-client";
 import { areaClass, Choice, fieldClass, Group, Note, Row, smallPrimary, smallSecondary, Toggle } from "./controls";
 import { ChangePasswordForm } from "./password-form";
 import { SignaturesSection } from "./signatures-panel";
@@ -580,23 +586,53 @@ export function AccountPanel({
 }) {
   const primary = data.identities.find((i) => i.email.toLowerCase() === data.address.toLowerCase());
   const aliases = data.identities.filter((i) => i !== primary);
-  // The mail server names an identity after its address until someone sets a name: show that as empty.
-  const [name, setName] = useState(primary && primary.name !== primary.email ? primary.name : "");
+  // The one source (rule 61): the mailbox's sender name from the control plane; the identities carry the same name.
+  const [sender, setSender] = useState<SenderNameView | null>(data.sender);
+  const [name, setName] = useState(sender?.name ?? "");
+  const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState<Status>(null);
   const [busy, setBusy] = useState(false);
   const id = useId();
   const photo = useOwnPhoto(data.address);
   const pct = data.quota.limit ? Math.min(100, Math.round((data.quota.used / data.quota.limit) * 100)) : null;
+  const editable = sender?.editable === true;
+
+  // Changed elsewhere (the console Profile, another tab): picked up when this tab is shown again, unless being edited.
+  useEffect(() => {
+    if (dirty) return;
+    const check = () => {
+      if (document.visibilityState !== "visible") return;
+      client
+        .identities()
+        .then((list) => {
+          const own = list.find((i) => i.email.toLowerCase() === data.address.toLowerCase());
+          if (!own) return;
+          const next = own.name.trim() === "" ? null : own.name;
+          setSender((cur) => (cur && cur.name !== next ? { ...cur, name: next } : cur));
+          setName(next ?? "");
+          onIdentities(list);
+        })
+        .catch(() => undefined);
+    };
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, [client, data.address, dirty, onIdentities]);
 
   const save = async (e: SyntheticEvent) => {
     e.preventDefault();
-    if (!primary) return;
+    if (!editable) return;
     setBusy(true);
     setStatus(null);
     try {
-      const updated = await client.updateIdentity(data.accountId, primary.id, { name });
-      onIdentities(data.identities.map((i) => (i.id === updated.id ? updated : i)));
-      setName(updated.name);
+      const updated = await client.updateSenderName(data.accountId, name);
+      onIdentities(updated.identities);
+      setSender(updated.sender);
+      setName(updated.sender.name ?? "");
+      setDirty(false);
       setStatus({ tone: "ok", text: "Name saved." });
     } catch (err) {
       setStatus({ tone: "error", text: messageOf(err) });
@@ -657,31 +693,47 @@ export function AccountPanel({
                   : "Your profile photo: the same one as in the console, shown wherever you appear in your account."}
             </p>
           </div>
-          <label htmlFor={`${id}-n`} className="text-[13px] text-muted-foreground">
-            Sender name, as people see it on your mail
-          </label>
-          <input
-            id={`${id}-n`}
-            value={name}
-            maxLength={100}
-            onChange={(e) => {
-              setName(e.target.value);
-              setStatus(null);
-            }}
-            placeholder="Sam Lee"
-            aria-describedby={`${id}-nd`}
-            className={fieldClass}
-          />
-          <p id={`${id}-nd`} className="text-[12.5px] text-muted-foreground">
-            Shown with <span className="font-mono">{data.address}</span> on mail you send. It&apos;s set for this
-            mailbox only; your name in the console profile is separate.
-          </p>
-          <div className="flex flex-wrap items-center gap-3">
-            <button type="submit" disabled={busy || !primary} className={smallPrimary}>
-              Save name
-            </button>
-            <StatusText status={status} />
-          </div>
+          {editable ? (
+            <>
+              <label htmlFor={`${id}-n`} className="text-[13px] text-muted-foreground">
+                Sender name, as people see it on your mail
+              </label>
+              <input
+                id={`${id}-n`}
+                value={name}
+                maxLength={80}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setDirty(true);
+                  setStatus(null);
+                }}
+                placeholder="Sam Lee"
+                aria-describedby={`${id}-nd`}
+                className={fieldClass}
+              />
+              <p id={`${id}-nd`} className="text-[12.5px] text-muted-foreground">
+                Your name, the same one your console profile shows. It&apos;s shown with{" "}
+                <span className="font-mono">{data.address}</span> on mail you send, and changing it here changes it
+                there too.
+              </p>
+              <div className="flex flex-wrap items-center gap-3">
+                <button type="submit" disabled={busy} className={smallPrimary}>
+                  Save name
+                </button>
+                <StatusText status={status} />
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col gap-1">
+              <span className="text-[13px] text-muted-foreground">Sender name, as people see it on your mail</span>
+              <span className="text-[14px]" data-testid="sender-name">
+                {sender?.name ?? <span className="text-muted-foreground">Not set</span>}
+              </span>
+              <p className="text-[12.5px] text-muted-foreground">
+                {sender?.reason ?? "Set for this mailbox in the console."}
+              </p>
+            </div>
+          )}
         </form>
       </section>
 
@@ -693,7 +745,6 @@ export function AccountPanel({
             {aliases.map((a) => (
               <li key={a.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
                 <span className="truncate font-mono text-[13.5px]">{a.email}</span>
-                {a.name && a.name !== a.email && <span className="am-micro truncate">{a.name}</span>}
               </li>
             ))}
           </ul>
