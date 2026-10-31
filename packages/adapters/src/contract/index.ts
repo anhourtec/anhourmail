@@ -1036,6 +1036,11 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         await uow.run((r) => r.people.setProfile(fresh.id, { city: "Halifax" }));
         expect(await uow.run((r) => r.people.profile(fresh.id))).toEqual({ city: "Halifax" });
         expect(await uow.run((r) => r.people.profile(id))).toEqual({});
+
+        // The person's name (the one source for their mailboxes' sender name): only theirs changes.
+        await uow.run((r) => r.people.setName(fresh.id, "Dee Renamed"));
+        expect((await uow.run((r) => r.suspensions.personInfo(fresh.id)))?.name).toBe("Dee Renamed");
+        expect(await uow.run((r) => r.people.userByEmail(login.email))).toEqual({ id, name: "Cee Example" });
       } finally {
         await cleanup();
       }

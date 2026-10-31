@@ -27,6 +27,11 @@ export type PeopleRepository = {
     /** "Add a user": the password was chosen by an admin and the person must choose their own at first sign-in. */
     mustChangePassword?: boolean;
   }): Promise<{ id: string }>;
+  /**
+   * Sets the person's name (`auth_user.name`, already checked by the name rules): the name the console shows and, for
+   * every mailbox of theirs without a custom display name, the sender name on their mail (`people/names.ts`).
+   */
+  setName(userId: string, name: string): Promise<void>;
   /** Replaces the person's optional profile details (only the given fields are kept). */
   setProfile(userId: string, details: ProfileDetails): Promise<void>;
   /** The person's optional profile details. */

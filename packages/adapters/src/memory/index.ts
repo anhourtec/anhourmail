@@ -722,6 +722,9 @@ function repositories(s: MemoryState): Repositories {
       if (mustChangePassword === true) s.mustChangePassword.push(id);
       return { id };
     },
+    setName: async (userId, name) => {
+      s.userNames[userId] = name;
+    },
     setProfile: async (userId, details) => {
       s.profiles[userId] = clone(details);
     },

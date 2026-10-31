@@ -1234,6 +1234,10 @@ class PgPeopleRepository implements PeopleRepository {
     return { id };
   }
 
+  async setName(userId: string, name: string): Promise<void> {
+    await this.x.update(authUser).set({ name, updatedAt: new Date() }).where(eq(authUser.id, userId));
+  }
+
   async setProfile(userId: string, details: ProfileDetails): Promise<void> {
     const values = Object.fromEntries(PROFILE_FIELDS.map((f) => [f, details[f] ?? null])) as Record<
       ProfileField,
