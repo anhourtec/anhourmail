@@ -158,12 +158,18 @@ export async function issueServiceKey(
  * What is wrong with a service account, for the plan's final assertion and smoke checks: it must exist with the
  * custom role holding exactly its key's set, no account-level permissions, no password or app password, at least one
  * API key, and every key `Replace` with exactly the set (and `allowedIps`, when given). Names only, never secrets.
+ *
+ * `olderKeysMayBeWider` (a key rotation after the set shrank): exactly one key must carry exactly the set (the new
+ * one); a key whose set holds the whole current set plus more is then not a problem but is returned in `wider` — its
+ * role caps it to the set (checked exactly above), so it can do nothing more, and it goes once the operator has
+ * switched to the new key and pruned. Keys are told apart by their sets, not their creation times (the server gives
+ * whole seconds, so two keys can tie); a key without a creation time is a problem (pruning keeps the newest).
  */
 export async function serviceAccountProblems(
   mgmt: StalwartManagement,
   role: StalwartCredentialRole,
   domainId: string,
-  opts: { allowedIps?: readonly string[]; maxKeys?: number } = {},
+  opts: { allowedIps?: readonly string[]; maxKeys?: number; olderKeysMayBeWider?: boolean; wider?: string[] } = {},
 ): Promise<string[]> {
   const name = SERVICE_CREDENTIALS[role].account;
   const want = SERVICE_CREDENTIALS[role].permissions;
@@ -192,7 +198,7 @@ export async function serviceAccountProblems(
   if (types.includes("AppPassword")) problems.push(`${name}: has an app password`);
   const keys = await mgmt.transport.getAll<Key>(
     "x:ApiKey",
-    ["description", "permissions", "allowedIps", "expiresAt"],
+    ["description", "permissions", "allowedIps", "expiresAt", "createdAt"],
     null,
     account.id,
   );
@@ -202,11 +208,24 @@ export async function serviceAccountProblems(
   }
   if (types.filter((t) => t === "ApiKey").length !== keys.length) problems.push(`${name}: API key list mismatch`);
   for (const k of keys) {
-    if (k.permissions?.["@type"] !== "Replace" || !same(on(k.permissions.permissions), want)) {
-      problems.push(`${name}: key ${k.id} doesn't carry exactly its set`);
-    }
+    const held = on(k.permissions?.permissions);
+    const exact = k.permissions?.["@type"] === "Replace" && same(held, want);
+    const wider = k.permissions?.["@type"] === "Replace" && !exact && want.every((p) => held.includes(p));
+    if (Number.isNaN(Date.parse(k.createdAt ?? ""))) problems.push(`${name}: key ${k.id} has no creation time`);
+    if (opts.olderKeysMayBeWider === true && wider) opts.wider?.push(k.id);
+    else if (!exact) problems.push(`${name}: key ${k.id} doesn't carry exactly its set`);
     if (opts.allowedIps && !same(on(k.allowedIps), opts.allowedIps)) {
       problems.push(`${name}: key ${k.id} allowedIps differ`);
+    }
+  }
+  if (opts.olderKeysMayBeWider === true && keys.length > 0) {
+    const exact = keys.filter(
+      (k) => k.permissions?.["@type"] === "Replace" && same(on(k.permissions.permissions), want),
+    );
+    if (exact.length !== 1) {
+      problems.push(
+        `${name}: ${String(exact.length)} keys carry exactly its set while rotating (expected one, the new key)`,
+      );
     }
   }
   return problems;
