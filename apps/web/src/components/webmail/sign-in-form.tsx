@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 "use client";
 
-import { type SyntheticEvent, useState } from "react";
+import { type SyntheticEvent, useEffect, useState } from "react";
 
 import { useHydrated } from "@/components/use-hydrated";
 
 import { PasswordInput } from "@/components/password-input";
 import { inputClass, primaryButtonClass } from "@/components/ui-classes";
+
+import { clearViewCache } from "./view-cache";
 
 const MESSAGES: Record<number, string> = {
   400: "Enter your mailbox address and password.",
@@ -23,6 +25,10 @@ export function WebmailSignInForm({ home, domain }: { home: string; domain: stri
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const hydrated = useHydrated();
+  // Any session this browser had has ended (signed out, expired, ended by the server): its copy of the first view goes.
+  useEffect(() => {
+    void clearViewCache();
+  }, []);
 
   async function onSubmit(e: SyntheticEvent<HTMLFormElement>) {
     e.preventDefault();
