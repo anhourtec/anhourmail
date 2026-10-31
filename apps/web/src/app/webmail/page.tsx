@@ -17,16 +17,21 @@ import { webmailBasePath } from "@/server/webmail/paths";
 import { platform } from "@/server/platform";
 import { WebmailBlockedError } from "@/server/webmail/service";
 import { mailboxTabHref } from "@/components/webmail/tab-paths";
+import { pageFirstLoad } from "@/server/webmail/page-first-load";
+import { clientIp } from "@anhourmail/server/client-ip";
 
 export const metadata: Metadata = { title: "Webmail" };
 
 /**
- * The webmail (mail.* origin; `/webmail` on dev bare hosts). Signed-out visitors go to the sign-in form; the
- * session check here only reads our encrypted session record — mail is fetched by the client through the BFF.
+ * The webmail (mail.* origin; `/webmail` on dev bare hosts). Signed-out visitors go to the sign-in form. Once the
+ * session has been checked here, the first view (folders and the opened view's first window, summaries only) is
+ * fetched through the BFF on the server and streamed inside the page; everything after that the client fetches
+ * through the BFF.
  */
 export default async function WebmailPage() {
+  const requestHeaders = await headers();
   const base = webmailBasePath(
-    (await headers()).get("host"),
+    requestHeaders.get("host"),
     env().NODE_ENV === "production",
     process.env.WEBMAIL_DEV_PORT,
   );
@@ -81,6 +86,18 @@ export default async function WebmailPage() {
     );
   }
   const app = env().APP_URL.replace(/\/$/, "");
+  // The app's first load (folders, counts and the opened view's first window), started now and streamed inside this
+  // page: the inbox needs no request of its own once the app's code has loaded. Not awaited, so the page itself isn't
+  // held up; null (the app then asks the first-load route) when over the budget or the mail server didn't answer.
+  // The key for this browser's encrypted copy of the first view: this session's, handed only to its own page.
+  const viewKey = await webmail()
+    .store.viewKey(id)
+    .catch(() => null);
+  const firstLoad = pageFirstLoad(id, clientIp(requestHeaders), session.username, {
+    start: preferences.startIn,
+    grouping: preferences.grouping,
+    attachments: preferences.attachmentChips,
+  });
   return (
     <WebmailApp
       username={session.username}
@@ -89,6 +106,8 @@ export default async function WebmailPage() {
       consoleHref={mailbox ? `${app}/accounts/${mailbox.accountId}/aliases` : app}
       initialCollapsed={jar.get(SIDEBAR_COOKIE)?.value === "collapsed"}
       initialPreferences={preferences}
+      firstLoad={firstLoad}
+      viewKey={viewKey}
       authservIds={trustedAuthservIds(env().MAIL_AUTHSERV_ID, platform().hosts.mx, env().NODE_ENV === "production")}
     />
   );

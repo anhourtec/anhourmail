@@ -72,6 +72,9 @@ export function proxy(request: NextRequest) {
     res = NextResponse.next({ request: { headers } });
   }
   if (csp) res.headers.set("Content-Security-Policy", csp);
+  // Webmail pages (their HTML and RSC payloads) carry mail summaries — the first view comes inside the page — so no
+  // browser or intermediary keeps a copy.
+  if (webmailPage) res.headers.set("Cache-Control", "no-store");
   return res;
 }
 
