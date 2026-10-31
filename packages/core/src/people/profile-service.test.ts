@@ -134,6 +134,25 @@ describe("updatePersonProfile", () => {
     expect(s.profiles.kid).toEqual({ jobTitle: "Intern" });
   });
 
+  it("someone with a platform role in this account only: still only they edit their name and details (403, audited)", async () => {
+    const { d, s, as } = world();
+    s.platformRoles.push({ userId: "solo", role: "global_admin" });
+    s.userNames.solo = "Sam Staff";
+    for (const input of [{ profile: { jobTitle: "Intern" } }, { name: "Renamed" }]) {
+      await expect(updatePersonProfile(d, as("owner"), ACCOUNT_A, "solo", input, req)).rejects.toThrow(
+        OTHER_ACCOUNT_PROFILE,
+      );
+      expect(s.audit.at(-1)).toMatchObject({ result: "denied", errorCode: "other_account", target: { id: "solo" } });
+    }
+    expect(s.profiles.solo).toEqual({ jobTitle: "Student", city: "Halifax" });
+    expect(s.userNames.solo).toBe("Sam Staff");
+    const view = await getPersonProfile(d, as("owner"), ACCOUNT_A, "solo");
+    expect(view).toMatchObject({ canEdit: false, readOnlyReason: OTHER_ACCOUNT_PROFILE });
+    // Their own edit still works.
+    await updatePersonProfile(d, as("solo"), ACCOUNT_A, "solo", { name: "Sam S" }, req);
+    expect(s.userNames.solo).toBe("Sam S");
+  });
+
   it("403 without member.manage, 404 for another account or someone outside it, 401 signed out", async () => {
     const { d, as } = world();
     const edit = (actor: Actor, accountId: string, userId: string) =>

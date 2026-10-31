@@ -6,6 +6,7 @@ import { ForbiddenError, NotFoundError, UnauthenticatedError } from "../errors";
 import { mutation } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 import { profileDetails } from "./entity";
+import { holdsPlatformRole, personName, queuePersonNameSync } from "./names";
 
 /**
  * Optional profile details after creation ("Edit profile"): job title, department, office, phones, postal address and
@@ -14,8 +15,8 @@ import { profileDetails } from "./entity";
  * Who may edit: the person themself (`self.profile.manage`, from their Profile page or their own person panel), and in
  * an account, admins with `member.manage` for a Member; someone with another role needs an Owner
  * (`account.admins.manage`), as for changing or removing them. The details belong to the person, not to one account:
- * someone who also belongs to another account is edited only by themself, so one account's admins can't change what
- * every other account sees (unaudited there).
+ * someone who also belongs to another account, or holds a platform role (staff), is edited only by themself, so one
+ * account's admins can't change what every other account (or the platform) sees, unaudited there.
  */
 
 export type ProfileView = {
@@ -36,7 +37,10 @@ export function changedFields(before: ProfileDetails, after: ProfileDetails): Pr
 
 const selfId = (actor: Actor): string | null => (actor.kind === "user" ? actor.userId : null);
 
-/** Someone else's details are refused for their role here, or because they also belong to another account. */
+/**
+ * Someone else's details are refused for their role here, or because they also belong to another account or hold a
+ * platform role (`holdsPlatformRole`).
+ */
 export type EditRefusal = "role" | "other_account";
 
 /**
@@ -56,7 +60,9 @@ export async function editRefusal(
   ) {
     return "role";
   }
-  return (await repos.accounts.membershipCount(target.userId)) > 1 ? "other_account" : null;
+  return (await repos.accounts.membershipCount(target.userId)) > 1 || (await holdsPlatformRole(repos, target.userId))
+    ? "other_account"
+    : null;
 }
 
 export const OTHER_ACCOUNT_PROFILE =
@@ -117,11 +123,39 @@ export async function getOwnProfile(deps: Deps, actor: Actor): Promise<ProfileVi
   }));
 }
 
-export type ProfileChange = { details: ProfileDetails; changed: ProfileField[] };
+/** What changed: the optional details' field names, and `name` when the person's name changed. */
+export type ProfileChange = { details: ProfileDetails; changed: (ProfileField | "name")[]; name?: string };
+
+/**
+ * Applies a profile edit inside the caller's unit of work: the details (replaced, unless only the name was sent) and
+ * the name when given. A new name is the sender name of every mailbox of theirs that follows it, so it queues the
+ * worker to write it to the mail server (`queuePersonNameSync`). Returns what changed.
+ */
+async function applyProfileEdit(
+  deps: Deps,
+  repos: Repositories,
+  userId: string,
+  input: { profile?: unknown; name?: unknown },
+): Promise<ProfileChange> {
+  const nameGiven = input.name !== undefined && input.name !== null;
+  const name = nameGiven ? personName(input.name) : undefined;
+  const before = await repos.people.profile(userId);
+  // Without a name, the details are always replaced (an absent `profile` clears them, as before names were editable).
+  const after = input.profile === undefined && nameGiven ? before : profileDetails(input.profile ?? {});
+  const changed: (ProfileField | "name")[] = changedFields(before, after);
+  if (changed.length > 0) await repos.people.setProfile(userId, after);
+  if (name !== undefined && name !== ((await repos.suspensions.personInfo(userId))?.name ?? "")) {
+    await repos.people.setName(userId, name);
+    await queuePersonNameSync(repos, userId, deps.clock.now());
+    changed.unshift("name");
+  }
+  return { details: after, changed, ...(name !== undefined ? { name } : {}) };
+}
 
 /**
  * An admin's (or the person's own) edit from the People page (`member.manage`, plus the role rule above; the person
- * themself always may). Replaces all the fields: an empty one clears it. Audited as `account.profile_changed` in the
+ * themself always may). Replaces all the fields: an empty one clears it. `name`, when given, is the person's name (the
+ * sender name of their mailboxes that follow it). Audited as `account.profile_changed` in the
  * account's log with the names of the fields that changed; a refusal by role (`forbidden`), or because the person also
  * belongs to another account (`other_account`), is audited as denied (403).
  */
@@ -130,7 +164,7 @@ export async function updatePersonProfile(
   actor: Actor,
   accountId: string,
   userId: string,
-  input: { profile?: unknown },
+  input: { profile?: unknown; name?: unknown },
   req: RequestMeta,
 ): Promise<ProfileChange> {
   const own = userId === selfId(actor);
@@ -159,14 +193,12 @@ export async function updatePersonProfile(
           denied: { code: refusal === "role" ? "forbidden" : refusal },
         };
       }
-      const after = profileDetails(input.profile ?? {});
-      const changed = changedFields(await repos.people.profile(target.userId), after);
-      if (changed.length > 0) await repos.people.setProfile(target.userId, after);
+      const result = await applyProfileEdit(deps, repos, target.userId, input);
       return {
-        result: { details: after, changed },
+        result,
         target: { label: target.email },
         // Which fields changed, never their values (personal data).
-        meta: { fields: changed, self: own },
+        meta: { fields: result.changed, self: own },
       };
     },
   );
@@ -177,14 +209,14 @@ export async function updatePersonProfile(
 }
 
 /**
- * The person's own edit from their Profile page (`self.profile.manage`). Recorded as `account.profile_changed` in
- * each account they belong to (so its admins see it), with the names of the fields that changed; in the platform log
- * when they belong to none.
+ * The person's own edit from their Profile page (`self.profile.manage`): the details and, when given, their name.
+ * Recorded as `account.profile_changed` in each account they belong to (so its admins see it), with the names of the
+ * fields that changed (`name` included); in the platform log when they belong to none.
  */
 export async function updateOwnProfile(
   deps: Deps,
   actor: Actor,
-  input: { profile?: unknown },
+  input: { profile?: unknown; name?: unknown },
   req: RequestMeta,
 ): Promise<ProfileChange> {
   const accounts = actor.kind === "user" ? [...new Set(actor.memberships.map((m) => m.accountId))] : [];
@@ -202,12 +234,10 @@ export async function updateOwnProfile(
     async (repos) => {
       if (actor.kind !== "user") throw new UnauthenticatedError();
       if (actingAsStaff(actor)) return { result: "act_as", target: { label: actor.email }, denied: { code: "act_as" } };
-      const after = profileDetails(input.profile ?? {});
-      const changed = changedFields(await repos.people.profile(actor.userId), after);
-      if (changed.length > 0) await repos.people.setProfile(actor.userId, after);
-      const meta = { fields: changed, self: true };
+      const result = await applyProfileEdit(deps, repos, actor.userId, input);
+      const meta = { fields: result.changed, self: true };
       return {
-        result: { details: after, changed },
+        result,
         target: { label: actor.email },
         meta,
         copies: rest.map((accountId) => ({ accountId, meta })),
