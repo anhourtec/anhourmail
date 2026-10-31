@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { Bone, PageHeaderSkeleton, SkeletonPage } from "@anhourmail/ui/skeletons";
 
-/** Mirrors Profile: header, name, photo with its buttons, the note and sign-in email, then the details and Edit. */
+/**
+ * Mirrors Profile: header, name, photo with its buttons, the name with Edit name, the note and sign-in email, then the
+ * details and Edit.
+ */
 export default function Loading() {
   return (
     <SkeletonPage label="Loading your profile">
@@ -13,6 +16,11 @@ export default function Loading() {
           <Bone className="h-10 w-40 rounded-lg" />
           <Bone className="h-3 w-56" />
         </div>
+      </div>
+      <div className="flex flex-col gap-2">
+        <Bone className="h-3 w-12" />
+        <Bone className="h-4 w-40" />
+        <Bone className="h-10 w-32 rounded-lg" />
       </div>
       <Bone className="h-3.5 w-full max-w-prose" />
       <Bone className="h-3.5 w-40" />

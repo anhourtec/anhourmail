@@ -7,6 +7,7 @@ import { PageHeader } from "@anhourmail/ui/page-header";
 
 import { initialsOf } from "@/components/console/initials";
 import { CopyValue } from "@/components/copy-value";
+import { EditPersonName } from "@/components/people/edit-person-name";
 import { EditProfile } from "@/components/people/edit-profile";
 import { ProfilePhoto } from "@/components/people/profile-photo";
 import { requireUser } from "@/server/console-frame";
@@ -18,7 +19,8 @@ export const metadata: Metadata = { title: "Profile" };
  * The signed-in person's Profile: their name, photo and console sign-in, and the optional profile details (job title …
  * country) they can edit themselves (`self.profile.manage`). Admins of their accounts see the same details on the
  * People page. The photo is the one the console app bar, the People page and the webmail of their mailboxes show
- * (ADR-0022); the sender name on mail is each mailbox's own (set in the webmail), which this page says.
+ * (ADR-0022). The name is the one source (rule 61): it is also the sender name of their mailboxes unless an admin gave
+ * one a custom display name, which this page says.
  */
 export default async function ProfilePage() {
   const actor = await requireUser();
@@ -45,9 +47,11 @@ export default async function ProfilePage() {
             subject="your photo"
           />
         ) : null}
+        <EditPersonName url="/api/me/profile" name={actor.name ?? ""} canEdit={profile.canEdit} />
         <p className="am-small max-w-prose">
-          Your name and photo are what the people in your accounts see, here and in the webmail of your mailboxes. The
-          name on mail you send is each mailbox&apos;s sender name, which you set in the webmail (Settings, Account).
+          Your name and photo are what the people in your accounts see, here and in the webmail of your mailboxes. Your
+          name is also the sender name on mail from your mailboxes, unless an admin set a different display name for one
+          of them.
         </p>
         <div className="flex flex-col gap-1">
           <span className="am-small">Email (console sign-in)</span>

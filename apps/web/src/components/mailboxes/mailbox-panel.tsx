@@ -105,7 +105,9 @@ export function MailboxPanel({
               <EditMailboxName
                 accountId={accountId}
                 mailboxId={m.id}
-                name={m.displayName}
+                custom={m.displayName}
+                senderName={m.senderName}
+                personName={m.owner ? m.owner.name : null}
                 canEdit={canManage && !deleting && !m.lifecycleLocked}
               />
             </Field>

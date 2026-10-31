@@ -47,18 +47,23 @@ function ThemeCycle() {
 
 /**
  * One source, shown the same everywhere (CLAUDE.md rule 61): when the person comes back to this tab, ask whether their
- * photo changed elsewhere (the webmail, another tab) and re-render the page's server parts if it did. Edits made on
- * this page refresh it themselves.
+ * photo or name changed elsewhere (the webmail, another tab) and re-render the page's server parts if either did.
+ * Edits made on this page refresh it themselves.
  */
-function usePhotoFreshness(current: string | null) {
+function useProfileFreshness(photo: string | null, name: string | null) {
   const router = useRouter();
   useEffect(() => {
+    const read = async <T,>(url: string): Promise<T | null> => {
+      const r = await fetch(url);
+      return r.ok ? (((await r.json()) as { data?: T }).data ?? null) : null;
+    };
     const check = () => {
       if (document.visibilityState !== "visible") return;
-      void fetch("/api/me/avatar")
-        .then((r) => (r.ok ? (r.json() as Promise<{ data?: { url?: string | null } }>) : null))
-        .then((json) => {
-          if (json?.data && (json.data.url ?? null) !== current) router.refresh();
+      void Promise.all([read<{ url?: string | null }>("/api/me/avatar"), read<{ name?: string | null }>("/api/me")])
+        .then(([a, me]) => {
+          const photoChanged = a !== null && (a.url ?? null) !== photo;
+          const nameChanged = me !== null && (me.name ?? "") !== (name ?? "");
+          if (photoChanged || nameChanged) router.refresh();
         })
         .catch(() => undefined);
     };
@@ -68,7 +73,7 @@ function usePhotoFreshness(current: string | null) {
       window.removeEventListener("focus", check);
       document.removeEventListener("visibilitychange", check);
     };
-  }, [current, router]);
+  }, [photo, name, router]);
 }
 
 /**
@@ -102,7 +107,7 @@ export function AppBar({
 }) {
   const { open: menuOpen, toggle: menuToggle, close: menuClose, trigger: menuTrigger, panel: menuPanel } = usePopover();
   const [searching, setSearching] = useState(false);
-  usePhotoFreshness(user.photoUrl ?? null);
+  useProfileFreshness(user.photoUrl ?? null, user.name);
 
   return (
     <header className="sticky top-0 z-40 border-b border-appbar-border bg-appbar text-appbar-foreground">

@@ -10,6 +10,7 @@ import { ActionLink, DetailHeader, DetailTabs, Field, FieldGrid, PanelSection, T
 import { initialsOf } from "../console/initials";
 import { StatusText } from "../console/status-text";
 import { CopyValue } from "../copy-value";
+import { EditPersonName } from "./edit-person-name";
 import { EditProfile } from "./edit-profile";
 import { ProfilePhoto } from "./profile-photo";
 import { RemovePerson, RoleForm } from "./person-actions";
@@ -146,6 +147,7 @@ export function PersonPanel({
                     />
                   </PanelSection>
                 )}
+                <EditPersonName url={`${personUrl}/profile`} name={person.name} canEdit={profile.canEdit} />
                 <EditProfile
                   url={`${personUrl}/profile`}
                   details={profile.details}
