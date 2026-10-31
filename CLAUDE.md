@@ -91,8 +91,8 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 ## Where we are and what's next
 
 Pre-staging has run on one VM since 2026-10-23 from the private ops repository (`anhourmail-ops`, following the
-local-only `deploy.md`); it was last deployed on 2026-10-30 at 300440a (leavers' sign-in cut-off, mailbox delegation
-in the console, the send-on-behalf sender rule). Since then the webmail side of delegation (Open another mailbox, writing from a shared mailbox; no "Shared with you" list), remote images' once-or-always choice with our own server's mail treated as verified, the forwarding guard (no forwarding of mail failing DMARC), the SEO pass and the fuller reserved-name list were pushed at 3c74f23 for the next deploy and a `--bootstrap-stalwart`; names as one source (one sender name per mailbox, following its person; masked aliases send with no name) follows it. The work plan stops before Phase 6. The next
+local-only `deploy.md`); it was last deployed on 2026-10-31 at 6545a16 (names as one source, mail-server file storage switched off for
+customers, delegation's webmail side, the forwarding guard, the SEO pass). The work plan stops before Phase 6. The next
 phases, in order, with exit criteria, are in `docs/internal/09-roadmap.md` "Path to production":
 
 1. pre-staging on one VM (real DNS, certificates, rDNS, external mail, backups and a restore drill);
