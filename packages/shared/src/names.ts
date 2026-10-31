@@ -2,8 +2,9 @@
 /**
  * Rules for names people choose that others see: first, last and display names, and account names. They appear in
  * emails we send (invites, notices) and in other people's consoles, so a name must read as a name: no control
- * characters, no bidirectional-text controls that reorder what's shown, no `@` (it would pose as an address) and nothing
- * that looks like a web address. The server checks every name with `nameProblem`; forms may call it for early feedback.
+ * characters, no bidirectional-text controls that reorder what's shown, no `@` (it would pose as an address), nothing
+ * that looks like a web address, and no `=?` (mail apps would decode it as a MIME encoded-word into other text). The
+ * server checks every name with `nameProblem`; forms may call it for early feedback.
  */
 
 /** C0 and C1 control characters, DEL, and the bidi controls (LRM/RLM, embeddings/overrides, isolates). */
@@ -17,6 +18,7 @@ export const NAME_PROBLEMS = {
   control: "Names can't contain control or text-direction characters.",
   at: "Names can't contain @.",
   url: "Names can't contain web addresses.",
+  encoded: "Names can't contain =? together.",
   long: "That name is too long.",
 } as const;
 
@@ -29,5 +31,7 @@ export function nameProblem(name: string): string | null {
   if (FORBIDDEN_CHARS.test(name)) return NAME_PROBLEMS.control;
   if (name.includes("@") || name.includes("＠")) return NAME_PROBLEMS.at;
   if (URL_LIKE.test(name)) return NAME_PROBLEMS.url;
+  // A MIME encoded-word (`=?utf-8?b?…?=`) in a sender name would be decoded by mail apps into something else.
+  if (name.includes("=?")) return NAME_PROBLEMS.encoded;
   return null;
 }

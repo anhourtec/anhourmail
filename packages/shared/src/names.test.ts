@@ -54,6 +54,14 @@ describe("name rules", () => {
     }
   });
 
+  it("refuses MIME encoded-words (=?), whatever the case, so a sender name can't decode into other text", () => {
+    for (const bad of ["=?utf-8?b?QWxleA==?=", "=?UTF-8?Q?Bank?=", "Alex =?iso-8859-1?q?x?=", "a=?b"]) {
+      expect(nameProblem(bad)).toBe(NAME_PROBLEMS.encoded);
+    }
+    expect(nameProblem("Alex = Kim?")).toBeNull();
+    expect(nameProblem("Who? =")).toBeNull();
+  });
+
   it("refuses very long input before running the pattern checks", () => {
     expect(nameProblem("a".repeat(201))).toBe(NAME_PROBLEMS.long);
     expect(nameProblem("a".repeat(200))).toBeNull();
