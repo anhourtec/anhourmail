@@ -17,6 +17,9 @@ test("a Global Administrator finds an account, opens it, and its owner sees the 
   await expect(page.getByRole("heading", { name: u.accountName, level: 1 })).toBeVisible();
   await expect(page.getByText("Opening this page is recorded in the account's audit log")).toBeVisible();
   await expect(page.getByRole("tabpanel", { name: /^People/ }).getByText(u.users.owner)).toBeVisible();
+  // A link to one tab opens on it.
+  await page.goto(`${page.url().split("?")[0] ?? ""}?tab=mailboxes`);
+  await expect(page.getByRole("tab", { name: /^Mailboxes/ })).toHaveAttribute("aria-selected", "true");
 
   // The platform audit is a filterable table with a details drawer.
   await (await openNav(page)).getByRole("link", { name: "Platform audit" }).click();
