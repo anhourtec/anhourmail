@@ -1,6 +1,6 @@
 # 01 — Architecture
 
-Last updated: 2026-10-31 (ADR-0027 proposed: image senders list sealed per mailbox in Postgres; names as one source: sender name in the control plane, mirrored to Stalwart; webmail: no "Shared with you" list or in-place switch, shared mailboxes open only in their own tab, maintainer decision; mailbox delegation, ADR-0026: writing from a shared mailbox's view through an own-mailbox pin; the webmail UI and tabs pinned to a shared mailbox per request, slice 14; sending as and on behalf of a delegated mailbox from the webmail BFF, slice 13; the webmail BFF opens delegated mailboxes behind the delegation gate; grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
+Last updated: 2026-10-31 (ADR-0027 proposed: Safe senders load images, own Sent mail loads images; names as one source: sender name in the control plane, mirrored to Stalwart; webmail: no "Shared with you" list or in-place switch, shared mailboxes open only in their own tab, maintainer decision; mailbox delegation, ADR-0026: writing from a shared mailbox's view through an own-mailbox pin; the webmail UI and tabs pinned to a shared mailbox per request, slice 14; sending as and on behalf of a delegated mailbox from the webmail BFF, slice 13; the webmail BFF opens delegated mailboxes behind the delegation gate; grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
 
 ## Overview
 
@@ -245,10 +245,10 @@ Built in Phase 4 slice 1 (2026-10-22; ADR-0018):
    (`07-security.md` "Image proxy (SSRF)"). This is the one place the app makes outbound HTTP requests to addresses
    from mail; it needs outbound HTTP/HTTPS from the app container in production (check the ops repo's network rules).
    Senders whose images always load are today keyed fingerprints in the control-plane preferences; ADR-0027
-   (Proposed) replaces them with a visible list per mailbox in `webmail_image_sender_list`, sealed with the key ring
-   (AES-256-GCM, AAD bound to the mailbox) so Postgres never holds a readable address. Only the web process decrypts
-   it, caches it in its own memory (never Redis) behind a per-row version check, and matches it for verified senders
-   only.
+   (Proposed) replaces them with the mailbox's existing Safe senders list (managed Sieve script on Stalwart, no
+   Postgres copy): for a verified From only, the BFF matches the From against it (exact address or exact domain),
+   caching the parsed list in its own memory (never Redis) behind a Redis rules-version counter. Messages in the
+   open mailbox's own Sent folder load their images automatically through the proxy.
    **The browser never sees a Stalwart token.** Webmail pages get a nonce-based CSP from `src/proxy.ts` (console pages
    get their own, stricter one there too; `07-security.md` "Standards"), which
    also sends visits to the webmail app page without a session cookie straight to sign-in (presence only; the page

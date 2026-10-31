@@ -1,6 +1,6 @@
 # 09 — Roadmap
 
-Last updated: 2026-10-31 (names as one source and the file-storage lockdown deployed at 6545a16; trusted image senders planned, ADR-0027). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
+Last updated: 2026-10-31 (names as one source and the file-storage lockdown deployed at 6545a16; safe senders to load images and own Sent mail images, ADR-0027). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
 
 ## Path to production (as of 2026-10-29)
 
