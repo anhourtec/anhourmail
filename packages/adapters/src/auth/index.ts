@@ -92,7 +92,7 @@ export type AuthOptions = {
 /** Console password length (better-auth's own checks; the breached-password check skips anything outside it). */
 export const CONSOLE_PASSWORD = { min: 12, max: 128 } as const;
 
-/** Passkeys must prove the person, not just the device (PIN, fingerprint or face): a passkey signs in on its own. */
+/** Passkeys must prove the person, not just the device (PIN, fingerprint or face), as a second step should. */
 function requireUserVerified(verified: boolean): void {
   if (!verified) {
     throw new APIError("UNAUTHORIZED", {
@@ -261,7 +261,8 @@ export function createAuth(opts: AuthOptions) {
         rpID: opts.relyingParty.id,
         rpName: opts.relyingParty.name,
         origin: opts.relyingParty.origin,
-        // Discoverable credentials (so a passkey can sign in without typing an email) that check the person.
+        // Discoverable credentials that check the person. A passkey is only the second step after the password
+        // (ADR-0028; security-plugin.ts asks for the person's own credentials).
         authenticatorSelection: { residentKey: "required", userVerification: "required" },
         registration: {
           // The name typed is checked first (security-plugin.ts); without one, name it after the authenticator.
@@ -301,20 +302,23 @@ export type Auth = ReturnType<typeof createAuth>;
 export function signInMethodFor(path: string | undefined, current: unknown): SignInMethod {
   switch (path) {
     case "/two-factor/verify-totp": {
-      // Turning on an authenticator in a passkey session keeps the stronger method.
+      // Turning on an authenticator in a passkey session keeps the method a passkey requirement accepts.
       const m = (current as { signInMethod?: unknown } | null | undefined)?.signInMethod;
-      return m === "passkey" ? "passkey" : "password+totp";
+      return m === "password+passkey" ? m : "password+totp";
     }
     case "/two-factor/verify-backup-code":
       return "password+recovery_code";
     case "/passkey/verify-authentication":
-      return "passkey";
+      // Only ever the second step after the password (ADR-0028).
+      return "password+passkey";
     case "/sign-in/email":
     case "/sign-up/email":
       return "password";
     default: {
+      // A passwordless `passkey` session (before ADR-0028) is never carried into a replacement: it counts as the
+      // password alone (that session is refused anyway).
       const m = (current as { signInMethod?: unknown } | null | undefined)?.signInMethod;
-      return isSignInMethod(m) ? m : "password";
+      return isSignInMethod(m) && m !== "passkey" ? m : "password";
     }
   }
 }

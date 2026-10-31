@@ -118,6 +118,7 @@ describe("job:bootstrap-admin against Postgres", () => {
           factors: async () => ({ totp: false, passkeys: 0 }),
           factorAdded: async () => undefined,
           codes: { claim: async () => true },
+          strikes: async () => 1,
           passwordChanged: async () => undefined,
           sessionRefusal: async () => null,
         },
