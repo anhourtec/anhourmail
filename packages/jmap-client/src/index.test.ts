@@ -95,6 +95,42 @@ describe("JmapClient", () => {
   });
 });
 
+describe("JmapClient.session", () => {
+  it("shares one fetch between callers asking at once, and keeps it", async () => {
+    const { f, seen } = fake(() => []);
+    const c = new JmapClient({ sessionUrl: "http://proxy.local/jmap/session", fetch: f });
+    const [a, b] = await Promise.all([c.accountId(), c.session()]);
+    expect(a).toBe("acc");
+    expect(b.apiUrl).toBe("http://proxy.local/jmap/");
+    await c.session();
+    expect(seen.filter((u) => u.endsWith("/session"))).toHaveLength(1);
+    await c.session(true);
+    expect(seen.filter((u) => u.endsWith("/session"))).toHaveLength(2);
+  });
+
+  it("forgets a failed fetch, so the next call tries again", async () => {
+    let fail = true;
+    const f = (async () => {
+      if (fail) {
+        fail = false;
+        return new Response("no", { status: 503 });
+      }
+      return Response.json(SESSION);
+    }) as typeof fetch;
+    const c = new JmapClient({ sessionUrl: "http://proxy.local/jmap/session", fetch: f });
+    await expect(c.session()).rejects.toMatchObject({ type: "http", detail: { status: 503 } });
+    expect(await c.accountId()).toBe("acc");
+  });
+
+  it("uses a primed session without fetching one, its URLs rewritten", async () => {
+    const { f, seen } = fake(() => [["Mailbox/get", { list: MAILBOXES }, "m"]]);
+    const c = new JmapClient({ sessionUrl: "http://proxy.local/jmap/session", fetch: f });
+    c.prime(SESSION);
+    expect((await c.mailboxes()).map((m) => m.id)).toEqual(["in", "dr", "se"]);
+    expect(seen).toEqual(["http://proxy.local/jmap/"]);
+  });
+});
+
 describe("JmapClient.upload", () => {
   it("posts to the rewritten upload URL and returns the blob id", async () => {
     const seen: { url: string; type: string | null }[] = [];

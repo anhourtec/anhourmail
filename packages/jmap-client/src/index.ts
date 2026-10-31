@@ -64,6 +64,7 @@ export type JmapClientOptions = {
 
 export class JmapClient {
   #session: JmapSession | null = null;
+  #loading: Promise<JmapSession> | null = null;
   readonly #opts: JmapClientOptions;
   readonly #fetch: typeof fetch;
 
@@ -86,11 +87,35 @@ export class JmapClient {
     return url.replace(/^https?:\/\/[^/]+/, origin);
   }
 
+  /**
+   * The JMAP Session resource, fetched once and kept. Callers asking while it is on its way share that one fetch
+   * (a failed fetch is forgotten, so the next call tries again); `refresh` fetches it again.
+   */
   async session(refresh = false): Promise<JmapSession> {
     if (this.#session && !refresh) return this.#session;
-    const res = await this.#fetch(this.#opts.sessionUrl, { headers: this.#headers() });
-    if (!res.ok) throw new JmapError(`JMAP session HTTP ${res.status}`, "http", { status: res.status });
-    const s = (await res.json()) as JmapSession;
+    if (this.#loading && !refresh) return this.#loading;
+    const loading = (async () => {
+      const res = await this.#fetch(this.#opts.sessionUrl, { headers: this.#headers() });
+      if (!res.ok) throw new JmapError(`JMAP session HTTP ${res.status}`, "http", { status: res.status });
+      return this.#use((await res.json()) as JmapSession);
+    })();
+    this.#loading = loading;
+    try {
+      return await loading;
+    } finally {
+      if (this.#loading === loading) this.#loading = null;
+    }
+  }
+
+  /**
+   * Uses a Session resource the caller already has (e.g. one sent with the page's first data), so the first request
+   * doesn't wait for a session fetch. Its URLs are rewritten like a fetched one's.
+   */
+  prime(session: JmapSession): void {
+    this.#use(session);
+  }
+
+  #use(s: JmapSession): JmapSession {
     this.#session = { ...s, apiUrl: this.#rewrite(s.apiUrl), uploadUrl: this.#rewrite(s.uploadUrl) };
     return this.#session;
   }
