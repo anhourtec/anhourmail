@@ -211,6 +211,20 @@
       "when": 1793337703697,
       "tag": "0029_mailbox_delegation",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1793416135554,
+      "tag": "0030_mailbox_name_follows_person",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1793417913478,
+      "tag": "0031_mailbox_sender_name_backfill",
+      "breakpoints": true
     }
   ]
 }

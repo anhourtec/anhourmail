@@ -311,7 +311,10 @@ export const mailbox = pgTable(
       .references(() => customerAccount.id, { onDelete: "cascade" }),
     userId: text("user_id").references(() => authUser.id, { onDelete: "set null" }),
     address: text("address").notNull().unique(),
-    /** The sender name ("Name <address>"), also the mail server account's description. Null: none set. */
+    /**
+     * A custom sender name an admin set ("Name <address>"). Null: the mailbox follows its person's name, or has none
+     * without a person (core `people/names.ts`). The resulting name is the mail server account's description.
+     */
     displayName: text("display_name"),
     /**
      * Set by "Add a user": the webmail asks for a new password before the inbox (and its API refuses everything else);

@@ -35,6 +35,8 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 | #    | Migration                           | Commit    | Date       | Change                                                                                                            | Rollback        |
 | ---- | ----------------------------------- | --------- | ---------- | ----------------------------------------------------------------------------------------------------------------- | --------------- |
+| 0031 | `0031_mailbox_sender_name_backfill` | —         | 2026-10-31 | Queue `mailbox.ensure` once per mailbox on the mail server, so its description is the sender name                 | Safe            |
+| 0030 | `0030_mailbox_name_follows_person`  | —         | 2026-10-31 | `mailbox.display_name` equal to its person's name → null (the mailbox follows the person; rule 61)                | Caution         |
 | 0029 | `0029_mailbox_delegation`           | —         | 2026-10-30 | `mailbox_delegation` table: read and manage, send as, send on behalf per mailbox and person (ADR-0026)            | Safe            |
 | 0028 | `0028_alias_creation_year`          | —         | 2026-10-29 | Seed `alias_creation_day` for the rolling year from live aliases (Free yearly cap)                                | Safe            |
 | 0027 | `0027_data_export_account_deletion` | —         | 2026-10-29 | `data_export` (sealed control-plane archives, 7 days) and `account_deletion` (grace period); ADR-0025             | Safe            |
@@ -93,6 +95,29 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0031_mailbox_sender_name_backfill · — · 2026-10-31 · Safe
+
+- Added: —
+- Changed: —
+- Removed: —
+- Data: one queued `mailbox.ensure` in `provisioning_job` for every mailbox on the mail server (`stalwart_id` set) that
+  is `active` or `suspended` and has a person or a display name. The worker then writes the sender name (custom display
+  name, else the person's name; core `people/names.ts`) as the account description; mailboxes made before had none
+  when they had a person but no display name. The job changes nothing else (a suspension stays in force).
+- Rollback: nothing to undo (the jobs only re-apply the intended state; finished jobs can stay).
+
+### 0030_mailbox_name_follows_person · — · 2026-10-31 · Caution
+
+- Added: —
+- Changed: meaning of `mailbox.display_name`: a custom sender name an admin set; null = the mailbox follows its
+  person's name (or has none without a person). Code before this treated null as "no sender name".
+- Removed: —
+- Data: sets `display_name` to null where the mailbox has a person and the value equals that person's `auth_user.name`
+  (trimmed): the copies "Add a user" and "Make this a user" stored. What each mailbox sends as is unchanged.
+- Rollback: older code would send those mailboxes with no name. To return to it, copy the person's name back first:
+  `update mailbox m set display_name = u.name from auth_user u where m.user_id = u.id and m.display_name is null;`
+  (that also names mailboxes that had none before, which matches what they send as now).
 
 ### 0029_mailbox_delegation · — · 2026-10-30 · Safe
 
