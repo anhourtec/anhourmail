@@ -56,6 +56,7 @@ import {
   parseScript,
   usesContacts,
 } from "./sieve";
+import { timed } from "../http/server-timing";
 import { QueueFullError, UserQueue, withLimitRetry } from "./queue";
 import { MAX_MAILBOXES, type MailboxTokens, type WebmailSession, type WebmailSessionStore } from "./session-store";
 import { pinnedAddress, pinnedKind, withPinnedMailbox } from "./pin";
@@ -1198,7 +1199,9 @@ export class WebmailService {
 
   async #upstream(url: string, init: RequestInit): Promise<Response> {
     try {
-      return await this.#d.fetch(url, { ...init, redirect: "manual", signal: AbortSignal.timeout(30_000) });
+      return await timed("stalwart", () =>
+        this.#d.fetch(url, { ...init, redirect: "manual", signal: AbortSignal.timeout(30_000) }),
+      );
     } catch (err) {
       log.warn("webmail upstream unreachable", { component: "webmail", err });
       throw new WebmailUnavailableError("mail server unavailable");

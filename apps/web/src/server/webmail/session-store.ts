@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes } from "node:crypto";
 
 import type { KeyRing } from "@anhourmail/server/keyring";
 
+import { addTiming, timed } from "../http/server-timing";
 import { pinnedAddress, pinView, unpinWrite } from "./pin";
 
 /**
@@ -81,7 +83,34 @@ export type SessionKv = {
   del(key: string): Promise<void>;
 };
 
+/**
+ * One request's copies of the session records it has read (`withSessionReads`): the gates and the handler read the
+ * same record several times per request, and each read is a Redis round trip plus a decrypt. A copy is used only
+ * while no write of any session has happened in this process since it was read (any write, compare-and-set, delete
+ * — a refresh another request finished, a switch), for at most `READ_COPY_MS`, and never once the request has
+ * answered (deferred work the request scheduled reads afresh). Every reader gets its own clone.
+ */
+type ReadCopies = { open: boolean; copies: Map<string, { at: number; writes: number; data: WebmailSession }> };
+const readScope = new AsyncLocalStorage<ReadCopies>();
+const READ_COPY_MS = 2_000;
+
+/**
+ * Runs `fn` (one webmail API request) with its session reads shared (`route()`); the copies end when `fn` settles.
+ */
+export async function withSessionReads<T>(fn: () => Promise<T>): Promise<T> {
+  const scope: ReadCopies = { open: true, copies: new Map() };
+  try {
+    return await readScope.run(scope, fn);
+  } finally {
+    scope.open = false;
+    scope.copies.clear();
+  }
+}
+
 const PURPOSE = "webmail-session";
+const VIEW_KEY_PURPOSE = "webmail-view-key";
+/** Where a session's view key lives, next to its record. */
+const viewKeyKey = (sessionKey: string) => sessionKey.replace("am:wm:s:", "am:wm:vk:");
 const SESSION_ID = /^[A-Za-z0-9_-]{43}$/;
 
 export const isSessionId = (v: string): boolean => SESSION_ID.test(v);
@@ -92,6 +121,8 @@ export class WebmailSessionStore {
   readonly #idleTtlSec: number;
   readonly #maxAgeMs: number;
   readonly #now: () => number;
+  /** Writes of any session record made through this store (process-wide): a request's read copies older are stale. */
+  #writes = 0;
 
   constructor(kv: SessionKv, ring: KeyRing, opts: { idleTtlSec?: number; maxAgeMs?: number; now?: () => number } = {}) {
     this.#kv = kv;
@@ -114,7 +145,8 @@ export class WebmailSessionStore {
     const sessionId = randomBytes(32).toString("base64url");
     const key = this.#key(sessionId);
     const ttl = this.#ttl(data);
-    if (ttl > 0) await this.#kv.set(key, this.#seal(key, { ...data, version: 1 }), ttl, "create");
+    this.#writes += 1;
+    if (ttl > 0) await timed("kv", () => this.#kv.set(key, this.#seal(key, { ...data, version: 1 }), ttl, "create"));
     return sessionId;
   }
 
@@ -125,21 +157,28 @@ export class WebmailSessionStore {
   async write(sessionId: string, written: WebmailSession): Promise<boolean> {
     const key = this.#key(sessionId);
     let data = written;
+    this.#writes += 1;
     if (pinnedAddress() !== null) {
       // A request pinned to a shared mailbox (a mailbox-scoped tab) writes the session's real active mailbox back. It
       // is taken from the record this write replaces (the same version, or the compare-and-set below fails anyway),
       // never from what another read in this request saw.
-      const stored = await this.#readRaw(key);
+      const stored = await this.#readRaw(key, false);
       if (!stored || (stored.version ?? 0) !== (written.version ?? 0)) return false;
       data = unpinWrite(written, stored);
     }
     const ttl = this.#ttl(data);
     if (ttl <= 0) {
-      await this.#kv.del(key);
+      await this.#drop(key);
       return false;
     }
     const current = data.version ?? 0;
-    return this.#kv.cas(key, String(current), this.#seal(key, { ...data, version: current + 1 }), ttl);
+    const sealed = this.#seal(key, { ...data, version: current + 1 });
+    try {
+      return await timed("kv", () => this.#kv.cas(key, String(current), sealed, ttl));
+    } finally {
+      // Whether it landed or lost to another write, what this request read before is no longer the record.
+      this.#writes += 1;
+    }
   }
 
   #ttl(data: WebmailSession): number {
@@ -163,9 +202,31 @@ export class WebmailSessionStore {
     return data ? pinView(data) : null;
   }
 
-  /** The stored record as it is (no pin applied), or null; drops one that is expired or can't be opened. */
-  async #readRaw(key: string): Promise<WebmailSession | null> {
-    const stored = await this.#kv.get(key);
+  /**
+   * The stored record as it is (no pin applied), or null; drops one that is expired or can't be opened. Inside
+   * `withSessionReads`, a copy this request read earlier is reused while no session was written since (`shared`).
+   */
+  async #readRaw(key: string, shared = true): Promise<WebmailSession | null> {
+    const scope = shared ? readScope.getStore() : undefined;
+    const now = this.#now();
+    if (scope?.open) {
+      const copy = scope.copies.get(key);
+      if (copy?.writes === this.#writes && now - copy.at < READ_COPY_MS && copy.data.createdAt + this.#maxAgeMs > now) {
+        addTiming("kvhit", 0);
+        return structuredClone(copy.data);
+      }
+    }
+    const writes = this.#writes;
+    const data = await this.#readStored(key);
+    if (scope?.open) {
+      if (data && writes === this.#writes) scope.copies.set(key, { at: now, writes, data: structuredClone(data) });
+      else scope.copies.delete(key);
+    }
+    return data;
+  }
+
+  async #readStored(key: string): Promise<WebmailSession | null> {
+    const stored = await timed("kv", () => this.#kv.get(key));
     if (stored === null) return null;
     const m = /^(\d{1,15})\.(.*)$/s.exec(stored);
     let data: WebmailSession;
@@ -173,18 +234,63 @@ export class WebmailSessionStore {
       data = JSON.parse(this.#ring.decrypt(PURPOSE, m?.[2] ?? stored, key)) as WebmailSession;
       data.version = m ? Number(m[1]) : 0;
     } catch {
-      await this.#kv.del(key);
+      await this.#drop(key);
       return null;
     }
     if (data.createdAt + this.#maxAgeMs <= this.#now()) {
-      await this.#kv.del(key);
+      await this.#drop(key);
       return null;
     }
     return data;
   }
 
+  /**
+   * Deletes a session record and its view key. The write count moves before and after the delete, so no read copy
+   * taken while it was in flight outlives it.
+   */
+  async #drop(key: string): Promise<void> {
+    this.#writes += 1;
+    try {
+      await this.#kv.del(key);
+      await this.#kv.del(viewKeyKey(key));
+    } finally {
+      this.#writes += 1;
+    }
+  }
+
   async destroy(sessionId: string): Promise<void> {
-    if (isSessionId(sessionId)) await this.#kv.del(this.#key(sessionId));
+    if (!isSessionId(sessionId)) return;
+    await this.#drop(this.#key(sessionId));
+  }
+
+  /**
+   * This session's key for the browser's encrypted copy of the first view (`components/webmail/view-cache.ts`): 32
+   * random bytes, base64url, made on first use and kept sealed in Redis next to the session record (same lifetime,
+   * deleted with it). Handed only to the webmail page of a checked session, never stored in the browser: once the
+   * session ends, what the browser kept can't be read. Null when the session doesn't exist.
+   */
+  async viewKey(sessionId: string): Promise<string | null> {
+    if (!isSessionId(sessionId)) return null;
+    const key = this.#key(sessionId);
+    const s = await this.#readRaw(key);
+    if (!s) return null;
+    const at = viewKeyKey(key);
+    const open = (sealed: string | null): string | null => {
+      if (sealed === null) return null;
+      try {
+        return this.#ring.decrypt(VIEW_KEY_PURPOSE, sealed, at);
+      } catch {
+        return null;
+      }
+    };
+    const found = open(await timed("kv", () => this.#kv.get(at)));
+    if (found) return found;
+    const ttl = this.#ttl(s);
+    if (ttl <= 0) return null;
+    const fresh = randomBytes(32).toString("base64url");
+    await timed("kv", () => this.#kv.set(at, this.#ring.encrypt(VIEW_KEY_PURPOSE, fresh, at), ttl, "create"));
+    // Two first uses at once: whichever was stored last is the key (the other's copy just isn't readable).
+    return open(await timed("kv", () => this.#kv.get(at))) ?? fresh;
   }
 }
 

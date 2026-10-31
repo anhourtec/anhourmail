@@ -5,6 +5,8 @@
  * most `maxInFlight` upstream requests per user and queues the rest (FIFO). A bounded backlog stops one runaway tab
  * from holding unbounded memory. Per process: with several app instances the retry on `limit` covers the overlap.
  */
+import { addTiming } from "../http/server-timing";
+
 export class QueueFullError extends Error {
   override readonly name = "QueueFullError";
 }
@@ -29,7 +31,9 @@ export class UserQueue {
     if (lane.active >= this.maxInFlight) {
       if (lane.waiting.length >= this.maxWaiting) throw new QueueFullError("Too many queued requests");
       const l = lane;
+      const asked = performance.now();
       await new Promise<void>((resolve) => l.waiting.push(resolve));
+      addTiming("queue", performance.now() - asked);
     }
     lane.active += 1;
     try {

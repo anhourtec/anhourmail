@@ -28,9 +28,10 @@ import { env, senderDelegationKey } from "../env";
 import { platform } from "../platform";
 import { trustedAuthservIds } from "./original";
 import { type SessionKv, WebmailSessionStore } from "./session-store";
-import { WebmailService } from "./service";
+import { type OAuthPort, WebmailService } from "./service";
 import { WebmailSettings } from "./settings";
 import { WEBMAIL_COOKIE_NAMES } from "../host-routing";
+import { timed } from "../http/server-timing";
 
 /**
  * The webmail session cookie (ADR-0003): opaque id only, HttpOnly, SameSite=Lax, host-only. On https it is
@@ -95,7 +96,10 @@ export function webmailFailures(): FailureStore {
 let accessGate: MailboxAccessGate | null = null;
 /** Whether a mailbox may use the webmail now (control plane, cached ≤ 30 s); shared by the BFF and `route()`. */
 export function mailboxAccessGate(): MailboxAccessGate {
-  accessGate ??= new MailboxAccessGate(pgMailboxStatusLookup(db()));
+  if (!accessGate) {
+    const lookup = pgMailboxStatusLookup(db());
+    accessGate = new MailboxAccessGate((address) => timed("db", () => lookup(address)));
+  }
   return accessGate;
 }
 
@@ -107,12 +111,17 @@ let delegationGateInstance: DelegationGate | null = null;
 export function delegationGate(): DelegationGate {
   if (!delegationGateInstance) {
     const lookup = pgMailboxStatusLookup(db());
-    delegationGateInstance = new DelegationGate(
-      delegationCheck(container().deps, { state: async (address) => webmailAccess(await lookup(address)) }),
-    );
+    const check = delegationCheck(container().deps, { state: async (address) => webmailAccess(await lookup(address)) });
+    delegationGateInstance = new DelegationGate((entry) => timed("db", () => check(entry)));
   }
   return delegationGateInstance;
 }
+
+/** The OAuth port with its token refreshes timed (`Server-Timing` `refresh`). */
+const timedRefresh = (port: OAuthPort): OAuthPort => ({
+  signIn: (name, secret) => port.signIn(name, secret),
+  refresh: (token) => timed("refresh", () => port.refresh(token)),
+});
 
 let instance: WebmailService | null = null;
 
@@ -129,12 +138,14 @@ export function webmail(): WebmailService {
     });
     instance = new WebmailService({
       store: new WebmailSessionStore(redisKv(), ring),
-      oauth: stalwartOAuthPort({
-        stalwartUrl,
-        webmailUrl: e.WEBMAIL_URL,
-        // Dev: a visitor without a forwarded address is this machine (servers bind to loopback by default).
-        fallbackIp: e.NODE_ENV === "production" ? null : "127.0.0.1",
-      }),
+      oauth: timedRefresh(
+        stalwartOAuthPort({
+          stalwartUrl,
+          webmailUrl: e.WEBMAIL_URL,
+          // Dev: a visitor without a forwarded address is this machine (servers bind to loopback by default).
+          fallbackIp: e.NODE_ENV === "production" ? null : "127.0.0.1",
+        }),
+      ),
       // Console → webmail handoff (ADR-0024): a throwaway credential minted with the operations key, used once.
       handoffSignIn: stalwartHandoffSignIn({
         stalwartUrl,
@@ -142,9 +153,11 @@ export function webmail(): WebmailService {
         fallbackIp: e.NODE_ENV === "production" ? null : "127.0.0.1",
       }),
       // A handoff-born webmail session ends with its console session (ADR-0024).
-      consoleSessionAlive: async (userId, sessionId) =>
-        (await container().deps.uow.run((r) => r.security.sessions(userId, new Date()))).some(
-          (x) => x.id === sessionId,
+      consoleSessionAlive: (userId, sessionId) =>
+        timed("db", async () =>
+          (await container().deps.uow.run((r) => r.security.sessions(userId, new Date()))).some(
+            (x) => x.id === sessionId,
+          ),
         ),
       // Delegated mailboxes (ADR-0026): listed and opened by core, used only through the gate.
       delegation: {
@@ -209,9 +222,13 @@ export function webmail(): WebmailService {
 let passwordGate: PasswordChangeGate | null = null;
 /** Whether a mailbox must change its password before using the webmail (`./password-gate`). */
 export function passwordChangeGate(): PasswordChangeGate {
-  passwordGate ??= new PasswordChangeGate(
-    async (address) =>
-      (await container().deps.uow.run((r) => r.webmailSettings.mailboxByAddress(address)))?.mustChangePassword === true,
+  passwordGate ??= new PasswordChangeGate((address) =>
+    timed(
+      "db",
+      async () =>
+        (await container().deps.uow.run((r) => r.webmailSettings.mailboxByAddress(address)))?.mustChangePassword ===
+        true,
+    ),
   );
   return passwordGate;
 }
