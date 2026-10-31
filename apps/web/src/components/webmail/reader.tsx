@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
+import type { SafeSenderMatch } from "@anhourmail/shared/senders";
 import { Bone, ReaderSkeleton } from "@anhourmail/ui/skeletons";
 
 import { authResults, senderChecks } from "@/server/webmail/original";
@@ -428,7 +429,8 @@ export function Reader({
   markRead = { mode: "open", delay: 5 },
   defaultReply = "reply",
   imagePolicy,
-  onRememberImages,
+  onSafeSender,
+  onForgetImageKey,
   canAnswer = true,
   canReply = canAnswer,
 }: {
@@ -451,8 +453,13 @@ export function Reader({
   defaultReply?: "reply" | "replyAll";
   /** When remote images load without asking (settings and remembered senders). */
   imagePolicy?: ImagePolicy;
-  /** Remembers or forgets a sender for "Always load images from this sender". */
-  onRememberImages?: (senderKey: string, on: boolean) => void;
+  /**
+   * "Always for <sender>" / "Stop loading" from a message: changes Safe senders (ADR-0027 §4). Absent in a mailbox
+   * shared with the person (only "Just this once" there).
+   */
+  onSafeSender?: (emailId: string, change: "add" | "remove") => Promise<SafeSenderMatch | null>;
+  /** Forgets a sender remembered by fingerprint before Safe senders loaded images. */
+  onForgetImageKey?: (senderKey: string) => void;
   /**
    * False in a mailbox shared with the person (ADR-0026 §6): reading and managing only. Reply, forward, blocking a
    * sender and adding contacts act on the person's own mailbox, so they aren't offered here.
@@ -488,8 +495,13 @@ export function Reader({
   const [thread, setThread] = useState<Summary[] | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const images: ImageOptions | undefined =
-    imagePolicy && onRememberImages
-      ? { policy: imagePolicy, contacts: knownAddresses, onRemember: onRememberImages }
+    imagePolicy && onForgetImageKey
+      ? {
+          policy: imagePolicy,
+          contacts: knownAddresses,
+          onForgetKey: onForgetImageKey,
+          ...(onSafeSender ? { onSafeSender } : {}),
+        }
       : undefined;
   const [views, setViews] = useState<Record<string, MessageView | "missing">>({});
   const [error, setError] = useState<string | null>(null);

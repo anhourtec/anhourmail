@@ -28,7 +28,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { MessageListSkeleton } from "@anhourmail/ui/skeletons";
 import type { SignatureSet } from "@anhourmail/shared/signatures";
-import { REMOTE_IMAGES, type WebmailPreferences } from "@anhourmail/shared/webmail";
+import type { WebmailPreferences } from "@anhourmail/shared/webmail";
 import { useTheme } from "next-themes";
 
 import type { Address, MessageView } from "@/server/webmail/view";
@@ -914,17 +914,30 @@ function Mailroom({
     [client, fail],
   );
 
-  // Remote images: the setting and remembered senders (keys from the server, never addresses), newest kept.
+  // Remote images: the setting, and senders remembered by fingerprint before Safe senders loaded images (keys from the
+  // server, never addresses; read-only now — they can only be forgotten, ADR-0027 §9).
   const imagePolicy = useMemo(
     () => ({ mode: prefs.remoteImages, senders: prefs.imageSenders }),
     [prefs.remoteImages, prefs.imageSenders],
   );
-  const rememberImages = useCallback(
-    (key: string, on: boolean) => {
+  const forgetImageKey = useCallback(
+    (key: string) => {
       const rest = prefsRef.current.imageSenders.filter((k) => k !== key);
-      updatePrefs({ imageSenders: on ? [...rest, key].slice(-REMOTE_IMAGES.maxSenders) : rest });
+      if (rest.length !== prefsRef.current.imageSenders.length) updatePrefs({ imageSenders: rest });
     },
     [updatePrefs],
+  );
+  // "Always for <sender>" / "Stop loading" from a message: Safe senders, the person's own mailbox only.
+  const changeSafeSender = useCallback(
+    async (emailId: string, change: "add" | "remove") => {
+      try {
+        return (await client.changeSafeSender(emailId, change)).safeSender;
+      } catch (err) {
+        fail(err, "That change to Safe senders couldn't be saved. Try again.");
+        throw err;
+      }
+    },
+    [client, fail],
   );
 
   // Theme: the saved choice wins on load; switching it anywhere (the sidebar toggle too) is saved.
@@ -2211,7 +2224,8 @@ function Mailroom({
                   canAnswer={!sharedMode}
                   canReply={canWrite === true}
                   imagePolicy={imagePolicy}
-                  onRememberImages={rememberImages}
+                  onForgetImageKey={forgetImageKey}
+                  {...(sharedMode ? {} : { onSafeSender: changeSafeSender })}
                   folders={folders ?? []}
                   currentFolder={currentFolder}
                   hiddenMailboxIds={hidden.filter((id) => id !== currentFolder?.id)}

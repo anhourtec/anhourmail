@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import type { SafeSenderMatch } from "@anhourmail/shared/senders";
 import { Bone } from "@anhourmail/ui/skeletons";
 
 import type { CalendarEvent, MdBlock, MdInline, TextBlock } from "@/server/webmail/body";
@@ -32,6 +33,7 @@ import { IMAGE_LINK_EXPIRED, type MailClient } from "./mail-client";
 import { MessageFrame } from "./message-frame";
 import {
   type ImagePolicy,
+  type ImageSender,
   imageLinks,
   loadsWithoutAsking,
   type RememberOffer,
@@ -448,13 +450,19 @@ function AttachmentChips({
   );
 }
 
-/** What the reader can do with remote images: the setting, remembered senders, contacts, and remembering one. */
+/** What the reader can do with remote images: the setting, legacy remembered senders, contacts, Safe senders. */
 export type ImageOptions = {
   policy: ImagePolicy;
   /** Addresses on a contact card (lowercase), for "Load from contacts". */
   contacts: ReadonlySet<string>;
-  /** Remembers (or forgets) a sender's key in the `imageSenders` preference. */
-  onRemember: (senderKey: string, on: boolean) => void;
+  /**
+   * Changes Safe senders from a message — "Always for <sender>" adds its From, "Stop loading" removes the entry it
+   * matched (ADR-0027 §4) — and resolves the entry the From matches afterwards. Rejects, after telling the person,
+   * when it couldn't be saved. Absent in a mailbox shared with the person: its Safe senders aren't theirs to change.
+   */
+  onSafeSender?: (emailId: string, change: "add" | "remove") => Promise<SafeSenderMatch | null>;
+  /** Forgets a sender remembered by fingerprint before Safe senders loaded images (`imageSenders`). */
+  onForgetKey: (senderKey: string) => void;
 };
 
 type ImageState = "blocked" | "loading" | "loaded";
@@ -471,8 +479,10 @@ function ImageNotice({
   trackers,
   failed,
   offer,
+  added,
   onLoad,
-  onRemember,
+  onAlways,
+  onStop,
 }: {
   state: ImageState;
   count: number;
@@ -480,13 +490,20 @@ function ImageNotice({
   trackers: number;
   failed: number;
   offer: RememberOffer;
+  /** The address "Always for" just added to Safe senders (the notice confirms what that means), or null. */
+  added: string | null;
   onLoad: () => void;
-  onRemember: (on: boolean) => void;
+  /** Adds the sender to Safe senders. */
+  onAlways: () => void;
+  /** Removes the Safe senders entry the sender matched, or forgets a fingerprint. */
+  onStop: () => void;
 }) {
   const [choosing, setChoosing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   const loadButton = useRef<HTMLButtonElement>(null);
   const firstChoice = useRef<HTMLButtonElement>(null);
+  const stopButton = useRef<HTMLButtonElement>(null);
   const reopen = useRef(false);
   useEffect(() => {
     if (choosing) firstChoice.current?.focus();
@@ -495,6 +512,9 @@ function ImageNotice({
       loadButton.current?.focus();
     }
   }, [choosing]);
+  useEffect(() => {
+    if (confirming) stopButton.current?.focus();
+  }, [confirming]);
 
   const removed = trackers > 0 ? ` · ${plural(trackers, "tracker")} removed` : "";
   const title = [
@@ -507,7 +527,6 @@ function ImageNotice({
   const button =
     "inline-flex h-8 min-w-0 max-w-full shrink-0 items-center gap-1 rounded-lg border bg-background px-3 text-[12.5px] transition-colors hover:bg-accent disabled:opacity-60";
   const link = "text-left text-[12.5px] text-primary underline-offset-2 hover:underline";
-  const canRemember = offer.kind === "choose" || offer.kind === "remembered";
   const unverified =
     offer.kind === "unverified" ? (
       <p className="am-micro">
@@ -525,11 +544,12 @@ function ImageNotice({
   const choose = (always: boolean) => {
     setChoosing(false);
     box.current?.focus();
-    if (always) onRemember(true);
+    if (always) onAlways();
     onLoad();
   };
   const noticeClass = "flex flex-wrap items-start gap-3 rounded-xl border bg-muted/60 px-4 py-3 outline-none";
   if (state === "loaded") {
+    const safe = offer.kind === "safe" && offer.canChange ? offer : null;
     return (
       <div ref={box} tabIndex={-1} role="status" className={noticeClass}>
         <ImageIcon className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
@@ -539,18 +559,89 @@ function ImageNotice({
             The sender can't see your IP address or your browser
             {failed > 0 ? `. ${plural(failed, "image")} couldn't be loaded.` : "."}
           </p>
+          {added !== null && offer.kind === "safe" && (
+            <p className="am-micro">
+              Images from <bdi className="font-mono">{added}</bdi> will load, and their mail won't go to Junk.
+            </p>
+          )}
           {unverified}
         </div>
-        {canRemember && (
-          <button
-            type="button"
-            className={link}
-            onClick={() => {
-              onRemember(offer.kind !== "remembered");
+        {confirming && safe ? (
+          <div
+            role="group"
+            aria-label="Stop loading images from this sender"
+            className="flex min-w-0 basis-full flex-col gap-2 pl-7"
+            onKeyDown={(e) => {
+              if (e.key !== "Escape") return;
+              e.preventDefault();
+              e.stopPropagation();
+              setConfirming(false);
+              box.current?.focus();
             }}
           >
-            {offer.kind === "remembered" ? "Stop loading from this sender" : "Always load from this sender"}
-          </button>
+            <p className="am-small">
+              {safe.match.kind === "domain" ? (
+                <>
+                  Stop loading images from anyone at <bdi className="font-mono">{safe.match.value}</bdi>? This also
+                  removes <bdi className="font-mono">{safe.match.value}</bdi> from Safe senders.
+                </>
+              ) : (
+                <>
+                  Stop loading images from <bdi className="font-mono">{safe.match.value}</bdi>? This also removes it
+                  from Safe senders.
+                </>
+              )}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                ref={stopButton}
+                type="button"
+                className={button}
+                onClick={() => {
+                  setConfirming(false);
+                  box.current?.focus();
+                  onStop();
+                }}
+              >
+                Stop loading
+              </button>
+              <button
+                type="button"
+                className={button}
+                onClick={() => {
+                  setConfirming(false);
+                  box.current?.focus();
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col items-start gap-1">
+            {offer.kind === "choose" && (
+              <button type="button" className={link} onClick={onAlways}>
+                Always load from this sender
+              </button>
+            )}
+            {offer.kind === "legacy" && offer.canChange && (
+              <button type="button" className={link} title={offer.sender} onClick={onAlways}>
+                Add <bdi className="font-mono">{offer.sender}</bdi> to Safe senders
+              </button>
+            )}
+            {(safe !== null || (offer.kind === "legacy" && offer.canChange)) && (
+              <button
+                type="button"
+                className={link}
+                onClick={() => {
+                  if (safe) setConfirming(true);
+                  else onStop();
+                }}
+              >
+                Stop loading from this sender
+              </button>
+            )}
+          </div>
         )}
       </div>
     );
@@ -632,6 +723,8 @@ function useRemoteImages(
   client: MailClient,
   reload: () => Promise<MessageView | null>,
   images: ImageOptions | undefined,
+  sender: ImageSender,
+  own: boolean,
 ) {
   const [html, setHtml] = useState(view.html);
   const [loaded, setLoaded] = useState<ReadonlyMap<string, string>>(new Map());
@@ -686,7 +779,7 @@ function useRemoteImages(
   const auto =
     images !== undefined &&
     view.loadableImages > 0 &&
-    loadsWithoutAsking(images.policy, view.senderKey, view.from[0]?.email, images.contacts, view.senderVerified);
+    loadsWithoutAsking(images.policy, sender, view.from[0]?.email, images.contacts, own);
   useEffect(() => {
     if (auto && state === "blocked") void load();
   }, [auto, state, load]);
@@ -777,13 +870,65 @@ export function MessageContent({
   images?: ImageOptions;
   /** Loads this message again (fresh image links); defaults to the reader's own message. */
   reload?: () => Promise<MessageView | null>;
-  /** The message is in this mailbox's Sent folder: the image notice says nothing about confirming the sender. */
+  /**
+   * The message is in this mailbox's Sent folder (its own mail, decided by folder): its images load by themselves and
+   * the notice says nothing about confirming the sender.
+   */
   own?: boolean;
 }) {
   const [nested, setNested] = useState<AttachmentView | null>(null);
+  // A Safe senders change made from this message, shown at once (the server's answer replaces it).
+  const [changed, setChanged] = useState<{ id: string; safe: SafeSenderMatch | null; added: string | null } | null>(
+    null,
+  );
+  const mine = changed?.id === view.id ? changed : null;
+  const sender: ImageSender = {
+    senderKey: view.senderKey,
+    senderVerified: view.senderVerified,
+    safeSender: mine ? mine.safe : view.safeSender,
+  };
   const again = useCallback(() => (reload ? reload() : client.message(view.id)), [reload, client, view.id]);
-  const remote = useRemoteImages(view, client, again, images);
-  const offer = rememberOffer(images?.policy, view.senderKey, view.from[0]?.email, own);
+  const remote = useRemoteImages(view, client, again, images, sender, own);
+  const offer = rememberOffer(images?.policy, sender, view.from[0]?.email, own, images?.onSafeSender !== undefined);
+  const legacyKey =
+    view.senderKey !== null && images?.policy.senders.includes(view.senderKey) === true ? view.senderKey : null;
+  const always = () => {
+    const change = images?.onSafeSender;
+    if (!change || (offer.kind !== "choose" && offer.kind !== "legacy")) return;
+    const before = mine;
+    const shown = offer.sender;
+    setChanged({ id: view.id, safe: { kind: "address", value: shown }, added: shown });
+    change(view.id, "add").then(
+      (safe) => {
+        setChanged({ id: view.id, safe, added: shown });
+        // The fingerprint isn't needed once the sender is on Safe senders.
+        if (legacyKey !== null) images.onForgetKey(legacyKey);
+      },
+      () => {
+        setChanged(before);
+      },
+    );
+  };
+  const stop = () => {
+    if (!images) return;
+    if (offer.kind === "legacy") {
+      images.onForgetKey(offer.key);
+      return;
+    }
+    const change = images.onSafeSender;
+    if (offer.kind !== "safe" || !change) return;
+    const before = mine;
+    setChanged({ id: view.id, safe: null, added: null });
+    if (legacyKey !== null) images.onForgetKey(legacyKey);
+    change(view.id, "remove").then(
+      (safe) => {
+        setChanged({ id: view.id, safe, added: null });
+      },
+      () => {
+        setChanged(before);
+      },
+    );
+  };
   return (
     <div className="flex flex-col gap-4">
       {view.blockedImages + view.blockedTrackers > 0 && (
@@ -794,13 +939,12 @@ export function MessageContent({
           trackers={view.blockedTrackers}
           failed={remote.failed}
           offer={offer}
+          added={mine?.added ?? null}
           onLoad={() => {
             void remote.load();
           }}
-          onRemember={(on) => {
-            if (view.senderKey === null || !images || own) return;
-            images.onRemember(view.senderKey, on);
-          }}
+          onAlways={always}
+          onStop={stop}
         />
       )}
       <AttachmentChips view={view} client={client} onOpenMessage={setNested} />

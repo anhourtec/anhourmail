@@ -58,62 +58,122 @@ describe("loading images into the message frame", () => {
     expect(withLoadedImages(html, new Map())).toBe(html);
   });
 
+  const KEY = "k".repeat(22);
+  /** What the server sends: a sender key and a Safe senders match only for a verified From. */
+  const unverified = { senderKey: null, senderVerified: false, safeSender: null };
+  const verified = (
+    over: Partial<{ senderKey: string | null; safeSender: { kind: "address" | "domain"; value: string } | null }> = {},
+  ) => ({
+    senderKey: KEY,
+    senderVerified: true,
+    safeSender: null,
+    ...over,
+  });
+  const safeDomain = { kind: "domain" as const, value: "club.example" };
+
   it("decides when images load without asking", () => {
     const contacts = new Set(["friend@example.org"]);
-    const ask = { mode: "ask" as const, senders: ["k".repeat(22)] };
-    expect(loadsWithoutAsking(ask, null, "friend@example.org", contacts)).toBe(false);
-    expect(loadsWithoutAsking(ask, "k".repeat(22), "x@example.org", contacts)).toBe(true);
-    expect(loadsWithoutAsking({ mode: "contacts", senders: [] }, null, "Friend@Example.org", contacts, true)).toBe(
-      true,
-    );
+    const ask = { mode: "ask" as const, senders: [] };
+    const contactsMode = { mode: "contacts" as const, senders: [] };
+    expect(loadsWithoutAsking(ask, verified(), "friend@example.org", contacts)).toBe(false);
+    expect(loadsWithoutAsking(contactsMode, verified(), "Friend@Example.org", contacts)).toBe(true);
     // A contact's address on a message whose From isn't verified asks first.
-    expect(loadsWithoutAsking({ mode: "contacts", senders: [] }, null, "friend@example.org", contacts)).toBe(false);
-    expect(loadsWithoutAsking({ mode: "contacts", senders: [] }, null, "x@example.org", contacts, true)).toBe(false);
-    expect(loadsWithoutAsking({ mode: "contacts", senders: [] }, null, undefined, contacts)).toBe(false);
-    expect(loadsWithoutAsking({ mode: "always", senders: [] }, null, undefined, contacts)).toBe(true);
+    expect(loadsWithoutAsking(contactsMode, unverified, "friend@example.org", contacts)).toBe(false);
+    expect(loadsWithoutAsking(contactsMode, verified(), "x@example.org", contacts)).toBe(false);
+    expect(loadsWithoutAsking(contactsMode, unverified, undefined, contacts)).toBe(false);
+    expect(loadsWithoutAsking({ mode: "always", senders: [] }, unverified, undefined, contacts)).toBe(true);
+  });
+
+  it("loads Safe senders' images in every mode, only for a verified From", () => {
+    const none = new Set<string>();
+    for (const mode of ["ask", "contacts", "always"] as const) {
+      expect(
+        loadsWithoutAsking({ mode, senders: [] }, verified({ safeSender: safeDomain }), "news@club.example", none),
+      ).toBe(true);
+    }
+    // A forged From matching a Safe sender: the server sends no match, and nothing loads by itself.
+    expect(loadsWithoutAsking({ mode: "ask", senders: [] }, unverified, "news@club.example", none)).toBe(false);
+    expect(
+      loadsWithoutAsking(
+        { mode: "ask", senders: [] },
+        { ...unverified, safeSender: safeDomain },
+        "news@club.example",
+        none,
+      ),
+    ).toBe(false);
+  });
+
+  it("still loads a sender remembered by fingerprint before Safe senders loaded images", () => {
+    const none = new Set<string>();
+    expect(loadsWithoutAsking({ mode: "ask", senders: [KEY] }, verified(), "x@example.org", none)).toBe(true);
+    expect(loadsWithoutAsking({ mode: "ask", senders: [] }, verified(), "x@example.org", none)).toBe(false);
+    expect(rememberOffer({ mode: "ask", senders: [KEY] }, verified(), "News@Club.example")).toEqual({
+      kind: "legacy",
+      sender: "News@club.example",
+      key: KEY,
+      canChange: true,
+    });
+    // On Safe senders as well: the Safe senders entry is what the notice talks about.
+    expect(
+      rememberOffer({ mode: "ask", senders: [KEY] }, verified({ safeSender: safeDomain }), "news@club.example").kind,
+    ).toBe("safe");
   });
 
   it("offers once or always only for a verified sender, and says why not otherwise", () => {
-    const key = "k".repeat(22);
     const ask = { mode: "ask", senders: [] } as const;
-    expect(rememberOffer(ask, key, "news@club.example")).toEqual({ kind: "choose", sender: "news@club.example" });
-    expect(rememberOffer({ mode: "contacts", senders: [key] }, key, "news@club.example")).toEqual({
-      kind: "remembered",
+    expect(rememberOffer(ask, verified(), "news@club.example")).toEqual({
+      kind: "choose",
+      sender: "news@club.example",
     });
-    // No sender key means the server couldn't verify the From: load once, never remember, explain.
-    expect(rememberOffer(ask, null, "news@Club.Example")).toEqual({ kind: "unverified", domain: "club.example" });
-    expect(rememberOffer({ mode: "contacts", senders: [] }, null, "friend@example.org")).toEqual({
+    expect(rememberOffer(ask, verified({ safeSender: safeDomain }), "news@club.example")).toEqual({
+      kind: "safe",
+      sender: "news@club.example",
+      match: safeDomain,
+      canChange: true,
+    });
+    // No verification: load once, never remember, explain.
+    expect(rememberOffer(ask, unverified, "news@Club.Example")).toEqual({ kind: "unverified", domain: "club.example" });
+    expect(rememberOffer({ mode: "contacts", senders: [] }, unverified, "friend@example.org")).toEqual({
       kind: "unverified",
       domain: "example.org",
     });
-    expect(rememberOffer(ask, null, undefined)).toEqual({ kind: "unverified", domain: null });
-    expect(rememberOffer(ask, null, "no-at-sign")).toEqual({ kind: "unverified", domain: null });
-    expect(rememberOffer(ask, null, "trailing@")).toEqual({ kind: "unverified", domain: null });
+    expect(rememberOffer(ask, unverified, undefined)).toEqual({ kind: "unverified", domain: null });
+    expect(rememberOffer(ask, unverified, "no-at-sign")).toEqual({ kind: "unverified", domain: null });
+    expect(rememberOffer(ask, unverified, "trailing@")).toEqual({ kind: "unverified", domain: null });
     // Images load anyway, so there is nothing to ask about next time.
-    expect(rememberOffer({ mode: "always", senders: [] }, null, "x@example.org")).toEqual({ kind: "none" });
-    expect(rememberOffer({ mode: "always", senders: [] }, key, "x@example.org")).toEqual({
-      kind: "choose",
-      sender: "x@example.org",
-    });
+    expect(rememberOffer({ mode: "always", senders: [] }, unverified, "x@example.org")).toEqual({ kind: "none" });
+    expect(rememberOffer({ mode: "always", senders: [] }, verified(), "x@example.org")).toEqual({ kind: "none" });
     // Without image settings (an attached message) nothing is remembered or explained.
-    expect(rememberOffer(undefined, key, "x@example.org")).toEqual({ kind: "none" });
-    expect(rememberOffer(undefined, null, "x@example.org")).toEqual({ kind: "none" });
-    expect(rememberOffer(ask, key, undefined)).toEqual({ kind: "none" });
+    expect(rememberOffer(undefined, verified(), "x@example.org")).toEqual({ kind: "none" });
+    expect(rememberOffer(undefined, unverified, "x@example.org")).toEqual({ kind: "none" });
   });
 
-  it("says nothing about confirming or remembering the sender of the person's own sent mail", () => {
-    const key = "k".repeat(22);
+  it("offers just this once in a mailbox shared with the person, whose Safe senders aren't theirs to change", () => {
     const ask = { mode: "ask", senders: [] } as const;
-    // In the Sent folder: no "can't confirm" line and no remember choice, whatever the From or sender key.
-    expect(rememberOffer(ask, null, "me@anhourmail.com", true)).toEqual({ kind: "none" });
-    expect(rememberOffer({ mode: "contacts", senders: [] }, null, undefined, true)).toEqual({ kind: "none" });
-    expect(rememberOffer(ask, key, "me@anhourmail.com", true)).toEqual({ kind: "none" });
-    expect(rememberOffer({ mode: "ask", senders: [key] }, key, "me@anhourmail.com", true)).toEqual({ kind: "none" });
-    // Its images still wait for "Load images": being sent mail doesn't load them by itself.
-    expect(loadsWithoutAsking(ask, null, "me@anhourmail.com", new Set(["me@anhourmail.com"]))).toBe(false);
-    // An inbox message with a forged own From isn't the person's own: unchanged unverified behaviour.
-    expect(rememberOffer(ask, null, "me@anhourmail.com")).toEqual({ kind: "unverified", domain: "anhourmail.com" });
-    expect(rememberOffer(ask, null, "me@anhourmail.com", false)).toEqual({
+    expect(rememberOffer(ask, verified(), "news@club.example", false, false)).toEqual({ kind: "once" });
+    expect(rememberOffer(ask, verified({ safeSender: safeDomain }), "news@club.example", false, false)).toMatchObject({
+      kind: "safe",
+      canChange: false,
+    });
+    expect(rememberOffer(ask, unverified, "news@club.example", false, false).kind).toBe("unverified");
+  });
+
+  it("loads the person's own sent mail by itself, saying nothing about its sender", () => {
+    const ask = { mode: "ask", senders: [] } as const;
+    const none = new Set<string>();
+    // In the Sent folder: loaded in every mode, no "can't confirm" line and no remember choice, whatever the From.
+    for (const mode of ["ask", "contacts", "always"] as const) {
+      expect(loadsWithoutAsking({ mode, senders: [] }, unverified, "me@anhourmail.com", none, true)).toBe(true);
+    }
+    expect(rememberOffer(ask, unverified, "me@anhourmail.com", true)).toEqual({ kind: "none" });
+    expect(rememberOffer({ mode: "contacts", senders: [] }, unverified, undefined, true)).toEqual({ kind: "none" });
+    expect(rememberOffer(ask, verified(), "me@anhourmail.com", true)).toEqual({ kind: "none" });
+    expect(rememberOffer({ mode: "ask", senders: [KEY] }, verified(), "me@anhourmail.com", true)).toEqual({
+      kind: "none",
+    });
+    // An inbox message with a forged own From isn't the person's own: it asks, and says it can't be confirmed.
+    expect(loadsWithoutAsking(ask, unverified, "me@anhourmail.com", new Set(["me@anhourmail.com"]))).toBe(false);
+    expect(rememberOffer(ask, unverified, "me@anhourmail.com")).toEqual({
       kind: "unverified",
       domain: "anhourmail.com",
     });

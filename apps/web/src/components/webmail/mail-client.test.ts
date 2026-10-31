@@ -146,6 +146,19 @@ describe("changing the mailbox's own password", () => {
     await expect(changed).rejects.toMatchObject({ name: "RefusedError", message: MESSAGE });
   });
 
+  it("shows the server's words for a settings change made meanwhile and for a blocked sender (409)", async () => {
+    const client = createMailClient(ORIGIN);
+    for (const [code, message] of [
+      ["settings_changed", "Your settings changed in another window. Try again."],
+      ["sender_blocked", "news@shop.example is on your blocked list. Remove it there first."],
+    ] as const) {
+      const saved = client.saveJunk("acc1", { blocked: [], safe: [], trustedOnly: false });
+      await settle();
+      server.answer("/api/webmail/settings/junk", Response.json({ error: { code, message } }, { status: 409 }));
+      await expect(saved).rejects.toMatchObject({ name: "RefusedError", message });
+    }
+  });
+
   it("keeps other conflicts generic", async () => {
     const client = createMailClient(ORIGIN);
     const changed = client.changePassword("acc1", "old one", "new one");

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import type { SafeSenderMatch } from "@anhourmail/shared/senders";
 
 /**
  * Remote images while writing (docs/internal/05-webmail.md "Compose"): HTML someone pastes or inserts may point at
@@ -106,36 +107,57 @@ export function withLoadedImages(html: string, loaded: ReadonlyMap<string, strin
 
 export type ImagePolicy = {
   mode: "ask" | "contacts" | "always";
-  /** Remembered senders' keys (the `imageSenders` preference). */
+  /** Remembered senders' keys (the legacy `imageSenders` preference, read-only: ADR-0027 §9). */
   senders: readonly string[];
 };
 
-/** Whether a message's images load without asking: always, a remembered sender, or (if chosen) a contact. */
+/** What the server said about a message's sender (`MessageView`). */
+export type ImageSender = {
+  /** The legacy remembered-sender key, sent only for a verified From. */
+  senderKey: string | null;
+  senderVerified: boolean;
+  /** The open mailbox's Safe senders entry the verified From matches (decided on the server). */
+  safeSender: SafeSenderMatch | null;
+};
+
+/**
+ * Whether a message's images load without asking (ADR-0027 §5, §6): the person's own Sent mail (`own`, decided by its
+ * folder, never by the From) and Safe senders with a verified From in every mode; every message with "always";
+ * a legacy remembered sender; and with "contacts", a verified From on a contact card.
+ */
 export function loadsWithoutAsking(
   policy: ImagePolicy,
-  senderKey: string | null,
+  sender: ImageSender,
   from: string | undefined,
   contacts: ReadonlySet<string>,
-  verified = false,
+  own = false,
 ): boolean {
-  if (policy.mode === "always") return true;
+  if (own || policy.mode === "always") return true;
+  if (sender.senderVerified && sender.safeSender !== null) return true;
   // The server sends a sender key only for a verified From.
-  if (senderKey !== null && policy.senders.includes(senderKey)) return true;
-  return policy.mode === "contacts" && verified && from !== undefined && contacts.has(from.toLowerCase());
+  if (sender.senderKey !== null && policy.senders.includes(sender.senderKey)) return true;
+  return policy.mode === "contacts" && sender.senderVerified && from !== undefined && contacts.has(from.toLowerCase());
 }
 
 /**
- * What "Load images" can offer about remembering the sender:
- * - `choose`: a verified sender not yet remembered — ask "Just this once" or "Always for <sender>";
- * - `remembered`: already remembered — load, and offer "Stop loading from this sender" afterwards;
- * - `unverified`: the From isn't verified (no sender key), so it can't be remembered — load once and say why
- *   (`domain` is the From address's domain, or null when there is none);
- * - `none`: nothing to remember (no image settings here, every message's images load anyway, or the message is the
+ * What the image notice can offer about the sender:
+ * - `choose`: a verified sender not on Safe senders — "Load images" asks "Just this once" or "Always for <sender>"
+ *   (which adds the address to Safe senders); after loading once, "Always load from this sender";
+ * - `once`: a verified sender in a mailbox shared with the person — its Safe senders are that mailbox's own, so
+ *   "Load images" only loads, just this once (ADR-0027 §8);
+ * - `safe`: on Safe senders — the images load, and "Stop loading from this sender" removes the entry it matched;
+ * - `legacy`: a sender remembered before Safe senders loaded images (a fingerprint) — loaded; offers "Add <sender> to
+ *   Safe senders", and "Stop loading" forgets the fingerprint;
+ * - `unverified`: the From isn't verified, so it can't be remembered — load once and say why (`domain` is the From
+ *   address's domain, or null when there is none);
+ * - `none`: nothing to say (no image settings here, every message's images load anyway, or the message is the
  *   person's own: it sits in their Sent folder, so there is no sender to confirm or remember).
  */
 export type RememberOffer =
   | { kind: "choose"; sender: string }
-  | { kind: "remembered" }
+  | { kind: "once" }
+  | { kind: "safe"; sender: string; match: SafeSenderMatch; canChange: boolean }
+  | { kind: "legacy"; sender: string; key: string; canChange: boolean }
   | { kind: "unverified"; domain: string | null }
   | { kind: "none" };
 
@@ -164,19 +186,33 @@ export function shownAddress(address: string): string {
 }
 
 /**
- * `own` is true for a message in the mailbox's Sent folder (decided from its mailbox, never from the From address,
- * which anyone can forge into an inbox): its images still wait for "Load images", but nothing is said or remembered.
+ * The notice's offer for a message (see `RememberOffer`). `own` is true for a message in the mailbox's Sent folder
+ * (decided from its mailbox, never from the From address, which anyone can forge into an inbox): its images load by
+ * themselves and nothing is said or remembered. `canChange`: whether this mailbox's Safe senders may be changed here
+ * (false in a mailbox shared with the person).
  */
 export function rememberOffer(
   policy: ImagePolicy | undefined,
-  senderKey: string | null,
+  sender: ImageSender,
   from: string | undefined,
   own = false,
+  canChange = true,
 ): RememberOffer {
   if (policy === undefined || own) return { kind: "none" };
-  if (senderKey !== null) {
-    if (policy.senders.includes(senderKey)) return { kind: "remembered" };
-    return from ? { kind: "choose", sender: shownAddress(from) } : { kind: "none" };
+  if (sender.senderVerified && from) {
+    const shown = shownAddress(from);
+    if (sender.safeSender !== null) {
+      const value =
+        sender.safeSender.kind === "domain"
+          ? shownDomain(sender.safeSender.value)
+          : shownAddress(sender.safeSender.value);
+      return { kind: "safe", sender: shown, match: { kind: sender.safeSender.kind, value }, canChange };
+    }
+    if (sender.senderKey !== null && policy.senders.includes(sender.senderKey)) {
+      return { kind: "legacy", sender: shown, key: sender.senderKey, canChange };
+    }
+    if (policy.mode === "always") return { kind: "none" };
+    return canChange ? { kind: "choose", sender: shown } : { kind: "once" };
   }
   if (policy.mode === "always") return { kind: "none" };
   const at = from?.lastIndexOf("@") ?? -1;

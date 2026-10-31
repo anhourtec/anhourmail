@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { JmapClient, JmapError } from "@anhourmail/jmap-client";
 
+import type { SafeSenderMatch } from "@anhourmail/shared/senders";
 import type { SignatureDefaults, SignatureSet } from "@anhourmail/shared/signatures";
 import type { WebmailPreferences } from "@anhourmail/shared/webmail";
 
@@ -165,7 +166,11 @@ async function api<T>(path: string, init: RequestInit = {}, go: typeof fetch = p
   if (!res.ok) {
     // An administrator's new password not in use yet: the own password change says so (409 with its own code).
     if (res.status === 409 && body?.error?.code === "mailbox_changed") throw new MailboxChangedError("mailbox changed");
-    const pending = res.status === 409 && body?.error?.code === "password_change_pending";
+    const pending =
+      res.status === 409 &&
+      (body?.error?.code === "password_change_pending" ||
+        body?.error?.code === "settings_changed" ||
+        body?.error?.code === "sender_blocked");
     // Not available in a mailbox shared with the person (its own-mailbox-only routes), and a send whose outcome the
     // server couldn't confirm: both say what to do in their message.
     const explained =
@@ -968,6 +973,16 @@ export function createMailClient(
         method: "PUT",
         headers: { [ACCOUNT]: account },
         body: JSON.stringify({ vacation, timeZone }),
+      }),
+    /**
+     * "Always for <sender>" (`add`) or "Stop loading" (`remove`) from a message: the server reads its From and changes
+     * Safe senders (ADR-0027 §4). Answers the entry the From matches afterwards (null: none).
+     */
+    changeSafeSender: async (emailId: string, change: "add" | "remove") =>
+      bff<{ safeSender: SafeSenderMatch | null; changed: boolean }>(`${origin}/api/webmail/settings/junk/safe`, {
+        method: change === "add" ? "POST" : "DELETE",
+        headers: { [ACCOUNT]: await accountId() },
+        body: JSON.stringify({ emailId }),
       }),
     saveJunk: (account: string, junk: Junk) =>
       bff<Junk>(`${origin}/api/webmail/settings/junk`, {
