@@ -13,6 +13,8 @@ export const GET = route(async ({ req }) => {
   return ok({
     userId: actor.userId,
     email: actor.email,
+    // Their name (the one source, rule 61): an open console page compares it to refresh after a change elsewhere.
+    name: actor.name ?? null,
     platformRoles: actor.platformRoles,
     memberships: actor.memberships,
     // A sign-in factor one of their accounts requires and they still have to set up (null when none).
