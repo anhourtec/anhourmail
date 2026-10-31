@@ -1,6 +1,6 @@
 # 09 — Roadmap
 
-Last updated: 2026-10-31 (names as one source built and deployed; trusted image senders planned). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
+Last updated: 2026-10-31 (names as one source and the file-storage lockdown deployed at 6545a16; trusted image senders planned, ADR-0027). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
 
 ## Path to production (as of 2026-10-29)
 
@@ -119,7 +119,7 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
 12. **Closed beta, then launch** (Phases 8–9): independent penetration test, full `standard` security audit, counsel
     review of legal pages and the AGPL image question, DMARC `quarantine` → `reject`.
 
-**Security residuals carried forward** (accepted for pre-staging, revisit before beta): the operations key in the web
+**Security residuals carried forward** (accepted for pre-staging, revisit before beta): customers can still set `shareWith` on their own address books (closing it means creating the contact books another way first; file storage sharing was closed 2026-10-31, migration 0032); the operations key in the web
 container can still do its own job through the proxy (app passwords on customers, managed Sieve) — detected by the
 reconcilers, not prevented; Stalwart Community lets any account-writing key set passwords, so the proxy is the
 control — keep it in front of every management caller; address-book sharing is still allowed.
