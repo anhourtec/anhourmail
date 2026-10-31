@@ -4,8 +4,9 @@
  * signed image link to the image proxy and shows the answers as `data:` images inside the sandboxed frame. For a
  * verified sender "Load images" asks "Just this once" or "Always for <sender>"; "Always" remembers the sender, and
  * "Stop loading" forgets it. A sender that can't be verified loads once, with a line saying why it can't be
- * remembered. The proxy's own outbound fetch is covered by unit tests against a local server; here the browser's
- * request to it is answered by the test, so nothing leaves this machine (rule 19).
+ * remembered. The person's own mail (in Sent) loads once with neither the question nor that line. The proxy's own
+ * outbound fetch is covered by unit tests against a local server; here the browser's request to it is answered by the
+ * test, so nothing leaves this machine (rule 19).
  */
 import type { Page } from "@playwright/test";
 
@@ -195,5 +196,70 @@ test("a sender that can't be verified loads once and says why it isn't remembere
   await expect(loaded.getByRole("button", { name: /from this sender/ })).toHaveCount(0);
   await expect(loaded).toContainText("so we'll ask again next time");
   expect(bodies).toHaveLength(4);
+  expect(consoleErrors).toEqual([]);
+});
+
+test("your own sent mail keeps images blocked until loaded, without asking about its sender", async ({
+  page,
+  consoleErrors,
+}) => {
+  const bodies = await fakeImageProxy(page);
+  // A seeded Sent message is plain text: serve it as the server would a reply quoting a remote image (an outside
+  // address's message), with no sender key, as our Sent copies have. The newsletter in the Inbox gets a forged own
+  // From: it isn't in Sent, so it stays unverified.
+  await page.route("**/api/webmail/messages/*", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const res = await route.fetch();
+    const json = (await res.json()) as { data?: { subject?: string; from?: { email: string }[] } };
+    if (json.data?.subject === "Block party set-up") {
+      Object.assign(json.data, {
+        html: '<p>Count me in for set-up.</p><blockquote type="cite"><img data-am-blocked="1" data-am-img="v1.1.sent.image" alt="Poster" width="60" height="20"></blockquote>',
+        blockedImages: 1,
+        loadableImages: 1,
+        blockedTrackers: 0,
+        senderKey: null,
+        senderVerified: false,
+      });
+    } else if (json.data?.from?.[0]?.email === CLUB) {
+      json.data.from[0].email = OWNER;
+      Object.assign(json.data, { senderKey: null, senderVerified: false });
+    }
+    await route.fulfill({ response: res, json });
+  });
+  await signIn(page);
+  await resetImagePreferences(page);
+  await reloadInbox(page);
+
+  // Found by search (Sent fills up with test runs' mail): it's in the Sent folder wherever it is opened from.
+  const box = page.getByRole("searchbox", { name: "Search mail" });
+  await box.fill(`from:${OWNER} subject:Block party set-up`);
+  await box.press("Enter");
+  await page
+    .getByRole("listbox", { name: "Search results messages" })
+    .getByRole("option", { name: /Block party set-up/ })
+    .first()
+    .click();
+  const reader = page.getByRole("region", { name: "Message" });
+  const notice = reader.getByRole("status").filter({ hasText: /remote image blocked/ });
+  await expect(notice).toBeVisible();
+  await expect(notice).not.toContainText("can't confirm");
+  await expect(notice).not.toContainText("ask again");
+  expect(bodies).toHaveLength(0);
+  // Load images loads straight away (through the proxy, once): no question, no remember option.
+  await notice.getByRole("button", { name: "Load images" }).click();
+  const loaded = reader.getByRole("status").filter({ hasText: "Images loaded through our privacy proxy" });
+  await expect(loaded).toBeVisible();
+  await expect(reader.getByRole("button", { name: /Just this once|Always for/ })).toHaveCount(0);
+  await expect(loaded.getByRole("button", { name: /from this sender/ })).toHaveCount(0);
+  await expect(loaded).not.toContainText("can't confirm");
+  await expect(reader.locator("iframe")).toHaveAttribute("srcdoc", /src="data:image\/png;base64,/);
+  expect(bodies).toHaveLength(1);
+
+  // An Inbox message forging the person's own address is still someone else's: it says it can't be confirmed.
+  await reloadInbox(page);
+  const forged = await openNewsletter(page);
+  await expect(forged.getByRole("status").filter({ hasText: /remote images? blocked/ })).toContainText(
+    "We can't confirm this message came from demo-family.test, so we'll ask again next time.",
+  );
   expect(consoleErrors).toEqual([]);
 });
