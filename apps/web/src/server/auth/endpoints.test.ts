@@ -8,9 +8,12 @@ describe("auth endpoint allow-list", () => {
     expect(authEndpoint("POST", "/api/auth/sign-in/email")).toEqual({ tier: "auth" });
     expect(authEndpoint("POST", "/api/auth/two-factor/verify-totp")).toEqual({ tier: "authFactor" });
     expect(authEndpoint("POST", "/api/auth/two-factor/verify-backup-code")).toEqual({ tier: "authFactor" });
+    // The passkey is only the second step (ADR-0028): its options use the sign-in tier, the answer the factor tier.
+    expect(authEndpoint("GET", "/api/auth/passkey/generate-authenticate-options")).toEqual({ tier: "auth" });
     expect(authEndpoint("POST", "/api/auth/passkey/verify-authentication")).toEqual({ tier: "authFactor" });
     expect(authEndpoint("POST", "/api/auth/two-factor/disable")).toEqual({ tier: "sensitive" });
     expect(authEndpoint("POST", "/api/auth/step-up")).toEqual({ tier: "sensitive" });
+    expect(authEndpoint("POST", "/api/auth/recovery-codes/generate")).toEqual({ tier: "sensitive" });
     expect(authEndpoint("GET", "/api/auth/passkey/generate-register-options")).toEqual({ tier: "sensitive" });
     expect(authEndpoint("GET", "/api/auth/reset-password/abcDEF_123-x")).toEqual({ tier: "auth" });
     expect(authEndpoint("GET", "/api/auth/verify-email")).toEqual({ tier: "auth" });

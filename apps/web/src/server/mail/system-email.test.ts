@@ -7,6 +7,7 @@ import {
   forwardingConfirmEmail,
   inviteEmail,
   passkeyAddedEmail,
+  passkeysRemovedEmail,
   passwordResetEmail,
 } from "./system-email";
 
@@ -129,5 +130,22 @@ describe("every system email uses the shared layout", () => {
     expect(forwarding?.text).toContain('Mailbox: "k***@family.test"');
     expect(forwarding?.text).toContain("an AnhourMail mailbox asked to forward its mail to this address");
     expect(verify?.text).toMatch(/^Hi,/);
+  });
+
+  it("all passkeys removed: the person and, worded for them, the account's Owners", () => {
+    const base = {
+      person: "kim@example.test",
+      accountName: "Family A",
+      count: 2,
+      at: new Date("2026-10-31T10:00:00Z"),
+      securityUrl: "https://app.example.test/security",
+      site: "example.test",
+    };
+    const own = passkeysRemovedEmail({ ...base, to: "kim@example.test", forOwner: false });
+    expect(own.subject).toBe("The passkeys on your AnhourMail login were removed");
+    expect(own.text).toContain("Your 2 passkeys were removed");
+    const owner = passkeysRemovedEmail({ ...base, to: "sam@example.test", forOwner: true });
+    expect(owner.subject).toBe("Someone in your account removed their passkeys");
+    expect(owner.text).toContain("All of kim@example.test's passkeys were removed");
   });
 });

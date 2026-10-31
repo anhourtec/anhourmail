@@ -86,7 +86,7 @@ export function inviteEmail(input: {
 }
 
 /**
- * Sent when a passkey is added to someone's console login: a passkey signs in on its own, so they should know. Shows
+ * Sent when a passkey is added to someone's console login: with the password it signs them in, so they should know. Shows
  * the name given (quoted, mono) and when; never any key material.
  */
 export function passkeyAddedEmail(input: {
@@ -99,10 +99,10 @@ export function passkeyAddedEmail(input: {
   return systemEmail({
     to: input.to,
     subject: "A passkey was added to your AnhourMail login",
-    preheader: "It can sign you in without your password. If this wasn't you, remove it.",
+    preheader: "Together with your password, it can sign you in. If this wasn't you, remove it.",
     greeting: hello(),
     lines: [
-      `A passkey was added to your AnhourMail console login on ${utcTime(input.at)}. It can sign you in without your password.`,
+      `A passkey was added to your AnhourMail console login on ${utcTime(input.at)}. Together with your password, it can sign you in as the second step.`,
     ],
     facts: [{ label: "Name given:", value: input.passkeyName }],
     closing: "If this wasn't you, remove it and change your password on your Security page.",
@@ -153,6 +153,45 @@ export function firstFactorEmail(input: {
       : { closing: "If this wasn't you, change your password and check your Security page now." }),
     action: { label: "Open the Security page", url: input.securityUrl },
     reason: "We send this the first time someone sets up a sign-in factor while their account requires one.",
+    site: input.site,
+  });
+}
+
+/**
+ * Sent when all of someone's passkeys were removed (a password reset with "also remove all passkeys", or "sign out
+ * everywhere else" with it): to them, and to the Owners of their accounts, so a takeover that strips the second step is
+ * visible.
+ */
+export function passkeysRemovedEmail(input: {
+  to: string;
+  person: string;
+  accountName: string | null;
+  count: number;
+  at: Date;
+  securityUrl: string;
+  forOwner: boolean;
+  site: string;
+}): MailMessage {
+  const what = input.count === 1 ? "passkey was" : `${String(input.count)} passkeys were`;
+  const where = input.accountName ? ` (in ${input.accountName})` : "";
+  return systemEmail({
+    to: input.to,
+    subject: input.forOwner
+      ? "Someone in your account removed their passkeys"
+      : "The passkeys on your AnhourMail login were removed",
+    preheader: input.forOwner
+      ? "Check with them if you weren't expecting it."
+      : "If this wasn't you, change your password now.",
+    greeting: hello(),
+    lines: input.forOwner
+      ? [
+          `All of ${input.person}'s passkeys were removed on ${utcTime(input.at)}${where}.`,
+          "If you weren't expecting this, check with them: it could mean someone else got into their login.",
+        ]
+      : [`Your ${what} removed from your AnhourMail console login on ${utcTime(input.at)}.`],
+    ...(input.forOwner ? {} : { closing: "If this wasn't you, reset your password and check your Security page now." }),
+    action: { label: "Open the Security page", url: input.securityUrl },
+    reason: "We send this whenever every passkey is removed from a login.",
     site: input.site,
   });
 }

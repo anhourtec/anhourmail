@@ -12,12 +12,13 @@ import {
   afterPasswordChange,
   factorRemovalRefusal,
   noteFactorAdded,
+  notePasskeysRemoved,
   recordSecurityEvent,
   sessionRefusalFor,
 } from "@anhourmail/core/security";
 import { keyRingFromEnv } from "@anhourmail/server/keyring";
 import { log } from "@anhourmail/server/log";
-import { redisOneTime } from "@anhourmail/server/one-time";
+import { redisOneTime, redisStrikes } from "@anhourmail/server/one-time";
 import { redis } from "@anhourmail/server/redis";
 import { requestContext } from "@anhourmail/server/request-context";
 import { EMAIL_VERIFICATION_HOURS } from "@anhourmail/shared/security";
@@ -25,7 +26,13 @@ import { EMAIL_VERIFICATION_HOURS } from "@anhourmail/shared/security";
 import { container } from "../container";
 
 import { env } from "../env";
-import { emailVerificationEmail, firstFactorEmail, passkeyAddedEmail, passwordResetEmail } from "../mail/system-email";
+import {
+  emailVerificationEmail,
+  firstFactorEmail,
+  passkeyAddedEmail,
+  passkeysRemovedEmail,
+  passwordResetEmail,
+} from "../mail/system-email";
 import { platform } from "../platform";
 
 /**
@@ -67,7 +74,7 @@ async function auditAuthEvent(e: AuthSecurityEvent): Promise<void> {
   ).catch((err: unknown) => {
     log.error("audit write failed", { component: "auth", action: e.action, err });
   });
-  // A new passkey can sign in on its own: tell the person, in case it wasn't them.
+  // A new passkey is a second step for sign-in: tell the person, in case it wasn't them.
   if (e.action === "auth.passkey_added" && !e.denied && e.email) {
     const name = typeof e.meta?.passkeyName === "string" ? e.meta.passkeyName : "Passkey";
     await container()
@@ -86,6 +93,47 @@ async function auditAuthEvent(e: AuthSecurityEvent): Promise<void> {
   }
 }
 
+/**
+ * All of someone's passkeys were removed: recorded in each of their accounts and emailed to them and those accounts'
+ * Owners (`notePasskeysRemoved`). Never throws; one failed send never stops the others.
+ */
+export async function announcePasskeysRemoved(
+  input: {
+    userId: string;
+    email: string;
+    passkeysRemoved: number;
+    via: "password_reset" | "sign_out_everywhere" | "single";
+  },
+  meta: { requestId: string; ip: string | null; userAgent: string | null },
+): Promise<void> {
+  try {
+    const { notify } = await notePasskeysRemoved(container().deps, input, meta);
+    for (const n of notify) {
+      await container()
+        .mailer.send(
+          passkeysRemovedEmail({
+            to: n.email,
+            person: input.email,
+            accountName: n.accountName,
+            count: input.passkeysRemoved,
+            at: new Date(),
+            securityUrl: `${env().APP_URL}/security`,
+            forOwner: n.owner,
+            site: platform().hosts.site,
+          }),
+        )
+        .catch((err: unknown) => {
+          log.error("passkeys removed notice send failed", {
+            component: "auth",
+            errorName: err instanceof Error ? err.name : "unknown",
+          });
+        });
+    }
+  } catch (err) {
+    log.error("passkeys removed notice failed", { component: "auth", err });
+  }
+}
+
 /** Checks and auditing around console sign-in factors (packages/adapters/src/auth/security-plugin.ts). */
 export const securityHooks: SecurityHooks = {
   onEvent: auditAuthEvent,
@@ -93,6 +141,8 @@ export const securityHooks: SecurityHooks = {
   // One atomic SET NX per code: of concurrent requests with the same code, only one may accept it. Redis errors
   // propagate, so the second step fails closed, like the `auth` rate-limit tier.
   codes: { claim: (userId, code) => redisOneTime(redis())(usedCodeKey(userId, code), USED_CODE_TTL_SEC * 1000) },
+  // Wrong console passwords per session, counted atomically; Redis errors propagate (fail closed, rule 14).
+  strikes: (key, ttlMs) => redisStrikes(redis())(key, ttlMs),
   factors: (userId) => container().deps.uow.run((r) => r.security.factors(userId)),
   factorAdded: async (e) => {
     const ctx = requestContext();
@@ -131,19 +181,28 @@ export const securityHooks: SecurityHooks = {
   sessionRefusal: (userId, method) => container().deps.uow.run((r) => sessionRefusalFor(r, userId, method)),
   passwordChanged: async (e) => {
     const ctx = requestContext();
-    await afterPasswordChange(
-      container().deps,
-      {
-        userId: e.userId,
-        email: e.email,
-        via: e.via,
-        keepSessionId: e.keepSessionId,
-        removePasskeys: e.removePasskeys,
-      },
-      { requestId: ctx?.requestId ?? "auth", ip: ctx?.clientIp ?? null, userAgent: e.userAgent },
-    ).catch((err: unknown) => {
+    const meta = { requestId: ctx?.requestId ?? "auth", ip: ctx?.clientIp ?? null, userAgent: e.userAgent };
+    try {
+      const out = await afterPasswordChange(
+        container().deps,
+        {
+          userId: e.userId,
+          email: e.email,
+          via: e.via,
+          keepSessionId: e.keepSessionId,
+          removePasskeys: e.removePasskeys,
+        },
+        meta,
+      );
+      if (out.passkeysRemoved > 0) {
+        await announcePasskeysRemoved(
+          { userId: e.userId, email: e.email, passkeysRemoved: out.passkeysRemoved, via: "password_reset" },
+          meta,
+        );
+      }
+    } catch (err) {
       log.error("password change follow-up failed", { component: "auth", via: e.via, err });
-    });
+    }
   },
 };
 

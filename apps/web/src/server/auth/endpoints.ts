@@ -11,6 +11,7 @@ const ENDPOINTS: Record<"GET" | "POST", Record<string, AuthTier>> = {
   GET: {
     // The emailed "confirm your email address" link (token in the query; lands on /email-verified).
     "/verify-email": "auth",
+    // The passkey second step's options (needs the password step's challenge; ADR-0028).
     "/passkey/generate-authenticate-options": "auth",
     "/passkey/generate-register-options": "sensitive",
   },
@@ -24,10 +25,13 @@ const ENDPOINTS: Record<"GET" | "POST", Record<string, AuthTier>> = {
     "/change-password": "sensitive",
     "/two-factor/verify-totp": "authFactor",
     "/two-factor/verify-backup-code": "authFactor",
+    // The passkey as the second step after the password (never a sign-in on its own; ADR-0028).
     "/passkey/verify-authentication": "authFactor",
     "/two-factor/enable": "sensitive",
     "/two-factor/disable": "sensitive",
     "/two-factor/generate-backup-codes": "sensitive",
+    // New recovery codes for someone whose second factor is a passkey (ADR-0028).
+    "/recovery-codes/generate": "sensitive",
     "/passkey/verify-registration": "sensitive",
     "/step-up": "sensitive",
   },
