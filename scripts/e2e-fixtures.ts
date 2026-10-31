@@ -61,7 +61,16 @@ if (mode === "create") {
   // gets its own logins and its own account: nobody else's sign-in changes.
   const security: Record<
     string,
-    { totp: string; passkey: string; owner: string; member: string; pkOwner: string; pkMember: string }
+    {
+      totp: string;
+      passkey: string;
+      owner: string;
+      member: string;
+      pkOwner: string;
+      pkMember: string;
+      admin: string;
+      adminAccount: string;
+    }
   > = {};
   const passwords: Record<string, { owner: string; member: string }> = {};
   const mailboxes: Record<string, { owner: string; member: string }> = {};
@@ -109,6 +118,19 @@ if (mode === "create") {
       { accountId: pkAccount.id, userId: pkOwner.id, role: "owner" },
       { accountId: pkAccount.id, userId: pkMember.id, role: "member" },
     ]);
+    // Password-first sign-in and step-up (ADR-0028): a Global Administrator of this project's own who adds a passkey,
+    // confirms it's them with the password, and suspends and opens (support access) an account of its own.
+    const secAdmin = await addLogin(`sec-${project}-admin`);
+    await db.insert(schema.platformRoleAssignment).values({ userId: secAdmin.id, role: "global_admin" });
+    const [adminAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} Step-up ${project}`, plan: "plus" })
+      .returning();
+    if (!adminAccount) throw new Error("step-up account not created");
+    const adminAccountOwner = await addLogin(`sec-${project}-stepup-owner`);
+    await db
+      .insert(schema.accountMembership)
+      .values({ accountId: adminAccount.id, userId: adminAccountOwner.id, role: "owner" });
     // Mailbox passwords journey: its own account per project, so its mailbox doesn't count against the shared
     // account's mailbox ceiling.
     const [pwAccount] = await db
@@ -421,6 +443,8 @@ if (mode === "create") {
       member: logins.member.email,
       pkOwner: pkOwner.email,
       pkMember: pkMember.email,
+      admin: secAdmin.email,
+      adminAccount: adminAccount.name,
     };
   }
   // A mailbox of the run's own for webmail journeys that send and receive. Stalwart throttles mail per sender domain

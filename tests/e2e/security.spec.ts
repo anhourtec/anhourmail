@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * Console sign-in security: two-factor sign-in with an authenticator app (codes computed here from the set-up key),
- * recovery codes, passkeys with a virtual authenticator (Chromium's WebAuthn domain), and an Owner requiring
- * two-factor sign-in for everyone in their account. Each browser project uses its own logins (scripts/e2e-fixtures.ts).
+ * Console sign-in security (ADR-0028: the password always first): two-factor sign-in with an authenticator app (codes
+ * computed here from the set-up key), recovery codes, passkeys as the second step with a virtual authenticator
+ * (Chromium's WebAuthn domain), "Confirm it's you" with the console password, and an Owner requiring two-factor sign-in
+ * for everyone in their account. Each browser project uses its own logins (scripts/e2e-fixtures.ts).
  */
 import { createHmac } from "node:crypto";
 
@@ -36,6 +37,30 @@ async function passwordStep(page: Page, email: string, password: string) {
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+}
+
+/** A virtual platform authenticator that checks the person (PIN or biometrics) and answers on its own. */
+async function addVirtualAuthenticator(page: Page) {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("WebAuthn.enable");
+  await cdp.send("WebAuthn.addVirtualAuthenticator", {
+    options: {
+      protocol: "ctap2",
+      transport: "internal",
+      hasResidentKey: true,
+      hasUserVerification: true,
+      isUserVerified: true,
+      automaticPresenceSimulation: true,
+    },
+  });
+}
+
+/** The password step, then the passkey step (the virtual authenticator answers). */
+async function signInWithPasskey(page: Page, email: string, password: string) {
+  await passwordStep(page, email, password);
+  await expect(page.getByRole("heading", { name: "Two-step sign-in" })).toBeVisible();
+  await page.getByRole("button", { name: "Use your passkey" }).click();
+  await expect(homeHeading(page)).toBeVisible();
 }
 
 async function openSecurity(page: Page) {
@@ -110,7 +135,7 @@ test("two-factor sign-in: turn it on, sign in with a code, then with a recovery 
   await expect(page.getByRole("alert").filter({ hasText: "already used" })).toBeVisible();
 });
 
-test("passkeys: add one with a virtual authenticator, rename it, sign in with it, remove it", async ({
+test("passkeys: add one with a virtual authenticator, rename it, use it as the second step, remove it", async ({
   page,
   consoleErrors,
 }, testInfo) => {
@@ -118,18 +143,12 @@ test("passkeys: add one with a virtual authenticator, rename it, sign in with it
   expect(consoleErrors).toEqual([]);
   const u = e2eUsers();
   const email = logins(testInfo.project.name).passkey;
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send("WebAuthn.enable");
-  await cdp.send("WebAuthn.addVirtualAuthenticator", {
-    options: {
-      protocol: "ctap2",
-      transport: "internal",
-      hasResidentKey: true,
-      hasUserVerification: true,
-      isUserVerified: true,
-      automaticPresenceSimulation: true,
-    },
-  });
+  await addVirtualAuthenticator(page);
+
+  // No passwordless passkey sign-in on the page.
+  await page.goto(`${urls.app}/sign-in`);
+  await expect(page.getByLabel("Email")).toBeVisible();
+  await expect(page.getByRole("button", { name: /passkey/i })).toHaveCount(0);
 
   await passwordStep(page, email, u.password);
   await expect(homeHeading(page)).toBeVisible();
@@ -137,6 +156,12 @@ test("passkeys: add one with a virtual authenticator, rename it, sign in with it
   await page.getByRole("button", { name: "Add a passkey" }).click();
   await page.getByLabel(/^Name/).fill("Test key");
   await page.getByRole("button", { name: "Continue" }).click();
+  // A first second factor comes with recovery codes, shown once.
+  await expect(page.getByRole("heading", { name: "Save your recovery codes" })).toBeVisible();
+  const codes = await page.getByRole("list", { name: "Recovery codes" }).getByRole("listitem").allTextContents();
+  expect(codes).toHaveLength(10);
+  await page.getByRole("button", { name: "I've saved them" }).click();
+  await expect(page.getByText("10 of 10 recovery codes left.")).toBeVisible();
   const list = page.getByRole("list", { name: "Your passkeys" });
   await expect(list.getByRole("button", { name: "Rename Test key" })).toBeVisible();
 
@@ -148,14 +173,31 @@ test("passkeys: add one with a virtual authenticator, rename it, sign in with it
   await page.getByRole("button", { name: "Save" }).click();
   await expect(list.getByRole("button", { name: "Rename Laptop key" })).toBeVisible();
 
+  // The password first, then the passkey (a recovery code is the way in without it).
   await signOut(page);
-  await page.getByRole("button", { name: "Sign in with a passkey" }).click();
+  await passwordStep(page, email, u.password);
+  await expect(page.getByRole("heading", { name: "Two-step sign-in" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Use a recovery code instead" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Lost your passkey? Reset your password" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Use your passkey" }).click();
+  await expect(homeHeading(page)).toBeVisible();
+
+  // Without the passkey: a recovery code on the second step.
+  await signOut(page);
+  await passwordStep(page, email, u.password);
+  await page.getByRole("button", { name: "Use a recovery code instead" }).click();
+  await page.getByLabel("Recovery code").fill(codes[0] ?? "");
+  await page.getByRole("button", { name: "Continue" }).click();
   await expect(homeHeading(page)).toBeVisible();
 
   await openSecurity(page);
   await expect(
-    page.getByRole("list", { name: "Recent sign-in and security activity" }).getByText("With passkey").first(),
+    page
+      .getByRole("list", { name: "Recent sign-in and security activity" })
+      .getByText("With password and passkey")
+      .first(),
   ).toBeVisible();
+  await expect(page.getByText("9 of 10 recovery codes left.")).toBeVisible();
   await page.getByRole("button", { name: "Remove Laptop key" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "Remove passkey" }).click();
   await expect(page.getByText("None yet")).toBeVisible();
@@ -200,7 +242,7 @@ test("an Owner requires two-factor sign-in, and a member is sent to set it up fi
 });
 
 // Refusals answer 403 on purpose: no console-error assertion here.
-test("under a two-factor requirement, a member with only a passkey can't sign in with the password alone", async ({
+test("under a two-factor requirement, a member with only a passkey signs in with the password, then the passkey", async ({
   page,
   browser,
 }, testInfo) => {
@@ -211,18 +253,7 @@ test("under a two-factor requirement, a member with only a passkey can't sign in
   // The member adds a passkey (right after signing in, so no extra confirmation is needed).
   const memberContext = await browser.newContext();
   const member = await memberContext.newPage();
-  const cdp = await memberContext.newCDPSession(member);
-  await cdp.send("WebAuthn.enable");
-  await cdp.send("WebAuthn.addVirtualAuthenticator", {
-    options: {
-      protocol: "ctap2",
-      transport: "internal",
-      hasResidentKey: true,
-      hasUserVerification: true,
-      isUserVerified: true,
-      automaticPresenceSimulation: true,
-    },
-  });
+  await addVirtualAuthenticator(member);
   await passwordStep(member, people.pkMember, u.password);
   await expect(homeHeading(member)).toBeVisible();
   await openSecurity(member);
@@ -242,15 +273,109 @@ test("under a two-factor requirement, a member with only a passkey can't sign in
   await requirements.getByRole("button", { name: "Save requirement" }).click();
   await expect(requirements.getByRole("status").filter({ hasText: "Saved." })).toBeVisible();
 
-  // The password alone gets no session; the passkey does.
+  // The password alone gets no session; the passkey step after it does.
   await passwordStep(member, people.pkMember, u.password);
-  await expect(
-    member.getByRole("alert").filter({ hasText: "Sign in with your passkey or set up an authenticator app" }),
-  ).toBeVisible();
+  await expect(member.getByRole("heading", { name: "Two-step sign-in" })).toBeVisible();
   await expect(member).toHaveURL(/\/sign-in$/);
   const me = await member.request.get(`${urls.app}/api/me`);
   expect(me.status()).toBe(401);
-  await member.getByRole("button", { name: "Sign in with a passkey" }).click();
+  await member.getByRole("button", { name: "Use your passkey" }).click();
   await expect(homeHeading(member)).toBeVisible();
   await memberContext.close();
+});
+
+/**
+ * Adds a passkey on the Security page. A sign-in or step-up in the last few minutes counts as the confirmation; if it
+ * has run out, the console password is asked first. Adding the passkey uses the confirmation up.
+ */
+async function addPasskey(page: Page, name: string, password: string) {
+  await openSecurity(page);
+  await page.getByRole("button", { name: "Add a passkey" }).click();
+  const confirm = page.getByRole("dialog", { name: "Confirm it's you" });
+  await expect.poll(async () => (await confirm.isVisible()) || (await page.getByLabel(/^Name/).isVisible())).toBe(true);
+  if (await confirm.isVisible()) {
+    await confirm.getByLabel("Console password").fill(password);
+    await confirm.getByRole("button", { name: "Confirm and continue" }).click();
+  }
+  await page.getByLabel(/^Name/).fill(name);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("button", { name: `Rename ${name}` })).toBeVisible();
+}
+
+/** Opens one of the run's accounts from Platform → Accounts. */
+async function openPlatformAccount(page: Page, accountName: string) {
+  await page.goto(`${urls.app}/platform/accounts`);
+  await page.getByLabel("Search accounts").fill(accountName);
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page.getByRole("link", { name: accountName }).click();
+  await expect(page.getByRole("heading", { name: accountName, level: 1 })).toBeVisible();
+}
+
+/** "Confirm it's you" must appear (the step-up was used up), and the console password alone answers it. */
+async function confirmWithPassword(page: Page, password: string) {
+  const confirm = page.getByRole("dialog", { name: "Confirm it's you" });
+  await expect(confirm).toBeVisible();
+  // One field, the password: no code field.
+  await expect(confirm.getByRole("textbox")).toHaveCount(1);
+  await expect(confirm.getByRole("textbox", { name: "Console password" })).toBeVisible();
+  await expect(confirm.getByText(/authenticator app|recovery code/)).toHaveCount(0);
+  await confirm.getByLabel("Console password").fill(password);
+  await confirm.getByRole("button", { name: "Confirm", exact: true }).click();
+  await expect(confirm).toHaveCount(0);
+}
+
+// Regression (2026-10-31): a Global Administrator with a passkey typed the right console password to suspend an account
+// and was told to sign in again with the passkey. Adding a passkey uses up the step-up, so the next sensitive action
+// asks: the password must just work.
+// The step-up refusal answers 403 on purpose (the browser logs it): no console-error assertion here.
+test("a Global Administrator with a passkey confirms suspension and support access with the console password", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(150_000);
+  const u = e2eUsers();
+  const { admin, adminAccount } = logins(testInfo.project.name);
+  await addVirtualAuthenticator(page);
+  await passwordStep(page, admin, u.password);
+  await expect(homeHeading(page)).toBeVisible();
+
+  // Suspension.
+  await addPasskey(page, "Admin key", u.password);
+  await openPlatformAccount(page, adminAccount);
+  await page.getByRole("button", { name: "Suspend account", exact: true }).click();
+  const panel = page.getByRole("dialog", { name: "Suspend this account" });
+  await panel.getByLabel("Reason").selectOption({ label: "Sending spam" });
+  await panel.getByRole("button", { name: "Suspend account", exact: true }).click();
+  await confirmWithPassword(page, u.password);
+  await expect(page.getByRole("button", { name: "Lift suspension" }).first()).toBeVisible();
+  // Lifting it within the window asks nothing more.
+  await page.getByRole("button", { name: "Lift suspension" }).first().click();
+  await page
+    .getByRole("dialog", { name: "Lift the suspension of this account" })
+    .getByRole("button", { name: "Lift suspension", exact: true })
+    .click();
+  await expect(page.getByRole("button", { name: "Suspend account", exact: true })).toBeVisible();
+
+  // Support access. Replacing the passkey (one authenticator holds one per login) uses the step-up up again.
+  await openSecurity(page);
+  await page.getByRole("button", { name: "Remove Admin key" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Remove passkey" }).click();
+  await expect(page.getByText("None yet")).toBeVisible();
+  await addPasskey(page, "Second key", u.password);
+  await openPlatformAccount(page, adminAccount);
+  await page.getByRole("button", { name: "Open with support access" }).click();
+  const open = page.getByRole("dialog", { name: "Open this account with support access" });
+  await open.getByLabel("Reason").fill(`${u.run}: checking the step-up`);
+  await open.getByRole("button", { name: "Open read-only" }).click();
+  await confirmWithPassword(page, u.password);
+  const banner = page.getByRole("region", { name: "Support access" });
+  await expect(banner).toBeVisible();
+  await expect(page).toHaveURL(/\/people$/);
+  await expect(page.getByRole("heading", { name: "People", level: 1 })).toBeVisible();
+  await banner.getByRole("button", { name: "End support access", exact: true }).click();
+  await expect(page.getByRole("heading", { name: adminAccount, level: 1 })).toBeVisible();
+  await expect(banner).toHaveCount(0);
+
+  // Signing in again: the password, then the passkey.
+  await signOut(page);
+  await signInWithPasskey(page, admin, u.password);
 });

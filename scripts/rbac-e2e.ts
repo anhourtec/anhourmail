@@ -323,7 +323,7 @@ try {
       const email = `${run}-${label.replace(/[^a-z0-9]+/gi, "-")}@rbac.test`.toLowerCase();
       const userId = await createUser(email, password);
       await db.insert(schema.platformRoleAssignment).values({ userId, role, grantedBy: run });
-      const cookie = await signIn(email, password); // a password sign-in without factors counts as a fresh step-up
+      const cookie = await signIn(email, password); // every sign-in counts as a fresh step-up (ADR-0028)
       const res = await post(cookie, `/api/platform/accounts/${account.id}/act-as`, { reason });
       results.push({ route: "act-as start (fresh sign-in)", persona: label, expected: 200, got: res.status });
       const { data } = (await res.json()) as { data?: { expiresAt: string } };

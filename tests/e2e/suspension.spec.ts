@@ -25,9 +25,10 @@ async function submitPanel(page: Page, panelName: string, button: string, passwo
   await expect(confirm).toHaveCount(0);
 }
 
-async function openAccount(page: Page, run: string, accountName: string) {
+async function openAccount(page: Page, accountName: string) {
   await page.goto(`${urls.app}/platform/accounts`);
-  await page.getByLabel("Search accounts").fill(run);
+  // By the account's own name: the run's accounts are more than one page of results.
+  await page.getByLabel("Search accounts").fill(accountName);
   await page.getByRole("button", { name: "Search", exact: true }).click();
   await page.getByRole("link", { name: accountName }).click();
   await expect(page.getByRole("heading", { name: accountName, level: 1 })).toBeVisible();
@@ -40,7 +41,7 @@ test("a Global Administrator suspends an account and a person, the customer sees
   const s = u.suspension[testInfo.project.name] ?? { accountName: "", owner: "", member: "" };
 
   await signIn(page, u.users.globalAdmin, u.password);
-  await openAccount(page, u.run, s.accountName);
+  await openAccount(page, s.accountName);
 
   // The account.
   await page.getByRole("button", { name: "Suspend account", exact: true }).click();
@@ -77,7 +78,7 @@ test("a Global Administrator suspends an account and a person, the customer sees
 
   // Lift both.
   await signIn(page, u.users.globalAdmin, u.password);
-  await openAccount(page, u.run, s.accountName);
+  await openAccount(page, s.accountName);
   await page
     .getByRole("row", { name: new RegExp(s.member.replace(/[.]/g, "\\.")) })
     .getByRole("button", { name: "Lift suspension" })

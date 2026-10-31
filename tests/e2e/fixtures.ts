@@ -48,7 +48,18 @@ export type E2eUsers = {
   >;
   security: Record<
     string,
-    { totp: string; passkey: string; owner: string; member: string; pkOwner: string; pkMember: string }
+    {
+      totp: string;
+      passkey: string;
+      owner: string;
+      member: string;
+      pkOwner: string;
+      pkMember: string;
+      /** A Global Administrator of this project's own (password-first sign-in and step-up, ADR-0028). */
+      admin: string;
+      /** The account that admin suspends and opens with support access. */
+      adminAccount: string;
+    }
   >;
 };
 
