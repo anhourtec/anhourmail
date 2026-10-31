@@ -69,7 +69,7 @@ function fake(handlers: Record<string, Handler>, permissions: string[] | number 
 describe("key permission sets", () => {
   it("gives the provisioning key the directory and what a customer keeps, and never impersonate", () => {
     expect(USER_ROLE_PERMISSIONS).toHaveLength(239);
-    expect(CUSTOMER_EFFECTIVE_PERMISSIONS).toHaveLength(186);
+    expect(CUSTOMER_EFFECTIVE_PERMISSIONS).toHaveLength(162);
     const p = new Set(PROVISIONING_KEY_PERMISSIONS);
     for (const n of ["authenticate", "sysAccountCreate", "sysDomainDestroy", "sysDkimSignatureUpdate", "emailSend"]) {
       expect(p.has(n)).toBe(true);
@@ -87,7 +87,7 @@ describe("key permission sets", () => {
     for (const n of [...Object.keys(CUSTOMER_PERMISSIONS.disabledPermissions), ...SELF_SERVICE_PERMISSIONS]) {
       expect(p.has(n)).toBe(false);
     }
-    expect(PROVISIONING_KEY_PERMISSIONS).toHaveLength(1 + 15 + 186 - 1); // `authenticate` is also a customer one
+    expect(PROVISIONING_KEY_PERMISSIONS).toHaveLength(1 + 15 + 162 - 1); // `authenticate` is also a customer one
   });
 
   it("keeps account and domain writes off the operations key and everything but reads off the audit key", () => {
@@ -415,7 +415,7 @@ describe("service accounts", () => {
         {
           id: "k1",
           description: "",
-          createdAt: "",
+          createdAt: "2026-10-23T00:00:00Z",
           permissions: { "@type": "Replace", permissions: want },
           allowedIps: { "10.0.0.0/8": true },
         },
@@ -430,7 +430,12 @@ describe("service accounts", () => {
     account.roles = { "@type": "Admin" };
     account.permissions = { "@type": "Merge" };
     account.credentials = { "0": { "@type": "Password" }, "1": { "@type": "AppPassword" }, "2": { "@type": "ApiKey" } };
-    state.keys.push({ id: "k2", description: "", createdAt: "", permissions: { "@type": "Inherit" } });
+    state.keys.push({
+      id: "k2",
+      description: "",
+      createdAt: "2026-10-24T00:00:00Z",
+      permissions: { "@type": "Inherit" },
+    });
     expect(await serviceAccountProblems(mgmt, "audit", "d1", { allowedIps: ["10.0.0.0/8"], maxKeys: 1 })).toEqual([
       'svc-audit: role is {"@type":"Admin"}, expected its custom role only',
       "svc-audit: account-level permissions",
@@ -450,6 +455,61 @@ describe("service accounts", () => {
     expect(await serviceAccountProblems(mgmt, "audit", "d1")).toEqual([
       "svc-audit: its role doesn't hold exactly the key's permissions",
       "svc-audit: no API key",
+    ]);
+  });
+
+  it("while rotating, lets keys wider than the set pass (reported) beside exactly one exact key", async () => {
+    const want = flags(AUDIT_KEY_PERMISSIONS);
+    const key = (id: string, createdAt: string, permissions: Record<string, boolean>) => ({
+      id,
+      description: "",
+      createdAt,
+      permissions: { "@type": "Replace", permissions },
+    });
+    const state: State = {
+      roles: [{ id: "r1", description: "anhourmail svc-audit", enabledPermissions: want, disabledPermissions: {} }],
+      accounts: [
+        {
+          id: "a1",
+          name: "svc-audit",
+          domainId: "d1",
+          roles: { "@type": "Custom", roleIds: { r1: true } },
+          credentials: { "0": { "@type": "ApiKey" }, "1": { "@type": "ApiKey" } },
+        },
+      ],
+      keys: [
+        key("old", "2026-10-01T00:00:00Z", { ...want, jmapFileNodeGet: true }),
+        key("new", "2026-10-31T00:00:00Z", want),
+      ],
+    };
+    const { mgmt } = server(state);
+    // Without the option the wider key is a problem, as before.
+    expect(await serviceAccountProblems(mgmt, "audit", "d1")).toEqual([
+      "svc-audit: key old doesn't carry exactly its set",
+    ]);
+    const wider: string[] = [];
+    expect(await serviceAccountProblems(mgmt, "audit", "d1", { olderKeysMayBeWider: true, wider })).toEqual([]);
+    expect(wider).toEqual(["old"]);
+    // Exactly one key may carry exactly the set: two (or none) is a problem whatever their times (the server gives
+    // whole seconds, so keys can tie); a key narrower than the set, or without a creation time, is still a problem.
+    state.keys = [key("a", "2026-10-31T00:00:00Z", want), key("b", "2026-10-31T00:00:00Z", want)];
+    expect(await serviceAccountProblems(mgmt, "audit", "d1", { olderKeysMayBeWider: true })).toEqual([
+      "svc-audit: 2 keys carry exactly its set while rotating (expected one, the new key)",
+    ]);
+    state.keys = [
+      key("a", "2026-10-01T00:00:00Z", { ...want, jmapFileNodeGet: true }),
+      key("b", "2026-10-31T00:00:00Z", { ...want, jmapFileNodeGet: true }),
+    ];
+    expect(await serviceAccountProblems(mgmt, "audit", "d1", { olderKeysMayBeWider: true })).toEqual([
+      "svc-audit: 0 keys carry exactly its set while rotating (expected one, the new key)",
+    ]);
+    state.keys = [key("old", "2026-10-01T00:00:00Z", { authenticate: true }), key("new", "2026-10-31T00:00:00Z", want)];
+    expect(await serviceAccountProblems(mgmt, "audit", "d1", { olderKeysMayBeWider: true })).toEqual([
+      "svc-audit: key old doesn't carry exactly its set",
+    ]);
+    state.keys = [key("old", "", { ...want, jmapFileNodeGet: true }), key("new", "2026-10-31T00:00:00Z", want)];
+    expect(await serviceAccountProblems(mgmt, "audit", "d1", { olderKeysMayBeWider: true })).toEqual([
+      "svc-audit: key old has no creation time",
     ]);
   });
 });

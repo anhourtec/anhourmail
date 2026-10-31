@@ -7,6 +7,7 @@ import {
   type StalwartCredentialRole,
 } from "./keys";
 import { StalwartManagement } from "./management";
+export { clearFileStorage, type FileStorageCleanup } from "./file-storage";
 
 export {
   isOverQuotaError,
@@ -56,6 +57,7 @@ export {
   type RelayRouteInput,
   StalwartManagement,
   CUSTOMER_PERMISSIONS,
+  FILE_STORAGE_PERMISSIONS,
   SUSPENDED_PERMISSIONS,
   type UserInput,
 } from "./management";

@@ -85,7 +85,7 @@ export const USER_ROLE_PERMISSIONS: readonly string[] = words(`
   sysSpamTrainingSampleGet sysSpamTrainingSampleQuery sysSpamTrainingSampleUpdate
 `);
 
-/** What a customer mailbox keeps: the User role minus `CUSTOMER_PERMISSIONS`' denials (186 names on v0.16.27). */
+/** What a customer mailbox keeps: the User role minus `CUSTOMER_PERMISSIONS`' denials (162 names on v0.16.27). */
 export const CUSTOMER_EFFECTIVE_PERMISSIONS: readonly string[] = unique(
   USER_ROLE_PERMISSIONS.filter((p) => !(p in CUSTOMER_PERMISSIONS.disabledPermissions)),
 );

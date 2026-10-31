@@ -51,6 +51,32 @@ export type UserInput = {
 };
 
 /**
+ * JMAP File Storage and WebDAV files on the pinned server (`GET /api/schema` `Permission` enum, v0.16.27, 2026-10-31):
+ * every name that mentions files apart from the administrative `sysFileStorage*`. Denied on every customer and
+ * system mailbox (`CUSTOMER_DENIALS`); no app password scope allows them either.
+ */
+export const FILE_STORAGE_PERMISSIONS = [
+  "jmapFileNodeGet",
+  "jmapFileNodeQuery",
+  "jmapFileNodeQueryChanges",
+  "jmapFileNodeChanges",
+  "jmapFileNodeCreate",
+  "jmapFileNodeUpdate",
+  "jmapFileNodeDestroy",
+  "jmapFileNodeCopy",
+  "davFileGet",
+  "davFilePut",
+  "davFileDelete",
+  "davFileCopy",
+  "davFileMove",
+  "davFileMkCol",
+  "davFileLock",
+  "davFilePropFind",
+  "davFilePropPatch",
+  "davFileAcl",
+] as const;
+
+/**
  * What no customer mailbox may do on the mail server (verified on v0.16.27, 2026-10-22; security reviews run-20/21).
  * We own the mailbox's one Sieve script (automatic replies, forwarding, junk rules; written with management
  * credentials — 05-webmail.md "Settings"), so end users may not change mail flow themselves: a user Sieve `redirect`
@@ -79,9 +105,9 @@ const CUSTOMER_DENIALS = {
   davPrincipalMatch: true,
   // No sharing (not a product feature; delegation is a console action, rule 49). There is no share permission of its
   // own: `shareWith` rides on `/set` create and update, so mailbox and calendar create/update are off (the webmail
-  // never sends them; IMAP CREATE/RENAME still work), and every ACL method is off. Address books stay writable: the
-  // webmail creates and updates them (contacts auto-save) — `AddressBook/set { shareWith }` is a known gap
-  // (research/stalwart.md "Sharing").
+  // never sends them; IMAP CREATE/RENAME still work), and every ACL method is off (`davFileAcl` comes with the file
+  // permissions below). Address books stay writable: the webmail creates and updates them (contacts auto-save) —
+  // `AddressBook/set { shareWith }` is a known gap (research/stalwart.md "Sharing").
   jmapMailboxCreate: true,
   jmapMailboxUpdate: true,
   jmapCalendarCreate: true,
@@ -89,8 +115,22 @@ const CUSTOMER_DENIALS = {
   imapAclSet: true,
   davCardAcl: true,
   davCalAcl: true,
-  davFileAcl: true,
   davPrincipalAcl: true,
+  // Share notifications (RFC 9670 `ShareNotification`): the record of who shared what with this account (the sharer's
+  // address and the item's name). Nothing is shared with customers any more and the webmail never reads them.
+  jmapShareNotificationGet: true,
+  jmapShareNotificationQuery: true,
+  jmapShareNotificationQueryChanges: true,
+  jmapShareNotificationChanges: true,
+  jmapShareNotificationCreate: true,
+  jmapShareNotificationUpdate: true,
+  jmapShareNotificationDestroy: true,
+  // No file storage (not a product feature; maintainer decision 2026-10-31). With a mailbox password a user could
+  // store files over JMAP (`FileNode/*`) and WebDAV (`/dav/file/`) and share them with any account on the server
+  // (`FileNode/set { shareWith }`, verified). Every FileNode method and every WebDAV file method is off; denying
+  // `jmapFileNodeGet` on the recipient also closes files shared before (research/stalwart.md "File storage").
+  // Attachments are email blobs (`jmapBlob*`, `jmapEmail*`), untouched.
+  ...Object.fromEntries(FILE_STORAGE_PERMISSIONS.map((p) => [p, true] as const)),
   // ADR-0020: no self-service credentials or password change (app passwords and API keys are made by the console with
   // the management key, which these don't limit — verified), and no principal look-ups (`Principal/query` otherwise
   // lists every account on the server). The webmail never needs them on a user's token.

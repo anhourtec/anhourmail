@@ -15,7 +15,12 @@ import {
   SELF_SERVICE_PERMISSIONS,
 } from "./app-passwords";
 import { StalwartError, StalwartTransport } from "./client";
-import { CUSTOMER_PERMISSIONS, StalwartManagement, SUSPENDED_PERMISSIONS } from "./management";
+import {
+  CUSTOMER_PERMISSIONS,
+  FILE_STORAGE_PERMISSIONS,
+  StalwartManagement,
+  SUSPENDED_PERMISSIONS,
+} from "./management";
 
 type Seen = { name: string; args: Record<string, unknown> };
 
@@ -112,6 +117,58 @@ describe("app password permissions", () => {
       expect(customer[p]).toBe(true);
       expect(suspended[p]).toBe(true);
     }
+  });
+
+  it("turns off file storage (JMAP FileNode and WebDAV files) on every account, and leaves attachments alone", () => {
+    const customer: Record<string, boolean> = CUSTOMER_PERMISSIONS.disabledPermissions;
+    const suspended: Record<string, boolean> = SUSPENDED_PERMISSIONS.disabledPermissions;
+    // Every file permission the server knows, not a hand-picked few (an upgrade adding one fails here).
+    const known = KNOWN_PERMISSIONS.filter((p) => /^jmapFileNode|^davFile/.test(p));
+    expect([...FILE_STORAGE_PERMISSIONS].sort()).toEqual(known.sort());
+    expect(known).toHaveLength(18);
+    for (const p of known) {
+      expect(customer[p]).toBe(true);
+      expect(suspended[p]).toBe(true);
+    }
+    // Share notifications (who shared what) are off too.
+    for (const p of KNOWN_PERMISSIONS.filter((n) => n.startsWith("jmapShareNotification")))
+      expect(customer[p]).toBe(true);
+    // Email blobs (attachments), mail import and sending are separate permissions and stay on.
+    for (const p of [
+      "jmapBlobUpload",
+      "jmapBlobGet",
+      "jmapBlobCopy",
+      "jmapEmailImport",
+      "jmapEmailCreate",
+      "emailSend",
+    ]) {
+      expect(p in customer).toBe(false);
+    }
+    // No app password scope allows them either.
+    for (const scope of ["imap", "pop3", "smtp", "jmap", "dav"] as const) {
+      expect(SCOPE_ALLOW[scope].filter((p) => known.includes(p))).toEqual([]);
+    }
+  });
+
+  it("reports drift (sieveLocked false) for an account locked down before file storage was denied", async () => {
+    const before = Object.fromEntries(
+      Object.keys(CUSTOMER_PERMISSIONS.disabledPermissions)
+        .filter((p) => !/^jmapFileNode|^davFile(?!Acl)/.test(p))
+        .map((p) => [p, true] as const),
+    );
+    const { mgmt } = management({
+      "x:Domain/get": () => ({ list: [{ id: "d", name: "x.test" }] }),
+      "x:Account/get": () => ({
+        list: [
+          { id: "a", name: "now", domainId: "d", permissions: CUSTOMER_PERMISSIONS },
+          { id: "b", name: "before", domainId: "d", permissions: { "@type": "Merge", disabledPermissions: before } },
+        ],
+      }),
+    });
+    expect((await mgmt.listUsers()).map((u) => [u.address, u.sieveLocked])).toEqual([
+      ["now@x.test", true],
+      ["before@x.test", false],
+    ]);
   });
 
   it("reports drift (sieveLocked false) when any of the whole denial list is missing, these included", async () => {
