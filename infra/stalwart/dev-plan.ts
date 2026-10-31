@@ -127,6 +127,9 @@ export async function applyDevMailPlan(
       password: await hashPassword(opts.mailboxPassword),
       resetPassword: true,
       quotaBytes: 1024 ** 3,
+      // Always written, so an existing dev volume gets the current customer lockdown (an existing account keeps its
+      // permissions when `suspended` is left out).
+      suspended: false,
       aliases:
         name === "alice" ? [{ name: "hello", domain: DEV_DOMAIN, enabled: true, description: "Seeded alias" }] : [],
     });

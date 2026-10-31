@@ -282,6 +282,7 @@ async function withThrowawayMailbox(label: string, fn: (m: Throwaway) => Promise
     domain: DEV_DOMAIN,
     password: await hashPassword(password),
     quotaBytes: 10 * 1024 ** 2,
+    suspended: false,
   });
   try {
     return await fn({ id, user: `${local}@${DEV_DOMAIN}`, password });

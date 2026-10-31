@@ -153,6 +153,8 @@ async function upsertMailbox(
     senderName: string | null;
     /** A person-less mailbox's own display name. */
     displayName?: string | null;
+    /** Written every run (an existing account keeps its permissions otherwise): the lockdown or the suspension. */
+    suspended?: boolean;
   },
   aliases: { address: string; kind: "alias" | "masked"; description: string }[] = [],
 ): Promise<string> {
@@ -162,6 +164,7 @@ async function upsertMailbox(
     password: await hashPassword(m.password),
     resetPassword: true,
     quotaBytes: m.quotaBytes,
+    suspended: m.suspended ?? false,
     description: m.senderName,
     aliases: aliases.map((a) => ({
       name: local(a.address),
@@ -416,6 +419,7 @@ for (const p of people) {
       password: await hashPassword(password),
       resetPassword: true,
       quotaBytes: quota("plus"),
+      suspended: false,
     });
   }
   const group = p.platformRole ? "Platform staff" : p.account ? `Customer: ${ACCOUNTS[p.account.key].name}` : "Other";
@@ -604,6 +608,7 @@ if (demo) {
       userId: null,
       quotaBytes: quota("plus"),
       senderName: null,
+      suspended: true, // suspended and deleting mailboxes are both off on the mail server
     });
     await db
       .update(schema.mailbox)

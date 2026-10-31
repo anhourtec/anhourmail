@@ -240,6 +240,7 @@ if (mode === "create") {
         domain: avDomain,
         password: await hashPassword(avPassword),
         quotaBytes: 50 * 1024 * 1024,
+        suspended: false,
       }),
       status: "active",
       quotaBytes: 50 * 1024 * 1024,
@@ -273,6 +274,7 @@ if (mode === "create") {
         password: await hashPassword(nmPassword),
         quotaBytes: 50 * 1024 * 1024,
         description: `nm-${project}-person`,
+        suspended: false,
       }),
       status: "active",
       quotaBytes: 50 * 1024 * 1024,
@@ -316,6 +318,7 @@ if (mode === "create") {
         domain: dlDomain,
         password: await hashPassword(`${randomBytes(12).toString("base64url")}-E2e`),
         quotaBytes: 50 * 1024 * 1024,
+        suspended: false,
       });
       await db.insert(schema.mailbox).values({
         accountId: dlAccount.id,
@@ -367,6 +370,7 @@ if (mode === "create") {
         domain: dwDomain,
         password: await hashPassword(mailboxPassword),
         quotaBytes: 50 * 1024 * 1024,
+        suspended: false,
       });
       await db.insert(schema.mailbox).values({
         accountId: dwAccount.id,
@@ -431,6 +435,7 @@ if (mode === "create") {
     domain: recipientDomain,
     password: await hashPassword(recipient.password),
     quotaBytes: 50 * 1024 * 1024,
+    suspended: false,
   });
   await db.insert(schema.customerDomain).values({
     accountId: account.id,
