@@ -18,6 +18,7 @@ import {
   stripComments,
   trustedAuthservIds,
 } from "./original";
+import { senderVerified } from "./image-proxy";
 
 const OURS = ["mail.dev.test"];
 
@@ -383,5 +384,23 @@ describe("exact header names elsewhere", () => {
   it("still reads names with ASCII space or tab before the colon as the field (as Stalwart does)", () => {
     const raw = `${RCVD}Authentication-Results \t: mail.dev.test; dmarc=pass header.from=example.org\r\n\r\n`;
     expect(ourAuthResultsHeader(parseHeaderBlock(raw), OURS)).toMatch(/^mail\.dev\.test;/);
+  });
+});
+
+describe("results that load images without asking (ADR-0027, security-audit run-55)", () => {
+  it("needs DMARC passing on our results: a DKIM pass alone (an `l=` signature replayed with images) isn't enough", () => {
+    const ok = authResults(parseHeaderBlock(STAMPED), OURS);
+    expect(senderVerified("probe@example.org", ok)).toBe(true);
+    for (const dmarc of [
+      "dmarc=none header.from=example.org",
+      "dmarc=fail header.from=example.org policy.dmarc=none",
+    ]) {
+      const raw = STAMPED.replace("dmarc=pass header.from=example.org policy.dmarc=reject", dmarc);
+      const r = authResults(parseHeaderBlock(raw), OURS);
+      expect(r?.dkim.result).toBe("pass");
+      expect(senderVerified("probe@example.org", r)).toBe(false);
+    }
+    // DMARC for another domain than the From's doesn't count either.
+    expect(senderVerified("probe@other.example", ok)).toBe(false);
   });
 });

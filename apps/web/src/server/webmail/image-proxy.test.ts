@@ -15,7 +15,7 @@ import {
   signImageLink,
   verifyImageLink,
   senderVerified,
-  withSenderKey,
+  withImageSender,
 } from "./image-proxy";
 import type { FetchResult } from "./remote-image";
 import { buildMessageView, type JmapEmail } from "./view";
@@ -140,58 +140,126 @@ describe("the reader's linking sanitiser", () => {
     expect(r.blockedImages).toBe(REMOTE_IMAGES.perMessage + 5);
   });
 
-  it("gives the view its sender key only when there is something to load", () => {
+  it("gives the view its sender key only when there is something to load", async () => {
     const loadable = buildMessageView(email('<img src="https://c.example.org/a.png">'), (h) => sanitize(h, new Map()));
     const passed = {
       spf: { result: "none", detail: null, domain: null },
       dkim: { result: "none", detail: null, domain: null },
       dmarc: { result: "pass", detail: null, domain: "shop.example" },
     };
-    expect(withSenderKey(loadable, SECRET, "me@a.test", passed).senderKey).toBe(
+    expect((await withKey(loadable, SECRET, "me@a.test", passed)).senderKey).toBe(
       senderKey(SECRET, "me@a.test", "news@shop.example"),
     );
     const none = buildMessageView(email("<p>Hello</p>"), (h) => sanitize(h, new Map()));
-    expect(withSenderKey(none, SECRET, "me@a.test", null).senderKey).toBeNull();
+    expect((await withKey(none, SECRET, "me@a.test", null)).senderKey).toBeNull();
     const noSender = { ...loadable, from: [] };
-    expect(withSenderKey(noSender, SECRET, "me@a.test", null).senderKey).toBeNull();
+    expect((await withKey(noSender, SECRET, "me@a.test", null)).senderKey).toBeNull();
   });
 
-  it("gives a sender key only for a From our own results verify", () => {
+  it("gives a sender key only for a From our own results verify", async () => {
     const loadable = buildMessageView(email('<img src="https://c.example.org/a.png">'), (h) => sanitize(h, new Map()));
     const check = (result: string, domain: string | null) => ({ result, detail: null, domain });
     const none = check("none", null);
     const auth = (dmarc: ReturnType<typeof check>, dkim: ReturnType<typeof check>) => ({ spf: none, dkim, dmarc });
-    const key = (a: Parameters<typeof withSenderKey>[3]) => withSenderKey(loadable, SECRET, "me@a.test", a);
-    expect(key(auth(check("pass", "shop.example"), none)).senderVerified).toBe(true);
-    expect(key(auth(none, check("pass", "shop.example"))).senderKey).not.toBeNull();
-    // DKIM for a parent domain aligns; another domain's signature doesn't.
-    expect(senderVerified("news@mail.shop.example", auth(none, check("pass", "shop.example")))).toBe(true);
-    expect(key(auth(none, check("pass", "evil.example"))).senderKey).toBeNull();
+    const key = (a: Parameters<typeof withKey>[3]) => withKey(loadable, SECRET, "me@a.test", a);
+    expect((await key(auth(check("pass", "shop.example"), none))).senderVerified).toBe(true);
+    // A DKIM pass alone isn't enough, aligned or not (an `l=` signature can be replayed with images appended).
+    expect((await key(auth(none, check("pass", "shop.example")))).senderKey).toBeNull();
+    expect(senderVerified("news@shop.example", auth(none, check("pass", "shop.example")))).toBe(false);
+    expect(senderVerified("news@mail.shop.example", auth(none, check("pass", "shop.example")))).toBe(false);
+    expect((await key(auth(none, check("pass", "evil.example")))).senderKey).toBeNull();
+    // DMARC for the From domain, compared in the one form (A–Z lower-cased, ASCII only).
+    expect(senderVerified("News@Shop.Example", auth(check("pass", "shop.example"), none))).toBe(true);
+    expect(senderVerified("news@shop\u3002example", auth(check("pass", "shop.example"), none))).toBe(false);
+    expect(senderVerified("news@\u212Aexample.com", auth(check("pass", "kexample.com"), none))).toBe(false);
     // A forged From: DMARC failed for the domain.
-    const forged = key(auth(check("fail", "shop.example"), none));
+    const forged = await key(auth(check("fail", "shop.example"), none));
     expect(forged.senderKey).toBeNull();
     expect(forged.senderVerified).toBe(false);
     // DMARC passed for some other domain than the From's.
-    expect(key(auth(check("pass", "other.example"), none)).senderKey).toBeNull();
+    expect((await key(auth(check("pass", "other.example"), none))).senderKey).toBeNull();
     // Results that couldn't be read, or none of ours (a copy forwarded by a redirect rule looks like that): not verified.
-    expect(key(undefined).senderKey).toBeNull();
-    expect(key(null).senderVerified).toBe(false);
+    expect((await key(undefined)).senderKey).toBeNull();
+    expect((await key(null)).senderVerified).toBe(false);
   });
 
-  it("gives a sender key for mail our server vouches was submitted here by its From (internal-mail marker)", () => {
+  it("gives a sender key for mail our server vouches was submitted here by its From (internal-mail marker)", async () => {
     const loadable = buildMessageView(email('<img src="https://c.example.org/a.png">'), (h) => sanitize(h, new Map()));
-    const internal = withSenderKey(loadable, SECRET, "me@a.test", null, true);
+    const internal = await withKey(loadable, SECRET, "me@a.test", null, true);
     expect(internal.senderVerified).toBe(true);
     expect(internal.senderKey).toBe(senderKey(SECRET, "me@a.test", "news@shop.example"));
     expect(senderVerified("news@shop.example", undefined, true)).toBe(true);
     // Without the marker, no results of ours is still not verified (the run-32 redirect case).
-    expect(withSenderKey(loadable, SECRET, "me@a.test", null, false).senderVerified).toBe(false);
+    expect((await withKey(loadable, SECRET, "me@a.test", null, false)).senderVerified).toBe(false);
     expect(senderVerified("news@shop.example", null)).toBe(false);
     // Nothing to load: unchanged either way.
     const none = buildMessageView(email("<p>Hello</p>"), (h) => sanitize(h, new Map()));
-    expect(withSenderKey(none, SECRET, "me@a.test", null, true).senderKey).toBeNull();
+    expect((await withKey(none, SECRET, "me@a.test", null, true)).senderKey).toBeNull();
   });
 });
+
+describe("Safe senders on the view (ADR-0027)", () => {
+  const sanitize = linkingSanitizer(SECRET, MINE);
+  const loadable = buildMessageView(email('<img src="https://c.example.org/a.png">'), (h) => sanitize(h, new Map()));
+  const dmarc = (result: string) => ({
+    spf: { result: "none", detail: null, domain: null },
+    dkim: { result: "none", detail: null, domain: null },
+    dmarc: { result, detail: null, domain: "shop.example" },
+  });
+  const match = { kind: "domain" as const, value: "shop.example" };
+
+  it("looks a verified From up and carries the match", async () => {
+    const asked: string[] = [];
+    const view = await withImageSender(loadable, SECRET, "me@a.test", dmarc("pass"), false, async (from) => {
+      asked.push(from);
+      return match;
+    });
+    expect(view.safeSender).toEqual(match);
+    expect(asked).toEqual(["news@shop.example"]);
+  });
+
+  it("never asks for a forged or unknown From, an attached message, or a message with nothing to load", async () => {
+    const asked: string[] = [];
+    const safe = async (from: string) => {
+      asked.push(from);
+      return match;
+    };
+    expect((await withImageSender(loadable, SECRET, "me@a.test", dmarc("fail"), false, safe)).safeSender).toBeNull();
+    expect((await withImageSender(loadable, SECRET, "me@a.test", null, false, safe)).safeSender).toBeNull();
+    // Attached messages are served with no results at all (`undefined`).
+    expect((await withImageSender(loadable, SECRET, "me@a.test", undefined, false, safe)).safeSender).toBeNull();
+    const none = buildMessageView(email("<p>Hello</p>"), (h) => sanitize(h, new Map()));
+    expect((await withImageSender(none, SECRET, "me@a.test", dmarc("pass"), false, safe)).safeSender).toBeNull();
+    expect(asked).toEqual([]);
+    expect(loadable.safeSender).toBeNull();
+  });
+
+  it("treats a message with more than one From address as unverified", async () => {
+    const asked: string[] = [];
+    const two = { ...loadable, from: [...loadable.from, { name: null, email: "other@shop.example" }] };
+    const view = await withImageSender(two, SECRET, "me@a.test", dmarc("pass"), false, async (from) => {
+      asked.push(from);
+      return match;
+    });
+    expect(view).toMatchObject({ senderVerified: false, senderKey: null, safeSender: null });
+    expect(asked).toEqual([]);
+  });
+
+  it("answers no match when the list can't be read", async () => {
+    const view = await withImageSender(loadable, SECRET, "me@a.test", dmarc("pass"), false, async () => null);
+    expect(view.senderVerified).toBe(true);
+    expect(view.safeSender).toBeNull();
+  });
+});
+
+/** The view as the message route serves it, with no Safe senders match. */
+const withKey = (
+  view: Parameters<typeof withImageSender>[0],
+  secret: string,
+  mailbox: string,
+  auth: Parameters<typeof withImageSender>[3],
+  internal = false,
+) => withImageSender(view, secret, mailbox, auth, internal, async () => null);
 
 describe("serveImage", () => {
   const ok: FetchResult = { ok: true, type: "image/png", bytes: PNG };

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { ok, route } from "@/server/http/route";
-import { env, senderDelegationKey } from "@/server/env";
+import { env } from "@/server/env";
 import { handleWebmail, notFound, unauthorized } from "@/server/webmail/http";
-import { platform } from "@/server/platform";
-import { linkingSanitizer, withSenderKey } from "@/server/webmail/image-proxy";
-import { type AuthSummary, authResults, isInternalMail, trustedAuthservIds } from "@/server/webmail/original";
+import { linkingSanitizer, withImageSender } from "@/server/webmail/image-proxy";
 import { webmail, webmailSessionId } from "@/server/webmail/instance";
+import { safeSenders } from "@/server/webmail/safe-senders";
 import { htmlToText } from "@/server/webmail/sanitize";
+import { senderEvidence } from "@/server/webmail/sender-check";
 import { isJmapId } from "@/server/webmail/view";
 
 /**
@@ -14,20 +14,11 @@ import { isJmapId } from "@/server/webmail/view";
  * blocked, each with a signed image link for "Load images", bound to this session and mailbox) for the sandboxed
  * frame, or the plain-text / markdown body as safe structures, plus calendar events. `?full=1` lifts the body cap
  * ("View entire message"). Unknown ids → 404.
+ *
+ * With images to load and a verified From, the view also says whether that From is on the open mailbox's Safe
+ * senders (ADR-0027 §3): the session's active mailbox, or in a tab of a mailbox shared with the person the mailbox the
+ * delegation gate admitted (the pinned entry is the active one here) — never an id the browser sent.
  */
-/** The internal-mail marker check, false when the key isn't usable (never thrown into the response). */
-function internalMarkerValid(
-  headers: Parameters<typeof isInternalMail>[0],
-  from: string,
-  trusted: readonly string[],
-): boolean {
-  try {
-    return isInternalMail(headers, from, senderDelegationKey(), trusted);
-  } catch {
-    return false;
-  }
-}
-
 export const GET = route(
   async ({ req }, params) => {
     const id = webmailSessionId(req.headers.get("cookie"));
@@ -44,21 +35,18 @@ export const GET = route(
       if (!view) return notFound();
       // Only a verified From may load images without asking: read our own Authentication-Results, or our server's
       // internal-mail marker (mail submitted here, which has no results of ours), when it matters.
-      let auth: AuthSummary | null | undefined;
-      let internal = false;
-      const from = view.from[0]?.email;
+      let evidence: ReturnType<typeof senderEvidence> = { auth: undefined, internal: false };
       if (view.loadableImages > 0) {
-        const e = env();
         const headers = await webmail()
           .headers(id, emailId)
           .catch(() => undefined);
-        if (headers) {
-          const trusted = trustedAuthservIds(e.MAIL_AUTHSERV_ID, platform().hosts.mx, e.NODE_ENV === "production");
-          auth = authResults(headers, trusted);
-          internal = from !== undefined && internalMarkerValid(headers, from, trusted);
-        }
+        evidence = senderEvidence(headers, view.from[0]?.email);
       }
-      return ok(withSenderKey(view, secret, s.username, auth, internal));
+      return ok(
+        await withImageSender(view, secret, s.username, evidence.auth, evidence.internal, (from) =>
+          safeSenders().match(s.accountId, s.username, from),
+        ),
+      );
     });
   },
   { session: "webmail", limit: "webmail", delegated: "full_access" },

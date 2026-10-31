@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import type { SafeSenderMatch } from "@anhourmail/shared/senders";
+
 import { type CalendarEvent, markdownBlocks, type MdBlock, type TextBlock, textBlocks } from "./body";
 
 /**
@@ -114,6 +116,12 @@ export type MessageView = {
    * our own results show DMARC or aligned DKIM passing, or the message never came in from outside.
    */
   senderVerified: boolean;
+  /**
+   * The mailbox's Safe senders entry the verified From matches (ADR-0027: their images load without asking), or null
+   * — always null when the From isn't verified or there is nothing to load. Decided on the server; the list itself
+   * never reaches the browser.
+   */
+  safeSender: SafeSenderMatch | null;
   attachments: AttachmentView[];
 };
 
@@ -299,6 +307,7 @@ export function buildMessageView(
     loadableImages,
     senderKey: null,
     senderVerified: false,
+    safeSender: null,
     attachments,
   };
 }

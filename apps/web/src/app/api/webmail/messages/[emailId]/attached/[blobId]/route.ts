@@ -2,7 +2,7 @@
 import { ok, route } from "@/server/http/route";
 import { env } from "@/server/env";
 import { handleWebmail, notFound, unauthorized } from "@/server/webmail/http";
-import { linkingSanitizer, withSenderKey } from "@/server/webmail/image-proxy";
+import { linkingSanitizer } from "@/server/webmail/image-proxy";
 import { webmail, webmailSessionId } from "@/server/webmail/instance";
 import { htmlToText } from "@/server/webmail/sanitize";
 import { isJmapId } from "@/server/webmail/view";
@@ -25,7 +25,9 @@ export const GET = route(
       const secret = env().BETTER_AUTH_SECRET;
       const sanitize = linkingSanitizer(secret, { sessionId: id, accountId: s.accountId });
       const view = await webmail().attachedMessage(id, emailId, blobId, sanitize, htmlToText);
-      return view ? ok(withSenderKey(view, secret, s.username, undefined)) : notFound();
+      // An attached message's From is never verified (no results of ours vouch for it): no sender key, and Safe
+      // senders never match it (ADR-0027 §1).
+      return view ? ok(view) : notFound();
     });
   },
   { session: "webmail", limit: "webmail", delegated: "full_access" },

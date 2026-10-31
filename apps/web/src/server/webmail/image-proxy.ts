@@ -5,6 +5,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { NextResponse } from "next/server";
 
+import { fromAddress, type SafeSenderMatch } from "@anhourmail/shared/senders";
 import { REMOTE_IMAGES } from "@anhourmail/shared/webmail";
 import { log } from "@anhourmail/server/log";
 
@@ -90,10 +91,13 @@ export function linkingSanitizer(
 }
 
 /**
- * Whether a message's From can be trusted for loading images without asking. Either our own server vouches that the
- * From address submitted it here (`internal`: the internal-mail marker, `isInternalMail` — mail between our own
- * users and our system mail, which never passes the inbound checks), or our own Authentication-Results show DMARC
- * passing for the From domain, or DKIM passing for it (or a parent domain). Anything else asks first.
+ * Whether a message's From can be trusted for loading images without asking (Safe senders, "Always for", remembered
+ * fingerprints, contacts mode). Either our own server vouches that the From address submitted it here (`internal`:
+ * the internal-mail marker, `isInternalMail` — mail between our own users and our system mail, which never passes the
+ * inbound checks), or our own Authentication-Results show **DMARC passing for the From domain**. A DKIM pass alone is
+ * not enough (security-audit run-55): a signature limited to part of the body (`l=`) can be replayed with content
+ * appended, such as images. The From domain must already be plain ASCII and is compared as `fromAddress` gives it —
+ * the same form the Safe senders match uses. Anything else asks first.
  */
 export function senderVerified(from: string, auth: AuthSummary | null | undefined, internal = false): boolean {
   // The marker is bound to this From address and Message-ID under the server's key, and only our server adds it.
@@ -102,29 +106,36 @@ export function senderVerified(from: string, auth: AuthSummary | null | undefine
   // `null`: no results of ours. That isn't proof of anything: a copy forwarded by a mailbox's own redirect rule
   // arrives with our LMTP `Received` on top and no results, whatever its From says.
   if (auth === undefined || auth === null) return false;
-  const domain = from.slice(from.lastIndexOf("@") + 1).toLowerCase();
-  const aligned = (d: string | null) => d !== null && (domain === d || domain.endsWith(`.${d}`));
-  return (
-    (auth.dmarc.result === "pass" && auth.dmarc.domain === domain) ||
-    (auth.dkim.result === "pass" && aligned(auth.dkim.domain))
-  );
+  const address = fromAddress(from);
+  if (address === null) return false;
+  const domain = address.slice(address.lastIndexOf("@") + 1);
+  return auth.dmarc.result === "pass" && auth.dmarc.domain === domain;
 }
 
 /**
- * The view with its sender's key, when it has images to load and a sender whose From is verified (else unchanged):
- * a forged From must not load a remembered sender's images, which would tell the forger the message was opened.
- * `internal` is `isInternalMail` for this message's headers and From (false when unknown).
+ * The view with its sender's key and Safe senders match, when it has images to load and a sender whose From is
+ * verified (else unchanged): a forged From must not load a remembered or safe sender's images, which would tell the
+ * forger the message was opened. `internal` is `isInternalMail` for this message's headers and From (false when
+ * unknown). A message with more than one From address is never verified. `safe` looks the verified From up in the open mailbox's Safe senders (`safe-senders.ts`); it is only
+ * called for a verified From with images to load.
  */
-export function withSenderKey(
+export async function withImageSender(
   view: MessageView,
   secret: string,
   mailbox: string,
   auth: AuthSummary | null | undefined,
-  internal = false,
-): MessageView {
-  const from = view.from[0]?.email;
+  internal: boolean,
+  safe: (from: string) => Promise<SafeSenderMatch | null>,
+): Promise<MessageView> {
+  // More than one From address: nobody in particular sent it, so nothing is verified (the reader asks).
+  const from = view.from.length === 1 ? view.from[0]?.email : undefined;
   if (view.loadableImages === 0 || !from || !senderVerified(from, auth, internal)) return view;
-  return { ...view, senderKey: senderKey(secret, mailbox, from), senderVerified: true };
+  return {
+    ...view,
+    senderKey: senderKey(secret, mailbox, from),
+    senderVerified: true,
+    safeSender: await safe(from),
+  };
 }
 
 /** Largest request body: `{ "token": "…" }` with a link for a 2,048-character address. */
