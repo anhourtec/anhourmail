@@ -92,12 +92,12 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 
 Pre-staging has run on one VM since 2026-10-23 from the private ops repository (`anhourmail-ops`, following the
 local-only `deploy.md`); it was last deployed on 2026-10-30 at 300440a (leavers' sign-in cut-off, mailbox delegation
-in the console, the send-on-behalf sender rule). Since then the webmail side of delegation (Open another mailbox, writing from a shared mailbox; no "Shared with you" list), remote images' once-or-always choice with our own server's mail treated as verified, and the forwarding guard (no forwarding of mail failing DMARC) wait for the next deploy and a `--bootstrap-stalwart`. The work plan stops before Phase 6. The next
+in the console, the send-on-behalf sender rule). Since then the webmail side of delegation (Open another mailbox, writing from a shared mailbox; no "Shared with you" list), remote images' once-or-always choice with our own server's mail treated as verified, the forwarding guard (no forwarding of mail failing DMARC), the SEO pass and the fuller reserved-name list were pushed at 3c74f23 for the next deploy and a `--bootstrap-stalwart`; names as one source (one sender name per mailbox, following its person; masked aliases send with no name) follows it. The work plan stops before Phase 6. The next
 phases, in order, with exit criteria, are in `docs/internal/09-roadmap.md` "Path to production":
 
 1. pre-staging on one VM (real DNS, certificates, rDNS, external mail, backups and a restore drill);
 2. product gaps a beta needs (built: webmail session handoff, data export and deletion, act-as, image proxy, leavers
-   and mailbox delegation; left: names as one source, free sign-up with proof-of-work instead of SMS/OTP, push sync,
+   mailbox delegation and names as one source; left: free sign-up with proof-of-work instead of SMS/OTP, push sync,
    webmail settings part 2);
 3. billing, plus mail and contacts import (migration);
 4. abuse controls, monitoring and backups;
@@ -403,3 +403,4 @@ an app container direct access to Stalwart's management listener.
 | 2026-10-29 | Nishchayjeet Singh (Nish) | Rule 61: profile data (name, avatar, sender name) has one source and stays in sync across console and webmail                      |
 | 2026-10-30 | Nishchayjeet Singh (Nish) | "Where we are and what's next": pre-staging redeployed at 300440a; delegation's webmail side waits for the next deploy             |
 | 2026-10-30 | Nishchayjeet Singh (Nish) | Rule 62: no marketing or bulk mail from our own domains; bulk only from customers' verified domains; blocklist response            |
+| 2026-10-31 | Nishchayjeet Singh (Nish) | "Where we are and what's next": 3c74f23 pushed for pre-staging; names as one source built                                          |
