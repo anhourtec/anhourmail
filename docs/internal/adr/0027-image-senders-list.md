@@ -1,7 +1,8 @@
 # ADR-0027: Safe senders load images; own Sent mail loads images
 
-**Status:** Proposed 2026-10-31 (revised 2026-10-31: replaces this ADR's earlier sealed "Always load images from"
-list, which was never built; see "Alternatives considered")
+**Status:** Accepted 2026-10-31, built 2026-10-31 (see "Update (2026-10-31): built"). Proposed 2026-10-31, revised
+the same day: replaces this ADR's earlier sealed "Always load images from" list, which was never built; see
+"Alternatives considered".
 
 **Maintainer decisions (2026-10-31):**
 
@@ -302,3 +303,63 @@ mail), a changelog entry.
 3. **Optimistic check on the script write:** checked on the pinned server when building; the re-read-and-compare
    fallback in section 4 is used if `ifInState` isn't honoured.
 4. **Fingerprint drop date:** at launch (pre-staging has only test users).
+
+## Update (2026-10-31): built
+
+Built as decided, slices 1–8 (the fingerprint drop at launch stays a later change). What the code does where the text
+above left a choice:
+
+- **IDN (decision 2):** `senderEntry` converts a typed U-label to its A-label with the WHATWG URL parser (the same
+  mapping as `domainToASCII`, and it runs in the browser too); `matchSafeSender` converts the From's domain the same
+  way, so both effects see one form. A test asserts `matchSafeSender` and the compiled Sieve tests agree.
+- **Optimistic check (decision 3):** `ifInState` **is** honoured by `SieveScript/set` on the management path of the
+  pinned v0.16.27 (a stale state is refused with `stateMismatch`; verified against the real server in
+  `webmail-settings.int.test.ts`). So the re-read-and-compare fallback isn't used: `putSieveScript(…, ifInState)`
+  writes on the state of the read the change was based on (`null` = "the read found no script"), for `saveJunk` and
+  the Safe senders routes (one retry of the delta, then 409 `settings_changed`); the contacts refresh uses it too.
+- **Rules version:** a missing counter is created at a random start (not 0) and `INCR` creates it the same way, so a
+  Redis flush can't make an old stamp look current; counters expire after 30 days; a cached list is also re-read
+  after 10 minutes whatever the counter says (covers a bump lost while Redis was down).
+- **Denied audit in a delegated tab:** the delegation gate still answers 403 before the handler; the route's new
+  `onSharedRefusal` option (in `route()`) records `junk_rules.changed` `denied` `own_mailbox_only` through
+  `WebmailSettingsService.recordMailFlowDenied` (the person as actor, in the shared mailbox's account).
+- **Reader:** in a shared mailbox's tab "Load images" loads straight away (the "Just this once" choice alone would be
+  a one-button question). After a fingerprint match the notice offers "Add <address> to Safe senders" (forgets the
+  fingerprint once saved) and "Stop loading from this sender" (forgets it). Preferences changes can only remove
+  fingerprints. Settings shows the legacy line only while there are any ("Forget them").
+- **Message view:** `withImageSender` (`image-proxy.ts`) replaces `withSenderKey`; attached messages are served without
+  any sender evidence (never verified, never matched).
+
+## Update (2026-10-31): security review fixes
+
+After the coordinator's review and security-audit run-55 (0 confirmed), still before any commit:
+
+- **Verified means DMARC.** `senderVerified` now needs our own results to show **DMARC passing for the From domain**
+  (or the internal-mail marker); an aligned DKIM pass alone no longer counts. Reason: a DKIM signature limited to part
+  of the body (`l=`) can be replayed with content appended, such as images. This applies to every way images load
+  without asking (Safe senders, "Always for", remembered fingerprints, contacts mode), since they all use it.
+  Residual (needs validation): a DMARC pass can itself rest on such a DKIM signature; whether the pinned Stalwart
+  honours `l=` wasn't tested on the dev stack (no DNS there to publish a throwaway key), so the regression is a unit
+  test on real results headers (`original.test.ts`).
+- **One domain form for verification and matching.** `fromAddress` (`@anhourmail/shared/senders`) takes the From only
+  if its domain is already plain ASCII and lower-cases A–Z only — no fullwidth letters, ideographic full stop or Kelvin
+  sign mapped onto an entry. `senderVerified`, `matchSafeSender` and "Always for" all use it, so the domain matched is
+  the domain verified. Typed entries still convert U-labels to A-labels (decision 2); a From written in U-label form
+  doesn't match (it wouldn't verify either). Entries' local parts refuse control characters and direction or
+  zero-width marks.
+- **More than one From address is never verified** (the view, and the From read for "Always for").
+- **Cache:** keyed by the mail-server account id **and** the mailbox address (hashed in the Redis counter key,
+  `webmail:rules:v:<accountId>:<hash>`), so an account id the mail server reuses for another mailbox never inherits a
+  list. A write bumps the counter and **drops** the writing process's entry instead of seeding it (a seed could race
+  another write). The start-up upgrade passes the mailbox address through `ManagedScriptStore.write`.
+- **Denied audit only while the grant holds:** `refusedInSharedMailbox` reads the session, which checks the delegation
+  grant again; with the grant gone nothing is written into the shared mailbox's account log (still 403).
+- **Errors:** a sender on Blocked senders is 409 `sender_blocked`, distinct from 409 `settings_changed`; the junk
+  lists are validated with `safeParse` (no entry in an error or a log).
+- **No Sieve state from the server:** if a read comes back without a state, the write falls back to re-reading the
+  script and comparing a hash of its text right before writing (version `content-sha256:…`) instead of refusing every
+  save.
+- **Own Sent mail by folder is accepted as designed** (maintainer decision 3): a message loads its images by itself
+  whenever any of its folders is the open mailbox's Sent, including Sent copies saved there by other mail apps and
+  mail a full-access delegate moves into a shared mailbox's Sent folder. Either way the person (or someone with full
+  access) put it there, and the fetch still goes through the proxy.

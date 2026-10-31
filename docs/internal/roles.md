@@ -1,6 +1,6 @@
 # Roles and permissions
 
-Last updated: 2026-10-31 (password-first sign-in and password-only step-up, ADR-0028, matrix unchanged; webmail sender name route; names edited through the profile rule; matrix unchanged; 2026-10-30: mailbox delegation, ADR-0026: mailboxes shared with the person in the webmail; console routes and RBAC harness rows; `delegation.manage.any` for User Administrators with guard rail 8; data export and account deletion, ADR-0025; staff support access / act-as, ADR-0023; profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
+Last updated: 2026-10-31 (delegates can't change a shared mailbox's Safe senders, ADR-0027, matrix unchanged; password-first sign-in and password-only step-up, ADR-0028, matrix unchanged; webmail sender name route; names edited through the profile rule; matrix unchanged; 2026-10-30: mailbox delegation, ADR-0026: mailboxes shared with the person in the webmail; console routes and RBAC harness rows; `delegation.manage.any` for User Administrators with guard rail 8; data export and account deletion, ADR-0025; staff support access / act-as, ADR-0023; profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
 
 **Source of truth: `packages/shared/src/rbac`.** That code is canonical: the permission list, the role → permission matrix, critical-permission flags and guard rails. The UI (what to show), the API (what to allow) and the RBAC harness (`npm run test:rbac`) all derive from it. This document explains the matrix for people. If the two disagree, the code wins, and this file is updated in the same change (rule 35).
 
@@ -342,7 +342,10 @@ matrix. A webmail session lists and opens what its own mailboxes' people hold (`
 audited in the person's own account; act-as on the console session behind a handoff-born session is a **403**). While
 a delegated mailbox is active, only routes marked `delegated: "full_access"` (reads, downloads, the image proxy) act on
 it; sending, drafts, uploads, identities, settings, contacts and export answer **403** `own_mailbox_only`. RBAC harness:
-the new route is `webmail`-guarded (401 to every console persona).
+the new route is `webmail`-guarded (401 to every console persona). A delegate can't change a shared mailbox's Safe
+senders either (ADR-0027 §8): `POST`/`DELETE /api/webmail/settings/junk/safe` answer **403** `own_mailbox_only` in its
+tab, audited `denied` with the person as actor; images there still match that mailbox's own list. No matrix change (a
+webmail session acts as its mailbox); both routes are `webmail`-guarded in the harness.
 
 ## What each role sees (navigation)
 

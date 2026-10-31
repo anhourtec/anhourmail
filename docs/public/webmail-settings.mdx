@@ -41,9 +41,11 @@ because they change how your mail is handled. Your photo is saved as soon as you
   load**. Images always come through our privacy proxy, so senders never see your IP address, and tracking pixels are
   always removed. See
   [Remote images are blocked until you load them](/docs/webmail#remote-images-are-blocked-until-you-load-them).
-- **Senders whose images always load:** how many senders you chose **Always load from this sender** for (up to
-  <Value of="remoteImageSenders" />
-  ). Only a private fingerprint of each address is kept, so they can't be listed; **Forget all** clears them.
+- **Safe senders:** images from your Safe senders always load (when we can confirm the message comes from them).
+  **Manage them in Junk and blocked senders** takes you there.
+- **Senders saved earlier:** shows only if you chose **Always for** a sender before Safe senders loaded images: how
+  many there are (only a private fingerprint of each address was kept, so they can't be listed). Their images still
+  load; **Forget them** clears them.
 - Read receipts are never sent.
 
 ## Writing
@@ -87,7 +89,10 @@ forgets the address; to forward somewhere else, remove it and start again.
 ## Junk and blocked senders
 
 - **Blocked senders:** mail from these addresses or whole domains (type `example.com`) goes straight to Junk.
-- **Safe senders:** mail from these addresses or domains is never moved to Junk by your rules.
+- **Safe senders:** mail from these addresses or domains is never moved to Junk, and their images load (only when we
+  can confirm the message really comes from them). **Always for** on a message's image note adds a sender here.
+  Domains match exactly: `example.com` doesn't include `news.example.com`. Each list holds up to
+  <Value of="senderListEntries" /> entries.
 - **Only trust my contacts and safe senders:** everything else goes to Junk. Check your Junk folder now and then if
   you turn this on.
 

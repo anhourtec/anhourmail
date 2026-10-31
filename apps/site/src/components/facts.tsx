@@ -51,6 +51,7 @@ import {
   WEBMAIL_SIGNATURES,
 } from "@anhourmail/shared";
 import { AVATAR } from "@anhourmail/shared/profile";
+import { MAX_SENDER_ENTRIES } from "@anhourmail/shared/senders";
 
 import { CopyButton } from "./copy-button";
 
@@ -139,6 +140,8 @@ const VALUES = {
   remoteImageSize: `${String(REMOTE_IMAGES.maxMb)} MB`,
   remoteImagesPerMessage: String(REMOTE_IMAGES.perMessage),
   remoteImageSenders: String(REMOTE_IMAGES.maxSenders),
+  // Blocked and Safe senders in webmail settings, each (packages/shared/src/senders.ts)
+  senderListEntries: String(MAX_SENDER_ENTRIES),
   bulkAddOnName: ADDONS[BULK_MAIL.addOnId].name,
   bulkAddOnStatus: ADDONS[BULK_MAIL.addOnId].status === "planned" ? "coming later" : "available now",
   bulkAddOnPlans: ADDONS[BULK_MAIL.addOnId].requires.map((id) => PLANS[id].name).join(" and "),

@@ -1,6 +1,6 @@
 # Audit
 
-Last updated: 2026-10-31 (password-first sign-in, ADR-0028: `auth.second_step_started`, `password+passkey`, password-only step-up; accepted exceptions: queue-only data migrations 0031/0032 and the bootstrap's file storage cleanup; names as one source: `account.profile_changed` `name`, `via: webmail`; `identity.changed` retired; 2026-10-30: `platform.mail_rules_upgraded` for the managed-script upgrade; mailbox delegation, ADR-0026: `delegation.sent_as`, `delegation.sent_on_behalf`, `delegation.send_failed`, `delegation.send_cancelled` and `delegation.tagged_copy_left` for sending from a delegated mailbox, slice 13; `delegation.mailbox_opened` for opening a delegated mailbox in the webmail; `delegation.granted` / `delegation.revoked` per change, `mailbox.converted_to_shared`, `MutationOutcome.also`; `account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
+Last updated: 2026-10-31 (`junk_rules.changed` meta `via`, `change`, `kind` and the shared-mailbox refusal, ADR-0027; password-first sign-in, ADR-0028: `auth.second_step_started`, `password+passkey`, password-only step-up; accepted exceptions: queue-only data migrations 0031/0032 and the bootstrap's file storage cleanup; names as one source: `account.profile_changed` `name`, `via: webmail`; `identity.changed` retired; 2026-10-30: `platform.mail_rules_upgraded` for the managed-script upgrade; mailbox delegation, ADR-0026: `delegation.sent_as`, `delegation.sent_on_behalf`, `delegation.send_failed`, `delegation.send_cancelled` and `delegation.tagged_copy_left` for sending from a delegated mailbox, slice 13; `delegation.mailbox_opened` for opening a delegated mailbox in the webmail; `delegation.granted` / `delegation.revoked` per change, `mailbox.converted_to_shared`, `MutationOutcome.also`; `account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
 
 Every meaningful action is recorded, tamper-evident, searchable and visible to the right people. Audit is a core module, not a logging side effect.
 
@@ -245,6 +245,14 @@ log when they belong to none), so its admins see it. A User Administrator editin
 (`forbidden`); an admin editing someone who also belongs to another account is `denied` (`other_account`); staff
 acting as someone are `denied` (`act_as`). From the webmail, a sender name an admin set is `denied` `admin_set`, a
 person also in another account `other_account` and a mailbox whose person left its account `not_member`.
+
+Webmail junk rules (05-webmail.md "Settings", ADR-0027 §7), in the mailbox's account as a `system` actor named by the
+mailbox address, target = the mailbox: `junk_rules.changed` with counts only — `blocked`, `safe`, `trustedOnly` — and
+`via`: `settings` (a save of the whole lists in Settings) or `message` ("Always for <sender>" / "Stop loading" from a
+message, plus `change`: `added` | `removed` and `kind`: `address` | `domain`). Never an address or a domain (rule 48).
+The script lives on the mail server, so these are written right after a successful write (a failed audit is logged at
+error level). Tried in a tab of a mailbox shared with the person, it is `denied` `own_mailbox_only` (meta
+`via: message`), actor = the person named by the mailbox they signed in with, in the shared mailbox's account.
 
 Webmail signatures (05-webmail.md "Signatures"), in the mailbox's account as a `system` actor named by the mailbox
 address, target = the mailbox: `webmail.signature_added` (meta `signature` id, `bytes` of HTML, `images`, `signatures`

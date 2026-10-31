@@ -312,20 +312,31 @@ shown in the message, so the sender's server sees our request instead of you: ne
 your cookies or the page you're on.
 
 - When we can confirm who sent the message, **Load images** asks how: **Just this once**, or **Always for** the
-  sender's address, which loads their images by themselves from then on. Press Escape to change your mind.
-  After the images load, **Stop loading from this sender** undoes "always" (and **Always load from this sender**
-  remembers a sender you loaded once).
+  sender's address. **Always for** adds the address to your **Safe senders** (Settings → Junk and blocked senders),
+  so their images load by themselves from then on and their mail isn't moved to Junk. Press Escape to change your
+  mind. After loading once, **Always load from this sender** does the same.
+- Images from your **Safe senders** load by themselves whichever **Remote images** setting you chose, but only when
+  we can confirm the message really comes from them. A Safe senders entry can be an address or a whole domain
+  (`example.com`, which doesn't include `news.example.com`).
+- **Stop loading from this sender** removes the sender from Safe senders, after asking. If they're there as part of a
+  whole domain, it says so and removes the domain.
 - When we can't confirm the message really comes from the sender's domain (it didn't pass the domain's sender
   checks), **Load images** loads them this once and the note says so: we'll ask again next time, because a message
-  that only pretends to be from someone mustn't be able to tell when you open it.
-- Mail you sent yourself (in your **Sent** folder, for example a reply quoting someone's newsletter) keeps its images
-  blocked too. **Load images** loads them this once, with no question about remembering a sender.
+  that only pretends to be from someone mustn't be able to tell when you open it. That's true even if the address it
+  shows is on your Safe senders.
+- Mail you sent yourself (in your **Sent** folder, for example a reply quoting someone's newsletter) loads its images
+  by itself, through the same proxy, with no question about the sender. A message in your inbox that only shows your
+  own address isn't treated as yours.
 - Mail sent to you from another mailbox on AnhourMail, and our own messages to you, count as confirmed when they were
   sent through our servers by the account that owns the From address. A forwarded copy only counts if the original
   did.
 - In **Settings → Reading → Remote images** you can also load images from people in your contacts, or always.
-- Images load by themselves for a remembered sender or a contact only when the message really comes from that
-  sender's domain. A message that only pretends to be from them asks first.
+- Images load by themselves for a Safe sender or a contact only when the message really comes from that sender's
+  domain. A message that only pretends to be from them asks first.
+- In a mailbox shared with you, images from that mailbox's Safe senders load; you can load others just this once, but
+  only the mailbox's own sign-in can change its Safe senders.
+- Senders you chose **Always for** before Safe senders loaded images still load. On one of their messages you can
+  **Add** the sender **to Safe senders** or **Stop loading from this sender**.
 - Each image can be up to <Value of="remoteImageSize" />, and up to <Value of="remoteImagesPerMessage" /> images load
   per message. Pictures in other formats (such as SVG) and images used as backgrounds stay blocked.
 - Loading an image still tells the sender that _someone_ opened the message through our proxy. If that matters, leave

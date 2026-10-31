@@ -1,6 +1,6 @@
 # 07 — Security
 
-Last updated: 2026-10-31 ("Webmail first view on the device and server timing"; "Sign-in factors": password first, passkeys only the second step, step-up by password, ADR-0028; "App passwords": no file storage on customer mailboxes; "Forwarding guard"; "Authentication results in the webmail": the internal-mail marker; "Delegation": sending as and on behalf of a delegated mailbox, the tag never stored and its five-minute expiry, slice 13; opening delegated mailboxes in the webmail and the gate; delegation grants and Convert to shared mailbox, ADR-0026; leavers lose mailbox sign-in; data export and account deletion; staff support access; profile photos).
+Last updated: 2026-10-31 ("Image proxy": Safe senders and own Sent mail load without asking, checked on the server for a verified From, ADR-0027; "Webmail first view on the device and server timing"; "Sign-in factors": password first, passkeys only the second step, step-up by password, ADR-0028; "App passwords": no file storage on customer mailboxes; "Forwarding guard"; "Authentication results in the webmail": the internal-mail marker; "Delegation": sending as and on behalf of a delegated mailbox, the tag never stored and its five-minute expiry, slice 13; opening delegated mailboxes in the webmail and the gate; delegation grants and Convert to shared mailbox, ADR-0026; leavers lose mailbox sign-in; data export and account deletion; staff support access; profile photos).
 
 ## Threat model
 
@@ -829,17 +829,30 @@ the outcome (`reason`) or the byte count — never the address, its host or quer
 **Tracking pixels** (≤ 2×2) are still removed by the sanitiser and never get a link; CSS background images stay
 blocked.
 
-**Remembered senders** ("Always load from this sender") are stored in `webmail_preference.prefs.imageSenders` as
-HMAC-SHA256 keys of the lowercased From address under the server secret, per mailbox (22 characters, ≤ 500), never
-the address. The server sends a message's `senderKey`; the browser only compares and stores keys. A forged From
-header can make a remembered sender's images load: that reveals to the forger only that the message was opened
-through our proxy, never the reader's address. Audit records the changed preference keys only.
+**Who loads without asking** (ADR-0027, 2026-10-31): the mailbox's **Safe senders** (Settings → Junk and blocked
+senders, in the managed Sieve script on Stalwart) and the person's own Sent mail (decided by folder, never by From).
+The Safe senders check runs on the server, only for a **verified From** (`senderVerified`: exactly one From address
+and our own trusted results showing DMARC passing for its domain — a DKIM pass alone isn't enough, since an `l=`
+signature could be replayed with images appended (run-55) — or the internal-mail marker; the domain must already be
+ASCII and is compared exactly as the Safe senders match takes it), so a forged From matching a Safe sender asks like any other and can't learn the message
+was opened. The browser never receives the list: the view carries only `safeSender: { kind, value } | null`. The
+parsed lists live in each web process's memory (≤ 2,000 mailboxes, never in Redis or Postgres, never logged); Redis
+holds only a version number per mailbox (`webmail:rules:v:<accountId>:<address hash>`; cache and counter are keyed by
+account id and address so a reused account id inherits nothing). A read failure means "no match" (the reader
+asks), never "load". "Always for <sender>" / "Stop loading" send a message id, never an address: the server reads that
+message's From with the session's token and re-checks it is verified before changing the list; own mailbox only
+(403, audited as denied, in a shared mailbox's tab). Senders remembered by fingerprint before (HMAC-SHA256 keys of the
+lowercased From under the server secret in `webmail_preference.prefs.imageSenders`, sent as `senderKey` only for a
+verified From) still load read-only until they are dropped at launch; preference changes can only remove keys.
 
 **Tests:** `remote-image.test.ts` (every blocked range, mapped/NAT64/6to4 forms, URL refusals, redirects to internal
 addresses, the redirect limit, DNS rebinding, size caps, compression, SVG/HTML refusal, deadline, headers sent),
 `image-proxy.test.ts` (links: other session, other mailbox, altered, expired; route logic 401/404/410/502/429 and
-response headers; logs carry no address), `img/route.test.ts` (signed-out 401, cross-origin 403, tier),
-e2e `webmail-images.spec.ts`.
+response headers; logs carry no address; Safe senders looked up only for a verified From), `img/route.test.ts`
+(signed-out 401, cross-origin 403, tier), `safe-senders.test.ts` (cache, version, TTL fallback, failures, no entry in
+logs), `senders.test.ts` (matching, IDN), `settings.test.ts` (Safe senders routes: 404/400/409, audit without
+addresses, concurrent change), e2e `webmail-images.spec.ts` (a forged From with a Safe senders domain, delivered over
+SMTP, still asks).
 
 ## Profile photos
 

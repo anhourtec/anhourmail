@@ -1,6 +1,6 @@
 # 05 — Webmail
 
-Last updated: 2026-10-31 (first load: session, folders and the opened view's first window in one answer, streamed inside the page for the person's own mailbox, `GET /api/webmail/bootstrap` otherwise; this browser's copy of the first view painted at once; `Server-Timing` on the webmail API; customer mailboxes have no file storage; remote images: the person's own mail in Sent loads once with no unverified line or remember choice; sender name = the one source in the control plane, identities renamed to it; mailboxes shared with you: no "Shared with you" list or in-place switch in the UI — they open only with Open another mailbox, in a tab named after the mailbox, with Your mailbox in its account menu; no banner; a session left on a shared mailbox goes back to the own one; the account menu tidied (maintainer decision); forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
+Last updated: 2026-10-31 (remote images, ADR-0027: Safe senders load their images when the From is verified, in every Reading mode, checked on the server with a per-process cache and a Redis rules version; "Always for" / "Stop loading" change Safe senders from the message; the person's own Sent mail loads by itself; old fingerprints read-only; managed-script writes are compare-and-swap; first load: session, folders and the opened view's first window in one answer, streamed inside the page for the person's own mailbox, `GET /api/webmail/bootstrap` otherwise; this browser's copy of the first view painted at once; `Server-Timing` on the webmail API; customer mailboxes have no file storage; remote images: the person's own mail in Sent loads once with no unverified line or remember choice; sender name = the one source in the control plane, identities renamed to it; mailboxes shared with you: no "Shared with you" list or in-place switch in the UI — they open only with Open another mailbox, in a tab named after the mailbox, with Your mailbox in its account menu; no banner; a session left on a shared mailbox goes back to the own one; the account menu tidied (maintainer decision); forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
 notifications; quoted replies; compose image placeholders; first-sign-in password step; sign-in links not pre-filled).
 
 **Status (2026-10-22): slice 1 is built** — webmail sign-in (OAuth code flow + PKCE, tokens sealed server-side), the
@@ -242,9 +242,12 @@ keywords (`settings/sections.ts`), so "vacation", "spam" or "24-hour" still find
 - **Defaults** are the current behaviour, so most people never open settings: comfortable, right pane, 2 preview
   lines, grouped by conversation, mark read when opened, open the next message after a move, Reply, 10 s undo,
   English (Canada) dates, the device's time zone, shortcuts on, start in Inbox.
-- **Remote images (2026-10-29):** Reading → Privacy offers **Remote images: Always ask / Load from contacts / Always
-  load** (`remoteImages`, default ask) and **Senders whose images always load** with a count and **Forget all**
-  (`imageSenders`: keyed hashes, so the list can't be shown as addresses). See "Remote images" below.
+- **Remote images (2026-10-29; ADR-0027 2026-10-31):** Reading → Privacy offers **Remote images: Always ask / Load
+  from contacts / Always load** (`remoteImages`, default ask) and a line "Images from your Safe senders always load.
+  Manage them in Junk and blocked senders" (a link to that section). Senders remembered by fingerprint before then
+  (`imageSenders`, keyed hashes) show as "N senders saved before Safe senders loaded images" with **Forget them**, only
+  while there are any. Junk and blocked senders → Safe senders: "Mail from these addresses or domains is never moved
+  to Junk, and their images load." See "Remote images" below.
 - **Not offered (no real behaviour yet), recorded rather than shown as placeholders:** read receipts — Stalwart v0.16.27 doesn't advertise JMAP MDN, and the webmail never sends them (stated);
   "basic formatted" messages — superseded: the composer writes rich text by default (2026-10-24); "empty Deleted after N days" — JMAP
   doesn't expose when a message was moved to Trash, so a correct per-person policy needs the worker-side
@@ -374,9 +377,31 @@ so two first requests can't both pass the cap. Stalwart's `maxNumberRedirects` i
 | `PATCH · DELETE /api/webmail/settings/signatures/:id`  | rename / rewrite · delete (a default it was becomes none)                     | `write`                                | `webmail.signature_changed` · `webmail.signature_removed` |
 | `PUT /api/webmail/settings/signatures/defaults`        | default for new messages, default for replies and forwards (null = none)      | `write`                                | `webmail.signature_defaults_changed` (flags)              |
 | `PUT /api/webmail/settings/vacation`                   | automatic replies                                                             | `write`                                | `vacation.changed` (flags)                                |
-| `PUT /api/webmail/settings/junk`                       | blocked / safe senders, trusted-only                                          | `write`                                | `junk_rules.changed` (counts)                             |
+| `PUT /api/webmail/settings/junk`                       | blocked / safe senders, trusted-only (409 if the script changed meanwhile)    | `write`                                | `junk_rules.changed` (counts, `via: settings`)            |
+| `POST · DELETE /api/webmail/settings/junk/safe`        | `{ emailId }`: add that message's verified From to Safe senders · remove it   | `write`                                | `junk_rules.changed` (counts, `via`, `change`, `kind`)    |
 | `POST · PUT · DELETE /api/webmail/settings/forwarding` | ask to confirm · on/off + keep a copy · remove                                | `forwardingVerify` · `write` · `write` | `forwarding.verification_sent` · `forwarding.changed`     |
 | `POST /api/webmail/forwarding/confirm`                 | the target confirms (public, token in the body)                               | `publicForm`                           | `forwarding.confirmed`                                    |
+
+**Writes are compare-and-swap (ADR-0027 §4).** Settings saves and the Safe senders routes write the managed script
+on the Sieve state of the read they were based on (JMAP `ifInState`, honoured by `SieveScript/set` on the pinned
+v0.16.27 — verified in `webmail-settings.int.test.ts`; "no script" is an expectation too): a change saved meanwhile
+in another window makes the save answer 409 `settings_changed` ("Your settings changed in another window. Try
+again.") instead of being lost. The Safe senders routes apply their one-entry change again on what is there once
+before answering 409. If the mail server ever answers a read without a Sieve state, the write instead re-reads the
+script and compares a hash of its text right before writing (version `content-sha256:…`). Every write then bumps the
+mailbox's rules version (`rulesWritten`, see "Remote images").
+
+**Safe senders from a message.** `POST`/`DELETE /api/webmail/settings/junk/safe` take `{ emailId }`, never an
+address: the BFF reads that message's From with the session's token (`ownMessageSender`), re-checks it is verified
+(`sender-check.ts`, the reader's own check), then adds the address (a no-op when an entry already covers it) or
+removes whichever entry it matched (address or domain). 404 for a message the session can't see; 400 for an
+unverified From ("Images from this sender can't be remembered because we couldn't confirm who sent it."), a full list
+(300: "Your Safe senders list is full. Remove some entries in Settings first.") or a wrong account pin; 409
+`sender_blocked` when the address is on Blocked senders ("<address> is on your blocked list. Remove it there
+first."). The address added is the From exactly as verified (`fromAddress`: one From only, ASCII domain, A–Z
+lower-cased, nothing else mapped). Own mailbox only: in a shared mailbox's tab the delegation gate answers 403
+`own_mailbox_only` and the route's `onSharedRefusal` hook audits the refusal (`denied`, the person as actor, in the
+shared mailbox's account) — only while the delegation grant still holds (re-checked), else nothing is written.
 
 Audit entries are written in the mailbox's own account (its admins see them) as a `system` actor named by the
 mailbox address; meta never holds message text, signatures or list entries — target addresses are masked. The
@@ -895,7 +920,7 @@ token; the browser never does (rule 21).
 
 - Server-side sanitising (allow-list sanitizer; HourMail's DOMPurify config is the starting point, hardened per `research/legacy-audit.md`) plus a client-side defence in depth.
 - Message HTML renders in an `<iframe sandbox>` **without `allow-scripts` and without `allow-same-origin`**, `srcdoc`, with its own CSP: `default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none'` (the frame never loads an image by URL, not even from the proxy: loaded images arrive as `data:` URLs). Links open via `target=_blank rel=noopener noreferrer` through a click interstitial for lookalike domains.
-- **Remote images are blocked by default.** "Load images" fetches them through our image proxy (`POST /api/webmail/img` with a signed image link): no cookies, no referrer, no client address, a size cap, and content checks. Senders never see the user's IP. The choice can be remembered per sender. Details: "Remote images" below and `07-security.md` "Image proxy (SSRF)".
+- **Remote images are blocked by default.** "Load images" fetches them through our image proxy (`POST /api/webmail/img` with a signed image link): no cookies, no referrer, no client address, a size cap, and content checks. Senders never see the user's IP. Safe senders (with a verified From) and the person's own Sent mail load by themselves. Details: "Remote images" below and `07-security.md` "Image proxy (SSRF)".
 
 ### Remote images
 
@@ -906,7 +931,7 @@ Built 2026-10-29. `server/webmail/{sanitize,image-proxy,remote-image}.ts`, `app/
   `linkingSanitizer`: every remote `<img>` (http, https, protocol-relative) becomes a placeholder with a signed
   **image link** in `data-am-img` and no address; at most `REMOTE_IMAGES.perMessage` (100) per message. Trackers
   (≤ 2×2) are still dropped and never linked; CSS background images stay blocked (counted, not loadable). The view
-  carries `loadableImages` and `senderKey`. The print view keeps images blocked.
+  carries `loadableImages`, `senderKey` and `safeSender`. The print view keeps images blocked.
 - **Why sign when serving, not a sign endpoint:** the proxy can only ever fetch addresses that were in a message this
   session opened, for the mailbox it showed, for an hour; a sign endpoint would let any session make us fetch any
   address. The link goes in a POST body so no address lands in access logs.
@@ -914,36 +939,81 @@ Built 2026-10-29. `server/webmail/{sanitize,image-proxy,remote-image}.ts`, `app/
   `data:` URLs (raster types only) and replace the placeholders in the frame document (one re-render at the end).
   An expired link (410) makes the reader load the message again for fresh links, once. Images that fail stay
   placeholders and the notice says how many.
-- **Without asking:** `remoteImages` `always`; `contacts` when the From address is on a contact card (the reader's
-  known-addresses set); or a remembered sender (`senderKey` in `imageSenders`). For a verified sender not yet
-  remembered, "Load images" opens an inline choice in the notice, "Just this once" / "Always for <address>" (focus
-  moves to the first; Escape closes it and returns focus); "Always" remembers and loads. Without a sender key it
-  loads at once and the notice says why it isn't remembered (below). After loading, "Stop loading from this sender" /
-  "Always load from this sender" toggles it. The decision is `rememberOffer` in `remote-images.ts`; "Forget all" in
-  Reading settings. **The person's own mail** (2026-10-31): a message in the open mailbox's Sent folder (by its
-  `mailboxIds` and the folder role `sent`, never by the From address, which anyone can forge into an inbox; in a
-  shared mailbox's tab, that mailbox's own Sent) stays blocked until "Load images" too, but loads once with no choice
-  and no unverified line: there is no sender to confirm or remember (`own` on `MessageContent`, from the reader). Its
-  Sent copy has no sender key, as the internal-mail marker is added only on local delivery. Both `contacts` and remembered
-  senders need a **verified From** (`senderVerified` in `image-proxy.ts`): our own trusted Authentication-Results show
-  DMARC passing for the From domain or DKIM passing for it or a parent domain, **or** our own server's internal-mail
-  marker vouches that the From address submitted the message here (`isInternalMail` in `original.ts`; ADR-0019
-  update "internal mail", 2026-10-30): mail between our users and our system mail, which never passes the inbound
-  checks and so has no results of ours. The marker is added only by the submission script, for mail whose recipients
-  are all local, bound to the From and Message-ID with `SENDER_DELEGATION_KEY`, and removed from everything arriving
-  from outside; the reader also refuses it on anything showing port 25 (results or `Received-SPF` headers, our
-  non-LMTP `Received`). A message with neither
-  is not verified: a copy forwarded by a mailbox's redirect rule arrives with no results whatever its From says
-  (security-audit run-32), and has no marker unless the original was internal mail (whose From is ours). Otherwise the
-  server sends no sender key and the reader asks, so a forged From can't learn that the message was opened. Attached
-  messages are never verified.
+- **Without asking (ADR-0027, 2026-10-31):** the person's **own Sent mail** in every mode; a **Safe sender** with a
+  verified From in every mode; every message with `remoteImages` `always`; with `contacts`, a verified From on a
+  contact card (the reader's known-addresses set); and a sender remembered by fingerprint before Safe senders loaded
+  images (`senderKey` in `imageSenders`, read-only). The decisions are `loadsWithoutAsking` / `rememberOffer` in
+  `remote-images.ts`.
+  - **Safe senders = one list, two effects.** An entry of the mailbox's Safe senders (Settings → Junk and blocked
+    senders, the managed script's `junk.safe`) keeps that sender's mail out of Junk (Sieve, at delivery, as before)
+    **and** loads their images through the proxy — the latter only for a **verified From**. Matching is
+    `matchSafeSender` in `@anhourmail/shared/senders` (with `senderEntry`): the whole address exactly, or the From's
+    domain exactly (no subdomains, the same as the Sieve `address :domain :is` test, asserted against the compiled
+    script in `sieve.test.ts`). Entries are lower-cased and a typed internationalised domain is stored as its A-label;
+    the From is taken by `fromAddress` — only if its domain is already plain ASCII, with A–Z lower-cased and nothing
+    else mapped (no fullwidth letters, ideographic full stop or Kelvin sign) — the same form `senderVerified` checks,
+    so the domain matched is the domain verified. Entries refuse control characters and direction or zero-width
+    marks. Note the deliberate asymmetry: the Junk skip doesn't need a
+    verified From (unchanged), loading images does, because loading is a signal to the sender.
+  - **Checked on the server, never in the browser.** The message route (`messages/:emailId`), only when the view has
+    loadable images and a verified From, looks the From up in the open mailbox's list (`withImageSender` →
+    `safe-senders.ts`) and sets `safeSender: { kind, value } | null`. The mailbox is the session's active one, or in a
+    shared mailbox's tab the one the delegation gate admitted (its own list, read with management credentials). The
+    browser never receives the list.
+  - **Cache.** Per web process, ≤ 2,000 mailboxes (LRU) of parsed sets; never written to Redis or Postgres, never
+    logged. Keyed by the mail-server account id and the mailbox address, so an id the mail server reuses for another
+    mailbox never inherits a list. Freshness: a Redis counter `webmail:rules:v:<accountId>:<address hash>` (a number
+    only), bumped by every managed-script
+    write (`saveMailRules` — settings, the Safe senders routes, the contacts refresh — and the start-up format
+    upgrade); a cached list is used while the counter is unchanged (a missing counter is created at a random start, so
+    a Redis flush can't make an old stamp current), and re-read after 10 minutes regardless. The writing process
+    drops its own entry (the next view reads what was written; seeding it could race another write). Redis down: a cached list is used for 60 s. The lookup has a 300 ms budget; a read
+    that fails or times out answers "no match" (the notice asks as for anyone else) and logs `safe senders
+unavailable` with the error's name only. No script or one that isn't ours = empty list; an inactive script still
+    applies to images (it is the person's stated trust).
+  - **The notice.** For a verified sender not on Safe senders, "Load images" opens an inline choice, "Just this once"
+    / "Always for <address>" (focus moves to the first; Escape closes it and returns focus). "Always" loads at once and
+    calls `POST …/junk/safe` in the background (optimistic; on failure the error toast shows, the images stay loaded
+    and the offer goes back); the loaded notice then says "Images from <address> will load, and their mail won't go
+    to Junk." After "Just this once", "Always load from this sender" does the same. For a Safe sender, "Stop loading
+    from this sender" asks first — "Stop loading images from <address>? This also removes it from Safe senders." or,
+    for a domain entry, "Stop loading images from anyone at <domain>? This also removes <domain> from Safe senders."
+    — then calls `DELETE …/junk/safe`. In a mailbox shared with the person, its Safe senders aren't theirs to change:
+    "Load images" just loads (no "Always for", no "Stop loading"). Without a verified From it loads at once and the
+    notice says why it isn't remembered (below).
+  - **Old fingerprints** (`imageSenders`, ADR-0027 §9): still matched (read-only) until they are dropped at launch;
+    never converted into Safe senders (that would also exempt the sender from Junk). After a fingerprint match the
+    notice offers "Add <address> to Safe senders" (which also forgets the fingerprint) and "Stop loading from this
+    sender" (forgets it). A preferences change can only remove keys, never add one (`WebmailSettingsService`).
+  - **The person's own mail** (2026-10-31): a message in the open mailbox's Sent folder (by its `mailboxIds` and the
+    folder role `sent`, any of them, never by the From address, which anyone can forge into an inbox; in a shared
+    mailbox's tab, that mailbox's own Sent) loads its images by itself through the proxy in every mode, with no
+    choice and no unverified line (`own` on `MessageContent`, from the reader). The loaded notice still says they
+    came through the proxy. A copy of the same message in Inbox only (a message to oneself) follows the normal rules.
+    Accepted (ADR-0027 update): this includes Sent copies saved by other mail apps and mail a full-access delegate
+    moves into a shared mailbox's Sent folder.
+  - **Verified From** (`senderVerified` in `image-proxy.ts`, one place for the message view and the Safe senders
+    routes: `sender-check.ts`; it decides every way images load without asking): the message has exactly one From
+    address, and our own trusted Authentication-Results show **DMARC passing for the From domain** (a DKIM pass alone
+    isn't enough since 2026-10-31: a signature over part of the body, `l=`, could be replayed with images appended —
+    security-audit run-55), **or** our own server's internal-mail marker vouches that the From address
+    submitted the message here (`isInternalMail` in `original.ts`; ADR-0019 update "internal mail", 2026-10-30): mail
+    between our users and our system mail, which never passes the inbound checks and so has no results of ours. The
+    marker is added only by the submission script, for mail whose recipients are all local, bound to the From and
+    Message-ID with `SENDER_DELEGATION_KEY`, and removed from everything arriving from outside; the reader also
+    refuses it on anything showing port 25 (results or `Received-SPF` headers, our non-LMTP `Received`). A message
+    with neither is not verified: a copy forwarded by a mailbox's redirect rule arrives with no results whatever its
+    From says (security-audit run-32), and has no marker unless the original was internal mail (whose From is ours).
+    Otherwise the server sends no sender key and no Safe senders match, and the reader asks, so a forged From can't
+    learn that the message was opened. Attached messages are never verified.
 - **Notice copy.** Blocked: "N remote images blocked · N trackers removed — Senders can't see when or where you
   opened this. Loading them goes through our privacy proxy, so the sender never sees your IP address." Loaded:
   "Images loaded through our privacy proxy — The sender can't see your IP address or your browser." Unverified
-  sender (no sender key, mode not `always`, not in Sent), in both states: "We can't confirm this message came from <domain>, so
+  sender (not verified, mode not `always`, not in Sent), in both states: "We can't confirm this message came from <domain>, so
   we'll ask again next time." (domain in mono; no protocol names in the UI).
 - **Limits** (`REMOTE_IMAGES` in `packages/shared/src/webmail.ts`, published): 5 MB per image, 100 per message,
-  3 redirects, 10 s, links valid 60 min, 500 remembered senders. Rate tier `webmailImage`.
+  3 redirects, 10 s, links valid 60 min; Safe senders hold up to 300 entries (`MAX_SENDER_ENTRIES`); the old
+  fingerprint cap (`maxSenders`, 500) goes with the fingerprints at launch. Rate tier `webmailImage`.
 - Print, forward and "view original" run through the same sanitiser and sandbox. Attachments download with `Content-Disposition: attachment` and are never rendered inline on the app origin (all three of HourMail's XSS paths are closed).
 - The app CSP is nonce-based with `'strict-dynamic'`, `connect-src 'self'`, `frame-src 'self'` (srcdoc), `object-src 'none'`, `base-uri 'none'`, and `Referrer-Policy: no-referrer`. There are no third-party scripts, fonts, analytics or error reporters (rule 29).
 

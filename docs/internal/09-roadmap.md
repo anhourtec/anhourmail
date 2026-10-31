@@ -1,6 +1,6 @@
 # 09 — Roadmap
 
-Last updated: 2026-10-31 (webmail first load: inside the page, IndexedDB first-view copy, `Server-Timing`; names as one source and the file-storage lockdown deployed at 6545a16; safe senders to load images and own Sent mail images, ADR-0027). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
+Last updated: 2026-10-31 (webmail first load: inside the page, IndexedDB first-view copy, `Server-Timing`; names as one source and the file-storage lockdown deployed at 6545a16; Safe senders load images and own Sent mail loads its images, ADR-0027 built). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
 
 ## Path to production (as of 2026-10-29)
 
@@ -103,7 +103,7 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
    archives built by the worker, mail streamed from the person's own webmail session, deletion with a 14-day grace
    period, own-login deletion), act-as (**built 2026-10-29**, ADR-0023: read-only support
    access, audited, visible to account admins), remote-image proxy, push sync in
-   the webmail (it polls every 30 s today), webmail settings part 2 (rules, templates; a person's own "Always load images from" list in Settings → Reading — addresses and domains they can see, add and remove, kept in the mailbox on the mail server, images loading only for a verified From; then an account-wide "Trusted image senders" list for Owners and User Admins, verified-only and audited — maintainer, 2026-10-31; no request-to-allow-list workflow), and the leftover open items
+   the webmail (it polls every 30 s today), webmail settings part 2 (rules, templates; senders whose images load are the mailbox's Safe senders — **built 2026-10-31**, ADR-0027: one list, verified From only, "Always for" adds to it, own Sent mail loads by itself, old fingerprints dropped at launch; next an account-wide safe-senders list for Owners and User Admins, verified-only for images and audited — maintainer, 2026-10-31; no request-to-allow-list workflow), and the leftover open items
    in the handoff (alias admin-lock, daily alias creation cap, provisioning-queue lock token, unknown-recipient
    rejection at SMTP time).
 9. **Billing and migration** (Phase 5): Stripe Checkout/Portal/Tax, webhooks, plan changes and the account
