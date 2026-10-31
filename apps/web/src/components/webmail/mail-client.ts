@@ -5,12 +5,34 @@ import type { SignatureDefaults, SignatureSet } from "@anhourmail/shared/signatu
 import type { WebmailPreferences } from "@anhourmail/shared/webmail";
 
 import type { BookView, ContactInput, ContactView } from "@/server/webmail/contacts";
+import type { Bootstrap, BootstrapInput } from "@/server/webmail/bootstrap";
 import type { DelegatedSender, MailboxList, SendResult } from "@/server/webmail/service";
 import type { Junk, Vacation } from "@/server/webmail/sieve";
 import type { SenderNameView, SettingsOverview, SignatureResult } from "@/server/webmail/settings";
 import type { Address, MessageView } from "@/server/webmail/view";
 
+import {
+  type Condition,
+  countCall,
+  FOLDER_PROPERTIES,
+  type Folder,
+  type Grouping,
+  type ListFilter,
+  listFilter,
+  type ListRow,
+  PAGE_SIZE,
+  pageCalls,
+  pageRows,
+  PINNED_LIMIT,
+  type SearchQuery,
+  SUMMARY,
+  type Summary,
+  type SyncState,
+  type View,
+  bootstrapUrl,
+} from "./list-query";
 import { isLoadedImageType } from "./remote-images";
+import { clearViewCache } from "./view-cache";
 
 /**
  * The webmail's data access in the browser. Everything goes to this origin's BFF (`/api/webmail/*`), which holds
@@ -19,40 +41,7 @@ import { isLoadedImageType } from "./remote-images";
  * mailbox switching use their own BFF endpoints (the proxy can't create or send mail).
  */
 
-export type Folder = {
-  id: string;
-  name: string;
-  role: string | null;
-  parentId: string | null;
-  sortOrder: number;
-  totalEmails: number;
-  unreadEmails: number;
-  totalThreads: number;
-  unreadThreads: number;
-};
-
-export type Summary = {
-  id: string;
-  threadId: string;
-  mailboxIds: Record<string, boolean>;
-  keywords: Record<string, boolean>;
-  from: Address[] | null;
-  to: Address[] | null;
-  cc?: Address[] | null;
-  subject: string | null;
-  receivedAt: string;
-  preview: string;
-  hasAttachment: boolean;
-};
-
-export type ListRow = Summary & {
-  threadSize: number;
-  /** Attachment names and types (only fetched when the list shows attachment chips). */
-  attachments?: { name: string | null; type: string }[];
-};
-
-/** How the list groups mail: whole conversations (one row each) or every message on its own row. */
-export type Grouping = WebmailPreferences["grouping"];
+export type { Folder, Grouping, ListFilter, ListRow, SearchQuery, Summary, SyncState, View };
 export type Identity = { id: string; name: string; email: string; signature?: string };
 export type { SenderNameView, SettingsOverview, SignatureResult };
 export type Attachment = { blobId: string; name: string; type: string; size: number };
@@ -71,9 +60,6 @@ export type DraftPayload = {
   attachments: Attachment[];
 };
 
-/** What the list shows: a folder, or "Priority" (flagged everywhere but Trash and Junk). */
-export type View = { kind: "folder"; id: string } | { kind: "priority" };
-
 export type ContactsData = {
   /** The account these contacts belong to: sent back with every change, refused if another mailbox is active. */
   accountId: string;
@@ -86,25 +72,6 @@ export type ContactsData = {
 /** The fields the contact form edits (the BFF validates and builds the card). */
 export type ContactFields = ContactInput;
 
-/** List narrowing from the filter menu and the search box. */
-export type ListFilter = {
-  unread?: boolean;
-  flagged?: boolean;
-  attachments?: boolean;
-  /** Parsed search (see `parseSearch`); searching covers every folder but Trash and Junk. */
-  search?: SearchQuery | null;
-};
-
-export type SearchQuery = {
-  text?: string;
-  from?: string;
-  to?: string;
-  subject?: string;
-  hasAttachment?: boolean;
-  unread?: boolean;
-  flagged?: boolean;
-};
-
 export class SignedOutError extends Error {
   override readonly name = "SignedOutError";
 }
@@ -115,42 +82,8 @@ export class RefusedError extends Error {
 }
 
 const USING = ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"];
-const SUMMARY = [
-  "threadId",
-  "mailboxIds",
-  "keywords",
-  "from",
-  "to",
-  "cc",
-  "subject",
-  "receivedAt",
-  "preview",
-  "hasAttachment",
-];
-export const PAGE_SIZE = 50;
-const PINNED_LIMIT = 50;
 
-type Condition = Record<string, unknown>;
-
-/** The JMAP filter for a view, narrowing and search. `hidden` = Trash and Junk ids. */
-export function listFilter(view: View, f: ListFilter, hidden: string[], opts: { pinned?: boolean } = {}): Condition {
-  const all: Condition[] = [];
-  const searching = f.search && Object.keys(f.search).length > 0;
-  if (view.kind === "folder" && (!searching || hidden.includes(view.id))) all.push({ inMailbox: view.id });
-  else if (hidden.length > 0) all.push({ inMailboxOtherThan: hidden });
-  if (view.kind === "priority") all.push({ hasKeyword: "$flagged" });
-  const s = f.search ?? {};
-  if (s.text) all.push({ text: s.text });
-  if (s.from) all.push({ from: s.from });
-  if (s.to) all.push({ to: s.to });
-  if (s.subject) all.push({ subject: s.subject });
-  if (f.attachments || s.hasAttachment) all.push({ hasAttachment: true });
-  if (f.unread || s.unread) all.push({ notKeyword: "$seen" });
-  if (f.flagged || s.flagged) all.push({ hasKeyword: "$flagged" });
-  if (opts.pinned === true) all.push({ hasKeyword: "$pinned" });
-  if (opts.pinned === false) all.push({ notKeyword: "$pinned" });
-  return all.length === 1 ? (all[0] ?? {}) : { operator: "AND", conditions: all };
-}
+export { listFilter, PAGE_SIZE };
 
 export type MailClient = ReturnType<typeof createMailClient>;
 
@@ -178,7 +111,9 @@ const PIN_QUERY = "shared";
 const OWN_PIN_HEADER = "X-Webmail-Own";
 const REFUSED = "x-webmail-refused";
 
-export type { DelegatedSender, MailboxList, SendResult };
+export type { Bootstrap, BootstrapInput, DelegatedSender, MailboxList, SendResult };
+export { bootstrapUrl };
+
 export type SharedMailbox = MailboxList["shared"][number];
 
 /** The browser's fetch, called plainly (browsers throw "Illegal invocation" when it is called with another `this`). */
@@ -229,6 +164,7 @@ async function api<T>(path: string, init: RequestInit = {}, go: typeof fetch = p
   if (res.status === 401) throw new SignedOutError("signed out");
   if (!res.ok) {
     // An administrator's new password not in use yet: the own password change says so (409 with its own code).
+    if (res.status === 409 && body?.error?.code === "mailbox_changed") throw new MailboxChangedError("mailbox changed");
     const pending = res.status === 409 && body?.error?.code === "password_change_pending";
     // Not available in a mailbox shared with the person (its own-mailbox-only routes), and a send whose outcome the
     // server couldn't confirm: both say what to do in their message.
@@ -245,8 +181,13 @@ async function api<T>(path: string, init: RequestInit = {}, go: typeof fetch = p
 
 const asState = (v: unknown): string => (typeof v === "string" ? v : "");
 
-/** Where automatic refresh is: the mail server's `Email` and `Mailbox` states after the last check. */
-export type SyncState = { email: string; mailbox: string };
+/**
+ * The session's active mailbox isn't the one this page shows (another tab switched it): nothing of it is shown or
+ * kept; the page reloads.
+ */
+export class MailboxChangedError extends Error {
+  override readonly name = "MailboxChangedError";
+}
 
 /** Thrown for a 404 that is the one "You don't have access to this mailbox" refusal (ADR-0026 §6). */
 export class MailboxRefusedError extends Error {
@@ -350,6 +291,8 @@ export function createMailClient(
       return res;
     });
   const bff = <T>(path: string, init: RequestInit = {}) => api<T>(path, init, net);
+  /** The first load, asked for once per client (`bootstrap`). */
+  let first: Promise<Bootstrap> | null = null;
 
   const jmap = new JmapClient({
     sessionUrl: `${origin}/api/webmail/session`,
@@ -439,46 +382,50 @@ export function createMailClient(
       };
     },
 
+    /**
+     * The first load in one request (`GET /api/webmail/bootstrap`): the session document (kept, so no session fetch
+     * follows), folders, sync states, the Priority count and the opened view's first window. `given` is the same answer
+     * streamed inside the page, used when it came (else the route is asked). Asked for once: later calls (React's
+     * development double effects) share the answer.
+     */
+    bootstrap(input: BootstrapInput, given?: PromiseLike<Bootstrap | null>): Promise<Bootstrap> {
+      first ??= (async () => {
+        const streamed = given ? await Promise.resolve(given).catch(() => null) : null;
+        const b = streamed ?? (await bff<Bootstrap>(bootstrapUrl(input, origin)));
+        // Only an answer for the mailbox this client shows is used: that address, and the person's own mailbox unless
+        // the client is scoped to a shared one. Anything else (the session switched meanwhile) is never shown or kept.
+        const account = b.session.primaryAccounts["urn:ietf:params:jmap:mail"] ?? "";
+        const personal = (b.session.accounts[account] as { isPersonal?: unknown } | undefined)?.isPersonal === true;
+        const want = input.expect ?? shared;
+        if ((want !== undefined && b.session.username.toLowerCase() !== want) || personal !== (shared === undefined)) {
+          throw new MailboxChangedError("another mailbox answered");
+        }
+        jmap.prime(b.session);
+        return b;
+      })();
+      return first;
+    },
+
+    /** The first load's answer, if it was asked for and arrived; null otherwise (never throws). */
+    async firstLoad(): Promise<Bootstrap | null> {
+      if (!first) return null;
+      try {
+        return await first;
+      } catch {
+        return null;
+      }
+    },
+
     async folders(): Promise<Folder[]> {
       const a = await accountId();
-      const res = await call([
-        [
-          "Mailbox/get",
-          {
-            accountId: a,
-            ids: null,
-            properties: [
-              "name",
-              "role",
-              "parentId",
-              "sortOrder",
-              "totalEmails",
-              "unreadEmails",
-              "totalThreads",
-              "unreadThreads",
-            ],
-          },
-          "m",
-        ],
-      ]);
+      const res = await call([["Mailbox/get", { accountId: a, ids: null, properties: FOLDER_PROPERTIES }, "m"]]);
       return (res.get("m")?.list ?? []) as Folder[];
     },
 
     /** How many flagged messages there are outside Trash and Junk ("Priority"). */
     async priorityCount(hidden: string[]): Promise<number> {
       const a = await accountId();
-      const res = await call([
-        [
-          "Email/query",
-          {
-            accountId: a,
-            filter: listFilter({ kind: "priority" }, {}, hidden),
-            limit: 0,
-            calculateTotal: true,
-          },
-          "q",
-        ],
-      ]);
+      const res = await call([countCall(a, listFilter({ kind: "priority" }, {}, hidden), "q")]);
       return Number(res.get("q")?.total ?? 0);
     },
 
@@ -490,44 +437,8 @@ export function createMailClient(
       opts: { attachments?: boolean } = {},
     ): Promise<{ total: number; rows: ListRow[] }> {
       const a = await accountId();
-      const properties = opts.attachments ? [...SUMMARY, "attachments"] : SUMMARY;
-      const res = await call([
-        [
-          "Email/query",
-          {
-            accountId: a,
-            filter,
-            sort: [{ property: "receivedAt", isAscending: false }],
-            collapseThreads: grouping === "conversations",
-            position,
-            limit,
-            calculateTotal: true,
-          },
-          "q",
-        ],
-        [
-          "Email/get",
-          {
-            accountId: a,
-            "#ids": { resultOf: "q", name: "Email/query", path: "/ids" },
-            properties,
-            ...(opts.attachments ? { bodyProperties: ["name", "type"] } : {}),
-          },
-          "g",
-        ],
-        ["Thread/get", { accountId: a, "#ids": { resultOf: "g", name: "Email/get", path: "/list/*/threadId" } }, "t"],
-      ]);
-      const ids = (res.get("q")?.ids ?? []) as string[];
-      const total = Number(res.get("q")?.total ?? ids.length);
-      const emails = new Map(((res.get("g")?.list ?? []) as Summary[]).map((e) => [e.id, e]));
-      const threads = new Map(
-        ((res.get("t")?.list ?? []) as { id: string; emailIds: string[] }[]).map((t) => [t.id, t.emailIds.length]),
-      );
-      const rows = ids
-        .map((id) => emails.get(id))
-        .filter((e): e is Summary => e !== undefined)
-        .map((e) => ({ ...e, threadSize: grouping === "messages" ? 1 : (threads.get(e.threadId) ?? 1) }));
-      return { total, rows };
+      const res = await call(pageCalls(a, filter, position, limit, { grouping, attachments: opts.attachments }));
+      return pageRows(res, grouping);
     },
 
     pinnedLimit: PINNED_LIMIT,
@@ -953,20 +864,24 @@ export function createMailClient(
       openMailbox(`${origin}/api/webmail/mailboxes/delegated`, { address, activate: false }),
     /** Signs another mailbox in and makes it active; reload the page on success (other requests stay held). */
     addMailbox: (address: string, password: string) =>
-      changeMailbox(() =>
-        api<{ active: string; activeShared: boolean; others: string[] }>(`${origin}/api/webmail/mailboxes`, {
-          method: "POST",
-          body: JSON.stringify({ address, password }),
-        }),
-      ),
+      changeMailbox(async () => {
+        const r = await api<{ active: string; activeShared: boolean; others: string[] }>(
+          `${origin}/api/webmail/mailboxes`,
+          { method: "POST", body: JSON.stringify({ address, password }) },
+        );
+        await clearViewCache();
+        return r;
+      }),
     /** Makes another signed-in mailbox active; reload the page on success (other requests stay held). */
     switchMailbox: (address: string) =>
-      changeMailbox(() =>
-        api<{ active: string; activeShared: boolean; others: string[] }>(`${origin}/api/webmail/mailboxes/active`, {
-          method: "PUT",
-          body: JSON.stringify({ address }),
-        }),
-      ),
+      changeMailbox(async () => {
+        const r = await api<{ active: string; activeShared: boolean; others: string[] }>(
+          `${origin}/api/webmail/mailboxes/active`,
+          { method: "PUT", body: JSON.stringify({ address }) },
+        );
+        await clearViewCache();
+        return r;
+      }),
 
     contacts: () => bff<ContactsData>(`${origin}/api/webmail/contacts`),
     createContact: (account: string, contact: ContactFields, book: "mine" | "other" = "mine") =>
@@ -1089,6 +1004,8 @@ export function createMailClient(
       }),
 
     async signOut(): Promise<void> {
+      // This browser's copy of the first view goes first, whatever the server answers.
+      await clearViewCache();
       await fetch(`${origin}/api/webmail/auth`, { method: "DELETE" });
     },
   };

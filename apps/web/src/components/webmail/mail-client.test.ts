@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createMailClient, RefusedError } from "./mail-client";
+import { createMailClient, MailboxChangedError, RefusedError } from "./mail-client";
 
 const ORIGIN = "http://mail.test";
 const SESSION = {
@@ -14,6 +14,9 @@ const SESSION = {
   primaryAccounts: { "urn:ietf:params:jmap:mail": "acc1" },
   capabilities: {},
 };
+
+/** The session document a first load carries: the person's own mailbox (`isPersonal`). */
+const BOOT_SESSION = { ...SESSION, accounts: { acc1: { name: SESSION.username, isPersonal: true } } };
 
 type Call = { method: string; path: string; answer: (res: Response) => void };
 
@@ -395,5 +398,181 @@ describe("a shared mailbox's tab", () => {
         own: "pat@example.test",
       });
     }
+  });
+});
+
+describe("the first load", () => {
+  let server: ReturnType<typeof fakeServer>;
+  beforeEach(() => {
+    server = fakeServer();
+    vi.stubGlobal("fetch", server.fetchFn);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const input = { start: "inbox", grouping: "conversations" as const, attachments: false };
+  const boot = () =>
+    Response.json({
+      data: {
+        session: BOOT_SESSION,
+        folders: [],
+        state: { email: "e1", mailbox: "m1" },
+        priorityCount: 0,
+        view: null,
+        list: null,
+        grouping: "conversations",
+        attachments: false,
+      },
+    });
+
+  it("is one request, asked for once, and its session document saves the session fetch", async () => {
+    const client = createMailClient(ORIGIN);
+    expect(await client.firstLoad()).toBeNull();
+    const a = client.bootstrap(input);
+    const b = client.bootstrap(input);
+    await settle();
+    expect(server.sent()).toEqual(["GET /api/webmail/bootstrap"]);
+    server.answer("/api/webmail/bootstrap", boot());
+    expect(await a).toBe(await b);
+    expect((await client.firstLoad())?.state).toEqual({ email: "e1", mailbox: "m1" });
+    const list = client.folders();
+    await settle();
+    // Straight to the proxy: no session request was made at all.
+    expect(server.sent()).toEqual(["POST /api/webmail/jmap"]);
+    expect(server.fetchFn.mock.calls.map(([u]) => new URL(u as string).pathname)).toEqual([
+      "/api/webmail/bootstrap",
+      "/api/webmail/jmap",
+    ]);
+    server.answer("/api/webmail/jmap", folders());
+    await expect(list).resolves.toEqual([]);
+  });
+
+  it("asks the route with the preferences and the tab's folder", async () => {
+    const client = createMailClient(ORIGIN);
+    void client.bootstrap({ start: "folder:F1", grouping: "messages", attachments: true, folder: "sent" });
+    await settle();
+    const [url] = server.fetchFn.mock.calls[0] ?? [];
+    expect(url).toBe(`${ORIGIN}/api/webmail/bootstrap?start=folder%3AF1&grouping=messages&chips=1&folder=sent`);
+  });
+
+  it("reports a failed first load as none (the app then loads step by step)", async () => {
+    const client = createMailClient(ORIGIN);
+    const a = client.bootstrap(input);
+    await settle();
+    server.answer("/api/webmail/bootstrap", new Response("{}", { status: 503 }));
+    await expect(a).rejects.toThrow("HTTP 503");
+    expect(await client.firstLoad()).toBeNull();
+  });
+
+  it("signs out without a browser store to clear", async () => {
+    const client = createMailClient(ORIGIN);
+    const out = client.signOut();
+    await settle();
+    expect(server.sent()).toEqual(["DELETE /api/webmail/auth"]);
+    server.answer("/api/webmail/auth", new Response(null, { status: 204 }));
+    await out;
+  });
+});
+
+describe("the first load streamed inside the page", () => {
+  let server: ReturnType<typeof fakeServer>;
+  beforeEach(() => {
+    server = fakeServer();
+    vi.stubGlobal("fetch", server.fetchFn);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  const input = { start: "inbox", grouping: "conversations" as const, attachments: false };
+  const streamed = {
+    session: BOOT_SESSION,
+    folders: [],
+    state: { email: "e2", mailbox: "m2" },
+    priorityCount: 1,
+    view: null,
+    list: null,
+    grouping: "conversations" as const,
+    attachments: false,
+  };
+
+  it("is used as it is: no request at all, and the session is primed from it", async () => {
+    const client = createMailClient(ORIGIN);
+    const b = await client.bootstrap(input, Promise.resolve(streamed));
+    expect(b.priorityCount).toBe(1);
+    expect(server.fetchFn).not.toHaveBeenCalled();
+    void client.folders();
+    await settle();
+    expect(server.sent()).toEqual(["POST /api/webmail/jmap"]);
+  });
+
+  it("falls back to the route when the page couldn't include it", async () => {
+    const client = createMailClient(ORIGIN);
+    const b = client.bootstrap(input, Promise.resolve(null));
+    await settle();
+    expect(server.sent()).toEqual(["GET /api/webmail/bootstrap"]);
+    server.answer("/api/webmail/bootstrap", Response.json({ data: streamed }));
+    expect((await b).state).toEqual({ email: "e2", mailbox: "m2" });
+  });
+});
+
+describe("a first load for another mailbox", () => {
+  let server: ReturnType<typeof fakeServer>;
+  beforeEach(() => {
+    server = fakeServer();
+    vi.stubGlobal("fetch", server.fetchFn);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  const answer = (session: unknown) => ({
+    session,
+    folders: [],
+    state: { email: "e", mailbox: "m" },
+    priorityCount: 0,
+    view: null,
+    list: null,
+    grouping: "conversations" as const,
+    attachments: false,
+  });
+  const input = { start: "inbox", grouping: "conversations" as const, attachments: false, expect: "pat@example.test" };
+
+  it("is refused before anything is primed: another address, or a shared mailbox in the person's own page", async () => {
+    const client = createMailClient(ORIGIN);
+    const other = { ...BOOT_SESSION, username: "sam@example.test" };
+    await expect(client.bootstrap(input, Promise.resolve(answer(other) as never))).rejects.toBeInstanceOf(
+      MailboxChangedError,
+    );
+    expect(await client.firstLoad()).toBeNull();
+    const shared = { ...BOOT_SESSION, accounts: { acc1: { isPersonal: false } } };
+    await expect(
+      createMailClient(ORIGIN).bootstrap(input, Promise.resolve(answer(shared) as never)),
+    ).rejects.toBeInstanceOf(MailboxChangedError);
+    // Nothing was primed: the next request fetches the session document.
+    void client.folders();
+    await settle();
+    expect(server.fetchFn.mock.calls.map(([u]) => new URL(u as string).pathname)).toContain("/api/webmail/session");
+  });
+
+  it("is accepted for a shared mailbox only in a tab scoped to it", async () => {
+    const shared = { ...BOOT_SESSION, username: "desk@example.test", accounts: { acc1: { isPersonal: false } } };
+    const tab = createMailClient(ORIGIN, { shared: "desk@example.test" });
+    const b = await tab.bootstrap(
+      { start: "inbox", grouping: "conversations", attachments: false, expect: "desk@example.test" },
+      Promise.resolve(answer(shared) as never),
+    );
+    expect(b.session.username).toBe("desk@example.test");
+  });
+
+  it("maps the route's 409 mailbox_changed", async () => {
+    const client = createMailClient(ORIGIN);
+    const b = client.bootstrap(input);
+    await settle();
+    expect(server.sent()).toEqual(["GET /api/webmail/bootstrap"]);
+    server.answer(
+      "/api/webmail/bootstrap",
+      Response.json({ error: { code: "mailbox_changed", message: "x" } }, { status: 409 }),
+    );
+    await expect(b).rejects.toBeInstanceOf(MailboxChangedError);
   });
 });

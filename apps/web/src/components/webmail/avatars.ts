@@ -108,9 +108,13 @@ export function photoChanged(address: string, url: string | null): void {
   void refreshPhotos();
 }
 
-/** Starts the refreshes (once, from the webmail app): on load, when the tab is shown or focused, and periodically. */
-export function usePhotoSync(active: string): void {
+/**
+ * Starts the refreshes (once, from the webmail app): on load, when the tab is shown or focused, and periodically.
+ * `ready` false holds the first one back (the app asks for photos once the mail is shown).
+ */
+export function usePhotoSync(active: string, ready = true): void {
   useEffect(() => {
+    if (!ready) return;
     void refreshPhotos();
     const onShow = () => {
       if (document.visibilityState === "visible") void refreshPhotos();
@@ -123,7 +127,7 @@ export function usePhotoSync(active: string): void {
       document.removeEventListener("visibilitychange", onShow);
       clearInterval(every);
     };
-  }, [active]);
+  }, [active, ready]);
 }
 
 /** The photo of one of this session's mailboxes, or null (read through the store, so a change re-renders). */

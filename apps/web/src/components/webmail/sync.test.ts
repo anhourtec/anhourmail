@@ -10,6 +10,7 @@ import {
   notificationHelp,
   POLL_MS,
   pollDelay,
+  raceFirstPaint,
   shouldPoll,
   tabTitle,
 } from "./sync";
@@ -194,5 +195,90 @@ describe("adjustUnread", () => {
     expect(adjustUnread(folders, [{ mailboxIds: { sent: true }, keywords: {} }], true)[2]?.unreadEmails).toBe(0);
     expect(adjustUnread(folders, [{ mailboxIds: { inbox: true }, keywords: { $seen: true } }], true)).toBe(folders);
     expect(adjustUnread(folders, [{ mailboxIds: { inbox: false }, keywords: {} }], true)).toBe(folders);
+  });
+});
+
+describe("raceFirstPaint", () => {
+  const deferred = <T>() => {
+    let resolve: (v: T) => void = () => undefined;
+    let reject: (e: unknown) => void = () => undefined;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  };
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const run = (
+    cached: Promise<string | null> | null,
+    fresh: Promise<string>,
+    fatalErr: unknown = null,
+    live = () => true,
+  ) => {
+    const shown: string[] = [];
+    let fellBack = false;
+    const done = raceFirstPaint({
+      cached,
+      fresh,
+      showCached: (c) => shown.push(`cached:${c}`),
+      showFresh: (f) => shown.push(`fresh:${f}`),
+      fallback: async () => {
+        fellBack = true;
+      },
+      fatal: (err) => err === fatalErr,
+      live,
+    });
+    return { shown, done, fellBack: () => fellBack };
+  };
+
+  it("shows this browser's copy first, then the server's answer over it", async () => {
+    const c = deferred<string | null>();
+    const f = deferred<string>();
+    const r = run(c.promise, f.promise);
+    c.resolve("copy");
+    await tick();
+    f.resolve("server");
+    await r.done;
+    expect(r.shown).toEqual(["cached:copy", "fresh:server"]);
+  });
+
+  it("never shows the copy once the server's answer is in, or when there is none", async () => {
+    const c = deferred<string | null>();
+    const r = run(c.promise, Promise.resolve("server"));
+    await r.done;
+    c.resolve("copy");
+    await tick();
+    expect(r.shown).toEqual(["fresh:server"]);
+    const none = run(Promise.resolve(null), Promise.resolve("server"));
+    await none.done;
+    expect(none.shown).toEqual(["fresh:server"]);
+    const failing = run(Promise.reject(new Error("no storage")), Promise.resolve("server"));
+    await failing.done;
+    expect(failing.shown).toEqual(["fresh:server"]);
+    const scoped = run(null, Promise.resolve("server"));
+    await scoped.done;
+    expect(scoped.shown).toEqual(["fresh:server"]);
+  });
+
+  it("falls back to the step-by-step load when the server's answer fails, but not when signed out", async () => {
+    const r = run(null, Promise.reject(new Error("503")));
+    await r.done;
+    expect(r.fellBack()).toBe(true);
+    const signedOut = new Error("signed out");
+    const out = run(null, Promise.reject(signedOut), signedOut);
+    await expect(out.done).rejects.toBe(signedOut);
+    expect(out.fellBack()).toBe(false);
+  });
+
+  it("shows nothing once the page has gone", async () => {
+    let live = true;
+    const c = deferred<string | null>();
+    const f = deferred<string>();
+    const r = run(c.promise, f.promise, null, () => live);
+    live = false;
+    c.resolve("copy");
+    f.resolve("server");
+    await r.done;
+    expect(r.shown).toEqual([]);
   });
 });

@@ -52,7 +52,9 @@ import {
 } from "./format";
 import { quoteHtml } from "./rich-text";
 import {
+  type Bootstrap,
   createMailClient,
+  MailboxChangedError,
   type DelegatedSender,
   type Folder,
   type Identity,
@@ -78,27 +80,46 @@ import {
   newMailToAnnounce,
   playChime,
   pollDelay,
+  raceFirstPaint,
   shouldPoll,
   tabTitle,
 } from "./sync";
 import { Reader, type ReaderAction, type ReaderActions } from "./reader";
 import { type Mailboxes, Sidebar } from "./sidebar";
+import {
+  hasPinnedSection,
+  hiddenFolders,
+  listKey,
+  mainFilter,
+  pinnedFilter,
+  type Shown,
+  startView,
+} from "./list-query";
 import { FOLDER_ROLES, mailboxTabHref, pagesBase } from "./tab-paths";
+import { type CachedView, clearViewCache, importViewKey, readCachedView, writeCachedView } from "./view-cache";
 import { ToastHost, useToasts } from "./toasts";
 
-type Shown = { view: View; narrow: Narrow; search: SearchQuery | null };
-const keyOf = (
-  s: Shown,
-  look: { grouping: string; attachmentChips: boolean } = { grouping: "", attachmentChips: false },
-) => JSON.stringify([s.view, s.narrow, s.search, look.grouping, look.attachmentChips]);
-/** The main section's filter: pinned conversations have their own section in folder views. */
-const mainFilter = (s: Shown, hidden: string[]) =>
-  listFilter(
-    s.view,
-    { ...s.narrow, search: s.search },
-    hidden,
-    s.view.kind === "folder" && !s.search ? { pinned: false } : {},
-  );
+const keyOf = listKey;
+
+/** The view a first load opened and its first window. */
+type FirstList = { view: View | null; list: { pinned: ListRow[]; total: number; rows: ListRow[] } | null };
+
+/**
+ * Runs `fn` once the next frame has been painted (or after 500 ms at the latest: a tab opened in the background
+ * paints nothing until it is shown).
+ */
+function afterPaint(fn: () => void): void {
+  let done = false;
+  const once = () => {
+    if (done) return;
+    done = true;
+    fn();
+  };
+  window.requestAnimationFrame(() => {
+    window.setTimeout(once, 0);
+  });
+  window.setTimeout(once, 500);
+}
 
 type ListState = { key: string; total: number | null; rows: (ListRow | undefined)[]; loaded: Set<number> };
 type Narrow = Omit<ListFilter, "search">;
@@ -157,6 +178,16 @@ type AppProps = {
   initialCollapsed: boolean;
   /** This mailbox's saved preferences (read on the server, so the first paint already follows them). */
   initialPreferences: WebmailPreferences;
+  /**
+   * The first load (folders and the opened view's first window), started on the server and streamed inside the page;
+   * null when it couldn't be (the app then asks for it). Absent on mailbox-scoped tabs.
+   */
+  firstLoad?: PromiseLike<Bootstrap | null> | undefined;
+  /**
+   * This session's key for the browser's encrypted copy of the first view (server-held, handed only to the page of a
+   * checked session; kept in memory as a non-extractable key, never stored). Absent: no copy is read or written.
+   */
+  viewKey?: string | null | undefined;
   /** Our mail server's authserv-ids (only its Authentication-Results are trusted in message details). */
   authservIds?: string[];
   /**
@@ -183,6 +214,8 @@ function Mailroom({
   consoleHref,
   initialCollapsed,
   initialPreferences,
+  firstLoad,
+  viewKey,
   authservIds = [],
   scope,
 }: AppProps) {
@@ -195,8 +228,10 @@ function Mailroom({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one client per app
   }, []);
   const [prefs, setPrefs] = useState<WebmailPreferences>(initialPreferences);
-  // Profile photos (sidebar, senders, contacts, Settings → Account), kept in step with the console (rule 61).
-  usePhotoSync(username);
+  /** The copy's key, imported once (in the browser only). */
+  const [cacheKey] = useState<Promise<CryptoKey | null>>(() =>
+    typeof window === "undefined" || scope ? Promise.resolve(null) : importViewKey(viewKey),
+  );
   const prefsRef = useRef(prefs);
   useEffect(() => {
     prefsRef.current = prefs;
@@ -205,6 +240,9 @@ function Mailroom({
   const rowKey = useCallback((r: ListRow) => (prefs.grouping === "messages" ? r.id : r.threadId), [prefs.grouping]);
   const toasts = useToasts();
   const [folders, setFolders] = useState<Folder[] | null>(null);
+  // Profile photos (sidebar, senders, contacts, Settings → Account), kept in step with the console (rule 61); asked for
+  // once the folders are shown, so they never hold up the mail.
+  usePhotoSync(username, folders !== null);
   const [view, setView] = useState<View | null>(null);
   const [narrow, setNarrow] = useState<Narrow>({});
   const [searchText, setSearchText] = useState("");
@@ -335,7 +373,10 @@ function Mailroom({
   const searching = search !== null;
 
   const signedOut = useCallback(() => {
-    window.location.assign(signInHref);
+    // The session ended: this browser's copy of the first view goes with it.
+    void clearViewCache().finally(() => {
+      window.location.assign(signInHref);
+    });
   }, [signInHref]);
 
   const fail = useCallback(
@@ -409,15 +450,11 @@ function Mailroom({
         setSelected(null);
         anchor.current = null;
       }
-      const pinnedSection = shown.view.kind === "folder" && shown.search === null;
-      if (pinnedSection) {
+      if (hasPinnedSection(shown)) {
         try {
-          const p = await client.page(
-            listFilter(shown.view, { ...shown.narrow }, hiddenIds, { pinned: true }),
-            0,
-            client.pinnedLimit,
-            { attachments: prefsRef.current.attachmentChips },
-          );
+          const p = await client.page(pinnedFilter(shown, hiddenIds), 0, client.pinnedLimit, {
+            attachments: prefsRef.current.attachmentChips,
+          });
           if (newest()) setPinned(p.rows);
         } catch (err) {
           if (newest()) fail(err);
@@ -490,51 +527,101 @@ function Mailroom({
     else void loadFolders();
   }, [loadFolders]);
 
-  // First paint: folders, the Inbox, the person's mailboxes and identities.
+  /** The server's first load answered for this page's mailbox: only then is the copy rewritten from what is shown. */
+  const matched = useRef(false);
+  // First paint (docs/internal/05-webmail.md "First load"): this browser's copy of the first view at once (the person's
+  // own mailbox only), then the server's first load in one request — folders, counts and the opened view's first
+  // window — which replaces it. What isn't needed to show mail (the person's mailboxes, the From picker, signatures,
+  // contacts) is asked for once that has been painted.
   useEffect(() => {
     let live = true;
-    client
-      .folders()
-      .then(async (f) => {
-        if (!live) return;
-        setFolders(f);
-        const h = [f.find((x) => x.role === "trash")?.id, f.find((x) => x.role === "junk")?.id].filter(
-          (x): x is string => x !== undefined,
-        );
-        // A mailbox-scoped tab starts in the folder its URL names (a role or an id), else its Inbox.
-        const wanted = scope?.folder;
-        const named = wanted
-          ? f.find((x) => ((FOLDER_ROLES as readonly string[]).includes(wanted) ? x.role === wanted : x.id === wanted))
-          : undefined;
-        const start = scoped ? "inbox" : prefsRef.current.startIn;
-        const chosen = start.startsWith("folder:") ? f.find((x) => `folder:${x.id}` === start) : named;
-        const first = chosen ?? f.find((x) => x.role === "inbox") ?? f[0];
-        if (start === "priority") {
-          const shown: Shown = { view: { kind: "priority" }, narrow: {}, search: null };
-          setView(shown.view);
-          void load(shown, h);
-        } else if (first) {
-          const shown: Shown = { view: { kind: "folder", id: first.id }, narrow: {}, search: null };
-          setView(shown.view);
-          void load(shown, h);
+    /** The list `seq` the first view was shown at: once the person has moved on (another `load`), only counts update. */
+    let shownAt: number | null = null;
+    const look = () => ({ grouping: prefsRef.current.grouping, attachmentChips: prefsRef.current.attachmentChips });
+    const start = scoped ? "inbox" : prefsRef.current.startIn;
+    const show = (d: Pick<CachedView, "folders" | "priorityCount" | "grouping" | "attachments"> & FirstList) => {
+      setFolders(d.folders);
+      setPriorityCount(d.priorityCount);
+      if (!d.view || (shownRef.current !== null && shownRef.current.seq !== shownAt)) return;
+      const shown: Shown = { view: d.view, narrow: {}, search: null };
+      const h = hiddenFolders(d.folders);
+      const now = look();
+      if (!d.list || d.grouping !== now.grouping || d.attachments !== now.attachmentChips) {
+        // Built another way than the list is shown now (a preference changed meanwhile): load it the usual way.
+        setView(shown.view);
+        void load(shown, h);
+        shownAt = shownRef.current?.seq ?? null;
+        return;
+      }
+      const seq = (shownRef.current?.seq ?? 0) + 1;
+      shownRef.current = { shown, hidden: h, seq };
+      shownAt = seq;
+      const rows: (ListRow | undefined)[] = [...d.list.rows];
+      rows.length = Math.max(d.list.total, d.list.rows.length);
+      setView(shown.view);
+      setPinned(hasPinnedSection(shown) ? d.list.pinned : []);
+      setList({ key: keyOf(shown, now), total: d.list.total, rows, loaded: new Set([0]) });
+    };
+    /** The step-by-step first load (folders, then the list), when the one-request load didn't work. */
+    const stepByStep = async () => {
+      const f = await client.folders();
+      if (!live) return;
+      setFolders(f);
+      const h = hiddenFolders(f);
+      const v = startView(f, start, scope?.folder);
+      if (v) {
+        const shown: Shown = { view: v, narrow: {}, search: null };
+        setView(shown.view);
+        void load(shown, h);
+      }
+      setPriorityCount(await client.priorityCount(h));
+    };
+    const asked = look();
+    const first = raceFirstPaint({
+      // The person's own mailbox only: a mailbox shared with them always loads from the server.
+      cached: scoped ? null : cacheKey.then((k) => readCachedView(username, k)),
+      fresh: client.bootstrap(
+        {
+          start,
+          grouping: asked.grouping,
+          attachments: asked.attachmentChips,
+          ...(scope?.folder === undefined ? {} : { folder: scope.folder }),
+          expect: username.toLowerCase(),
+        },
+        firstLoad,
+      ),
+      showCached: (c: CachedView) => {
+        const now = look();
+        if (c.start === start && c.grouping === now.grouping && c.attachments === now.attachmentChips) show(c);
+      },
+      showFresh: (b: Bootstrap) => {
+        matched.current = true;
+        show(b);
+        if (!scoped && b.view && b.list) {
+          const entry = {
+            address: username,
+            start,
+            grouping: b.grouping,
+            attachments: b.attachments,
+            folders: b.folders,
+            priorityCount: b.priorityCount,
+            view: b.view,
+            list: b.list,
+          };
+          void cacheKey.then((k) => writeCachedView(entry, k));
         }
-        setPriorityCount(await client.priorityCount(h));
-      })
-      .catch((err: unknown) => {
-        fail(err);
-      });
-    if (!scoped) {
-      client
-        .mailboxes()
-        .then((m) => {
-          // A session left on a shared mailbox (switched to one before they opened only in tabs of their own): the
-          // page hands it back to the person's own mailbox, so load it again.
-          if (m.activeShared) window.location.reload();
-          else setMailboxes(m);
-        })
-        .catch(() => undefined);
-    } else {
-      // Which own mailbox this one comes through, and whether the person may send from it.
+      },
+      fallback: stepByStep,
+      fatal: (err) => err instanceof SignedOutError || err instanceof MailboxChangedError,
+      live: () => live,
+    }).catch((err: unknown) => {
+      if (!live) return;
+      // Another tab switched the session's mailbox: show (and keep) nothing of it here; the page shows the right one.
+      if (err instanceof MailboxChangedError) window.location.reload();
+      else fail(err);
+    });
+    if (scoped) {
+      // Which own mailbox this one comes through, and whether the person may send from it (New email waits on it).
       client
         .mailboxes()
         .then((m) => {
@@ -546,35 +633,95 @@ function Mailroom({
           setSenders([]);
         });
     }
-    // The person's own mailbox only (refused while a shared one is shown, so not asked for then: see below).
-    if (!scoped) {
-      client
-        .senders()
-        .then((r) => {
-          setIdentities(r.identities);
-          setSenders(r.shared);
-        })
-        .catch(() => {
-          client
-            .identities()
-            .then(setIdentities)
-            .catch(() => undefined);
-        });
-      client
-        .signatures()
-        .then(setSignatures)
-        .catch(() => undefined);
-      client
-        .contacts()
-        .then(setBook)
-        .catch(() => undefined);
-    }
+    void first.then(() => {
+      // After the first view has been painted (two frames on), so these never hold up the mail.
+      afterPaint(() => {
+        if (!live || scoped) return;
+        client
+          .mailboxes()
+          .then((m) => {
+            // A session left on a shared mailbox (switched to one before they opened only in tabs of their own): the
+            // page hands it back to the person's own mailbox, so load it again.
+            if (m.activeShared) window.location.reload();
+            else setMailboxes(m);
+          })
+          .catch(() => undefined);
+        // The person's own mailbox only (refused while a shared one is shown, so not asked for then: see below).
+        client
+          .senders()
+          .then((r) => {
+            setIdentities(r.identities);
+            setSenders(r.shared);
+          })
+          .catch(() => {
+            client
+              .identities()
+              .then(setIdentities)
+              .catch(() => undefined);
+          });
+        client
+          .signatures()
+          .then(setSignatures)
+          .catch(() => undefined);
+        client
+          .contacts()
+          .then(setBook)
+          .catch(() => undefined);
+      });
+    });
     return () => {
       live = false;
     };
     // First paint only.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once
   }, []);
+
+  // This browser's copy of the first view follows what the person last saw of it: written when the tab is hidden or
+  // closed, only while the list shows that view as it opens (no search or filter), with its first window loaded.
+  const snapshot = useRef<() => void>(() => undefined);
+  useEffect(() => {
+    snapshot.current = () => {
+      const now = shownRef.current;
+      const l = listRef.current;
+      if (scoped || !matched.current || !folders || !now || l?.total == null || !l.loaded.has(0)) return;
+      const start = prefs.startIn;
+      const want = startView(folders, start);
+      if (
+        !want ||
+        keyOf({ view: want, narrow: {}, search: null }, prefs) !== l.key ||
+        l.key !== keyOf(now.shown, prefs)
+      ) {
+        return;
+      }
+      const rows = l.rows.slice(0, PAGE_SIZE).filter((r): r is ListRow => r !== undefined);
+      const entry = {
+        address: username,
+        start,
+        grouping: prefs.grouping,
+        attachments: prefs.attachmentChips,
+        folders,
+        priorityCount,
+        view: want,
+        list: { pinned: pinnedRef.current, total: l.total, rows },
+      };
+      void cacheKey.then((k) => writeCachedView(entry, k));
+    };
+  });
+  useEffect(() => {
+    if (scoped) return;
+    const onHide = () => {
+      if (document.visibilityState === "hidden") snapshot.current();
+    };
+    const onLeave = () => {
+      snapshot.current();
+    };
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", onLeave);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", onLeave);
+    };
+  }, [scoped]);
 
   // A shared mailbox shown: the From picker, signatures and own Trash (where a discarded draft goes) come from the
   // person's own mailbox it comes through, once that is known.
@@ -708,7 +855,15 @@ function Mailroom({
     document.addEventListener("visibilitychange", wake);
     window.addEventListener("focus", wake);
     window.addEventListener("online", wake);
-    void tick();
+    // The first load carried the states to check from: the first check is then an ordinary one, a poll interval on.
+    void client.firstLoad().then((b) => {
+      if (life.stopped) return;
+      if (b && state === null) {
+        state = b.state;
+        window.clearTimeout(timer);
+        timer = window.setTimeout(() => void tick(), pollDelay(0));
+      } else void tick();
+    });
     return () => {
       life.stopped = true;
       window.clearTimeout(timer);

@@ -70,6 +70,42 @@ export function coalescer(run: () => Promise<unknown>, delayMs: number): { sched
 }
 
 /**
+ * The first paint's order (docs/internal/05-webmail.md "First load"): this browser's copy of the first view
+ * (`cached`) is shown only if it arrives before the server's answer (`fresh`), which is always shown when it comes. If
+ * the server's answer fails, `fallback` runs (the step-by-step load) — unless `fatal` says the failure ends things
+ * (signed out), when it is rethrown. Nothing is shown once `live()` is false (the page went away).
+ */
+export async function raceFirstPaint<C, F>(o: {
+  cached: Promise<C | null> | null;
+  fresh: Promise<F>;
+  showCached: (c: C) => void;
+  showFresh: (f: F) => void;
+  fallback: () => Promise<void>;
+  fatal: (err: unknown) => boolean;
+  live: () => boolean;
+}): Promise<void> {
+  let settled = false;
+  void o.cached?.then(
+    (c) => {
+      if (c !== null && !settled && o.live()) o.showCached(c);
+    },
+    () => undefined,
+  );
+  let f: F;
+  try {
+    f = await o.fresh;
+  } catch (err) {
+    settled = true;
+    if (!o.live()) return;
+    if (o.fatal(err)) throw err;
+    await o.fallback();
+    return;
+  }
+  settled = true;
+  if (o.live()) o.showFresh(f);
+}
+
+/**
  * The folder counts right after marking messages read (`seen` true) or unread, before the server's own counts
  * arrive: each message whose read state flips moves its folders' unread count by one. Messages not in `emails`
  * (not loaded in the list) are left to the reload that follows.
