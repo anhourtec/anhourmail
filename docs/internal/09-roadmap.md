@@ -1,6 +1,6 @@
 # 09 — Roadmap
 
-Last updated: 2026-10-31 (names as one source built). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
+Last updated: 2026-10-31 (names as one source built and deployed; trusted image senders planned). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
 
 ## Path to production (as of 2026-10-29)
 
@@ -103,7 +103,7 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
    archives built by the worker, mail streamed from the person's own webmail session, deletion with a 14-day grace
    period, own-login deletion), act-as (**built 2026-10-29**, ADR-0023: read-only support
    access, audited, visible to account admins), remote-image proxy, push sync in
-   the webmail (it polls every 30 s today), webmail settings part 2 (rules, templates), and the leftover open items
+   the webmail (it polls every 30 s today), webmail settings part 2 (rules, templates; a person's own "Always load images from" list in Settings → Reading — addresses and domains they can see, add and remove, kept in the mailbox on the mail server, images loading only for a verified From; then an account-wide "Trusted image senders" list for Owners and User Admins, verified-only and audited — maintainer, 2026-10-31; no request-to-allow-list workflow), and the leftover open items
    in the handoff (alias admin-lock, daily alias creation cap, provisioning-queue lock token, unknown-recipient
    rejection at SMTP time).
 9. **Billing and migration** (Phase 5): Stripe Checkout/Portal/Tax, webhooks, plan changes and the account
