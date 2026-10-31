@@ -185,7 +185,7 @@
       <img src="./docs/images/readme/console-security.jpg" alt="The Security page: an authenticator app and passkeys under How you sign in, and the list of console sessions with a Sign out button for each" width="100%">
       <br><sub>Console · Security</sub>
       <h3>Two-factor sign-in and passkeys</h3>
-      <p>An authenticator app, recovery codes and passkeys, with sessions and recent activity in one place. Owners can
+      <p>Your password first, then a passkey, an authenticator app or a recovery code as the second step, with sessions and recent activity in one place. Owners can
       require a second factor.</p>
     </td>
   </tr>
@@ -269,7 +269,7 @@ Everything below runs in local development and on our pre-staging server. It is 
 | **Aliases**          | Aliases and masked aliases, up to 400 per mailbox on paid plans, each switchable on and off.                                                                                                                                                                                                   |
 | **People and roles** | Invites, roles, profile details and photos. Removing someone keeps their mail as a shared mailbox and turns their sign-in off at once.                                                                                                                                                         |
 | **Delegation**       | Give people **Read and manage**, **Send as** or **Send on behalf** on a mailbox. Convert a mailbox to a shared mailbox and back. In the webmail, shared mailboxes open by address in a tab of their own (Open another mailbox) and can be chosen as From.                                      |
-| **Sign-in security** | Two-factor sign-in with an authenticator app, recovery codes and passkeys; owners can require a second factor; a Security page with sessions and recent activity.                                                                                                                              |
+| **Sign-in security** | Password first, then a second step with a passkey, an authenticator app or a recovery code; owners can require a second factor; a Security page with sessions and recent activity.                                                                                                             |
 | **Mail apps**        | App passwords scoped to IMAP, SMTP, contacts or mail over HTTPS, shown once.                                                                                                                                                                                                                   |
 | **Webmail**          | Folders and threads, a safe reader, rich-text writing (sent with a plain-text copy), drafts and undo send, archive, junk, move, pin, search, several mailboxes in one session, contacts that sync over CardDAV, named signatures, automatic replies, confirmed forwarding and blocked senders. |
 | **Your data**        | Export your mail and contacts; delete your account with a 14-day grace period.                                                                                                                                                                                                                 |
