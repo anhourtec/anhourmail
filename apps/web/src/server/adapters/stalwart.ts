@@ -34,12 +34,14 @@ export const stalwartReady = (): Promise<void> => stalwartOperations().ready();
 /**
  * The webmail's managed Sieve script (automatic replies, forwarding, junk rules) read and written with the operations
  * key, never a user token: customer mailboxes can't write their own Sieve (CUSTOMER_PERMISSIONS, rule 21). Writing
- * also makes it the active script. `accountId` is the mailbox's JMAP account id.
+ * also makes it the active script; with the state of the read it was based on, only if nothing changed since (JMAP
+ * `ifInState`, honoured by the pinned server). `accountId` is the mailbox's JMAP account id.
  */
 export function managedSieve(): ManagedSieve {
   return {
     read: async (accountId) => (await operations()).getSieveScript(accountId, MANAGED_SCRIPT),
-    write: async (accountId, script) => (await operations()).putSieveScript(accountId, MANAGED_SCRIPT, script),
+    write: async (accountId, script, ifInState) =>
+      (await operations()).putSieveScript(accountId, MANAGED_SCRIPT, script, ifInState),
   };
 }
 

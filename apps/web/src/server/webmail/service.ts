@@ -138,6 +138,19 @@ export class WebmailRefusedError extends Error {
 }
 
 /**
+ * The mailbox's settings changed between the read a change was based on and its write (another window, the contacts
+ * refresh): nothing was written. → 409 `settings_changed`
+ */
+export class WebmailConflictError extends Error {
+  override readonly name = "WebmailConflictError";
+}
+
+/** "Always for <sender>" for an address that is on the mailbox's Blocked senders. → 409 `sender_blocked` */
+export class WebmailSenderBlockedError extends Error {
+  override readonly name = "WebmailSenderBlockedError";
+}
+
+/**
  * A delegated mailbox the session held or asked for can't be used (no grant now, unknown, another account's, the plan,
  * the mailbox's state): the entry is dropped and the answer is 404 "You don't have access to this mailbox." in every
  * case (ADR-0026 §6, rule 25). The session itself goes on with the person's own mailbox.
@@ -288,6 +301,11 @@ export type WebmailDeps = {
   /** The managed Sieve script (automatic replies, forwarding, junk rules), via management credentials. */
   sieve: ManagedSieve;
   /**
+   * Called after every managed-script write with the mailbox it was for (`safe-senders.ts`: bumps the rules version
+   * every process checks, and drops this process's cached list). Failures are the callee's to swallow.
+   */
+  rulesWritten?: (accountId: string, address: string) => Promise<void>;
+  /**
    * The sender name of a mailbox in the control plane (core `webmailSendingNames`; rule 61), by its address: what its
    * identities are named and what it sends as. `masked`: the mailbox's masked alias addresses, whose identities are
    * named and send with no name (ADR-0014 update 2026-10-31). Null for an address we don't hold. Absent: identities
@@ -322,11 +340,24 @@ export type RulesState = "none" | "active" | "inactive";
  * stalwart-client management port; faked in tests.
  */
 export type ManagedSieve = {
-  /** The script and whether it's the active one, or null when the mailbox has none yet. */
-  read(accountId: string): Promise<{ content: string; active: boolean } | null>;
-  /** Writes it and makes it the active one. */
-  write(accountId: string, script: string): Promise<void>;
+  /**
+   * The script and whether it's the active one, or null when the mailbox has none yet. `state`: the account's Sieve
+   * state at this read (JMAP `state`), for a compare-and-swap write; absent when the store can't tell.
+   */
+  read(accountId: string): Promise<{ content: string; active: boolean; state?: string } | null>;
+  /**
+   * Writes it and makes it the active one. With `ifInState` (a read's `state`, or null for "the read found none")
+   * it writes only if nothing changed since that read, and answers false otherwise; without it, always writes.
+   */
+  write(accountId: string, script: string, ifInState?: string | null): Promise<boolean>;
 };
+
+/** A rules version taken from the script's text, used when the mail server gives no Sieve state with a read. */
+const CONTENT_VERSION = "content-sha256:";
+const contentVersion = (content: string): string =>
+  `${CONTENT_VERSION}${createHash("sha256").update(content).digest("base64url")}`;
+/** What a compare-and-swap write expects: the read's Sieve state, or a hash of the text when there was none. */
+const rulesVersion = (content: string, state: string): string => (state === "" ? contentVersion(content) : state);
 
 /** How long a proof that the session's own mailbox still signs in (for delegated use) holds: the gate's cache, 10 s. */
 const VIA_PROOF_MS = 10_000;
@@ -473,6 +504,7 @@ export class WebmailService {
         setTimeout(fn, ms).unref();
       },
       holdSeconds: async () => UNDO_SECONDS,
+      rulesWritten: async () => undefined,
       ...deps,
     };
     this.#base = deps.stalwartUrl.replace(/\/+$/, "");
@@ -1362,6 +1394,50 @@ export class WebmailService {
       const { name: n, value } = h as { name?: unknown; value?: unknown };
       return typeof n === "string" && typeof value === "string" ? [{ name: n, value: value.trim() }] : [];
     });
+  }
+
+  /**
+   * One message's From address (null unless it has exactly one) and its header fields, in the person's own active mailbox (never a mailbox
+   * shared with them), for a change made from the message (ADR-0027 §4 "Always for"). Null when this session can't
+   * see that message (unknown, deleted, or another mailbox's id).
+   */
+  async ownMessageSender(
+    sessionId: string,
+    emailId: string,
+  ): Promise<{ accountId: string; from: string | null; headers: { name: string; value: string }[] } | null> {
+    let accountId = "";
+    const res = await this.jmapAs(
+      sessionId,
+      (s) => {
+        accountId = s.accountId;
+        return {
+          using: USING,
+          methodCalls: [
+            ["Email/get", { accountId: s.accountId, ids: [emailId], properties: ["from", "headers"] }, "f"],
+          ],
+        };
+      },
+      OWN,
+    );
+    const resp = res as { methodResponses?: [string, { list?: { from?: unknown; headers?: unknown }[] }, string][] };
+    const [name, args] = resp.methodResponses?.[0] ?? [];
+    if (name !== "Email/get") throw new WebmailUnavailableError("unexpected response");
+    const email = args?.list?.[0];
+    if (!email) return null;
+    // Exactly one From address, or none for this purpose: a message "from" several people is never verified.
+    const first =
+      Array.isArray(email.from) && email.from.length === 1
+        ? (email.from[0] as { email?: unknown } | undefined)
+        : undefined;
+    const from = typeof first?.email === "string" && first.email.trim() !== "" ? first.email.trim() : null;
+    const headers = Array.isArray(email.headers)
+      ? email.headers.flatMap((h: unknown) => {
+          if (typeof h !== "object" || h === null) return [];
+          const { name: n, value } = h as { name?: unknown; value?: unknown };
+          return typeof n === "string" && typeof value === "string" ? [{ name: n, value: value.trim() }] : [];
+        })
+      : [];
+    return { accountId, from, headers };
   }
 
   /** Builds the reader view: inline images, a markdown body and calendar invitations fetched as small blobs. */
@@ -3522,25 +3598,31 @@ export class WebmailService {
    * The automatic-reply, forwarding and junk settings, and whether they are in force. Read with management
    * credentials (`ManagedSieve`): customer mailboxes can't manage their own Sieve, so the script is ours alone.
    */
-  async mailRules(sessionId: string): Promise<{ accountId: string; rules: MailRules; state: RulesState }> {
+  async mailRules(
+    sessionId: string,
+  ): Promise<{ accountId: string; rules: MailRules; state: RulesState; version?: string | null }> {
     const accountId = (await this.#ownActive(sessionId)).accountId;
     const script = await this.#d.sieve.read(accountId);
-    if (script === null) return { accountId, rules: DEFAULT_RULES, state: "none" };
+    // `version`: what a compare-and-swap write expects (null: no script yet; absent: the store can't tell).
+    if (script === null) return { accountId, rules: DEFAULT_RULES, state: "none", version: null };
     return {
       accountId,
       rules: parseScript(script.content) ?? DEFAULT_RULES,
       state: script.active ? "active" : "inactive",
+      ...(script.state !== undefined ? { version: rulesVersion(script.content, script.state) } : {}),
     };
   }
 
   /**
    * Writes the managed script with management credentials and makes it the active one. The caller has already
-   * checked a forwarding target is the control-plane confirmed one.
+   * checked a forwarding target is the control-plane confirmed one. `ifInState`: the `version` of the `mailRules` read
+   * the change is based on — then nothing is written if the script changed since (`WebmailConflictError`, 409).
    */
   async saveMailRules(
     sessionId: string,
     account: string,
     rules: Omit<MailRules, "include">,
+    opts: { ifInState?: string | null } = {},
   ): Promise<{ contactsUsed: number }> {
     const s = await this.#ownActive(sessionId);
     if (s.accountId !== account) throw new WebmailRefusedError("Your active mailbox changed. Try again.");
@@ -3570,8 +3652,20 @@ export class WebmailService {
     if (new TextEncoder().encode(script).length > MAX_SCRIPT_BYTES) {
       throw new WebmailRefusedError(MAILBOX_RULES_LIMIT_MESSAGE);
     }
+    let written: boolean;
     try {
-      await this.#d.sieve.write(account, script);
+      const expect = opts.ifInState;
+      if (typeof expect === "string" && expect.startsWith(CONTENT_VERSION)) {
+        // The server gave no Sieve state at the read: re-read and compare the text just before writing instead.
+        const now = await this.#d.sieve.read(account);
+        written =
+          now !== null && contentVersion(now.content) === expect && (await this.#d.sieve.write(account, script));
+      } else {
+        written =
+          expect === undefined
+            ? await this.#d.sieve.write(account, script)
+            : await this.#d.sieve.write(account, script, expect);
+      }
     } catch (err) {
       log.warn("webmail rules not saved", {
         component: "webmail",
@@ -3579,6 +3673,8 @@ export class WebmailService {
       });
       throw new WebmailRefusedError("The mail server didn't accept these settings.");
     }
+    if (!written) throw new WebmailConflictError("Your settings changed in another window. Try again.");
+    await this.#d.rulesWritten(account, s.username).catch(() => undefined);
     return { contactsUsed: contacts.length };
   }
 
@@ -3588,10 +3684,17 @@ export class WebmailService {
    */
   async #refreshContactRules(sessionId: string, account: string): Promise<void> {
     try {
-      const { accountId, rules, state } = await this.mailRules(sessionId);
+      const current = await this.mailRules(sessionId);
+      const { accountId, rules, state } = current;
       if (accountId !== account || state !== "active" || !usesContacts(rules)) return;
       const { include: _include, ...rest } = rules;
-      await this.saveMailRules(sessionId, account, rest);
+      // On the version just read: a save from another window meanwhile wins (and wrote the contacts itself).
+      await this.saveMailRules(
+        sessionId,
+        account,
+        rest,
+        current.version === undefined ? {} : { ifInState: current.version },
+      );
     } catch (err) {
       log.warn("webmail rules refresh failed", {
         component: "webmail",

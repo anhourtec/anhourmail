@@ -391,7 +391,7 @@ function setup(opts: { key?: string | null; rotate?: boolean } = {}) {
     stalwartUrl: "http://stalwart:8080",
     access,
     quota,
-    sieve: { read: async () => null, write: async () => undefined },
+    sieve: { read: async () => null, write: async () => true },
     confirmedForward: async () => null,
     fetch: server.fetchImpl,
     now: () => now,

@@ -448,7 +448,7 @@ function setup(
     stalwartUrl: "http://stalwart",
     access: { state: async (a) => (allowed(a) ? "ok" : "suspended") },
     quota,
-    sieve: { read: async () => null, write: async () => undefined },
+    sieve: { read: async () => null, write: async () => true },
     confirmedForward: async () => null,
     fetch: fake.fetchImpl,
     defer: (fn, ms) => {
@@ -739,7 +739,7 @@ describe("session writes are compare-and-set", () => {
       stalwartUrl: "http://stalwart",
       access: { state: async () => "ok" as const },
       quota: memorySlidingQuota(),
-      sieve: { read: async () => null, write: async () => undefined },
+      sieve: { read: async () => null, write: async () => true },
       confirmedForward: async () => null,
       fetch: fake.fetchImpl,
       now: () => now,

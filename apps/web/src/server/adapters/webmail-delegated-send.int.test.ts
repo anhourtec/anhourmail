@@ -166,7 +166,7 @@ function world(rights: DelegationRight[], hold = 1) {
     stalwartUrl: STALWART_URL,
     access,
     quota: memorySlidingQuota(),
-    sieve: { read: async () => null, write: async () => undefined },
+    sieve: { read: async () => null, write: async () => true },
     confirmedForward: async () => null,
     holdSeconds: async () => hold,
     fetch: lossyFetch,

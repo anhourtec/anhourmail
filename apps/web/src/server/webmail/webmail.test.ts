@@ -430,7 +430,7 @@ function setup(
     stalwartUrl: "http://stalwart:8080/",
     access: { state: async (a) => opts.state?.(a) ?? (allowed(a) ? "ok" : "suspended") },
     quota: memorySlidingQuota(),
-    sieve: { read: async () => null, write: async () => undefined },
+    sieve: { read: async () => null, write: async () => true },
     confirmedForward: async () => null,
     fetch: fetchImpl,
     now: () => now,

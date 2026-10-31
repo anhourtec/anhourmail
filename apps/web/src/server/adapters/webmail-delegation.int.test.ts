@@ -133,7 +133,7 @@ function world() {
     stalwartUrl: STALWART_URL,
     access,
     quota: memorySlidingQuota(),
-    sieve: { read: async () => null, write: async () => undefined },
+    sieve: { read: async () => null, write: async () => true },
     confirmedForward: async () => null,
     defer: () => undefined,
     now,

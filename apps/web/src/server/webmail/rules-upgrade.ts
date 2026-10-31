@@ -12,6 +12,7 @@ import { container } from "../container";
 import { env } from "../env";
 import { platform } from "../platform";
 import { trustedAuthservIds } from "./original";
+import { bumpRulesVersion } from "./safe-senders";
 import { MAX_SCRIPT_BYTES, upgradeManagedScript } from "./sieve";
 
 /** How long after start-up the upgrade runs, so Stalwart and Postgres are up and the first requests come first. */
@@ -55,9 +56,18 @@ export async function upgradeMailRules(): Promise<void> {
       log.info("managed script upgrade not needed", { component: "webmail-rules-upgrade" });
       return;
     }
+    const store = managedSieveStore();
     const result = await upgradeManagedScripts(
       container().deps,
-      managedSieveStore(),
+      {
+        ...store,
+        // Every managed-script write bumps the mailbox's rules version (ADR-0027 §3).
+        write: async (accountId, script, state, address) => {
+          const written = await store.write(accountId, script, state, address);
+          if (written) await bumpRulesVersion(accountId, address);
+          return written;
+        },
+      },
       (text, address) => upgradeManagedScript(text, ids, mailboxDomainOf(address)),
       { maxBytes: MAX_SCRIPT_BYTES },
     );

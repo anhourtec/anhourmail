@@ -13,11 +13,13 @@ import { PinnedMailboxMissingError, REFUSED_HEADER } from "./pin";
 import {
   WebmailBlockedError,
   WebmailBusyError,
+  WebmailConflictError,
   WebmailDelegationRefusedError,
   WebmailOwnMailboxOnlyError,
   WebmailQuotaError,
   WebmailSendUnconfirmedError,
   WebmailRefusedError,
+  WebmailSenderBlockedError,
   WebmailSignedOutError,
   WebmailSignInError,
   WebmailUnavailableError,
@@ -94,6 +96,8 @@ export function webmailErrorResponse(err: unknown): Response | null {
     return res;
   }
   if (err instanceof WebmailRefusedError) return body("refused", err.message, 400);
+  if (err instanceof WebmailConflictError) return body("settings_changed", err.message, 409);
+  if (err instanceof WebmailSenderBlockedError) return body("sender_blocked", err.message, 409);
   // One answer for every refused delegated mailbox (ADR-0026 §6): it never says whether an address exists.
   if (err instanceof WebmailDelegationRefusedError || err instanceof PinnedMailboxMissingError) {
     const res = body("not_found", DELEGATION_REFUSED, 404);

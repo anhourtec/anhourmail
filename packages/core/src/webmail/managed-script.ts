@@ -271,8 +271,9 @@ export type ManagedScriptStore = ManagedScriptReader & {
   /**
    * Writes `content` only if the account's Sieve state is still `ifInState` (JMAP `ifInState`, honoured by the pinned
    * server: a stale state is refused with `stateMismatch`, verified on v0.16.27). False when the state changed.
+   * `mailboxAddress` lets the web app bump that mailbox's rules version (ADR-0027 §3).
    */
-  write(externalId: string, content: string, ifInState: string): Promise<boolean>;
+  write(externalId: string, content: string, ifInState: string, mailboxAddress: string): Promise<boolean>;
 };
 
 export type ManagedScriptUpgrade = {
@@ -358,7 +359,7 @@ export async function upgradeManagedScripts(
       continue;
     }
     try {
-      if (await store.write(m.stalwartId, next, script.state)) out.upgraded += 1;
+      if (await store.write(m.stalwartId, next, script.state, m.address)) out.upgraded += 1;
       else out.skippedChanged += 1;
     } catch {
       out.failed += 1;

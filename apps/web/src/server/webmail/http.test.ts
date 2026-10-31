@@ -13,8 +13,10 @@ import {
   readCappedBytes,
   shownAccount,
   signedNoticeReason,
+  webmailErrorResponse,
   withUploadSlot,
 } from "./http";
+import { WebmailConflictError, WebmailSenderBlockedError } from "./service";
 
 describe("upload slots and capped bodies", () => {
   it("runs at most MAX_UPLOADS uploads at once and asks the rest to retry", async () => {
@@ -94,5 +96,20 @@ describe("why a mailbox can't use the webmail", () => {
     expect(blockedNoticeForLink(secret, `suspended.${String(Number(exp) + 600)}.${mac ?? ""}`, now)).toBeNull();
     expect(blockedNoticeForLink(secret, `${link}.x`, now)).toBeNull();
     expect(blockedNoticeForLink("t".repeat(32), link, now)).toBeNull();
+  });
+});
+
+describe("Safe senders refusals", () => {
+  it("answers a change made meanwhile and a blocked sender with their own 409 codes", async () => {
+    const changed = webmailErrorResponse(
+      new WebmailConflictError("Your settings changed in another window. Try again."),
+    );
+    expect(changed?.status).toBe(409);
+    expect(await changed?.json()).toEqual({
+      error: { code: "settings_changed", message: "Your settings changed in another window. Try again." },
+    });
+    const blocked = webmailErrorResponse(new WebmailSenderBlockedError("x@y.example is on your blocked list."));
+    expect(blocked?.status).toBe(409);
+    expect(await blocked?.json()).toMatchObject({ error: { code: "sender_blocked" } });
   });
 });
