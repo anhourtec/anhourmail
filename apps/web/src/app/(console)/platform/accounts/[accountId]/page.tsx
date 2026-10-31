@@ -36,8 +36,16 @@ const DOMAIN_STATUS: Record<string, { text: string; tone: Tone }> = {
   removing: { text: "Removing", tone: "warning" },
 };
 
-export default async function CustomerAccountPage({ params }: { params: Promise<{ accountId: string }> }) {
+export default async function CustomerAccountPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ accountId: string }>;
+  searchParams: Promise<{ tab?: string | string[] }>;
+}) {
   const { accountId } = await params;
+  // A link to one tab (`?tab=mailboxes`) opens on it; DetailTabs ignores an unknown id.
+  const { tab } = await searchParams;
   const actor = await requireUser();
   if (!can(actor, "platform.accounts.read")) notFound();
   const h = await headers();
@@ -267,6 +275,7 @@ export default async function CustomerAccountPage({ params }: { params: Promise<
       </FieldGrid>
       <DetailTabs
         label="Account details"
+        initial={typeof tab === "string" ? tab : null}
         tabs={[
           { id: "people", label: `People (${String(people.length)})`, content: peopleTab },
           { id: "domains", label: `Domains (${String(domains.length)})`, content: domainsTab },
