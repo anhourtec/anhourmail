@@ -170,7 +170,7 @@
       <br><sub>Console · Aliases</sub>
       <h3>Aliases and masked aliases</h3>
       <p>More addresses for the same mailbox. Give a site a random masked alias, and switch it off the day it starts
-      getting spam. Mail you send from a masked alias carries no name.</p>
+      getting spam. Mail you send from a masked alias carries no name, and images from your safe senders load by themselves.</p>
     </td>
   </tr>
   <tr>
