@@ -375,6 +375,35 @@ describe("provisioning jobs", () => {
     expect(d.uow.state.mailboxes[0]).toMatchObject({ status: "failed" });
   });
 
+  it("a mailbox meant to be off stays off: a failed suspension or deletion keeps its status, and a re-run keeps it off", async () => {
+    for (const intent of ["suspended", "deleting"] as const) {
+      const { d, clock } = setup();
+      const working = fakeMailServer();
+      await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+      await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+      while (await runNextJob(d, working));
+      expect(working.boxes[0]?.suspended).toBe(false);
+      // Suspend (or schedule the deletion) while the mail server keeps refusing: the job gives up.
+      d.uow.state.mailboxes[0]!.status = intent;
+      if (intent === "deleting") d.uow.state.mailboxes[0]!.purgeAfter = new Date(clock.now().getTime() + 86_400_000);
+      const refusing: MailServer = { ...working, ensureMailbox: () => Promise.reject(new Error("mail server down")) };
+      await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+      for (let i = 0; i < MAX_ATTEMPTS; i++) {
+        await runNextJob(d, refusing);
+        clock.set(new Date(clock.now().getTime() + backoffMs(i + 1)));
+      }
+      // Not "failed": the intent (off) stays recorded, and so does the error.
+      expect(d.uow.state.mailboxes[0]).toMatchObject({ status: intent });
+      expect(d.uow.state.mailboxes[0]?.lastError).toContain("mail server down");
+      // A later run (the reconciler's re-queue, a backfill or migration 0032), with no password waiting, turns it off.
+      expect(d.uow.state.mailboxPasswords.find((p) => p.mailboxId === "m1")?.pendingHash ?? null).toBeNull();
+      await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+      while (await runNextJob(d, working));
+      expect(working.boxes[0]?.suspended).toBe(true);
+      expect(d.uow.state.mailboxes[0]?.status).toBe(intent);
+    }
+  });
+
   it("turns off a catch-all whose mailbox ends up failed, and queues the domain", async () => {
     const { d, clock } = setup();
     d.uow.state.catchAll.push({ domainId: "d1", mailboxId: "m1" });
@@ -699,7 +728,7 @@ describe("customer Sieve lock drift and backfill", () => {
     return { mail, open };
   }
 
-  it("re-queues active mailboxes whose lock is missing, and the job re-applies it", async () => {
+  it("re-queues every mailbox of ours whose lock is missing (but one still being set up), and the job re-applies it", async () => {
     const { d } = setup();
     const base = {
       accountId: "a1",
@@ -713,23 +742,36 @@ describe("customer Sieve lock drift and backfill", () => {
       { ...base, id: "m1", address: "open@example.test", status: "active", stalwartId: "x1" },
       { ...base, id: "m2", address: "fine@example.test", status: "active", stalwartId: "x2" },
       { ...base, id: "m3", address: "paused@example.test", status: "suspended", stalwartId: "x3" },
+      { ...base, id: "m4", address: "broken@example.test", status: "failed", stalwartId: "x4" },
+      { ...base, id: "m5", address: "resuming@example.test", status: "provisioning", stalwartId: "x5" },
     ];
     const { mail, open } = lockingServer();
     await mail.ensureDomain("example.test");
     await mail.ensureMailbox(ensureArgs("open@example.test", 1));
     await mail.ensureMailbox(ensureArgs("fine@example.test", 1));
     await mail.ensureMailbox({ ...ensureArgs("paused@example.test", 1), suspended: true });
-    open.add("open@example.test"); // e.g. created before the lock existed, or changed by hand
-    open.add("paused@example.test"); // suspended: its own permissions lock it; not reported here
+    await mail.ensureMailbox(ensureArgs("broken@example.test", 1));
+    await mail.ensureMailbox({ ...ensureArgs("resuming@example.test", 1), suspended: true });
+    // e.g. made before a denial existed (file storage, 2026-10-31), or changed by hand. A suspension written before a
+    // new denial lacks it too; a failed mailbox keeps whatever it last had. One being resumed has its own job.
+    for (const a of ["open", "paused", "broken", "resuming"]) open.add(`${a}@example.test`);
 
     const report = await reconcile(d, mail);
-    expect(report.sieveLockMismatch).toEqual(["open@example.test"]);
+    expect(report.sieveLockMismatch).toEqual(["open@example.test", "paused@example.test", "broken@example.test"]);
     expect(report.clean).toBe(false);
-    expect(d.uow.state.jobs.map((j) => [j.kind, j.subjectId])).toEqual([["mailbox.ensure", "m1"]]);
-    expect(d.uow.state.audit.at(-1)?.meta).toMatchObject({ sieveLockMismatches: 1, requeued: 1 });
+    expect(d.uow.state.jobs.map((j) => [j.kind, j.subjectId])).toEqual([
+      ["mailbox.ensure", "m1"],
+      ["mailbox.ensure", "m3"],
+      ["mailbox.ensure", "m4"],
+    ]);
+    expect(d.uow.state.audit.at(-1)?.meta).toMatchObject({ sieveLockMismatches: 3, requeued: 3 });
     while (await runNextJob(d, mail)) {
       /* drain */
     }
+    // The suspension stays in force; the failed one's ensure was its retry.
+    expect(mail.boxes.find((b) => b.address === "paused@example.test")?.suspended).toBe(true);
+    expect(d.uow.state.mailboxes.find((m) => m.id === "m4")?.status).toBe("active");
+    // The one being resumed isn't reported: its own queued ensure writes the lock (its account is suspended until then).
     expect((await reconcile(d, mail)).sieveLockMismatch).toEqual([]);
   });
 
@@ -1098,6 +1140,26 @@ describe("mailbox passwords (worker)", () => {
     await enqueueProvisioning(d, { kind: "mailbox.password", subjectId: "m1" });
     await runNextJob(d, mail);
     expect(d.uow.state.mailboxPasswords[0]?.pendingHash).toBeNull();
+  });
+
+  it("a failed turn-on retried (by the reconciler or a backfill) still waits for an administrator's password", async () => {
+    const { d } = setup();
+    const mail = fakeMailServer();
+    await provision(d, mail);
+    d.uow.state.mailboxes[0]!.status = "suspended";
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    while (await runNextJob(d, mail));
+    await d.uow.run((r) => r.mailboxPasswords.setPending("m1", PHC(21), "grant-21"));
+    // The resume gave up earlier: the mailbox is failed, its account still suspended on the mail server.
+    d.uow.state.mailboxes[0]!.status = "failed";
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(d.uow.state.jobs.at(-1)).toMatchObject({
+      kind: "mailbox.ensure",
+      status: "queued",
+      lastError: "Error: waiting for a new password to reach the mail server",
+    });
+    expect(mail.boxes[0]?.suspended).toBe(true);
   });
 
   it("turning an account back on waits for an administrator's password still waiting (a leaver's cut-off)", async () => {

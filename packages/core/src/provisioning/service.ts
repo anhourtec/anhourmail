@@ -189,9 +189,10 @@ async function apply(deps: Deps, mail: MailServer, job: ClaimedJob): Promise<voi
   const creating = mailbox.stalwartId === null;
   // Turning an existing account back on (a resume or restore) waits for an administrator's password that is still
   // waiting, e.g. one that cut a leaver's sign-in off: the account stays off until the old password no longer works.
+  // A failed mailbox counts too: its ensure is a retry of the same turn-on (a resume that gave up while waiting).
   if (
     !creating &&
-    mailbox.status === "provisioning" &&
+    (mailbox.status === "provisioning" || mailbox.status === "failed") &&
     mailbox.pendingPasswordHash &&
     !mailbox.pendingPasswordByOwner
   ) {
@@ -361,8 +362,9 @@ export type DriftReport = {
    */
   suspensionMismatch: { address: string; desired: boolean; actual: boolean }[];
   /**
-   * Active mailboxes whose customer lock is missing on the mail server (the user could write their own Sieve or
-   * VacationResponse). Re-queued like suspension drift; `mailbox.ensure` re-applies the lock.
+   * Mailboxes of ours (any status but provisioning) whose customer lock is missing on the mail server (the user could
+   * write their own Sieve or VacationResponse, or use file storage). Re-queued like suspension drift; `mailbox.ensure`
+   * re-applies the lock.
    */
   sieveLockMismatch: string[];
   clean: boolean;
@@ -441,11 +443,17 @@ export async function reconcile(
     if (actual !== undefined && actual !== want) {
       report.suspensionMismatch.push({ address: m.address, desired: want, actual });
       requeue.push(m.id);
-    } else if (m.status === "active" && haveLocked.get(m.address) === false) {
-      // Suspended/deleting accounts are locked by their superset permissions; only active ones can drift open.
-      report.sieveLockMismatch.push(m.address);
-      requeue.push(m.id);
     }
+  }
+  // The customer lock (every denial in `CUSTOMER_DENIALS`; the suspension is a superset, so it holds there too) on
+  // every account of ours on the mail server, whatever its status, except one still being set up (its own job writes
+  // it): a failed mailbox's account keeps whatever permissions it last had, and a denial added later (file storage,
+  // 2026-10-31) reaches an account only when its permissions are written again. Re-queued: `mailbox.ensure` writes them
+  // (a failed one's ensure is its retry; it still waits for an administrator's password before turning anything on).
+  for (const m of known) {
+    if (m.status === "provisioning" || haveLocked.get(m.address) !== false) continue;
+    report.sieveLockMismatch.push(m.address);
+    if (!requeue.includes(m.id)) requeue.push(m.id);
   }
   report.clean =
     report.missingOnMailServer.domains.length +

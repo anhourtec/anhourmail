@@ -225,6 +225,13 @@
       "when": 1793417913478,
       "tag": "0031_mailbox_sender_name_backfill",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1793429180201,
+      "tag": "0032_mailbox_file_storage_lockdown",
+      "breakpoints": true
     }
   ]
 }
