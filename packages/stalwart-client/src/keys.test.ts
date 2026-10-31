@@ -490,18 +490,17 @@ describe("service accounts", () => {
     const wider: string[] = [];
     expect(await serviceAccountProblems(mgmt, "audit", "d1", { olderKeysMayBeWider: true, wider })).toEqual([]);
     expect(wider).toEqual(["old"]);
-    // Exactly one key may carry exactly the set: two (or none) is a problem whatever their times (the server gives
-    // whole seconds, so keys can tie); a key narrower than the set, or without a creation time, is still a problem.
+    // A role whose set didn't change: the old key and the new one both carry exactly the set, which is fine (seen on
+    // the first rotation run, 2026-10-31). No exact key at all is a problem; a key narrower than the set, or without a
+    // creation time, is still a problem.
     state.keys = [key("a", "2026-10-31T00:00:00Z", want), key("b", "2026-10-31T00:00:00Z", want)];
-    expect(await serviceAccountProblems(mgmt, "audit", "d1", { olderKeysMayBeWider: true })).toEqual([
-      "svc-audit: 2 keys carry exactly its set while rotating (expected one, the new key)",
-    ]);
+    expect(await serviceAccountProblems(mgmt, "audit", "d1", { olderKeysMayBeWider: true })).toEqual([]);
     state.keys = [
       key("a", "2026-10-01T00:00:00Z", { ...want, jmapFileNodeGet: true }),
       key("b", "2026-10-31T00:00:00Z", { ...want, jmapFileNodeGet: true }),
     ];
     expect(await serviceAccountProblems(mgmt, "audit", "d1", { olderKeysMayBeWider: true })).toEqual([
-      "svc-audit: 0 keys carry exactly its set while rotating (expected one, the new key)",
+      "svc-audit: no key carries exactly its set while rotating",
     ]);
     state.keys = [key("old", "2026-10-01T00:00:00Z", { authenticate: true }), key("new", "2026-10-31T00:00:00Z", want)];
     expect(await serviceAccountProblems(mgmt, "audit", "d1", { olderKeysMayBeWider: true })).toEqual([

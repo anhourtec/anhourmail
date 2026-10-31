@@ -159,8 +159,9 @@ export async function issueServiceKey(
  * custom role holding exactly its key's set, no account-level permissions, no password or app password, at least one
  * API key, and every key `Replace` with exactly the set (and `allowedIps`, when given). Names only, never secrets.
  *
- * `olderKeysMayBeWider` (a key rotation after the set shrank): exactly one key must carry exactly the set (the new
- * one); a key whose set holds the whole current set plus more is then not a problem but is returned in `wider` — its
+ * `olderKeysMayBeWider` (a key rotation): at least one key must carry exactly the set (the new one; an older key of a
+ * role whose set didn't change carries it too); a key whose set holds the whole current set plus more is then not a
+ * problem but is returned in `wider` — its
  * role caps it to the set (checked exactly above), so it can do nothing more, and it goes once the operator has
  * switched to the new key and pruned. Keys are told apart by their sets, not their creation times (the server gives
  * whole seconds, so two keys can tie); a key without a creation time is a problem (pruning keeps the newest).
@@ -222,11 +223,7 @@ export async function serviceAccountProblems(
     const exact = keys.filter(
       (k) => k.permissions?.["@type"] === "Replace" && same(on(k.permissions.permissions), want),
     );
-    if (exact.length !== 1) {
-      problems.push(
-        `${name}: ${String(exact.length)} keys carry exactly its set while rotating (expected one, the new key)`,
-      );
-    }
+    if (exact.length === 0) problems.push(`${name}: no key carries exactly its set while rotating`);
   }
   return problems;
 }
