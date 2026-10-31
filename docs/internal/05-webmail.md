@@ -1,6 +1,6 @@
 # 05 — Webmail
 
-Last updated: 2026-10-31 (sender name = the one source in the control plane, identities renamed to it; mailboxes shared with you: no "Shared with you" list or in-place switch in the UI — they open only with Open another mailbox, in a tab named after the mailbox, with Your mailbox in its account menu; no banner; a session left on a shared mailbox goes back to the own one; the account menu tidied (maintainer decision); forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
+Last updated: 2026-10-31 (remote images: the person's own mail in Sent loads once with no unverified line or remember choice; sender name = the one source in the control plane, identities renamed to it; mailboxes shared with you: no "Shared with you" list or in-place switch in the UI — they open only with Open another mailbox, in a tab named after the mailbox, with Your mailbox in its account menu; no banner; a session left on a shared mailbox goes back to the own one; the account menu tidied (maintainer decision); forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
 notifications; quoted replies; compose image placeholders; first-sign-in password step; sign-in links not pre-filled).
 
 **Status (2026-10-22): slice 1 is built** — webmail sign-in (OAuth code flow + PKCE, tokens sealed server-side), the
@@ -836,7 +836,11 @@ Built 2026-10-29. `server/webmail/{sanitize,image-proxy,remote-image}.ts`, `app/
   moves to the first; Escape closes it and returns focus); "Always" remembers and loads. Without a sender key it
   loads at once and the notice says why it isn't remembered (below). After loading, "Stop loading from this sender" /
   "Always load from this sender" toggles it. The decision is `rememberOffer` in `remote-images.ts`; "Forget all" in
-  Reading settings. Both `contacts` and remembered
+  Reading settings. **The person's own mail** (2026-10-31): a message in the open mailbox's Sent folder (by its
+  `mailboxIds` and the folder role `sent`, never by the From address, which anyone can forge into an inbox; in a
+  shared mailbox's tab, that mailbox's own Sent) stays blocked until "Load images" too, but loads once with no choice
+  and no unverified line: there is no sender to confirm or remember (`own` on `MessageContent`, from the reader). Its
+  Sent copy has no sender key, as the internal-mail marker is added only on local delivery. Both `contacts` and remembered
   senders need a **verified From** (`senderVerified` in `image-proxy.ts`): our own trusted Authentication-Results show
   DMARC passing for the From domain or DKIM passing for it or a parent domain, **or** our own server's internal-mail
   marker vouches that the From address submitted the message here (`isInternalMail` in `original.ts`; ADR-0019
@@ -852,7 +856,7 @@ Built 2026-10-29. `server/webmail/{sanitize,image-proxy,remote-image}.ts`, `app/
 - **Notice copy.** Blocked: "N remote images blocked · N trackers removed — Senders can't see when or where you
   opened this. Loading them goes through our privacy proxy, so the sender never sees your IP address." Loaded:
   "Images loaded through our privacy proxy — The sender can't see your IP address or your browser." Unverified
-  sender (no sender key, mode not `always`), in both states: "We can't confirm this message came from <domain>, so
+  sender (no sender key, mode not `always`, not in Sent), in both states: "We can't confirm this message came from <domain>, so
   we'll ask again next time." (domain in mono; no protocol names in the UI).
 - **Limits** (`REMOTE_IMAGES` in `packages/shared/src/webmail.ts`, published): 5 MB per image, 100 per message,
   3 redirects, 10 s, links valid 60 min, 500 remembered senders. Rate tier `webmailImage`.
