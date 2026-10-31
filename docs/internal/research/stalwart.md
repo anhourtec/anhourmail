@@ -532,7 +532,8 @@ Probed with throwaway `dev.test` accounts; the webmail settings (05-webmail.md "
 - **Quota/get** (`urn:ietf:params:jmap:quota`) returns one `octets` quota with `scope: "account"`, `used` and
   `hardLimit` (the account's `maxDiskQuota`).
 - **Identity/set** updates `name`, `textSignature` and `htmlSignature` on the account's own identities (aliases
-  have their own identity each; the default `name` is the address).
+  have their own identity each; a new identity is named after the account description, or the address without one —
+  re-checked 2026-10-31; changing the description never renames existing identities).
 - **Identity signatures are capped at 2,047 bytes** each (`htmlSignature`, `textSignature`; measured 2026-10-29 on
   v0.16.27 with the integration test: 2,047 ASCII characters or 1,023 two-byte characters are stored, 2,048 is
   refused in `notUpdated` with `invalidProperties`, "Field could not be set."). Signatures with embedded images don't

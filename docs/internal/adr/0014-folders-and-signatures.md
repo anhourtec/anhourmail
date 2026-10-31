@@ -144,3 +144,38 @@ Signatures decision 1 and 2 are now built, with these changes from the original 
   (`webmail_preference.signatures_started_at` makes it once only). The identity route now changes the sender name
   only.
 - Templates, the disclaimer and shared-mailbox signature sets (decisions 3–5) are unchanged and still ahead.
+
+## Update (2026-10-31) — sender names: one source, mirrored to the identities
+
+Maintainer decision (2026-10-29, `09-roadmap.md`): the mailbox display name is the one source, a person's own mailbox
+follows their profile name unless an admin sets another, and the webmail sender name shows the same value (rule 61).
+Until now the identity's `name` was a third, separate value edited only in the webmail.
+
+- **Source.** `mailbox.display_name` null = follow the mailbox's person (`auth_user.name`); a value = an admin's
+  custom name; no person and no value = none (`mailboxSenderName`, `packages/core/src/people/names.ts`). Migration
+  0030 turned stored copies of the person's name into "follow".
+- **Probed on v0.16.27** (throwaway accounts, removed): Stalwart creates an account's identities lazily, on the first
+  `Identity/get`, one for the address and one per enabled alias, each named after the account `description` (none:
+  the address); an alias added later gets the description current then. Changing the description never renames
+  identities that exist. A management credential with `impersonate` can `Identity/get`/`set` another account's
+  identities by passing its id (the dev admin), and `name: ""` is accepted (checked by `sender-name.int.test.ts`).
+- **Mirroring.** The worker writes the sender name as the description (`mailbox.ensure`, queued by every change:
+  a profile name edit for each mailbox that follows it, a display-name edit, "Make this a user", creation; migration
+  0031 queued every existing mailbox once). Existing identities are renamed by the **webmail with the session's own
+  token** whenever it reads them and a name differs (`WebmailService.identities`; every identity of the mailbox, as
+  Stalwart names them), and the webmail sends with the control-plane name regardless. **Masked aliases send with no
+  name** (maintainer default, 2026-10-31): a masked alias exists so a website can't tie it to the person, and a name
+  in From would. Their identities are renamed to `""` and drafts, sends and delegated sends from them carry no name
+  (`webmailSendingNames` gives the webmail the mailbox's masked alias addresses with its sender name, in one read);
+  plain aliases keep the sender name.
+  No key scope changed: neither the worker's provisioning key (no `impersonate`, by design) nor the web app's
+  operations key (no identity permissions) can write identities. Consequence: an IMAP/SMTP or third-party JMAP client
+  sees an old identity name until the mailbox next uses the webmail (SMTP clients set their own From name anyway).
+  Closing that gap would mean adding `jmapIdentityGet` + `jmapIdentityUpdate` to the operations key (new production
+  keys and a security review) — left to the maintainer.
+- **Editing.** Webmail Settings → Account → Sender name now edits the person's name (`setWebmailSenderName`, audited
+  as `account.profile_changed`, `via: webmail`) when the mailbox follows its person and that person is in no other
+  account (the photo rule, ADR-0022); otherwise read-only with why. The per-identity route
+  (`PATCH /api/webmail/settings/identities/:id`, audit `identity.changed`) is gone; `PUT
+/api/webmail/settings/sender-name` replaces it. The console Profile gained "Edit name"; Mailboxes → Display name
+  offers "Use the person's name" or a custom name.

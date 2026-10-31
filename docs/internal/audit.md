@@ -1,6 +1,6 @@
 # Audit
 
-Last updated: 2026-10-30 (`platform.mail_rules_upgraded` for the managed-script upgrade; mailbox delegation, ADR-0026: `delegation.sent_as`, `delegation.sent_on_behalf`, `delegation.send_failed`, `delegation.send_cancelled` and `delegation.tagged_copy_left` for sending from a delegated mailbox, slice 13; `delegation.mailbox_opened` for opening a delegated mailbox in the webmail; `delegation.granted` / `delegation.revoked` per change, `mailbox.converted_to_shared`, `MutationOutcome.also`; `account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
+Last updated: 2026-10-31 (names as one source: `account.profile_changed` `name`, `via: webmail`; `identity.changed` retired; 2026-10-30: `platform.mail_rules_upgraded` for the managed-script upgrade; mailbox delegation, ADR-0026: `delegation.sent_as`, `delegation.sent_on_behalf`, `delegation.send_failed`, `delegation.send_cancelled` and `delegation.tagged_copy_left` for sending from a delegated mailbox, slice 13; `delegation.mailbox_opened` for opening a delegated mailbox in the webmail; `delegation.granted` / `delegation.revoked` per change, `mailbox.converted_to_shared`, `MutationOutcome.also`; `account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
 
 Every meaningful action is recorded, tamper-evident, searchable and visible to the right people. Audit is a core module, not a logging side effect.
 
@@ -139,8 +139,10 @@ skipped inactive, failed) when it wrote or failed anything.
 `passwordGenerated`, `requirePasswordChange`, `profileFields` — the names of the optional profile fields given, never
 their values — and `platformAddress` for a free address). One entry covers the mailbox, the console login, the
 membership and the owner link, written in the same transaction. A User Administrator asking for a role other than
-Member is recorded as `denied`. Never the password (generated or chosen). `mailbox.renamed` (meta: none; the name is
-personal data) when an admin edits a mailbox's display name. `auth.password_changed` carries `firstPasswordReplaced:
+Member is recorded as `denied`. Never the password (generated or chosen). `mailbox.renamed` (meta: `cleared` — true
+when the custom name was removed so the mailbox follows its person again; never the name, personal data) when an admin
+edits a mailbox's display name; from the webmail of a mailbox without a person (read-only there) it is `denied`
+`admin_set`. `auth.password_changed` carries `firstPasswordReplaced:
 true` when it lifts the first-sign-in password change.
 Mailbox handovers (`07-security.md` "Mailbox passwords"): the webmail's own change while an administrator's password
 is waiting or never applied is `mailbox.password_changed` `denied` `password_change_pending` (written as the mailbox,
@@ -206,11 +208,19 @@ the hold cancelled it (after the mail server cancelled it; retried once, and the
 be written); `delegation.tagged_copy_left` — sent, but the temporary copy holding the on-behalf tag couldn't be destroyed
 (twice); its tag expires within minutes.
 
+`identity.changed` is no longer written (since 2026-10-31): the sender name is the person's name or the mailbox's
+display name, recorded as `account.profile_changed` or `mailbox.renamed`. It stays in the catalogue for older entries.
+
 Profile details: `account.profile_changed` (target = the person, label their sign-in email; meta: `fields` — the names
-of the optional profile fields that changed, never their values — and `self`). An admin's edit is written to that
+of the optional profile fields that changed, and `name` when their name changed, never the values — and `self`; `via:
+"webmail"` when the person changed their name as the sender name in their mailbox's webmail, whose actor is `system`
+named after the mailbox). A name change also queues `mailbox.ensure` for each mailbox that follows the person (no
+entry of its own: the job only mirrors it to the mail server). An admin's edit is written to that
 account's log; the person's own edit from their Profile page is written to every account they belong to (the platform
 log when they belong to none), so its admins see it. A User Administrator editing an admin's profile is `denied`
-(`forbidden`); an admin editing someone who also belongs to another account is `denied` (`other_account`).
+(`forbidden`); an admin editing someone who also belongs to another account is `denied` (`other_account`); staff
+acting as someone are `denied` (`act_as`). From the webmail, a sender name an admin set is `denied` `admin_set`, a
+person also in another account `other_account` and a mailbox whose person left its account `not_member`.
 
 Webmail signatures (05-webmail.md "Signatures"), in the mailbox's account as a `system` actor named by the mailbox
 address, target = the mailbox: `webmail.signature_added` (meta `signature` id, `bytes` of HTML, `images`, `signatures`

@@ -1,6 +1,6 @@
 # Roles and permissions
 
-Last updated: 2026-10-30 (mailbox delegation, ADR-0026: mailboxes shared with the person in the webmail; console routes and RBAC harness rows; `delegation.manage.any` for User Administrators with guard rail 8; data export and account deletion, ADR-0025; staff support access / act-as, ADR-0023; profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
+Last updated: 2026-10-31 (webmail sender name route; names edited through the profile rule; matrix unchanged; 2026-10-30: mailbox delegation, ADR-0026: mailboxes shared with the person in the webmail; console routes and RBAC harness rows; `delegation.manage.any` for User Administrators with guard rail 8; data export and account deletion, ADR-0025; staff support access / act-as, ADR-0023; profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
 
 **Source of truth: `packages/shared/src/rbac`.** That code is canonical: the permission list, the role → permission matrix, critical-permission flags and guard rails. The UI (what to show), the API (what to allow) and the RBAC harness (`npm run test:rbac`) all derive from it. This document explains the matrix for people. If the two disagree, the code wins, and this file is updated in the same change (rule 35).
 
@@ -160,7 +160,10 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
      **404**. Viewing them needs `member.read`. The details belong to the person, not the account: someone who also
      belongs to another account is edited only by themself (admins get **403** "This person also belongs to another
      account, so only they can change their profile.", audited as `denied` `other_account`; the panel hides Edit), so
-     one account's admins can't change what another account sees.
+     one account's admins can't change what another account sees. Someone holding any platform role (Global
+     Administrator or another staff role) counts the same, even with one account (`holdsPlatformRole`): a customer
+     Owner can't rename staff or change their photo, from the console or a mailbox's webmail. A malformed body is
+     **400** `bad_request` and changes nothing (never read as "no details").
    - Profile photos (ADR-0022, `avatars/service.ts`; no new permission): a person's photo follows the profile details
      rule exactly — the person themself (`self.profile.manage`: `POST`/`DELETE /api/me/avatar`, their own panel, or
      the webmail of one of their mailboxes), `member.manage` for a Member and an Owner for anyone else
@@ -168,7 +171,8 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
      outside the account). A mailbox without a person has its own photo: `mailbox.manage`
      (`POST`/`DELETE …/mailboxes/:mailboxId/avatar`; a mailbox with a person is **409**, it shows the person's) or that
      mailbox's own webmail session (`/api/webmail/settings/avatar`). The webmail of a person's mailbox changes the
-     person's photo only while they are a member of that mailbox's account and of no other (else **403**, audited as
+     person's photo only while they are a member of that mailbox's account and of no other, and hold no platform role
+     (else **403**, audited as
      `denied` `other_account`, or `not_member` once they've left it): an admin who resets the mailbox password can't use
      it to change what another account shows. Only current memberships count anywhere (a removed person's old
      mailboxes keep their owner link, but that account no longer sees their photo). Seeing a photo (`GET /api/avatars/:kind/:id`):
@@ -319,7 +323,13 @@ personas 403), the public start and redemption on the webmail origin.
 Webmail **settings** (`/api/webmail/settings/*`) act on the session's own mailbox only — its preferences, its own
 identities, its own Sieve rules — and every change carries the account the app is showing (`X-Webmail-Account`).
 Mail-flow changes are audited in the mailbox's account as a `system` actor named by the mailbox, so the account's
-admins see them. The forwarding confirmation (`POST /api/webmail/forwarding/confirm`) is public: the one-time token
+admins see them. The **sender name** (`PUT /api/webmail/settings/sender-name`) is the mailbox person's name: it
+follows the console's profile edit rule from the mailbox's side (no new permission; the session proved the mailbox's
+password) — allowed only when the mailbox follows its person and that person is in no other account and holds no
+platform role, else **403**
+(`admin_set`, `other_account`, `not_member`, audited as denied). The console name edit is the existing profile edit
+(`self.profile.manage` for yourself; `member.manage` for a Member, an Owner for anyone; never during act-as). The
+forwarding confirmation (`POST /api/webmail/forwarding/confirm`) is public: the one-time token
 is the authorisation, and an unknown, used or expired token is a 404.
 
 **Mailboxes shared with the person** (ADR-0026 §6): no permission of its own — a grant on the mailbox

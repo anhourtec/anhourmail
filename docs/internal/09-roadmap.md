@@ -1,6 +1,6 @@
 # 09 — Roadmap
 
-Last updated: 2026-10-30. Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
+Last updated: 2026-10-31 (names as one source built). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
 
 ## Path to production (as of 2026-10-29)
 
@@ -62,7 +62,10 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
   sidebar, in the conventional enterprise layout (the mailbox's name, expandable to Inbox, Drafts, Sent, Deleted,
   Archive and Junk).
 - **Names:** the mailbox display name is the one source; a person's own mailbox follows their profile name unless an
-  admin sets another; the webmail sender name shows the same value (CLAUDE.md rule 61).
+  admin sets another; the webmail sender name shows the same value (CLAUDE.md rule 61). **Built 2026-10-31**
+  (`04-data-model.md` "Names", ADR-0014 update): `mailbox.display_name` null = follow the person; Profile "Edit name";
+  Mailboxes → Display name "Use the person's name" / Custom; webmail Sender name edits the person's name; the worker
+  writes the description and the webmail renames identities with the session's token (migrations 0030, 0031).
 
 **Also built 2026-10-30 (maintainer reports from pre-staging):** writing from a shared mailbox's own tab, "Shared with you" removed from the webmail (shared mailboxes open only with Open another mailbox; sidebar folder trees per shared mailbox are a future item), remote images treat mail submitted on our own server as a verified sender (keyed `X-AnhourMail-Internal` marker, stripped from port-25 mail; ADR-0019), and the forwarding guard: managed forwarding skips mail failing DMARC and own-domain mail without a pass for that domain (maintainer decision; ADR-0019 "forwarding and DMARC").
 
@@ -81,7 +84,7 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
 6. ~~Avatars: photo upload on console Profile and in webmail Account, synced everywhere~~ — done 2026-10-29
    (ADR-0022: one re-encoded photo per person or person-less mailbox in Postgres, served same-origin). The name check
    found the console name and the webmail sender name are separate values (now labelled so; `04-data-model.md`
-   "Names"); whether the sender name should follow the console's mailbox display name is still open.
+   "Names"); the sender name now follows them as one source (built 2026-10-31, "Names" above).
 
 7. **Pre-staging on one VM (now, deployed 2026-10-23; live-server fixes open).** Deploy `anhourmail-ops` topology A
    on the chosen provider (`deploy.md`): real DNS, ACME certificates, rDNS, inbound and outbound mail with a real

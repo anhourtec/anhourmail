@@ -1,6 +1,6 @@
 # 01 — Architecture
 
-Last updated: 2026-10-30 (webmail: no "Shared with you" list or in-place switch, shared mailboxes open only in their own tab, maintainer decision; mailbox delegation, ADR-0026: writing from a shared mailbox's view through an own-mailbox pin; the webmail UI and tabs pinned to a shared mailbox per request, slice 14; sending as and on behalf of a delegated mailbox from the webmail BFF, slice 13; the webmail BFF opens delegated mailboxes behind the delegation gate; grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
+Last updated: 2026-10-31 (names as one source: sender name in the control plane, mirrored to Stalwart; webmail: no "Shared with you" list or in-place switch, shared mailboxes open only in their own tab, maintainer decision; mailbox delegation, ADR-0026: writing from a shared mailbox's view through an own-mailbox pin; the webmail UI and tabs pinned to a shared mailbox per request, slice 14; sending as and on behalf of a delegated mailbox from the webmail BFF, slice 13; the webmail BFF opens delegated mailboxes behind the delegation gate; grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
 
 ## Overview
 
@@ -76,8 +76,10 @@ mail clients ─► Stalwart 465/587/993/995 (TLS by Stalwart itself)    MX traf
 - **Stalwart is the source of truth for mail state:** messages, mail credentials, DKIM keys and their published zone (`dnsZoneFile`). The control plane caches only the DKIM public keys (`customer_domain.dkim_keys`, written by the worker's `domain.ensure`) so the console can show customers the TXT records to publish without calling Stalwart.
 - **Webmail settings are split by what they control** (05-webmail.md "Settings"): display preferences per mailbox in
   Postgres (`webmail_preference`); a person's own mail flow (automatic replies, forwarding, junk lists) in one
-  managed Sieve script in their Stalwart account, written by the BFF with their own token (not a provisioning job:
-  it is mailbox data, like folders); sender names on their JMAP identities. Named signatures and their two defaults
+  managed Sieve script in their Stalwart account, written by the BFF with the operations key (customer mailboxes can't
+  write Sieve; not a provisioning job: it is mailbox data, like folders); the sender name in the control plane (the
+  mailbox's custom display name, else its person's name; `people/names.ts`), mirrored to the account description by
+  the worker and to the JMAP identities by the webmail with the session's own token. Named signatures and their two defaults
   are control-plane data per mailbox (`webmail_signature`), sanitised on save; the default for new messages is copied
   to the mailbox's identities (within the mail server's 2 KB limit) for other JMAP apps. Only the forwarding
   target's confirmation lives in the control plane (`forwarding_target`), and the BFF writes a redirect only to a
@@ -106,7 +108,8 @@ sign-in", `user_profile.must_change_password` gates the console (only `self` per
 cleared by `afterPasswordChange`) and `mailbox.must_change_password` gates the webmail (a change-password step
 before the inbox, and 403 `password_change_required` from every webmail API route but the change and sign-out; cleared
 by the worker once the person's own password is applied, `07-security.md` "Mailbox passwords"). The two passwords then diverge as usual. The mailbox's
-display name is sent to Stalwart as the account `description`, which seeds the sending identity's name.
+sender name — the person's name, since the mailbox follows it (`mailbox.display_name` null) — is sent to Stalwart as
+the account `description`, which seeds the sending identities' names (04-data-model.md "Names").
 
 **Removing someone** (`people/service.ts` `removeMember`) is the reverse, for leavers: in the same audited
 transaction as the membership delete, each of their mailboxes in the account is released (`mailboxes.releaseOwner`,
@@ -164,8 +167,8 @@ sign-in as the active one (never a delegated entry), so drafts, uploads, the Fro
 person's own tab, and the server sends from the shared mailbox (`#sendDelegated`).
 
 **"Make this a user"** (`mailboxes/make-user.ts`) does the same for an existing unassigned mailbox (a shared address):
-login, membership, profile, owner link (`mailboxes.assignOwner`, conditional on no owner) and display name in one
-audited transaction, plus a new generated password queued as a `mailbox.password` job (with the management-proxy
+login, membership, profile and owner link (`mailboxes.assignOwner`, conditional on no owner; the person's name is the
+display name given, which the mailbox then follows) in one audited transaction, plus a new generated password queued as a `mailbox.password` job (with the management-proxy
 grant) and both first-sign-in flags set. It needs a fresh step-up because it replaces a password in use. Until an
 administrator's password is applied, the mailbox's own change is refused (409 `password_change_pending`) and console
 reset emails to the address are held (`consoleResetHeld`); a job that gives up keeps the hash and the console asks for
