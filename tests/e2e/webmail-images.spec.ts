@@ -2,12 +2,16 @@
 /**
  * Remote images in the webmail: the seeded newsletter's images stay blocked until "Load images", which sends each
  * signed image link to the image proxy and shows the answers as `data:` images inside the sandboxed frame. For a
- * verified sender "Load images" asks "Just this once" or "Always for <sender>"; "Always" remembers the sender, and
- * "Stop loading" forgets it. A sender that can't be verified loads once, with a line saying why it can't be
- * remembered. The person's own mail (in Sent) loads once with neither the question nor that line. The proxy's own
- * outbound fetch is covered by unit tests against a local server; here the browser's request to it is answered by the
- * test, so nothing leaves this machine (rule 19).
+ * verified sender "Load images" asks "Just this once" or "Always for <sender>"; "Always" adds the address to Safe
+ * senders (Settings → Junk and blocked senders shows it), whose images then load by themselves in every mode, and
+ * "Stop loading" removes it again (ADR-0027). A Safe senders domain loads a verified sender's images, never a forged
+ * From with that domain (delivered here over SMTP, unverified). A sender that can't be verified loads once, with a
+ * line saying why it can't be remembered. The person's own mail (in Sent) loads by itself, saying nothing about its
+ * sender. The proxy's own outbound fetch is covered by unit tests against a local server; here the browser's request
+ * to it is answered by the test, so nothing leaves this machine (rule 19).
  */
+import net from "node:net";
+
 import type { Page } from "@playwright/test";
 
 import { demoPassword } from "../support/demo-credentials";
@@ -15,6 +19,7 @@ import { expect, SIGN_IN_TIMEOUT, test, urls } from "./fixtures";
 
 const OWNER = "owner@demo-family.test";
 const CLUB = "news@harbour-reading.example";
+const CLUB_DOMAIN = "harbour-reading.example";
 
 /** A real 1×1 PNG. */
 const PNG = Buffer.from(
@@ -34,16 +39,104 @@ async function signIn(page: Page) {
   await page.addStyleTag({ content: "nextjs-portal { display: none !important; }" });
 }
 
-/** Back to the defaults (ask, nobody remembered), so a run never depends on or leaves behind a remembered sender. */
-async function resetImagePreferences(page: Page) {
+/** The account id the app shows (sent with every settings change). */
+async function shownAccount(page: Page): Promise<{ accountId: string; junk: Junk }> {
   const overview = await page.request.get(`${urls.webmail}/api/webmail/settings`);
   expect(overview.ok()).toBe(true);
-  const { data } = (await overview.json()) as { data: { accountId: string } };
+  const { data } = (await overview.json()) as { data: { accountId: string; rules: { junk: Junk } } };
+  return { accountId: data.accountId, junk: data.rules.junk };
+}
+
+type Junk = { blocked: string[]; safe: string[]; trustedOnly: boolean };
+
+/**
+ * Back to the defaults (ask, no fingerprints, the club neither safe nor blocked), so a run never depends on or leaves
+ * behind a remembered sender. `safe`: entries to add to Safe senders instead.
+ */
+async function resetImagePreferences(page: Page, safe: string[] = []) {
+  const { accountId, junk } = await shownAccount(page);
+  const headers = { Origin: urls.webmail, "X-Webmail-Account": accountId };
   const res = await page.request.patch(`${urls.webmail}/api/webmail/settings/preferences`, {
-    headers: { Origin: urls.webmail, "X-Webmail-Account": data.accountId },
+    headers,
     data: { remoteImages: "ask", imageSenders: [] },
   });
   expect(res.ok()).toBe(true);
+  const club = (e: string) => e === CLUB || e === CLUB_DOMAIN;
+  const saved = await page.request.put(`${urls.webmail}/api/webmail/settings/junk`, {
+    headers,
+    data: {
+      ...junk,
+      blocked: junk.blocked.filter((e) => !club(e)),
+      safe: [...junk.safe.filter((e) => !club(e)), ...safe],
+    },
+  });
+  expect(saved.ok()).toBe(true);
+}
+
+/**
+ * Delivers an HTML message with one remote image to the demo mailbox over SMTP, as another server would, with the
+ * club's address in From — nothing vouches for it, so the webmail can't verify it (dev only: no mail leaves the
+ * machine).
+ */
+async function deliverForged(subject: string): Promise<void> {
+  const body = [
+    `From: Harbour Reading Club <${CLUB}>`,
+    `To: ${OWNER}`,
+    `Subject: ${subject}`,
+    `Message-ID: <${String(Date.now())}.forged@harbour-reading.example>`,
+    "MIME-Version: 1.0",
+    "Content-Type: text/html; charset=utf-8",
+    "",
+    '<p>Our picks this week.</p><img src="https://cdn.harbour-reading.example/img/logo.png" width="120" height="40" alt="Logo">',
+    ".",
+  ].join("\r\n");
+  const lines = ["EHLO sender.test", `MAIL FROM:<${CLUB}>`, `RCPT TO:<${OWNER}>`, "DATA", body, "QUIT"];
+  const replies = await new Promise<string[]>((resolve) => {
+    const socket = net.connect({ host: "127.0.0.1", port: Number(process.env.STALWART_SMTP_PORT ?? 25) });
+    const out: string[] = [];
+    let buf = "";
+    let i = -1;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = () => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(out);
+    };
+    socket.setEncoding("utf8");
+    socket.on("data", (d: string) => {
+      buf += d;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        out.push(buf.trim().split("\r\n").at(-1) ?? "");
+        buf = "";
+        i += 1;
+        if (i >= lines.length || out.some((r) => /^5\d\d /.test(r))) finish();
+        else socket.write(`${lines[i] ?? ""}\r\n`);
+      }, 300);
+    });
+    socket.on("close", finish);
+    socket.on("error", finish);
+    setTimeout(finish, 15_000).unref();
+  });
+  expect(replies.some((r) => r.startsWith("250 2.0.0"))).toBe(true);
+}
+
+const settingsDialog = (page: Page) => page.getByRole("dialog", { name: "Settings" });
+
+/** Phones show an open message full screen: back to the list first. */
+async function closeMessage(page: Page) {
+  const close = page.getByRole("button", { name: "Close message" });
+  if (await close.isVisible()) await close.click();
+}
+
+async function openSettings(page: Page, tab: RegExp) {
+  await closeMessage(page);
+  const nav = page.getByRole("navigation", { name: "Folders" });
+  if (!(await nav.isVisible())) await page.getByRole("button", { name: "Toggle folders" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(settingsDialog(page)).toBeVisible();
+  await settingsDialog(page).getByRole("tab", { name: tab }).click();
+  return settingsDialog(page).getByRole("tabpanel");
 }
 
 /** Answers the image proxy with a PNG and records each request body. */
@@ -58,10 +151,8 @@ async function fakeImageProxy(page: Page) {
   return bodies;
 }
 
-const preferencesSaved = (page: Page) =>
-  page.waitForResponse(
-    (r) => r.url().endsWith("/api/webmail/settings/preferences") && r.request().method() === "PATCH",
-  );
+const safeSenderSaved = (page: Page, method: "POST" | "DELETE") =>
+  page.waitForResponse((r) => r.url().endsWith("/api/webmail/settings/junk/safe") && r.request().method() === method);
 
 async function reloadInbox(page: Page) {
   await page.reload();
@@ -98,7 +189,7 @@ test("remote images load through the image proxy once, or always for a verified 
   const reader = await openNewsletter(page);
   const notice = reader.getByRole("status").filter({ hasText: /remote images? blocked/ });
   await expect(notice).toContainText(/tracker removed/);
-  // A verified sender: no explanation, and no separate remember link before loading.
+  // A verified sender: no explanation, and no separate remember or stop link before loading.
   await expect(notice).not.toContainText("can't confirm");
   await expect(notice.getByRole("button", { name: "Always load from this sender" })).toHaveCount(0);
   const messageFrame = reader.locator("iframe");
@@ -141,26 +232,99 @@ test("remote images load through the image proxy once, or always for a verified 
   const blockedAgain = askedAgain.getByRole("status").filter({ hasText: /remote images? blocked/ });
   await expect(blockedAgain).toBeVisible();
 
-  // Always: loads and remembers the sender, so the next time the images load by themselves.
+  // Always: loads and adds the address to Safe senders, so the next time the images load by themselves.
   await blockedAgain.getByRole("button", { name: "Load images" }).click();
-  const saved = preferencesSaved(page);
+  const saved = safeSenderSaved(page, "POST");
   await blockedAgain.getByRole("button", { name: `Always for ${CLUB}` }).click();
-  expect((await saved).ok()).toBe(true);
+  const added = await saved;
+  expect(added.ok()).toBe(true);
+  // The browser named the message, never an address; the server read the From itself.
+  expect(Object.keys(added.request().postDataJSON() as object)).toEqual(["emailId"]);
+  expect(await added.json()).toMatchObject({ data: { safeSender: { kind: "address", value: CLUB }, changed: true } });
+  expect(patches).toEqual([]);
   const remembered = askedAgain.getByRole("status").filter({ hasText: "Images loaded through our privacy proxy" });
+  await expect(remembered).toContainText(`Images from ${CLUB} will load, and their mail won't go to Junk.`);
   await expect(remembered.getByRole("button", { name: "Stop loading from this sender" })).toBeVisible();
+
+  // Settings → Junk and blocked senders lists it, with what Safe senders now means.
+  const junkPanel = await openSettings(page, /^Junk and blocked senders/);
+  await expect(
+    junkPanel.getByText("Mail from these addresses or domains is never moved to Junk, and their images load."),
+  ).toBeVisible();
+  await expect(junkPanel.getByRole("list", { name: "Safe senders" })).toContainText(CLUB);
+
   await reloadInbox(page);
   const again = await openNewsletter(page);
   const auto = again.getByRole("status").filter({ hasText: "Images loaded through our privacy proxy" });
   await expect(auto).toBeVisible();
+  await expect(again.locator("iframe")).toHaveAttribute("srcdoc", /src="data:image\/png;base64,/);
 
-  // Forget it again (also leaves the demo mailbox as it was).
-  const forgot = preferencesSaved(page);
+  // Stop loading asks first (it removes the address from Safe senders too), then forgets it.
   await auto.getByRole("button", { name: "Stop loading from this sender" }).click();
-  expect((await forgot).ok()).toBe(true);
+  const confirm = auto.getByRole("group", { name: "Stop loading images from this sender" });
+  await expect(confirm).toContainText(`Stop loading images from ${CLUB}? This also removes it from Safe senders.`);
+  const removed = safeSenderSaved(page, "DELETE");
+  await confirm.getByRole("button", { name: "Stop loading", exact: true }).click();
+  expect((await removed).ok()).toBe(true);
   await expect(auto.getByRole("button", { name: "Always load from this sender" })).toBeVisible();
+  const after = await shownAccount(page);
+  expect(after.junk.safe).not.toContain(CLUB);
   await reloadInbox(page);
   const blocked = await openNewsletter(page);
   await expect(blocked.getByRole("status").filter({ hasText: /remote images? blocked/ })).toBeVisible();
+  await resetImagePreferences(page);
+  expect(consoleErrors).toEqual([]);
+});
+
+test("a Safe senders domain loads a verified sender's images by itself, never a forged From with that domain", async ({
+  page,
+  consoleErrors,
+}) => {
+  const bodies = await fakeImageProxy(page);
+  const subject = `Forged picks ${String(Date.now())}`;
+  await deliverForged(subject);
+  await signIn(page);
+  await resetImagePreferences(page, [CLUB_DOMAIN]);
+  await reloadInbox(page);
+
+  // The seeded newsletter's From is verified: its images load in "Always ask" without a question.
+  const reader = await openNewsletter(page);
+  const loaded = reader.getByRole("status").filter({ hasText: "Images loaded through our privacy proxy" });
+  await expect(loaded).toBeVisible();
+  expect(bodies).toHaveLength(4);
+  await expect(reader.locator("iframe")).toHaveAttribute("srcdoc", /src="data:image\/png;base64,/);
+  // Stopping names the domain entry it would remove.
+  await loaded.getByRole("button", { name: "Stop loading from this sender" }).click();
+  await expect(loaded.getByRole("group", { name: "Stop loading images from this sender" })).toContainText(
+    `Stop loading images from anyone at ${CLUB_DOMAIN}? This also removes ${CLUB_DOMAIN} from Safe senders.`,
+  );
+  await loaded.getByRole("button", { name: "Cancel" }).click();
+  await expect(loaded.getByRole("group", { name: "Stop loading images from this sender" })).toHaveCount(0);
+
+  // The same domain in a From nothing vouches for: blocked, with the reason, and nothing fetched.
+  await closeMessage(page);
+  const box = page.getByRole("searchbox", { name: "Search mail" });
+  await box.fill(`subject:${subject}`);
+  await box.press("Enter");
+  await page
+    .getByRole("listbox", { name: "Search results messages" })
+    .getByRole("option", { name: new RegExp(subject) })
+    .first()
+    .click();
+  const forged = page.getByRole("region", { name: "Message" });
+  const notice = forged.getByRole("status").filter({ hasText: /remote image blocked/ });
+  await expect(notice).toContainText(
+    `We can't confirm this message came from ${CLUB_DOMAIN}, so we'll ask again next time.`,
+  );
+  await expect(forged.locator("iframe")).not.toHaveAttribute("srcdoc", /src="data:image\/png/);
+  expect(bodies).toHaveLength(4);
+  // Its notice offers no way to remember it.
+  await notice.getByRole("button", { name: "Load images" }).click();
+  await expect(forged.getByRole("button", { name: /Just this once|Always for/ })).toHaveCount(0);
+  await expect(forged.getByRole("status").filter({ hasText: "Images loaded through our privacy proxy" })).toBeVisible();
+  await expect(forged.getByRole("button", { name: /from this sender/ })).toHaveCount(0);
+  // Out of the Inbox again, so runs don't pile up (Trash empties itself).
+  await forged.getByRole("button", { name: "Delete", exact: true }).click();
   await resetImagePreferences(page);
   expect(consoleErrors).toEqual([]);
 });
@@ -174,7 +338,7 @@ test("a sender that can't be verified loads once and says why it isn't remembere
     const json = (await res.json()) as { data?: { from?: { email: string }[]; senderKey?: unknown } };
     if (json.data?.from?.[0]?.email === CLUB) {
       json.data.senderKey = null;
-      Object.assign(json.data, { senderVerified: false });
+      Object.assign(json.data, { senderVerified: false, safeSender: null });
     }
     await route.fulfill({ response: res, json });
   });
@@ -199,7 +363,7 @@ test("a sender that can't be verified loads once and says why it isn't remembere
   expect(consoleErrors).toEqual([]);
 });
 
-test("your own sent mail keeps images blocked until loaded, without asking about its sender", async ({
+test("your own sent mail loads its images by itself, without asking about its sender", async ({
   page,
   consoleErrors,
 }) => {
@@ -219,10 +383,11 @@ test("your own sent mail keeps images blocked until loaded, without asking about
         blockedTrackers: 0,
         senderKey: null,
         senderVerified: false,
+        safeSender: null,
       });
     } else if (json.data?.from?.[0]?.email === CLUB) {
       json.data.from[0].email = OWNER;
-      Object.assign(json.data, { senderKey: null, senderVerified: false });
+      Object.assign(json.data, { senderKey: null, senderVerified: false, safeSender: null });
     }
     await route.fulfill({ response: res, json });
   });
@@ -240,26 +405,33 @@ test("your own sent mail keeps images blocked until loaded, without asking about
     .first()
     .click();
   const reader = page.getByRole("region", { name: "Message" });
-  const notice = reader.getByRole("status").filter({ hasText: /remote image blocked/ });
-  await expect(notice).toBeVisible();
-  await expect(notice).not.toContainText("can't confirm");
-  await expect(notice).not.toContainText("ask again");
-  expect(bodies).toHaveLength(0);
-  // Load images loads straight away (through the proxy, once): no question, no remember option.
-  await notice.getByRole("button", { name: "Load images" }).click();
+  // In "Always ask", with nothing clicked: loaded through the proxy, once, with no question or remember option.
   const loaded = reader.getByRole("status").filter({ hasText: "Images loaded through our privacy proxy" });
   await expect(loaded).toBeVisible();
-  await expect(reader.getByRole("button", { name: /Just this once|Always for/ })).toHaveCount(0);
-  await expect(loaded.getByRole("button", { name: /from this sender/ })).toHaveCount(0);
-  await expect(loaded).not.toContainText("can't confirm");
   await expect(reader.locator("iframe")).toHaveAttribute("srcdoc", /src="data:image\/png;base64,/);
   expect(bodies).toHaveLength(1);
+  await expect(reader.getByRole("button", { name: /Just this once|Always for|Load images/ })).toHaveCount(0);
+  await expect(loaded.getByRole("button", { name: /from this sender/ })).toHaveCount(0);
+  await expect(loaded).not.toContainText("can't confirm");
+  await expect(loaded).not.toContainText("ask again");
 
-  // An Inbox message forging the person's own address is still someone else's: it says it can't be confirmed.
+  // An Inbox message forging the person's own address is still someone else's: it asks, and says it can't be confirmed.
   await reloadInbox(page);
   const forged = await openNewsletter(page);
   await expect(forged.getByRole("status").filter({ hasText: /remote images? blocked/ })).toContainText(
     "We can't confirm this message came from demo-family.test, so we'll ask again next time.",
   );
+  expect(bodies).toHaveLength(1);
+  expect(consoleErrors).toEqual([]);
+});
+
+test("Reading settings point to Safe senders for images", async ({ page, consoleErrors }) => {
+  await signIn(page);
+  const reading = await openSettings(page, /^Reading/);
+  await expect(reading).toContainText("Images from your Safe senders always load.");
+  await reading.getByRole("button", { name: "Manage them in Junk and blocked senders" }).click();
+  const junk = settingsDialog(page).getByRole("tabpanel");
+  await expect(junk.getByRole("list", { name: "Safe senders" }).or(junk.getByText("None yet.").first())).toBeVisible();
+  await expect(junk.getByRole("heading", { name: "Safe senders" })).toBeVisible();
   expect(consoleErrors).toEqual([]);
 });
