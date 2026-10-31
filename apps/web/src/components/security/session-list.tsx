@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { callApi } from "../api";
+import { StepUpForm } from "./step-up-form";
 import { ConfirmDialog, inlineActionClass } from "../console/flyout";
 import { StatusText } from "../console/status-text";
 import { secondaryButtonClass } from "../ui-classes";
@@ -77,6 +78,13 @@ export function SessionList({ sessions, hasPasskeys }: { sessions: SessionRow[];
   const router = useRouter();
   const [confirm, setConfirm] = useState(false);
   const [removePasskeys, setRemovePasskeys] = useState(false);
+  const [stepUp, setStepUp] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const signOutOthers = () =>
+    callApi("/api/me/sessions", {
+      method: "DELETE",
+      ...(removePasskeys ? { body: { removePasskeys: true } } : {}),
+    });
   const others = sessions.filter((s) => !s.current).length;
   return (
     <div className="flex flex-col gap-3">
@@ -106,10 +114,13 @@ export function SessionList({ sessions, hasPasskeys }: { sessions: SessionRow[];
             setConfirm(false);
           }}
           onConfirm={async () => {
-            const res = await callApi("/api/me/sessions", {
-              method: "DELETE",
-              ...(removePasskeys ? { body: { removePasskeys: true } } : {}),
-            });
+            const res = await signOutOthers();
+            if (!res.ok && res.code === "step_up_required") {
+              // Removing every passkey needs the console password from the last few minutes (ADR-0028).
+              setConfirm(false);
+              setStepUp(true);
+              return null;
+            }
             if (!res.ok) return res.message;
             setConfirm(false);
             router.refresh();
@@ -130,12 +141,34 @@ export function SessionList({ sessions, hasPasskeys }: { sessions: SessionRow[];
                 }}
                 className="mt-1 size-4 accent-primary"
               />
-              <span className="am-small text-foreground">
-                Also remove all my passkeys (they sign in on their own; add them again afterwards)
-              </span>
+              <span className="am-small text-foreground">Also remove all my passkeys (add them again afterwards)</span>
             </label>
           )}
         </ConfirmDialog>
+      )}
+      {stepUp && (
+        <StepUpForm
+          why="Removing all your passkeys changes how you sign in, so it needs your console password."
+          confirmLabel="Confirm and sign out"
+          onConfirmed={async () => {
+            const res = await signOutOthers();
+            setStepUp(false);
+            if (!res.ok) {
+              setError(res.message);
+              return;
+            }
+            setRemovePasskeys(false);
+            router.refresh();
+          }}
+          onCancel={() => {
+            setStepUp(false);
+          }}
+        />
+      )}
+      {error && (
+        <p role="alert" className="am-small text-destructive">
+          {error}
+        </p>
       )}
     </div>
   );

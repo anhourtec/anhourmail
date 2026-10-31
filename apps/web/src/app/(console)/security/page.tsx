@@ -9,6 +9,7 @@ import { getSecurityOverview, type SecurityActivityItem } from "@anhourmail/core
 import { PageHeader } from "@anhourmail/ui/page-header";
 
 import { StatusText } from "@/components/console/status-text";
+import { PasskeyRecoveryCodes } from "@/components/security/passkey-recovery-codes";
 import { PasskeyReviewList, PasskeySettings } from "@/components/security/passkey-settings";
 import { SessionList } from "@/components/security/session-list";
 import { SignInPolicyForm } from "@/components/security/sign-in-policy";
@@ -26,6 +27,8 @@ const METHODS: Record<string, string> = {
   password: "password",
   "password+totp": "password and authenticator code",
   "password+recovery_code": "password and recovery code",
+  "password+passkey": "password and passkey",
+  "password+trusted_device": "password on a trusted browser",
   passkey: "passkey",
   totp: "authenticator code",
   recovery_code: "recovery code",
@@ -132,7 +135,7 @@ export default async function SecurityPage() {
             <div className="flex flex-col gap-1">
               <p className="am-h4">Check your passkeys</p>
               <p className="am-small text-foreground">
-                Your password was reset on {utc(data.passwordResetAt)}. Passkeys still sign you in on their own: remove
+                Your password was reset on {utc(data.passwordResetAt)}. Your passkeys are still your second step: remove
                 any you don&apos;t recognise.
               </p>
             </div>
@@ -162,13 +165,22 @@ export default async function SecurityPage() {
       <Section
         id="methods"
         title="How you sign in"
-        description="Add a second step after your password, or a passkey that signs you in on its own."
+        description="You always sign in with your password first. Add a second step after it: a passkey or security key, or an authenticator app."
       >
         <div className="flex flex-col gap-6 border-t pt-4">
-          <TwoFactorSettings enabled={factors.totp} recoveryCodesLeft={factors.recoveryCodesLeft} />
+          <TwoFactorSettings
+            enabled={factors.totp}
+            recoveryCodesLeft={factors.recoveryCodesLeft}
+            hasPasskeys={data.passkeys.length > 0}
+          />
           <div className="border-t pt-4">
             <PasskeySettings passkeys={passkeyRows} />
           </div>
+          {!factors.totp && data.passkeys.length > 0 && (
+            <div className="border-t pt-4">
+              <PasskeyRecoveryCodes recoveryCodesLeft={factors.recoveryCodesLeft} />
+            </div>
+          )}
         </div>
       </Section>
 

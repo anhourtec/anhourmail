@@ -61,7 +61,8 @@ function SetupQr({ uri }: { uri: string }) {
   );
 }
 
-function RecoveryCodes({ codes, fresh, onDone }: { codes: string[]; fresh: boolean; onDone: () => void }) {
+/** Recovery codes, shown once: copy, download, then "I've saved them". */
+export function RecoveryCodes({ codes, fresh, onDone }: { codes: string[]; fresh: boolean; onDone: () => void }) {
   const text = codes.join("\n");
   const [copied, setCopied] = useState(false);
   return (
@@ -69,8 +70,9 @@ function RecoveryCodes({ codes, fresh, onDone }: { codes: string[]; fresh: boole
       <div className="flex flex-col gap-1">
         <h4 className="am-h4">{fresh ? "Save your recovery codes" : "Your new recovery codes"}</h4>
         <p className="am-small">
-          Each code signs you in once if you lose your authenticator app. Keep them somewhere safe, such as a password
-          manager. They won&apos;t be shown again{fresh ? "" : ", and your old codes no longer work"}.
+          Each code works once as your second step if you lose your passkey or authenticator app. Keep them somewhere
+          safe, such as a password manager. They won&apos;t be shown again
+          {fresh ? "" : ", and your old codes no longer work"}.
         </p>
       </div>
       <ol aria-label="Recovery codes" className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
@@ -114,7 +116,16 @@ function RecoveryCodes({ codes, fresh, onDone }: { codes: string[]; fresh: boole
  * (or type the secret) → enter a code → save the recovery codes. Turning it off needs the password and a current
  * code. New recovery codes replace the old ones.
  */
-export function TwoFactorSettings({ enabled, recoveryCodesLeft }: { enabled: boolean; recoveryCodesLeft: number }) {
+export function TwoFactorSettings({
+  enabled,
+  recoveryCodesLeft,
+  hasPasskeys = false,
+}: {
+  enabled: boolean;
+  recoveryCodesLeft: number;
+  /** With a passkey, turning the app off keeps the passkey as the second step and keeps the recovery codes. */
+  hasPasskeys?: boolean;
+}) {
   const router = useRouter();
   const id = useId();
   const [mode, setMode] = useState<Mode>({ kind: "idle" });
@@ -344,7 +355,9 @@ export function TwoFactorSettings({ enabled, recoveryCodesLeft }: { enabled: boo
           className="flex max-w-md flex-col gap-3"
         >
           <p className="am-small">
-            Without it, your password alone signs you in. Your recovery codes stop working too.
+            {hasPasskeys
+              ? "Your passkey stays your second step, and your recovery codes keep working."
+              : "Without it, your password alone signs you in. Your recovery codes stop working too."}
           </p>
           <label htmlFor={`${id}-dpw`} className="am-h4">
             Password

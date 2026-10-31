@@ -10,9 +10,10 @@ import { PASSKEY_NAME_MAX } from "@anhourmail/shared/security";
 import { callApi } from "../api";
 import { ConfirmDialog, inlineActionClass } from "../console/flyout";
 import { StatusText } from "../console/status-text";
-import { PasswordInput } from "../password-input";
 import { useHydrated } from "../use-hydrated";
 import { inputClass, primaryButtonClass, secondaryButtonClass } from "../ui-classes";
+import { StepUpForm } from "./step-up-form";
+import { RecoveryCodes } from "./two-factor-settings";
 import { authCall, createPasskey, passkeyError, passkeysSupported } from "./webauthn";
 
 export type PasskeyRow = {
@@ -40,6 +41,7 @@ function PasskeyItem({ p }: { p: PasskeyRow }) {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  const [stepUp, setStepUp] = useState(false);
   const url = `/api/me/passkeys/${encodeURIComponent(p.id)}`;
 
   return (
@@ -141,23 +143,47 @@ function PasskeyItem({ p }: { p: PasskeyRow }) {
           }}
           onConfirm={async () => {
             const res = await callApi(url, { method: "DELETE" });
+            if (!res.ok && res.code === "step_up_required") {
+              // Removing a passkey needs the console password from the last few minutes (ADR-0028).
+              setConfirm(false);
+              setStepUp(true);
+              return null;
+            }
             if (!res.ok) return res.message;
             setConfirm(false);
             router.refresh();
             return null;
           }}
         >
-          It won&apos;t sign you in to AnhourMail any more. You can also delete it from the device or password manager
+          It won&apos;t work as your second step any more. You can also delete it from the device or password manager
           that holds it.
         </ConfirmDialog>
+      )}
+      {stepUp && (
+        <StepUpForm
+          why="Removing a passkey changes how you sign in, so it needs your console password."
+          confirmLabel="Confirm and remove"
+          onConfirmed={async () => {
+            const res = await callApi(url, { method: "DELETE" });
+            setStepUp(false);
+            if (!res.ok) {
+              setError(res.message);
+              return;
+            }
+            router.refresh();
+          }}
+          onCancel={() => {
+            setStepUp(false);
+          }}
+        />
       )}
     </li>
   );
 }
 
 /**
- * Passkeys and security keys: a complete, phishing-resistant sign-in on their own (they check your PIN, fingerprint
- * or face). Add, rename and remove. Passkeys work only on the console's own address.
+ * Passkeys and security keys: a phishing-resistant second step after the password (they check your PIN, fingerprint
+ * or face; ADR-0028). Add, rename and remove. Passkeys work only on the console's own address.
  */
 export function PasskeySettings({ passkeys }: { passkeys: PasskeyRow[] }) {
   const router = useRouter();
@@ -167,22 +193,11 @@ export function PasskeySettings({ passkeys }: { passkeys: PasskeyRow[] }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
-  /** The server wants a recent confirmation (password or code) before a passkey can be added. */
+  /** The server wants a recent confirmation (the console password) before a passkey can be added. */
   const [stepUp, setStepUp] = useState(false);
+  /** Recovery codes issued with a first passkey, shown once. */
+  const [freshCodes, setFreshCodes] = useState<string[] | null>(null);
   const supported = hydrated && passkeysSupported();
-
-  async function confirm(secret: { password: string } | { code: string }) {
-    setPending(true);
-    setError(null);
-    const res = await authCall("/step-up", { method: "POST", body: secret });
-    setPending(false);
-    if (!res.ok) {
-      setError(res.status === 429 ? res.message : "That isn't right. Try your password or a current code again.");
-      return;
-    }
-    setStepUp(false);
-    await add();
-  }
 
   async function add() {
     setPending(true);
@@ -208,6 +223,9 @@ export function PasskeySettings({ passkeys }: { passkeys: PasskeyRow[] }) {
       }
       setAdding(false);
       setName("");
+      // A first second factor comes with recovery codes, shown once (ADR-0028).
+      const codes = (res.data as { recoveryCodes?: unknown } | null)?.recoveryCodes;
+      if (Array.isArray(codes) && codes.every((c) => typeof c === "string")) setFreshCodes(codes);
       router.refresh();
     } catch (err) {
       setError(passkeyError(err));
@@ -224,7 +242,7 @@ export function PasskeySettings({ passkeys }: { passkeys: PasskeyRow[] }) {
           <div className="flex min-w-0 flex-col gap-1">
             <h3 className="am-h4">Passkeys and security keys</h3>
             <p className="am-small">
-              Sign in with your fingerprint, face, device PIN or a security key instead of a password and code.
+              After your password, confirm it&apos;s you with your fingerprint, face, device PIN or a security key.
             </p>
             {passkeys.length > 0 ? (
               <StatusText tone="success">
@@ -254,55 +272,30 @@ export function PasskeySettings({ passkeys }: { passkeys: PasskeyRow[] }) {
           This browser can&apos;t create passkeys here. Use a current browser on the console&apos;s own address.
         </p>
       )}
-      {adding && stepUp && (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            const form = new FormData(e.currentTarget);
-            const password = form.get("password");
-            const code = form.get("code");
-            if (typeof password === "string" && password !== "") void confirm({ password });
-            else if (typeof code === "string" && code.trim() !== "") void confirm({ code: code.trim() });
-            else setError("Enter your password or a code.");
+      {freshCodes && (
+        <RecoveryCodes
+          codes={freshCodes}
+          fresh
+          onDone={() => {
+            setFreshCodes(null);
+            router.refresh();
           }}
-          className="flex max-w-md flex-col gap-3"
-        >
-          <div className="flex flex-col gap-1">
-            <h4 className="am-h4">Confirm it&apos;s you</h4>
-            <p className="am-small">
-              For safety, adding a passkey needs your password or a code from the last few minutes.
-            </p>
-          </div>
-          <label htmlFor={`${id}-pw`} className="am-h4">
-            Password
-          </label>
-          <PasswordInput id={`${id}-pw`} name="password" autoComplete="current-password" className={inputClass} />
-          <label htmlFor={`${id}-code`} className="am-small">
-            Or a code from your authenticator app, or a recovery code
-          </label>
-          <input id={`${id}-code`} name="code" autoComplete="one-time-code" className={`${inputClass} font-mono`} />
-          {error && (
-            <p role="alert" className="am-small text-destructive">
-              {error}
-            </p>
-          )}
-          <div className="flex flex-wrap gap-2">
-            <button type="submit" disabled={pending} className={primaryButtonClass}>
-              {pending ? "Checking…" : "Confirm and continue"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setAdding(false);
-                setStepUp(false);
-                setError(null);
-              }}
-              className={secondaryButtonClass}
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
+        />
+      )}
+      {adding && stepUp && (
+        <StepUpForm
+          why="For safety, adding a passkey needs your console password."
+          confirmLabel="Confirm and continue"
+          onConfirmed={async () => {
+            setStepUp(false);
+            await add();
+          }}
+          onCancel={() => {
+            setAdding(false);
+            setStepUp(false);
+            setError(null);
+          }}
+        />
       )}
       {adding && !stepUp && (
         <form

@@ -98,8 +98,8 @@ export function ResetPasswordForm({ token }: { token: string }) {
       <label className="flex items-start gap-2.5">
         <input type="checkbox" name="removePasskeys" className="mt-1 size-4 accent-primary" />
         <span className="am-small text-foreground">
-          Also remove all passkeys from my login (choose this if you think someone else got in). Every session is signed
-          out either way.
+          Also remove all passkeys from my login (choose this if you lost your passkey or think someone else got in).
+          Every session is signed out either way.
         </span>
       </label>
       {error && (
