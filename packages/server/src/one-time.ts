@@ -21,3 +21,31 @@ export function memoryOneTime(now: () => number = Date.now): OneTimeStore {
     return true;
   };
 }
+
+/**
+ * Atomic strike counters (e.g. wrong passwords in one console session): increments `key` and returns the new count, the
+ * window starting at the first strike (`ttlMs`). One Lua call, so concurrent strikes never lose a count. Errors
+ * propagate: callers fail closed.
+ */
+export type StrikeCounter = (key: string, ttlMs: number) => Promise<number>;
+
+const STRIKE_SCRIPT =
+  "local n = redis.call('INCR', KEYS[1]) if n == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end return n";
+
+export function redisStrikes(redis: {
+  eval(script: string, numKeys: number, ...args: (string | number)[]): Promise<unknown>;
+}): StrikeCounter {
+  return async (key, ttlMs) => Number(await redis.eval(STRIKE_SCRIPT, 1, key, ttlMs));
+}
+
+/** In-process counter for tests (single-threaded, so each increment is atomic). */
+export function memoryStrikes(now: () => number = Date.now): StrikeCounter {
+  const counts = new Map<string, { n: number; until: number }>();
+  return async (key, ttlMs) => {
+    const t = now();
+    const c = counts.get(key);
+    const next = c && c.until > t ? { n: c.n + 1, until: c.until } : { n: 1, until: t + ttlMs };
+    counts.set(key, next);
+    return next.n;
+  };
+}

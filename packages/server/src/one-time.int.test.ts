@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, describe, expect, it } from "vitest";
 
-import { redisOneTime } from "./one-time";
+import { redisOneTime, redisStrikes } from "./one-time";
 import { redis as shared } from "./redis";
 
 if (!process.env.REDIS_URL) throw new Error("REDIS_URL is not set (integration tests need the compose stack)");
@@ -16,6 +16,16 @@ describe("redis one-time claims", () => {
     const key = `am:test:one-time:${randomUUID()}`;
     const results = await Promise.all(Array.from({ length: 20 }, () => claim(key, 500)));
     expect(results.filter(Boolean)).toHaveLength(1);
+    const ttl = await redis.pttl(key);
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(500);
+  });
+
+  it("20 concurrent strikes count 1..20 exactly once each, and the counter expires", async () => {
+    const strike = redisStrikes(redis);
+    const key = `am:test:strikes:${randomUUID()}`;
+    const counts = await Promise.all(Array.from({ length: 20 }, () => strike(key, 500)));
+    expect([...counts].sort((a, b) => a - b)).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
     const ttl = await redis.pttl(key);
     expect(ttl).toBeGreaterThan(0);
     expect(ttl).toBeLessThanOrEqual(500);
