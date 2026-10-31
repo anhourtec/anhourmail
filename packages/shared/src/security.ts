@@ -32,17 +32,29 @@ export const SECOND_STEP_LIMITS = { perChallenge: 5, perAccount: 10, lockMinutes
 /** Passkey names people choose ("Work laptop"). */
 export const PASSKEY_NAME_MAX = 60;
 
-/** How a console session was signed in (recorded on the session; an account requirement can depend on it). */
+/**
+ * How a console session was signed in (recorded on the session; an account requirement can depend on it). Sign-in is
+ * always the password first, then a second step for anyone with a second factor (ADR-0028). `passkey` is the
+ * passwordless sign-in that existed before 2026-10-31: kept only to read old rows; such sessions are ended on their next
+ * request (the person signs in again).
+ */
 export const SIGN_IN_METHODS = [
   "password",
   "password+trusted_device",
   "password+totp",
   "password+recovery_code",
+  "password+passkey",
   "passkey",
 ] as const;
 export type SignInMethod = (typeof SIGN_IN_METHODS)[number];
 export const isSignInMethod = (v: unknown): v is SignInMethod =>
   typeof v === "string" && (SIGN_IN_METHODS as readonly string[]).includes(v);
+
+/** What the second sign-in step can use, as the password step lists them (`twoFactorMethods`). */
+export const SECOND_STEP_METHODS = ["passkey", "totp", "recovery_code"] as const;
+export type SecondStepMethod = (typeof SECOND_STEP_METHODS)[number];
+export const isSecondStepMethod = (v: unknown): v is SecondStepMethod =>
+  typeof v === "string" && (SECOND_STEP_METHODS as readonly string[]).includes(v);
 
 /**
  * Hours a "confirm your email address" link works (sent at sign-up and on request from the console). Confirming it is
@@ -50,7 +62,10 @@ export const isSignInMethod = (v: unknown): v is SignInMethod =>
  */
 export const EMAIL_VERIFICATION_HOURS = 24;
 
-/** Adding a passkey needs the person to have confirmed it's them (password or a code) this recently. */
+/**
+ * Sensitive actions (adding a passkey, suspensions, support access, app and mailbox passwords, …) need the person to
+ * have confirmed it's them with their console password, or signed in, this recently (ADR-0028).
+ */
 export const STEP_UP_MINUTES = 5;
 
 // --- app passwords (mail apps over IMAP, POP3, SMTP and HTTPS; docs/internal/07-security.md "App passwords") ------

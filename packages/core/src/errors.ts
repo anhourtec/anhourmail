@@ -89,12 +89,12 @@ export class PasswordChangeRequiredError extends DomainError {
 }
 
 /**
- * The action needs the person to have confirmed it's them in the last few minutes (password, a current code or a
- * fresh sign-in). HTTP 403 with its own code, so the console can ask and retry.
+ * The action needs the person to have confirmed it's them in the last few minutes (their console password or a fresh
+ * sign-in; ADR-0028). HTTP 403 with its own code, so the console can ask and retry.
  */
 export class StepUpRequiredError extends DomainError {
   constructor() {
-    super("Confirm it's you first: enter your password or a code.", "step_up_required");
+    super("Confirm it's you first: enter your console password.", "step_up_required");
   }
 }
 
