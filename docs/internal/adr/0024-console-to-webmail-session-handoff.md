@@ -158,3 +158,8 @@ The throwaway credential, made with the real operations key (`impersonate` + `sy
 - **Keep a long-lived per-person webmail app password:** a standing credential with account-wide token reach;
   rejected (ADR-0020 "OAuth escalation").
 - **Impersonation service account for the session:** one credential that reads every mailbox; rejected (ADR-0018).
+
+## Update 2026-10-31: step-up by password (ADR-0028)
+
+`stepUpFresh` is now met by the console password (`POST /api/auth/step-up` takes no codes) or any sign-in in the last
+few minutes. Minting and redemption are otherwise unchanged.

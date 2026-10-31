@@ -125,3 +125,11 @@ webmail session.
 `avatars/service.ts` (refusals while acting), `packages/core/src/audit/record.ts` (attribution), `apps/web/src/server/auth/actor.ts` (where the
 acting actor is built), the three routes, `packages/adapters/src/db-postgres/act-as.ts` (open-session queries, `due`),
 `packages/shared/src/rbac` (`ACT_AS_ACCOUNT_ROLE`), the banner and dialog, and the RBAC harness personas.
+
+## Update 2026-10-31: the step-up is the console password (ADR-0028)
+
+The decision above said the step-up demands the strongest factor the staff member holds. ADR-0028 replaced that for
+every sensitive action: "Confirm it's you" is the console password (or a sign-in in the last 5 minutes), whatever the
+person's factors or session type. Starting and renewing support access still need that fresh step-up on the same
+console session; the window, the reuse within it and the refusals are unchanged. Requiring staff to hold a passkey
+remains the staff account's sign-in policy (the passkey is then their second step at every sign-in).
