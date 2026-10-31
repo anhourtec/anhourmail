@@ -49,6 +49,16 @@ describe("webmail preferences service", () => {
     expect(entry?.meta).toEqual({ changed: ["density", "previewLines"] });
   });
 
+  it("only ever forgets remembered image senders, never adds one (Safe senders load images now)", async () => {
+    const { d, svc } = setup();
+    const [k1, k2, k3] = ["a".repeat(22), "b".repeat(22), "c".repeat(22)];
+    d.uow.state.webmailPreferences.push({ mailboxId: MB_A, prefs: { imageSenders: [k1, k2] }, updatedAt: new Date() });
+    expect((await svc.updatePreferences("sam@a.test", { imageSenders: [k2, k3] }, req)).imageSenders).toEqual([k2]);
+    expect((await svc.preferences("sam@a.test")).imageSenders).toEqual([k2]);
+    expect((await svc.updatePreferences("sam@a.test", { imageSenders: [] }, req)).imageSenders).toEqual([]);
+    expect((await svc.updatePreferences("sam@a.test", { imageSenders: [k1] }, req)).imageSenders).toEqual([]);
+  });
+
   it("refuses unknown keys or values and unknown mailboxes", async () => {
     const { d, svc } = setup();
     await expect(svc.updatePreferences("sam@a.test", { density: "huge" }, req)).rejects.toThrow(/can't be changed/);
@@ -141,5 +151,28 @@ describe("forwarding confirmation", () => {
       scope: `account:${ACCOUNT_B}`,
       meta: { enabled: true },
     });
+  });
+
+  it("records a refused change in a shared mailbox as denied, by the person, in that mailbox's account", async () => {
+    const { d, svc } = setup();
+    await svc.recordMailFlowDenied(
+      " Sam@A.test ",
+      "lee@b.test",
+      "junk_rules.changed",
+      "own_mailbox_only",
+      { via: "message" },
+      req,
+    );
+    expect(d.uow.state.audit.at(-1)).toMatchObject({
+      action: "junk_rules.changed",
+      result: "denied",
+      errorCode: "own_mailbox_only",
+      scope: `account:${ACCOUNT_B}`,
+      meta: { via: "message" },
+    });
+    expect(JSON.stringify(d.uow.state.audit.at(-1)?.actor)).toContain("sam@a.test");
+    await expect(
+      svc.recordMailFlowDenied("sam@a.test", "nobody@b.test", "junk_rules.changed", "x", {}, req),
+    ).rejects.toMatchObject({ code: "not_found" });
   });
 });

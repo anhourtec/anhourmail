@@ -80,7 +80,12 @@ export class WebmailSettingsService {
         target: { type: "mailbox", id: m.id, label: m.address },
       },
       async (repos) => {
-        const next = { ...normalizePreferences(await repos.webmailSettings.preferences(m.id)), ...change };
+        const current = normalizePreferences(await repos.webmailSettings.preferences(m.id));
+        const next = { ...current, ...change };
+        // Remembered image senders are legacy (ADR-0027 §9: Safe senders load images now): a change can only forget
+        // keys, never add one.
+        if (change.imageSenders)
+          next.imageSenders = change.imageSenders.filter((k) => current.imageSenders.includes(k));
         await repos.webmailSettings.savePreferences(m.id, next, this.deps.clock.now());
         return { result: next, meta: { changed: Object.keys(change) } };
       },
@@ -239,6 +244,34 @@ export class WebmailSettingsService {
         target: { type: "mailbox", id: m.id, label: m.address },
       },
       async () => ({ result: undefined, meta }),
+    );
+  }
+
+  /**
+   * Records a refused mail-flow change (`denied`, nothing applied): one the person tried in a tab of a mailbox shared
+   * with them (`target`), which only that mailbox's own sign-in may change (ADR-0026 §6). The actor is the person,
+   * named by the mailbox they signed in with (`actorAddress`); the entry goes to the shared mailbox's account log.
+   */
+  async recordMailFlowDenied(
+    actorAddress: string,
+    target: string,
+    action: MailFlowAction,
+    code: string,
+    meta: Record<string, string | number | boolean>,
+    req: RequestMeta,
+  ): Promise<void> {
+    const m = await this.mailbox(target);
+    await mutation(
+      this.deps,
+      this.#actor(actorAddress.trim().toLowerCase()),
+      req,
+      {
+        action,
+        permission: "forwarding.manage.own",
+        accountId: m.accountId,
+        target: { type: "mailbox", id: m.id, label: m.address },
+      },
+      async () => ({ result: undefined, meta, denied: { code } }),
     );
   }
 }
