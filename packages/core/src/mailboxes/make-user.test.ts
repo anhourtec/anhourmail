@@ -109,9 +109,10 @@ describe("makeMailboxUser", () => {
 
     expect(out.role).toBe("member");
     expect(out.password).toHaveLength(GENERATED_MAILBOX_PASSWORD.length);
-    expect(out.mailbox.owner).toEqual({ userId: out.userId, email: "support@family.ca" });
+    expect(out.mailbox.owner).toEqual({ userId: out.userId, email: "support@family.ca", name: "Support desk" });
+    expect(out.mailbox).toMatchObject({ displayName: null, senderName: "Support desk", nameSource: "person" });
     expect(s.userEmails[out.userId]).toBe("support@family.ca");
-    // A blank display name keeps the mailbox's own.
+    // A blank display name gives the person the mailbox's own, which the mailbox then follows.
     expect(s.userNames[out.userId]).toBe("Support desk");
     expect(s.memberships).toContainEqual(
       expect.objectContaining({ userId: out.userId, accountId: ACCOUNT_A, role: "member" }),
@@ -119,7 +120,7 @@ describe("makeMailboxUser", () => {
     expect(s.mustChangePassword).toContain(out.userId);
     expect(s.profiles[out.userId]).toEqual({ department: "Help", country: "CA" });
     const box = s.mailboxes.find((m) => m.id === SHARED);
-    expect(box).toMatchObject({ userId: out.userId, displayName: "Support desk", mustChangePassword: true });
+    expect(box).toMatchObject({ userId: out.userId, displayName: null, mustChangePassword: true });
     // The console and the mailbox both get the same new password, as hashes only.
     expect(consoleHashes.at(-1)).toBe(out.password);
     expect(s.logins.find((l) => l.userId === out.userId)?.passwordHash).toMatch(/^\$argon2id\$console\$/);
@@ -149,7 +150,9 @@ describe("makeMailboxUser", () => {
     const out = await make(d, owner, { displayName: "Sam Lee", role: "user_admin" });
     expect(out.role).toBe("user_admin");
     expect(d.uow.state.userNames[out.userId]).toBe("Sam Lee");
-    expect(d.uow.state.mailboxes.find((m) => m.id === SHARED)?.displayName).toBe("Sam Lee");
+    // The person's name; the mailbox follows it rather than keeping a copy.
+    expect(d.uow.state.mailboxes.find((m) => m.id === SHARED)?.displayName).toBeNull();
+    expect(out.mailbox.senderName).toBe("Sam Lee");
   });
 
   it("lets a User Administrator grant Member only (403, audited as denied, nothing written)", async () => {

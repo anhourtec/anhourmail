@@ -100,7 +100,9 @@ describe("addUser", () => {
     expect(out.requirePasswordChange).toBe(true);
     expect(out.password).toHaveLength(GENERATED_MAILBOX_PASSWORD.length);
     expect(out.mailbox).toMatchObject({ address: "jane@family.ca", status: "provisioning" });
-    expect(out.mailbox.owner).toEqual({ userId: out.userId, email: "jane@family.ca" });
+    expect(out.mailbox.owner).toEqual({ userId: out.userId, email: "jane@family.ca", name: "Jane Doe" });
+    // The mailbox follows the person's name (no custom display name): one source (rule 61).
+    expect(out.mailbox).toMatchObject({ displayName: null, senderName: "Jane Doe", nameSource: "person" });
 
     expect(s.userEmails[out.userId]).toBe("jane@family.ca");
     expect(s.userNames[out.userId]).toBe("Jane Doe");
@@ -110,7 +112,7 @@ describe("addUser", () => {
     expect(s.mustChangePassword).toContain(out.userId);
     expect(s.profiles[out.userId]).toEqual({ jobTitle: "Editor", country: "CA" });
     const box = s.mailboxes.find((m) => m.address === "jane@family.ca");
-    expect(box).toMatchObject({ userId: out.userId, displayName: "Jane Doe", mustChangePassword: true });
+    expect(box).toMatchObject({ userId: out.userId, displayName: null, mustChangePassword: true });
     // Only hashes are kept: the console's (identity adapter) and the mailbox's (for the worker).
     expect(s.logins.find((l) => l.userId === out.userId)?.passwordHash).toMatch(/^\$argon2id\$console\$/);
     expect(s.mailboxPasswords.find((p) => p.mailboxId === box?.id)?.pendingHash).toMatch(/^\$argon2id\$/);
@@ -229,11 +231,16 @@ describe("addUser", () => {
     const d = setup();
     const { mailbox } = await add(d, owner);
     const renamed = await renameMailbox(d, userAdmin, ACCOUNT_A, mailbox.id, { displayName: " Jane  Q. Doe " }, req);
-    expect(renamed.displayName).toBe("Jane Q. Doe");
+    expect(renamed).toMatchObject({ displayName: "Jane Q. Doe", senderName: "Jane Q. Doe", nameSource: "custom" });
     expect(d.uow.state.jobs.at(-1)).toMatchObject({ kind: "mailbox.ensure", subjectId: mailbox.id });
     expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "mailbox.renamed", result: "success" });
     expect(JSON.stringify(d.uow.state.audit.at(-1))).not.toContain("Jane Q.");
-    expect((await renameMailbox(d, owner, ACCOUNT_A, mailbox.id, { displayName: "" }, req)).displayName).toBeNull();
+    // Cleared: "Use the person's name" — the mailbox follows its person again.
+    expect(await renameMailbox(d, owner, ACCOUNT_A, mailbox.id, { displayName: "" }, req)).toMatchObject({
+      displayName: null,
+      senderName: "Jane Doe",
+      nameSource: "person",
+    });
     await expect(
       renameMailbox(d, owner, ACCOUNT_A, mailbox.id, { displayName: "visit example.com" }, req),
     ).rejects.toThrow(ValidationError);

@@ -128,7 +128,8 @@ export async function makeMailboxUser(
       const also = await dropOwnGrants(repos, accountId, m, userId);
       // An admin's or Owner's mailbox keeps only grants an Owner made (guard rail 8 survives; ADR-0026 review update).
       if (role !== "member") also.push(...(await dropGrantsNotByOwners(repos, accountId, userId)));
-      await repos.mailboxes.setDisplayName(m.id, shown);
+      // The person's name is the display name given (by default the mailbox's own); the mailbox follows it from now on.
+      await repos.mailboxes.setDisplayName(m.id, null);
       await repos.mailboxes.setPasswordChangeRequired(m.id, true);
       // The new mailbox password, for the worker (with the grant the management proxy needs for a replacement).
       const phc = await hashMailboxPassword(hasher, password);
@@ -146,11 +147,11 @@ export async function makeMailboxUser(
         await repos.provisioning.enqueue({ kind: "app_password.revoke", subjectId: m.id, runAfter: now });
       }
       await repos.provisioning.enqueue({ kind: "mailbox.password", subjectId: m.id, runAfter: now });
-      // The display name becomes the mail server account's description.
+      // The person's name becomes the mail server account's description (its sender name).
       await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: m.id, runAfter: now });
       return {
         result: {
-          mailbox: await viewOf(repos, accountId, { ...m, userId, displayName: shown, mustChangePassword: true }),
+          mailbox: await viewOf(repos, accountId, { ...m, userId, displayName: null, mustChangePassword: true }),
           userId,
           role,
           password,

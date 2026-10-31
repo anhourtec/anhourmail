@@ -28,6 +28,7 @@ import type { Deps, Repositories, RequestMeta } from "../ports";
 import { BreachedPasswordError, passwordBreached } from "../security/breached-passwords";
 import type { MailServer } from "../provisioning/ports";
 import { displayName } from "../people/entity";
+import { mailboxSenderName, type NameSource } from "../people/names";
 import { GB, type Mailbox, type MailboxStatus, normaliseLocalPart } from "./entity";
 import { hashMailboxPassword, mailboxPassword, type PasswordHasher } from "./password-hash";
 import {
@@ -46,9 +47,17 @@ export type MailboxView = {
   address: string;
   status: MailboxStatus;
   quotaBytes: number;
-  owner: { userId: string; email: string } | null;
-  /** The sender name ("Name <address>"); null when none is set. */
+  /** The person it belongs to; `name` is their name (what the mailbox sends as unless it has a custom one). */
+  owner: { userId: string; email: string; name: string } | null;
+  /**
+   * The custom display name an admin set; null when the mailbox follows its person's name (or, without a person, has
+   * none). See `senderName` for what it sends as.
+   */
   displayName: string | null;
+  /** The sender name in "Name <address>": the custom display name, else the person's name, else none (null). */
+  senderName: string | null;
+  /** Where `senderName` comes from. */
+  nameSource: NameSource;
   /** While `deleting`: when it is removed for good (it can be restored until then). */
   purgeAfter: Date | null;
   /**
@@ -73,20 +82,29 @@ async function scoped(repos: Repositories, accountId: string, id: string): Promi
 
 async function views(repos: Repositories, accountId: string, list: Mailbox[]): Promise<MailboxView[]> {
   const members = new Map((await repos.access.members(accountId)).map((m) => [m.userId, m.email] as const));
+  const names = new Map((await repos.people.list(accountId)).map((p) => [p.userId, p.name] as const));
   const storage = new Map((await repos.mailboxStorage.byAccount(accountId)).map((x) => [x.mailboxId, x] as const));
-  return list.map((m) => ({
-    id: m.id,
-    address: m.address,
-    status: m.status,
-    quotaBytes: m.quotaBytes,
-    owner: m.userId && members.has(m.userId) ? { userId: m.userId, email: members.get(m.userId) ?? "" } : null,
-    displayName: m.displayName ?? null,
-    purgeAfter: m.purgeAfter,
-    applyFailed: m.lastError !== null,
-    createdAt: m.createdAt,
-    storageUsedBytes: storage.get(m.id)?.usedBytes ?? null,
-    storageCheckedAt: storage.get(m.id)?.checkedAt ?? null,
-  }));
+  return list.map((m) => {
+    const sender = mailboxSenderName(m.displayName, m.userId ? names.get(m.userId) : null);
+    return {
+      id: m.id,
+      address: m.address,
+      status: m.status,
+      quotaBytes: m.quotaBytes,
+      owner:
+        m.userId && members.has(m.userId)
+          ? { userId: m.userId, email: members.get(m.userId) ?? "", name: names.get(m.userId) ?? "" }
+          : null,
+      displayName: m.displayName ?? null,
+      senderName: sender.name,
+      nameSource: sender.source,
+      purgeAfter: m.purgeAfter,
+      applyFailed: m.lastError !== null,
+      createdAt: m.createdAt,
+      storageUsedBytes: storage.get(m.id)?.usedBytes ?? null,
+      storageCheckedAt: storage.get(m.id)?.checkedAt ?? null,
+    };
+  });
 }
 
 /**
@@ -489,11 +507,12 @@ const BEING_DELETED = "This mailbox is being deleted. Restore it first.";
  * to its current quota plus the unassigned pool. The worker applies it to the mail server.
  */
 /**
- * "Edit name" (`mailbox.manage`): the mailbox's display name, the sender name in "Name <address>". Applied to the mail
- * server as the account description (the worker's `mailbox.ensure`), which names the sending identities it creates;
- * an identity that already exists keeps its name until the person changes it in the webmail's settings. Empty clears
- * it. Like suspending or setting a password, renaming an Owner's or an admin's mailbox takes an Owner (403, audited as
- * denied). The name itself is personal data: the audit entry records only that it changed.
+ * "Display name" (`mailbox.manage`): a custom sender name for the mailbox ("Name <address>"), or empty to clear it —
+ * then a person's mailbox follows their name again ("Use the person's name") and a mailbox without a person has none
+ * (people/names.ts). The worker writes the resulting sender name to the mail server as the account description
+ * (`mailbox.ensure`); the webmail renames the mailbox's sending identities to it on its next request. Like suspending or
+ * setting a password, renaming an Owner's or an admin's mailbox takes an Owner (403, audited as denied). The name itself
+ * is personal data: the audit entry records only that it changed (and whether it was cleared).
  */
 export async function renameMailbox(
   deps: Deps,

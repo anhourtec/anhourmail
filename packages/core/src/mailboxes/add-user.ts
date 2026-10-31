@@ -116,7 +116,8 @@ export async function addUser(
       if (Object.keys(profile).length > 0) await repos.people.setProfile(userId, profile);
       const mailbox = {
         ...newMailbox(deps, accountId, userId, address, quotaBytes),
-        displayName: shown,
+        // The person's name is the display name given; their mailbox follows it (people/names.ts).
+        displayName: null,
         mustChangePassword: requireChange,
       };
       await repos.mailboxes.insert(mailbox);
