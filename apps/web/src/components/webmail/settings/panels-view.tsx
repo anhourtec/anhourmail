@@ -11,6 +11,7 @@ import type { Folder, ListRow } from "../mail-client";
 import { MessageRow, rowHeight } from "../message-list";
 import { notificationHelp, type NotifyPermission } from "../sync";
 import { Choice, Group, Note, Row, SelectRow, smallSecondary, Toggle } from "./controls";
+import type { SectionId } from "./sections";
 
 type Change = (patch: Partial<WebmailPreferences>) => void;
 
@@ -185,7 +186,16 @@ export function AppearancePanel({ prefs, onChange }: { prefs: WebmailPreferences
   );
 }
 
-export function ReadingPanel({ prefs, onChange }: { prefs: WebmailPreferences; onChange: Change }) {
+export function ReadingPanel({
+  prefs,
+  onChange,
+  onOpen,
+}: {
+  prefs: WebmailPreferences;
+  onChange: Change;
+  /** Shows another settings section (the Safe senders link). */
+  onOpen?: (section: SectionId) => void;
+}) {
   // Desktop notifications: the browser's current answer, and what to tell the person when it said no.
   const [permission, setPermission] = useState<NotifyPermission>(() =>
     typeof Notification === "undefined" ? "unsupported" : Notification.permission,
@@ -288,25 +298,39 @@ export function ReadingPanel({ prefs, onChange }: { prefs: WebmailPreferences; o
             onChange({ remoteImages });
           }}
         />
-        <Row
-          label="Senders whose images always load"
-          description={
-            prefs.imageSenders.length === 0
-              ? "None yet. Choose \u201cAlways load from this sender\u201d on a message."
-              : `${String(prefs.imageSenders.length)} ${prefs.imageSenders.length === 1 ? "sender" : "senders"}. Only a private fingerprint of each address is kept, so they can't be listed here.`
-          }
-        >
-          <button
-            type="button"
-            disabled={prefs.imageSenders.length === 0}
-            onClick={() => {
-              onChange({ imageSenders: [] });
-            }}
-            className={smallSecondary}
+        <Note label="Safe senders">
+          Images from your Safe senders always load.{" "}
+          {onOpen ? (
+            <button
+              type="button"
+              className="text-primary underline-offset-2 hover:underline"
+              onClick={() => {
+                onOpen("junk");
+              }}
+            >
+              Manage them in Junk and blocked senders
+            </button>
+          ) : (
+            "Manage them in Junk and blocked senders"
+          )}
+          .
+        </Note>
+        {prefs.imageSenders.length > 0 && (
+          <Row
+            label="Senders saved earlier"
+            description={`${String(prefs.imageSenders.length)} ${prefs.imageSenders.length === 1 ? "sender" : "senders"} saved before Safe senders loaded images. Their images still load; only a private fingerprint of each address was kept, so they can't be listed here.`}
           >
-            Forget all
-          </button>
-        </Row>
+            <button
+              type="button"
+              onClick={() => {
+                onChange({ imageSenders: [] });
+              }}
+              className={smallSecondary}
+            >
+              Forget them
+            </button>
+          </Row>
+        )}
         <Note label="Read receipts are never sent">
           When a sender asks to know that you read their message, we don't tell them.
         </Note>

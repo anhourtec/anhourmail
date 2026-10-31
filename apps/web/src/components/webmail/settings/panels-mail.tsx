@@ -543,7 +543,7 @@ export function JunkPanel({
       />
       <SenderList
         label="Safe senders"
-        description="Mail from these addresses or domains is never moved to Junk by your rules."
+        description="Mail from these addresses or domains is never moved to Junk, and their images load."
         entries={safe}
         onChange={setSafe}
       />

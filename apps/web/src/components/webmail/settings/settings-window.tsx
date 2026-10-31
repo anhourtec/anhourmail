@@ -137,7 +137,17 @@ export function SettingsWindow({
       case "appearance":
         return <AppearancePanel prefs={preferences} onChange={onChange} />;
       case "reading":
-        return <ReadingPanel prefs={preferences} onChange={onChange} />;
+        return (
+          <ReadingPanel
+            prefs={preferences}
+            onChange={onChange}
+            onOpen={(next) => {
+              setQuery("");
+              pick(next);
+              document.getElementById(`${id}-tab-${next}`)?.focus();
+            }}
+          />
+        );
       case "region":
         return <RegionPanel prefs={preferences} onChange={onChange} folders={folders} shortcuts={shortcuts} />;
       case "export":
