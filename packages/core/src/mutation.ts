@@ -154,7 +154,8 @@ export async function mutation<T>(
     });
   } catch (err) {
     const code = err instanceof DomainError ? err.code : "server_error";
-    await deps.uow.run((r) => r.audit.append(base("failed", code, scope), deps.clock.now())).catch(() => undefined);
+    const result = err instanceof DomainError && err.auditDenied ? "denied" : "failed";
+    await deps.uow.run((r) => r.audit.append(base(result, code, scope), deps.clock.now())).catch(() => undefined);
     throw err;
   }
 }

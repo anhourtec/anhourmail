@@ -6,6 +6,12 @@
  * EmailUnverified → 403.
  */
 export class DomainError extends Error {
+  /**
+   * A policy refusal thrown from inside a mutation (e.g. the address ceiling): `mutation()` audits it as `denied`
+   * rather than `failed`. Nothing it did is committed either way.
+   */
+  auditDenied = false;
+
   constructor(
     message: string,
     readonly code: string,
