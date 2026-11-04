@@ -3,7 +3,8 @@
  * Mailboxes shared with a person, in their webmail (ADR-0026 §6). The Owner gives a member Read and manage and Send as
  * on a shared mailbox (desk@) and Send on behalf on another (team@) in the console. The member's own webmail lists
  * neither (no shared section in the sidebar or the account menu); they send as desk@ and on behalf of team@ from their
- * own mailbox (desk@'s Sent keeps its copy; the message sent on behalf reads "… on behalf of team@"), and read desk@ in
+ * own mailbox (desk@'s Sent keeps its copy; the message sent on behalf reads "… on behalf of team@"), undo a send as
+ * desk@ in its hold (their draft comes back, nothing is delivered, desk@'s Sent keeps no copy), and read desk@ in
  * a tab of its own (Open another mailbox), which leaves their own tab alone: its sidebar header names desk@ like an
  * account, the tab title names it, and its account menu leads back to their own mailbox. In desk@'s tab, New email
  * and Reply start From desk@ and send as it. An address they have no access to gets the one refusal page. Taking Send
@@ -153,6 +154,24 @@ test("a member reads, sends as and on behalf of mailboxes shared with them, open
   await expect(account.getByRole("menuitem")).toHaveText(["Add another mailbox", "Open another mailbox", "Sign out"]);
   await mail.keyboard.press("Escape");
 
+  // Undo a send as desk@ in its hold: the member's own draft comes back, still From desk@, and nobody gets it (the
+  // undo may be answered by another server process than the send: it carries the send's sealed ticket).
+  const undone = `Undone ${tag}`;
+  await send(mail, dw.mailbox, undone, async (from) => {
+    await from.selectOption({ label: dw.shared });
+  });
+  await mail
+    .getByRole("status")
+    .filter({ hasText: "Message sent." })
+    .last()
+    .getByRole("button", { name: "Undo" })
+    .click();
+  const back = mail.getByRole("dialog", { name: "Draft" });
+  await expect(back.getByLabel("Subject")).toHaveValue(undone, { timeout: SIGN_IN_TIMEOUT });
+  await expect(back.getByLabel("From")).toHaveValue(`shared:${dw.shared}`);
+  await back.getByRole("button", { name: "Discard draft" }).click();
+  await expect(back).toBeHidden();
+
   // Send as desk@, and on behalf of team@, from the member's own mailbox to themselves.
   await send(mail, dw.mailbox, `As desk ${tag}`, async (from) => {
     await from.selectOption({ label: dw.shared });
@@ -171,6 +190,13 @@ test("a member reads, sends as and on behalf of mailboxes shared with them, open
   const asDesk = await openBySearch(mail, `As desk ${tag}`, dw.shared);
   await expect(asDesk.getByText(`<${dw.shared}>`).first()).toBeVisible();
   await expect(asDesk.getByText(/on behalf of/)).toHaveCount(0);
+  // The undone one never arrived (it went before these, so it would be here by now).
+  const box = mail.getByRole("searchbox", { name: "Search mail" });
+  await box.fill(`from:${dw.shared} subject:${tag}`);
+  await box.press("Enter");
+  const found = mail.getByRole("listbox", { name: "Search results messages" });
+  await expect(found.getByRole("option", { name: new RegExp(`As desk ${tag}`) }).first()).toBeVisible();
+  await expect(found.getByRole("option", { name: new RegExp(undone) })).toHaveCount(0);
   const onBehalf = await openBySearch(mail, `On behalf ${tag}`, dw.team);
   await expect(onBehalf.getByText(`<${dw.team}>`).first()).toBeVisible();
   await expect(
@@ -208,6 +234,8 @@ test("a member reads, sends as and on behalf of mailboxes shared with them, open
   await expect(tab).toHaveURL(/\/sent$/);
   await expect(tab).toHaveTitle(new RegExp(`^(\\(\\d+\\) )?${dw.shared.replace(/[.]/g, "\\.")} · Sent$`));
   await expect(tab.getByRole("option", { name: new RegExp(`As desk ${tag}`) }).first()).toBeVisible();
+  // The undone send's copy was taken out of desk@'s Sent.
+  await expect(tab.getByRole("option", { name: new RegExp(undone) })).toHaveCount(0);
   // Settings belong to the member's own mailbox.
   await tab.getByRole("button", { name: "Settings" }).click();
   const ownSettings = tab.getByRole("dialog", { name: "Settings" });
