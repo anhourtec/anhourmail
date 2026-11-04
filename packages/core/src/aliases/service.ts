@@ -5,6 +5,7 @@ import { isReservedPlatformLocalPart } from "@anhourmail/shared/addresses";
 import { ALIAS_YEAR_DAYS, ALIASES_PER_MAILBOX, PLANS, type PlanId } from "@anhourmail/shared/plans";
 
 import { addressCeilingError, addressCeilingReached } from "../billing/ceilings";
+import { assertDomainUsable, assertMailboxNotHeld } from "../billing/held";
 import { type Actor, authorize, can } from "../actor";
 import {
   AliasAdminLockedError,
@@ -238,6 +239,8 @@ export async function createAlias(
       const mailbox = (await reachable(repos, actor, accountId)).find((m) => m.id === mailboxId);
       if (!mailbox) throw new ValidationError("Choose one of your mailboxes.");
       if (mailbox.status === "deleting") throw new ConflictError("That mailbox is being deleted. Restore it first.");
+      // Nothing new on what a downgrade held (ADR-0029 §6): a held mailbox, a held or plan-excluded custom domain.
+      await assertMailboxNotHeld(repos, accountId, mailbox.id);
       const description = normaliseDescription(input.description);
 
       let next: () => string; // the address to try (masked: a fresh random one each time)
@@ -249,11 +252,16 @@ export async function createAlias(
         const domainId = typeof input.domainId === "string" ? input.domainId : "";
         const domain = isId(domainId) ? await repos.domains.get(accountId, domainId) : null;
         if (domain?.status !== "active") throw new ValidationError("Choose one of your active domains.");
+        await assertDomainUsable(repos, accountId, domain);
         const chosen = `${local}@${domain.name}`;
         next = () => chosen;
       } else {
         await assertDomainHeld(repos, accountId, mailbox.address);
         const domainName = mailbox.address.slice(mailbox.address.lastIndexOf("@") + 1);
+        if (!onPlatformDomain(mailbox.address, deps.platform)) {
+          const own = (await repos.domains.listByAccount(accountId)).find((d) => d.name === domainName);
+          if (own) await assertDomainUsable(repos, accountId, own);
+        }
         next = () => `${maskedLocalPart()}@${domainName}`;
       }
 

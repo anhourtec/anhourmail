@@ -2,6 +2,7 @@
 export * from "./ceilings";
 export * from "./entitlements";
 export * from "./entity";
+export * from "./held";
 export * from "./holds";
 export * from "./ingest";
 export * from "./invite-codes";

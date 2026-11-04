@@ -20,6 +20,7 @@ import {
   entitledAddonsOf,
   mailboxCeilingMessage,
 } from "../billing/ceilings";
+import { assertDomainUsable } from "../billing/held";
 import { turnOffCatchAllFor } from "../domains/catch-all";
 import {
   ConflictError,
@@ -373,6 +374,8 @@ export async function newMailboxAddress(
   const domainId = typeof input.domainId === "string" ? input.domainId : "";
   const domain = isId(domainId) ? await repos.domains.get(accountId, domainId) : null;
   if (domain?.status !== "active") throw new ValidationError("Choose one of your active domains.");
+  // Not on a custom domain the effective plan excludes or a downgrade held (ADR-0029 §6; 403 plan_limit, denied).
+  await assertDomainUsable(repos, accountId, domain);
   return { address: `${local}@${domain.name}`, onPlatform: false };
 }
 
