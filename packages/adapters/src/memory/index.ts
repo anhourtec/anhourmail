@@ -289,6 +289,10 @@ function repositories(s: MemoryState): Repositories {
     membershipCount: async (userId) => s.memberships.filter((m) => m.userId === userId).length,
     // Runs are already serialised in memory: nothing to lock.
     lock: async () => undefined,
+    setPlan: async (id, plan) => {
+      const a = s.accounts.find((x) => x.id === id);
+      if (a) a.plan = plan;
+    },
     get: async (id) => {
       const a = s.accounts.find((x) => x.id === id);
       return a ? { id: a.id, name: a.name, plan: a.plan, status: a.status ?? "active" } : null;

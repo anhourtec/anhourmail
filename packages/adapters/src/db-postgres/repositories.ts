@@ -307,6 +307,11 @@ class PgAccountRepository implements AccountRepository {
     await this.x.execute(sql`select id from customer_account where id = ${id} for update`);
   }
 
+  async setPlan(id: string, plan: PlanId): Promise<void> {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return;
+    await this.x.update(customerAccount).set({ plan }).where(eq(customerAccount.id, id));
+  }
+
   async addMember(input: { accountId: string; userId: string; role: AccountRole }): Promise<void> {
     await this.x.insert(accountMembership).values(input);
   }

@@ -11,6 +11,8 @@ export type AccountRepository = {
    * enforced one request at a time.
    */
   lock(id: string): Promise<void>;
+  /** Sets the effective plan the rest of the code reads (only the billing sync writes it, ADR-0029 §4). */
+  setPlan(id: string, plan: PlanId): Promise<void>;
   addMember(input: { accountId: string; userId: string; role: AccountRole }): Promise<void>;
   setUserState(input: { userId: string; state: UserState }): Promise<void>;
   /** Accounts the user already belongs to (sign-up must be idempotent). */
