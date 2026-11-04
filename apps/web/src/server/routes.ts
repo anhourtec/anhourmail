@@ -734,6 +734,8 @@ export const ROUTES: readonly RouteSpec[] = [
   { method: "GET", path: "/api/webmail/session", file: "app/api/webmail/session/route.ts", guard: "webmail" },
   { method: "GET", path: "/api/webmail/bootstrap", file: "app/api/webmail/bootstrap/route.ts", guard: "webmail" },
   { method: "POST", path: "/api/webmail/jmap", file: "app/api/webmail/jmap/route.ts", guard: "webmail" },
+  // Push stream (server-sent events, 05-webmail.md "Push"): own mailboxes only.
+  { method: "GET", path: "/api/webmail/push", file: "app/api/webmail/push/route.ts", guard: "webmail" },
   {
     method: "GET",
     path: "/api/webmail/messages/:emailId",

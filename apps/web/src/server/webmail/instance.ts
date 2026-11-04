@@ -17,6 +17,7 @@ import {
   WebmailSignaturesService,
 } from "@anhourmail/core/webmail";
 import { setWebmailSenderName, webmailSenderName, webmailSendingNames } from "@anhourmail/core/people";
+import { openPushChannel } from "@anhourmail/jmap-client/push";
 import { keyRingFromEnv } from "@anhourmail/server/keyring";
 import { type FailureStore, redisFailureStore, redisSlidingQuota } from "@anhourmail/server/rate-limit";
 import { redis } from "@anhourmail/server/redis";
@@ -29,6 +30,8 @@ import { platform } from "../platform";
 import { trustedAuthservIds } from "./original";
 import { safeSenders } from "./safe-senders";
 import { fromVerified } from "./sender-check";
+import { PushHub } from "./push-hub";
+import { pushTargetFrom } from "./push-target";
 import { type SessionKv, WebmailSessionStore } from "./session-store";
 import { type OAuthPort, WebmailService } from "./service";
 import { WebmailSettings } from "./settings";
@@ -221,6 +224,27 @@ export function webmail(): WebmailService {
     });
   }
   return instance;
+}
+
+/** Where the push hub lives: `globalThis`, so every route module of this process (and a dev reload) shares it. */
+const globalForPush = globalThis as { amWebmailPushHub?: PushHub };
+
+/**
+ * The webmail push hub (`./push-hub`): one per server process, on `globalThis` — never per route module, so the push
+ * stream and sign-out see the same channels under `next dev` and the standalone build.
+ */
+export function webmailPush(): PushHub {
+  globalForPush.amWebmailPushHub ??= new PushHub({
+    target: pushTargetFrom(webmail),
+    connect: (target, handlers) =>
+      openPushChannel({
+        url: webmail().pushUrl,
+        authorization: `Bearer ${target.accessToken}`,
+        dataTypes: ["Email", "Mailbox"],
+        ...handlers,
+      }),
+  });
+  return globalForPush.amWebmailPushHub;
 }
 
 let passwordGate: PasswordChangeGate | null = null;

@@ -171,6 +171,8 @@ describe("webmail delegation gate", () => {
       "POST mailboxes/delegated/route.ts",
       "GET mailboxes/route.ts",
       "POST mailboxes/route.ts",
+      // The push stream answers 204 itself (no push) while a shared mailbox is active: those tabs poll.
+      "GET push/route.ts",
     ]);
     // Sending, drafts, uploads, identities, settings, contacts and export always need the person's own mailbox.
     for (const key of [

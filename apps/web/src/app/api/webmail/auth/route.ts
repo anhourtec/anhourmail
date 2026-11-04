@@ -9,7 +9,7 @@ import { failuresExceeded, LIMITS, recordFailure } from "@anhourmail/server/rate
 import { env } from "@/server/env";
 import { ok, readJson, route } from "@/server/http/route";
 import { badRequest, handleWebmail } from "@/server/webmail/http";
-import { webmail, webmailCookie, webmailFailures, webmailSessionId } from "@/server/webmail/instance";
+import { webmail, webmailCookie, webmailFailures, webmailPush, webmailSessionId } from "@/server/webmail/instance";
 import { hasKnownTag, knownTag, knownTags, rememberKnown } from "@/server/webmail/known-mailboxes";
 import { WebmailBlockedError, WebmailSignInError } from "@/server/webmail/service";
 
@@ -71,7 +71,11 @@ export const POST = route(
 export const DELETE = route(
   async ({ req }) => {
     const id = webmailSessionId(req.headers.get("cookie"));
-    if (id) await webmail().signOut(id);
+    if (id) {
+      await webmail().signOut(id);
+      // This process's push streams for the session end now (other processes notice within a minute).
+      webmailPush().closeSession(id);
+    }
     const res = ok({ signedOut: true });
     res.headers.append("Set-Cookie", webmailCookie("", 0));
     return res;
