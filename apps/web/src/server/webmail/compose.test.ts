@@ -27,6 +27,7 @@ import { MAX_OUTGOING_HTML } from "./outgoing-html";
 import {
   GrantRefusedError,
   WebmailBlockedError,
+  WebmailNotFoundError,
   WebmailQuotaError,
   WebmailRefusedError,
   WebmailService,
@@ -252,7 +253,14 @@ function fakeStalwart() {
         },
       ],
     ]),
-    submissions: new Map<string, { emailId: string; undoStatus: string }>(),
+    submissions: new Map<
+      string,
+      { emailId: string; undoStatus: string; deliveryStatus?: Record<string, { delivered: string; smtpReply: string }> }
+    >(),
+    /** Addresses the mail server refuses at RCPT (an unknown address on one of its own domains). */
+    unknownAddresses: new Set<string>(),
+    /** Answer `EmailSubmission/get` with a method error (the delivery report can't be read). */
+    failSubmissionGet: false,
     seq: 0,
     calls: [] as string[],
     uploads: [] as { type: string | null; size: number }[],
@@ -354,9 +362,25 @@ function fakeStalwart() {
     "EmailSubmission/set": (a) => {
       if (a.create) {
         if (state.refuseSubmission) return { notCreated: { send: { type: "forbiddenFrom" } } };
-        const create = (a.create as Record<string, { emailId: string; envelope: unknown }>).send;
+        const create = (
+          a.create as Record<string, { emailId: string; envelope: { rcptTo: { email: string }[] } | undefined }>
+        ).send;
         const id = `s${String(++state.seq)}`;
-        state.submissions.set(id, { emailId: create?.emailId ?? "", undoStatus: "pending" });
+        // Like the server: RCPT is checked while the message is held; nothing accepted means nothing to hold.
+        const deliveryStatus = Object.fromEntries(
+          (create?.envelope?.rcptTo ?? []).map(({ email }) => [
+            email,
+            state.unknownAddresses.has(email)
+              ? { delivered: "no", smtpReply: "550 5.1.2 Mailbox does not exist." }
+              : { delivered: "queued", smtpReply: "250 2.1.5 Queued" },
+          ]),
+        );
+        const accepted = Object.values(deliveryStatus).some((d) => d.delivered !== "no");
+        state.submissions.set(id, {
+          emailId: create?.emailId ?? "",
+          undoStatus: accepted ? "pending" : "final",
+          deliveryStatus,
+        });
         // onSuccessUpdateEmail: Drafts → Sent, no $draft.
         const e = state.emails.get(create?.emailId ?? "");
         if (e) {
@@ -376,12 +400,15 @@ function fakeStalwart() {
       }
       return { updated, notUpdated: {} };
     },
-    "EmailSubmission/get": (a) => ({
-      list: (a.ids as string[]).flatMap((id) => {
-        const s = state.submissions.get(id);
-        return s ? [{ id, ...s }] : [];
-      }),
-    }),
+    "EmailSubmission/get": (a) => {
+      if (state.failSubmissionGet) return undefined;
+      return {
+        list: (a.ids as string[]).flatMap((id) => {
+          const s = state.submissions.get(id);
+          return s ? [{ id, ...s }] : [];
+        }),
+      };
+    },
   };
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -412,7 +439,8 @@ function fakeStalwart() {
       if (name.endsWith("/get") && Array.isArray(args.ids) && args.ids.length > 500) {
         return ["error", { type: "requestTooLarge" }, id];
       }
-      return h ? [name, h(args), id] : ["error", { type: "unknownMethod" }, id];
+      const answer = h?.(args);
+      return answer !== undefined ? [name, answer, id] : ["error", { type: "unknownMethod" }, id];
     });
     return Response.json({ methodResponses });
   }) as typeof fetch;
@@ -427,10 +455,17 @@ function setup(
 ) {
   const fake = fakeStalwart();
   const deferred: { fn: () => void; ms: number }[] = [];
+  /** Every wait the service asked for (answered at once). */
+  const sleeps: number[] = [];
   /** Lets held submissions go out (or not), then runs what the service deferred and waits for it. */
   const afterHold = async (release = true) => {
     if (release)
-      for (const sub of fake.state.submissions.values()) if (sub.undoStatus === "pending") sub.undoStatus = "final";
+      for (const sub of fake.state.submissions.values()) {
+        if (sub.undoStatus !== "pending") continue;
+        sub.undoStatus = "final";
+        // Handed on: accepted recipients are no longer "queued" here.
+        for (const d of Object.values(sub.deliveryStatus ?? {})) if (d.delivered === "queued") d.delivered = "unknown";
+      }
     const due = deferred.splice(0);
     for (const d of due) d.fn();
     await new Promise((r) => setTimeout(r, 30));
@@ -454,10 +489,13 @@ function setup(
     defer: (fn, ms) => {
       deferred.push({ fn, ms });
     },
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
     ...(holdSeconds ? { holdSeconds } : {}),
     ...(senderName ? { senderName } : {}),
   });
-  return { svc, deferred, afterHold, ...fake };
+  return { svc, deferred, afterHold, sleeps, ...fake };
 }
 
 const draft = (over: Record<string, unknown> = {}) =>
@@ -657,6 +695,124 @@ describe("several mailboxes in one session", () => {
     expect(await t.svc.mailboxes(sessionId)).toBeNull();
     await expect(t.svc.addMailbox(sessionId, "m1@x.test", "right")).rejects.toThrow();
     await expect(t.svc.switchMailbox(sessionId, "m1@x.test")).rejects.toThrow();
+  });
+});
+
+describe("delivery problems after a send", () => {
+  const nobody = "nobody@x.test";
+  const noMailbox = { email: nobody, code: "5.1.2", reason: "No mailbox with this address exists." };
+
+  it("reports nothing when every recipient was accepted, before and after the hold", async () => {
+    const t = setup();
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const a = "acc-a@x.test";
+    const d = await t.svc.saveDraft(sessionId, draft(), a);
+    const sent = await t.svc.send(sessionId, d.id, "i1", a);
+    expect(sent).toMatchObject({ undelivered: [], held: true });
+    await t.afterHold();
+    await expect(t.svc.deliveryReportOf(sessionId, sent.submissionId, a)).resolves.toEqual({
+      undelivered: [],
+      settled: true,
+      held: false,
+    });
+    expect(t.sleeps).toEqual([]);
+  });
+
+  it("names an unknown address at once, keeps the others held for undo, and the copy in Sent", async () => {
+    const t = setup();
+    t.state.unknownAddresses.add(nobody);
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const a = "acc-a@x.test";
+    const d = await t.svc.saveDraft(sessionId, draft({ to: [{ email: "s@x.test" }, { email: nobody }] }), a);
+    const sent = await t.svc.send(sessionId, d.id, "i1", a);
+    // Partly refused: the accepted recipient is still held, so undo still works.
+    expect(sent.undelivered).toEqual([noMailbox]);
+    expect(sent.held).toBe(true);
+    expect(t.state.emails.get(d.id)?.mailboxIds).toEqual({ sent: true });
+    await t.afterHold();
+    const after = await t.svc.deliveryReportOf(sessionId, sent.submissionId, a);
+    expect(after).toEqual({ undelivered: [noMailbox], settled: true, held: false });
+  });
+
+  it("says nothing was held when every recipient was refused (nothing to undo)", async () => {
+    const t = setup();
+    t.state.unknownAddresses.add(nobody);
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const d = await t.svc.saveDraft(sessionId, draft({ to: [{ email: nobody }] }));
+    const sent = await t.svc.send(sessionId, d.id, "i1");
+    expect(sent).toMatchObject({ undelivered: [noMailbox], held: false });
+    // The message was submitted: it stays in Sent, nothing destructive happens.
+    expect(t.state.emails.get(d.id)?.mailboxIds).toEqual({ sent: true });
+  });
+
+  it("still answers the send when the report can't be read, and the check after the hold says unavailable", async () => {
+    const t = setup();
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const d = await t.svc.saveDraft(sessionId, draft());
+    t.state.failSubmissionGet = true;
+    const sent = await t.svc.send(sessionId, d.id, "i1");
+    expect(sent).toMatchObject({ undelivered: [], held: true });
+    await expect(t.svc.deliveryReportOf(sessionId, sent.submissionId, "acc-a@x.test")).rejects.toBeInstanceOf(
+      WebmailUnavailableError,
+    );
+    // Re-checked within the bound, then gave up: never more than about 3 s.
+    expect(t.sleeps.reduce((x, y) => x + y, 0)).toBeLessThanOrEqual(3000);
+  });
+
+  it("re-checks a report that hasn't settled for about 3 s at most, then answers what it has", async () => {
+    const t = setup();
+    t.state.unknownAddresses.add(nobody);
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const a = "acc-a@x.test";
+    const d = await t.svc.saveDraft(sessionId, draft({ to: [{ email: "s@x.test" }, { email: nobody }] }), a);
+    const sent = await t.svc.send(sessionId, d.id, "i1", a);
+    // Still held (a long undo delay, or the server hasn't handed it on): the bounded re-check runs out.
+    const report = await t.svc.deliveryReportOf(sessionId, sent.submissionId, a);
+    expect(report).toEqual({ undelivered: [noMailbox], settled: false, held: true });
+    expect(t.sleeps).toEqual([750, 750, 1500]);
+  });
+
+  it("is a 404 for a submission this mailbox doesn't have, and refused for a mailbox not signed in here", async () => {
+    const t = setup();
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    await expect(t.svc.deliveryReportOf(sessionId, "s999", "acc-a@x.test")).rejects.toBeInstanceOf(
+      WebmailNotFoundError,
+    );
+    // Another person's mailbox (their account id) isn't one of this session's: refused, never read.
+    const before = t.state.calls.length;
+    await expect(t.svc.deliveryReportOf(sessionId, "s1", "acc-b@x.test")).rejects.toBeInstanceOf(WebmailRefusedError);
+    expect(t.state.calls.slice(before)).not.toContain("EmailSubmission/get");
+  });
+
+  it("reads a send of a mailbox the session has switched away from with that mailbox's own token", async () => {
+    const t = setup();
+    t.state.unknownAddresses.add(nobody);
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const a = "acc-a@x.test";
+    const d = await t.svc.saveDraft(sessionId, draft({ to: [{ email: "s@x.test" }, { email: nobody }] }), a);
+    const sent = await t.svc.send(sessionId, d.id, "i1", a);
+    await t.svc.addMailbox(sessionId, "b@x.test", "right");
+    await t.afterHold();
+    await expect(t.svc.deliveryReportOf(sessionId, sent.submissionId, a)).resolves.toMatchObject({
+      undelivered: [noMailbox],
+    });
+  });
+
+  it("never logs the recipients of a refused send", async () => {
+    const lines: string[] = [];
+    setLogSinkForTests((l) => {
+      lines.push(l);
+    });
+    const t = setup();
+    t.state.unknownAddresses.add(nobody);
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const d = await t.svc.saveDraft(sessionId, draft({ to: [{ email: nobody }] }));
+    t.state.failSubmissionGet = true;
+    await t.svc.send(sessionId, d.id, "i1");
+    t.state.failSubmissionGet = false;
+    await t.svc.deliveryReportOf(sessionId, "s999", "acc-a@x.test").catch(() => undefined);
+    expect(lines.join("\n")).not.toContain("nobody");
+    expect(lines.join("\n")).not.toContain("5.1.2");
   });
 });
 

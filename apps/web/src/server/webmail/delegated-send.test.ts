@@ -33,6 +33,7 @@ import {
   GrantRefusedError,
   type OAuthTokens,
   WebmailDelegationRefusedError,
+  WebmailNotFoundError,
   WebmailOwnMailboxOnlyError,
   WebmailQuotaError,
   WebmailRefusedError,
@@ -162,6 +163,24 @@ function mailServer(sendAudits: () => number) {
         const inMailbox = (args.filter as { inMailbox?: string } | undefined)?.inMailbox;
         const ids = [...b.emails.values()].filter((e) => !inMailbox || e.mailboxIds[inMailbox]).map((e) => e.id);
         out.push([name, { ids: ids.reverse() }, callId]);
+      } else if (name === "EmailSubmission/get") {
+        // Like the server: an address starting "nobody" doesn't exist and is refused at RCPT while held.
+        const ids = args.ids as string[];
+        const list = b.submissions
+          .filter((x) => ids.includes(x.id))
+          .map((x) => ({
+            id: x.id,
+            undoStatus: x.undoStatus === "pending" ? "final" : x.undoStatus,
+            deliveryStatus: Object.fromEntries(
+              x.envelope.rcptTo.map(({ email }) => [
+                email,
+                email.startsWith("nobody")
+                  ? { delivered: "no", smtpReply: "550 5.1.2 Mailbox does not exist." }
+                  : { delivered: "unknown", smtpReply: "250 2.1.5 Queued" },
+              ]),
+            ),
+          }));
+        out.push([name, { list }, callId]);
       } else if (name === "EmailSubmission/query") {
         const want = (args.filter as { emailIds?: string[] } | undefined)?.emailIds ?? [];
         out.push([name, { ids: b.submissions.filter((x) => want.includes(x.emailId)).map((x) => x.id) }, callId]);
@@ -733,6 +752,49 @@ describe("sending from a mailbox shared with the person (ADR-0026 §6, §8; slic
     await expect(
       t.svc.undoSend(sessionId, submissionId, "acc-kim@family.test", { mailbox: "desk@family.test", req }),
     ).rejects.toBeInstanceOf(WebmailRefusedError);
+  });
+
+  it("reports refused recipients of a delegated send, only for its sealed ticket and to the session that sent it", async () => {
+    const t = setup();
+    t.grant(DESK, "send_as");
+    const { sessionId } = await t.svc.signIn("kim@family.test", "right");
+    const draftId = await t.draft(sessionId, { to: [{ email: "nobody-1@family.test" }, { email: "ann@example.org" }] });
+    const out = await t.svc.send(sessionId, draftId, KIM_ID, "acc-kim@family.test", { from: "desk@family.test", req });
+    const refused = { email: "nobody-1@family.test", code: "5.1.2", reason: "No mailbox with this address exists." };
+    expect(out.undelivered).toEqual([refused]);
+    const ticket = out.reportTicket ?? "";
+    // Sealed: the browser can't read what it names.
+    expect(ticket).not.toContain("desk@");
+    expect(ticket).not.toContain(out.submissionId);
+    const desk = (tk = ticket) => ({ mailbox: "desk@family.test", ticket: tk });
+    // After the hold: read in the shared mailbox with the entry that sent it.
+    await expect(t.svc.deliveryReportOf(sessionId, out.submissionId, "acc-kim@family.test", desk())).resolves.toEqual({
+      undelivered: [refused],
+      settled: true,
+      held: false,
+    });
+    // Not from the tab of another mailbox, not another submission or mailbox, not a forged or altered ticket.
+    for (const [submission, account, shared] of [
+      [out.submissionId, "acc-other@family.test", desk()],
+      ["sub-unknown", "acc-kim@family.test", desk()],
+      [out.submissionId, "acc-kim@family.test", { mailbox: "team@family.test", ticket }],
+      [out.submissionId, "acc-kim@family.test", desk("")],
+      [out.submissionId, "acc-kim@family.test", desk(`${ticket.slice(0, -2)}AA`)],
+    ] as const) {
+      await expect(t.svc.deliveryReportOf(sessionId, submission, account, shared)).rejects.toBeInstanceOf(
+        WebmailNotFoundError,
+      );
+    }
+    // Not another person's session, even with the ticket.
+    const lee = await t.svc.signIn("lee@family.test", "right");
+    await expect(
+      t.svc.deliveryReportOf(lee.sessionId, out.submissionId, "acc-lee@family.test", desk()),
+    ).rejects.toBeInstanceOf(WebmailNotFoundError);
+    // A few minutes later it is no longer valid.
+    t.advance(10 * 60_000);
+    await expect(
+      t.svc.deliveryReportOf(sessionId, out.submissionId, "acc-kim@family.test", desk()),
+    ).rejects.toBeInstanceOf(WebmailNotFoundError);
   });
 
   it("never sends from a shared mailbox while one is the active mailbox, nor to the own mailbox as 'from'", async () => {

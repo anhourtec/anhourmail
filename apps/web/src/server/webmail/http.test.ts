@@ -16,7 +16,8 @@ import {
   webmailErrorResponse,
   withUploadSlot,
 } from "./http";
-import { WebmailConflictError, WebmailSenderBlockedError } from "./service";
+import { REFUSED_HEADER } from "./pin";
+import { WebmailConflictError, WebmailNotFoundError, WebmailSenderBlockedError } from "./service";
 
 describe("upload slots and capped bodies", () => {
   it("runs at most MAX_UPLOADS uploads at once and asks the rest to retry", async () => {
@@ -111,5 +112,14 @@ describe("Safe senders refusals", () => {
     const blocked = webmailErrorResponse(new WebmailSenderBlockedError("x@y.example is on your blocked list."));
     expect(blocked?.status).toBe(409);
     expect(await blocked?.json()).toMatchObject({ error: { code: "sender_blocked" } });
+  });
+});
+
+describe("delivery reports", () => {
+  it("answers a report of a submission this session didn't make with a plain 404 (no refused-mailbox header)", async () => {
+    const res = webmailErrorResponse(new WebmailNotFoundError("no such submission"));
+    expect(res?.status).toBe(404);
+    expect(res?.headers.get(REFUSED_HEADER)).toBeNull();
+    expect(await res?.json()).toEqual({ error: { code: "not_found", message: "Nothing to show for this message." } });
   });
 });
