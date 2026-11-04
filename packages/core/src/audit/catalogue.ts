@@ -95,13 +95,25 @@ export const AUDIT_ACTIONS = [
   // console → webmail handoff (ADR-0024): the code minted, then redeemed (or refused)
   "webmail.handoff_started",
   "webmail.handoff_redeemed",
-  // billing
+  // billing (ADR-0029 §12). `billing.suspended` / `billing.reactivated` are retired (never written; kept so old labels
+  // read): `billing.state_changed` replaces them.
   "billing.plan_changed",
   "billing.payment_succeeded",
   "billing.payment_failed",
   "billing.refunded",
   "billing.suspended",
   "billing.reactivated",
+  "billing.state_changed",
+  "billing.addons_changed",
+  "billing.supporter_amount_changed",
+  "billing.cancel_scheduled",
+  "billing.cancel_undone",
+  "billing.dispute_opened",
+  "billing.dispute_closed",
+  "billing.holds_applied",
+  "billing.holds_lifted",
+  "billing.ceiling_changed",
+  "billing.sync_failed",
   // trust and safety
   "trust.tier_changed",
   "trust.limits_changed",
