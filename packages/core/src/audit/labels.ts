@@ -109,6 +109,7 @@ const EXPLICIT: Partial<Record<AuditAction, string>> = {
   "auth.email_verification_sent": "Email confirmation link sent",
   "auth.email_verified": "Email address confirmed",
   "auth.login_deleted": "Console login deleted",
+  "auth.sign_up_refused": "Sign-up refused",
   "account.created": "Account created",
   "account.deleted": "Account deleted",
   "account.updated": "Account settings changed",

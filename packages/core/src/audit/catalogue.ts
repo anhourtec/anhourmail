@@ -32,6 +32,7 @@ export const AUDIT_ACTIONS = [
   "auth.email_verification_sent",
   "auth.email_verified",
   "auth.login_deleted",
+  "auth.sign_up_refused",
   // account and people
   "account.created",
   "account.deleted",

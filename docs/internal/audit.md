@@ -16,7 +16,7 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 
 | Area | Actions |
 | --- | --- |
-| `auth` | `auth.sign_in`, `auth.sign_in_failed`, `auth.second_step_started`, `auth.sign_out`, `auth.password_changed`, `auth.password_reset`, `auth.password_reset_requested`, `auth.two_factor_enabled`, `auth.two_factor_disabled`, `auth.app_password_created`, `auth.app_password_revoked`, `auth.session_revoked`, `auth.locked_out`, `auth.mail_client_sign_in`, `auth.mail_client_sign_in_failed`, `auth.two_factor_reset`, `auth.backup_code_used`, `auth.sessions_revoked_all`, `auth.new_device`, `auth.passkey_added`, `auth.passkey_renamed`, `auth.passkey_removed`, `auth.recovery_codes_regenerated`, `auth.identity_confirmed`, `auth.email_verification_sent`, `auth.email_verified`, `auth.login_deleted` |
+| `auth` | `auth.sign_in`, `auth.sign_in_failed`, `auth.second_step_started`, `auth.sign_out`, `auth.password_changed`, `auth.password_reset`, `auth.password_reset_requested`, `auth.two_factor_enabled`, `auth.two_factor_disabled`, `auth.app_password_created`, `auth.app_password_revoked`, `auth.session_revoked`, `auth.locked_out`, `auth.mail_client_sign_in`, `auth.mail_client_sign_in_failed`, `auth.two_factor_reset`, `auth.backup_code_used`, `auth.sessions_revoked_all`, `auth.new_device`, `auth.passkey_added`, `auth.passkey_renamed`, `auth.passkey_removed`, `auth.recovery_codes_regenerated`, `auth.identity_confirmed`, `auth.email_verification_sent`, `auth.email_verified`, `auth.login_deleted`, `auth.sign_up_refused` |
 | `account` | `account.created`, `account.deleted`, `account.updated`, `account.invite_sent`, `account.invite_accepted`, `account.invite_resent`, `account.invite_revoked`, `account.member_added`, `account.user_added`, `account.profile_changed`, `account.avatar_changed`, `account.avatar_removed`, `account.member_removed`, `account.role_changed`, `account.ownership_transferred`, `account.sign_in_policy_changed`, `account.sign_in_factor_added`, `account.sign_in_factor_removed` |
 | `domain` | `domain.added`, `domain.verified`, `domain.verify_failed`, `domain.removed`, `domain.dns_state_changed`, `domain.released`, `domain.expired` |
 | `mailbox` | `mailbox.created`, `mailbox.renamed`, `mailbox.made_user`, `mailbox.converted_to_shared`, `mailbox.suspended`, `mailbox.unsuspended`, `mailbox.deleted`, `mailbox.quota_changed`, `mailbox.deletion_scheduled`, `mailbox.restored`, `mailbox.password_reset`, `mailbox.password_changed`, `mailbox.avatar_changed`, `mailbox.avatar_removed` |
@@ -356,6 +356,14 @@ newest first with a `before` cursor.
 Signed-out and identity events carry the request's client address (TRUST_PROXY rules, the same one the rate limiter
 uses): `account.created` (sign-up), `auth.password_reset_requested`, `auth.email_verification_sent` and
 `auth.email_verified`, like every sign-in event. The IP is the only request detail they keep (no user agent).
+
+Sign-up refusals (ADR-0031): `auth.sign_up_refused`, `denied`, in the platform log, actor the identity system, no target
+person (`user`, id and label null — the body is read only for its shape, so no address or name is recorded), with the
+client address. `errorCode` `proof_of_work` (meta `reason`: `expired`, `wrong_client`, `too_easy`, `insufficient_work`,
+`replayed`), `sign_up_attempts` (`attempts_hour`) or `sign_up_limited` (`address_hour`, `address_day`, `network_hour`,
+`network_day`, `network56_day`, `network48_day`). At most one entry per network (IPv4 /24, IPv6 /48) and reason per
+hour; every refusal is logged. Missing, malformed and forged proofs are logged
+only, never audited (anyone can send them without asking us for a challenge). Never the challenge or the proof.
 
 Staff support access (act-as, ADR-0023; roles.md guard rail 4): `staff.act_as_started` (meta `reason` — the staff
 member's own words, shown to the account's admins —, `minutes`, `access: "read_only"`, `actAsSessionId`),
