@@ -2,25 +2,46 @@
 import { authRouteHandlers } from "@anhourmail/adapters/auth";
 import type { LimitName } from "@anhourmail/server/rate-limit";
 
-import { auth } from "@/server/auth/instance";
+import { auth, signUpOpen } from "@/server/auth/instance";
 import { authEndpoint } from "@/server/auth/endpoints";
+import { signUpGate } from "@/server/auth/sign-up-gate";
 import { route } from "@/server/http/route";
 
 /**
  * better-auth endpoints, allow-listed (`server/auth/endpoints.ts`): anything else answers 404, so plugin endpoints we
  * replace with audited services (sessions, passkey rename/remove) can't be called around them. Each endpoint has its
  * rate-limit tier: `auth` by default (fail-closed), `authFactor` for second sign-in steps, `sensitive` for factor
- * changes.
+ * changes. Open sign-up first passes the sign-up gate (proof-of-work and sign-up limits, ADR-0031).
  */
 const handlers = () => authRouteHandlers(auth());
+
+const SIGN_UP = "/api/auth/sign-up/email";
 
 const notFound = () => Response.json({ error: { code: "not_found", message: "Not found." } }, { status: 404 });
 
 const byTier = (method: "GET" | "POST") => {
   const make = (limit: LimitName) =>
-    route(async ({ req }) => (authEndpoint(method, new URL(req.url).pathname) ? handlers()[method](req) : notFound()), {
-      limit,
-    });
+    route(
+      async ({ req, meta }) => {
+        const path = new URL(req.url).pathname;
+        if (!authEndpoint(method, path)) return notFound();
+        if (method === "POST" && path === SIGN_UP && signUpOpen()) {
+          const gate = await signUpGate(req, meta);
+          if ("refused" in gate) return gate.refused;
+          // The account tiers count only a created account: anything else (or a throw) gives them back.
+          let created = false;
+          try {
+            const res = await handlers()[method](req);
+            created = res.ok;
+            return res;
+          } finally {
+            await gate.settle(created);
+          }
+        }
+        return handlers()[method](req);
+      },
+      { limit },
+    );
   const tiers = { auth: make("auth"), authFactor: make("authFactor"), sensitive: make("sensitive") };
   return (req: Request, ctx: { params: Promise<{ all: string[] }> }) =>
     tiers[authEndpoint(method, new URL(req.url).pathname)?.tier ?? "auth"](req, ctx);
