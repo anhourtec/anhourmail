@@ -285,6 +285,36 @@ describe("webmail BFF on the dev Stalwart", () => {
     expect(raw).not.toContain("<script");
   });
 
+  it("tells the sender which addresses on our domains don't exist, at once and after the hold", async () => {
+    const tag = randomBytes(5).toString("hex");
+    const nobody = `nobody-${tag}@dev.test`;
+    const owner = service();
+    const { sessionId, session } = await owner.signIn(OWNER, demoPassword(OWNER));
+    const identity = (await owner.identities(sessionId)).find((i) => i.email === OWNER);
+    if (!identity) throw new Error("owner identity missing");
+    const draft = await owner.saveDraft(sessionId, {
+      identityId: identity.id,
+      to: [
+        { name: null, email: RECIPIENT },
+        { name: null, email: nobody },
+      ],
+      cc: [],
+      bcc: [],
+      subject: `int-test unknown ${tag}`,
+      text: "One of these doesn't exist.",
+      attachments: [],
+    });
+    const sent = await owner.send(sessionId, draft.id, identity.id);
+    const refused = { email: nobody, code: "5.1.2", reason: "No mailbox with this address exists." };
+    // Refused at RCPT while held: known in the send's answer; the real recipient is still held (undo still works).
+    expect(sent.undelivered).toEqual([refused]);
+    expect(sent.held).toBe(true);
+    await new Promise((r) => setTimeout(r, (sent.holdSeconds + 1) * 1000));
+    const after = await owner.deliveryReportOf(sessionId, sent.submissionId, session.accountId);
+    expect(after.undelivered).toEqual([refused]);
+    expect(after.held).toBe(false);
+  });
+
   it("can undo a send while it is held", async () => {
     const tag = randomBytes(5).toString("hex");
     const owner = service();

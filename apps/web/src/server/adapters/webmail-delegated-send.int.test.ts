@@ -253,7 +253,16 @@ describe("sending from a shared mailbox in the webmail on the dev Stalwart", () 
       t.svc.send(d.sessionId, d.draftId, d.identityId, d.account, { from: deskAddress, req }),
     );
     expect(out.from).toBe(deskAddress);
+    expect(out).toMatchObject({ undelivered: [], held: true });
     const h = await delivered(to);
+    // After the hold, the report (read in desk@ with the entry that sent it) names nobody.
+    const report = await asClient(() =>
+      t.svc.deliveryReportOf(d.sessionId, out.submissionId, d.account, {
+        mailbox: deskAddress,
+        ticket: out.reportTicket ?? "",
+      }),
+    );
+    expect(report.undelivered).toEqual([]);
     expect(h?.from?.join(" ")).toContain(deskAddress);
     expect(h?.sender).toBeUndefined();
     const stored = (await deskMessages()).filter((m) => m.subject === subject);
@@ -278,6 +287,26 @@ describe("sending from a shared mailbox in the webmail on the dev Stalwart", () 
     expect(names).toContain("sender");
     for (const name of tagHeaders) expect(names).not.toContain(name);
     expect(t.s.audit.filter((e) => e.action === "delegation.sent_on_behalf")).toHaveLength(1);
+  }, 90_000);
+
+  it("tells the person sending on behalf that an address on our domain doesn't exist, at once and after the hold", async () => {
+    const t = world(["send_on_behalf"]);
+    const nobody = `nobody-${randomUUID().slice(0, 8)}@dev.test`;
+    const d = await kimDraft(t.svc, nobody, `int dsend unknown ${tag}`);
+    const out = await asClient(() =>
+      t.svc.send(d.sessionId, d.draftId, d.identityId, d.account, { from: deskAddress, req }),
+    );
+    const refused = { email: nobody, code: "5.1.2", reason: "No mailbox with this address exists." };
+    // Its only recipient was refused, so nothing is held.
+    expect(out).toMatchObject({ undelivered: [refused], held: false });
+    await sleep((out.holdSeconds + 1) * 1000);
+    const after = await asClient(() =>
+      t.svc.deliveryReportOf(d.sessionId, out.submissionId, d.account, {
+        mailbox: deskAddress,
+        ticket: out.reportTicket ?? "",
+      }),
+    );
+    expect(after.undelivered).toEqual([refused]);
   }, 90_000);
 
   it("undoes a send on behalf in its hold: nothing delivered, no copy left, the own draft handed back", async () => {
