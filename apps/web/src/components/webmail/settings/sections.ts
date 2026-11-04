@@ -6,6 +6,7 @@ import {
   Download,
   Forward,
   Globe,
+  ListFilter,
   type LucideIcon,
   Palette,
   PenLine,
@@ -17,7 +18,7 @@ import {
  * each with the words people search for. Search matches the label or any keyword.
  */
 export type SectionId =
-  "appearance" | "reading" | "writing" | "replies" | "forwarding" | "junk" | "account" | "export" | "region";
+  "appearance" | "reading" | "writing" | "rules" | "replies" | "forwarding" | "junk" | "account" | "export" | "region";
 
 export type Section = { id: SectionId; label: string; icon: LucideIcon; summary: string; keywords: string[] };
 
@@ -86,6 +87,28 @@ export const SECTIONS: readonly Section[] = [
     icon: PenLine,
     summary: "Signatures, replies and undo send",
     keywords: ["signature", "reply", "reply all", "undo send", "delay", "cc", "bcc", "format", "plain text", "compose"],
+  },
+  {
+    id: "rules",
+    label: "Rules",
+    icon: ListFilter,
+    summary: "Sort, flag or forward new mail as it arrives",
+    keywords: [
+      "rules",
+      "filters",
+      "filter",
+      "sort",
+      "move",
+      "folder",
+      "label",
+      "mark as read",
+      "flag",
+      "forward",
+      "delete",
+      "mailing list",
+      "newsletter",
+      "inbox rules",
+    ],
   },
   {
     id: "replies",

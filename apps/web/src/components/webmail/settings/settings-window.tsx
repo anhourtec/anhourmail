@@ -12,10 +12,11 @@ import type { Folder, Identity, MailClient, SettingsOverview } from "../mail-cli
 import { ExportPanel } from "./export-panel";
 import { AccountPanel, ForwardingPanel, JunkPanel, RepliesPanel, WritingPanel } from "./panels-mail";
 import { AppearancePanel, ReadingPanel, RegionPanel } from "./panels-view";
+import { RulesPanel } from "./rules-panel";
 import { matchSections, SECTIONS, type SectionId } from "./sections";
 
 /** Panels that need the mail server's side of the settings (loaded when the window opens). */
-const NEEDS_SERVER: ReadonlySet<SectionId> = new Set(["writing", "replies", "forwarding", "junk", "account"]);
+const NEEDS_SERVER: ReadonlySet<SectionId> = new Set(["writing", "rules", "replies", "forwarding", "junk", "account"]);
 
 function PanelSkeleton() {
   return (
@@ -167,6 +168,8 @@ export function SettingsWindow({
             onSignatures={onSignaturesChanged}
           />
         );
+      case "rules":
+        return <RulesPanel client={client} account={data.accountId} />;
       case "replies":
         return <RepliesPanel data={data} client={client} timeZone={timeZone} onSaved={setData} />;
       case "forwarding":

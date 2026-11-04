@@ -10,7 +10,7 @@ import type { Bootstrap, BootstrapInput } from "@/server/webmail/bootstrap";
 import type { DelegatedSender, MailboxList, SendResult } from "@/server/webmail/service";
 import type { Undelivered } from "@/server/webmail/delivery";
 import type { Junk, Vacation } from "@/server/webmail/sieve";
-import type { SenderNameView, SettingsOverview, SignatureResult } from "@/server/webmail/settings";
+import type { RulesView, SenderNameView, SettingsOverview, SignatureResult } from "@/server/webmail/settings";
 import type { Address, MessageView } from "@/server/webmail/view";
 
 import {
@@ -45,7 +45,7 @@ import { clearViewCache } from "./view-cache";
 
 export type { Folder, Grouping, ListFilter, ListRow, SearchQuery, Summary, SyncState, View };
 export type Identity = { id: string; name: string; email: string; signature?: string };
-export type { SenderNameView, SettingsOverview, SignatureResult };
+export type { RulesView, SenderNameView, SettingsOverview, SignatureResult };
 export type Attachment = { blobId: string; name: string; type: string; size: number };
 export type DraftPayload = {
   replaces?: string;
@@ -1023,6 +1023,53 @@ export function createMailClient(
         headers: { [ACCOUNT]: await accountId() },
         body: JSON.stringify({ emailId }),
       }),
+    /** Mail rules (ADR-0032 §2): the list, its version, the folders and the forwarding address. */
+    rules: () => bff<RulesView>(`${origin}/api/webmail/settings/rules`),
+    /** Saves the whole ordered list against the version it was read at (409 when it changed meanwhile). */
+    saveRules: (account: string, rules: unknown[], version: string | null) =>
+      bff<RulesView>(`${origin}/api/webmail/settings/rules`, {
+        method: "PUT",
+        headers: { [ACCOUNT]: account },
+        body: JSON.stringify({ rules, version }),
+      }),
+    /**
+     * Recent Inbox messages a rule's conditions match (the rule editor's preview), with the equivalent JMAP filter on
+     * the person's own mail through the proxy. Sieve decides at delivery; this is close, not exact.
+     */
+    async previewRule(
+      inboxId: string,
+      filter: Record<string, unknown>,
+    ): Promise<{ id: string; subject: string; from: string }[]> {
+      const a = await accountId();
+      const res = await call([
+        [
+          "Email/query",
+          {
+            accountId: a,
+            filter: { operator: "AND", conditions: [{ inMailbox: inboxId }, filter] },
+            sort: [{ property: "receivedAt", isAscending: false }],
+            limit: 10,
+          },
+          "q",
+        ],
+        [
+          "Email/get",
+          {
+            accountId: a,
+            "#ids": { resultOf: "q", name: "Email/query", path: "/ids" },
+            properties: ["subject", "from"],
+          },
+          "g",
+        ],
+      ]);
+      return ((res.get("g")?.list ?? []) as { id: string; subject: string | null; from: Address[] | null }[]).map(
+        (e) => {
+          const who = e.from?.[0];
+          const name = who?.name?.trim() ?? "";
+          return { id: e.id, subject: e.subject ?? "", from: name !== "" ? name : (who?.email ?? "") };
+        },
+      );
+    },
     saveJunk: (account: string, junk: Junk) =>
       bff<Junk>(`${origin}/api/webmail/settings/junk`, {
         method: "PUT",
