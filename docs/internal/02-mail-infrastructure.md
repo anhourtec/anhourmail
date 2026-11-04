@@ -1,6 +1,6 @@
 # 02 — Mail infrastructure
 
-Last updated: 2026-10-31 (no file storage on customer mailboxes; the provisioning key's set narrows); 2026-10-30 (internal-mail marker and the inbound-headers script; send-on-behalf tag expiry, ADR-0026 slice 13). Research: `research/stalwart.md`, `research/deliverability.md`.
+Last updated: 2026-11-04 (the webmail tells the sender about unknown local recipients); 2026-10-31 (no file storage on customer mailboxes; the provisioning key's set narrows); 2026-10-30 (internal-mail marker and the inbound-headers script; send-on-behalf tag expiry, ADR-0026 slice 13). Research: `research/stalwart.md`, `research/deliverability.md`.
 
 ## URL and hostname map
 
@@ -297,8 +297,9 @@ Verified 2026-10-29 on v0.16.27 (handoff item 14; `stack:verify` checks every ca
 - **JMAP `EmailSubmission`:** the submission is created, and Stalwart refuses the local recipient inside it:
   `deliveryStatus[<address>]` becomes `{ delivered: "no", smtpReply: "550 5.1.2 Mailbox does not exist." }` with
   **no DSN** to the sender (`x:DsnReportSettings` has no switch for it). This is what looked like a silent drop. The
-  webmail has to read `deliveryStatus` after sending, or pre-check local recipients, and show the sender that the
-  address doesn't exist (open item for the webmail).
+  refusal is in `deliveryStatus` as soon as the submission is created, during the undo hold. The webmail reads it at
+  send and again after the hold and names the address to the sender (2026-11-04, `05-webmail.md` "Delivery
+  problems"); it does not pre-check recipients while composing.
 - **Production** needs no change: the ops staging plan sets nothing on the RCPT stage and creates the system domain
   through the same `upsertDomain`. After a deploy, an `RCPT TO:<random>@<system domain>` from outside must get 550
   (a probe that stops at `RCPT`, never sending content).

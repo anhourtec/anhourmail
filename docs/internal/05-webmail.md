@@ -1,6 +1,6 @@
 # 05 — Webmail
 
-Last updated: 2026-10-31 (remote images, ADR-0027: Safe senders load their images when the From is verified, in every Reading mode, checked on the server with a per-process cache and a Redis rules version; "Always for" / "Stop loading" change Safe senders from the message; the person's own Sent mail loads by itself; old fingerprints read-only; managed-script writes are compare-and-swap; first load: session, folders and the opened view's first window in one answer, streamed inside the page for the person's own mailbox, `GET /api/webmail/bootstrap` otherwise; this browser's copy of the first view painted at once; `Server-Timing` on the webmail API; customer mailboxes have no file storage; remote images: the person's own mail in Sent loads once with no unverified line or remember choice; sender name = the one source in the control plane, identities renamed to it; mailboxes shared with you: no "Shared with you" list or in-place switch in the UI — they open only with Open another mailbox, in a tab named after the mailbox, with Your mailbox in its account menu; no banner; a session left on a shared mailbox goes back to the own one; the account menu tidied (maintainer decision); forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
+Last updated: 2026-11-04 (delivery problems: the send and a check after the undo hold read the submission's `deliveryStatus` and name the recipients the mail server refused, `POST /api/webmail/send/status`; handoff item 14); 2026-10-31 (remote images, ADR-0027: Safe senders load their images when the From is verified, in every Reading mode, checked on the server with a per-process cache and a Redis rules version; "Always for" / "Stop loading" change Safe senders from the message; the person's own Sent mail loads by itself; old fingerprints read-only; managed-script writes are compare-and-swap; first load: session, folders and the opened view's first window in one answer, streamed inside the page for the person's own mailbox, `GET /api/webmail/bootstrap` otherwise; this browser's copy of the first view painted at once; `Server-Timing` on the webmail API; customer mailboxes have no file storage; remote images: the person's own mail in Sent loads once with no unverified line or remember choice; sender name = the one source in the control plane, identities renamed to it; mailboxes shared with you: no "Shared with you" list or in-place switch in the UI — they open only with Open another mailbox, in a tab named after the mailbox, with Your mailbox in its account menu; no banner; a session left on a shared mailbox goes back to the own one; the account menu tidied (maintainer decision); forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
 notifications; quoted replies; compose image placeholders; first-sign-in password step; sign-in links not pre-filled).
 
 **Status (2026-10-22): slice 1 is built** — webmail sign-in (OAuth code flow + PKCE, tokens sealed server-side), the
@@ -116,6 +116,42 @@ frame-ancestors 'none'` unless the route sets its own sandboxing one). `next.con
   upstream request may be retried).
 - **Undo** (`POST /api/webmail/send/undo`) cancels the held submission and moves the message back to Drafts; once it
   is released Stalwart refuses the cancel and the person sees "It has already been sent".
+- **Delivery problems (2026-11-04, handoff item 14).** Stalwart refuses an unknown address on one of its own domains
+  at `RCPT`, and for a JMAP submission that refusal sends **no DSN**: the submission is created with
+  `deliveryStatus[addr] = { delivered: "no", smtpReply: "550 5.1.2 …" }`. Verified on v0.16.27 (2026-11-04): the
+  refusal is there **at once**, while the message is still held (accepted recipients show `queued` until release,
+  then `unknown` for local and Mailpit delivery), and a submission whose every recipient is refused is never held
+  (`undoStatus: final` straight away, nothing to undo). So:
+  - **At send** (own and from a shared mailbox): right after `EmailSubmission/set` the BFF reads that submission
+    (`EmailSubmission/get`, `undoStatus` + `deliveryStatus`, with the sending mailbox's own token or the delegated
+    entry that sent it) and answers `undelivered` and `held` with the send. A failed read never fails the send (it
+    went); it answers "nothing yet".
+  - **After the undo hold**, the app asks once (`POST /api/webmail/send/status` `{ submissionId, mailbox?, ticket? }`, `write`
+    tier, own-mailbox-only like send and undo) about `holdSeconds + 1` s after the send; undo cancels that check.
+    The BFF re-reads while the report isn't settled (still held, or a recipient still `queued` or without a status)
+    at 0.75, 1.5 and 3 s — never longer — and answers what it has. Own sends: read with the tab's mailbox's own token
+    (`#call` with `inactive`, so a switch in another tab still reads the mailbox that sent; a mailbox not signed in
+    here is refused). Shared-mailbox sends: the send answers a `reportTicket`, sealed with the session store's key ring
+    (purpose `webmail-send-ticket`, AAD = the session's record key) and naming the mailbox, the submission, the
+    delegated entry (mailbox id, via), the own account and an expiry (`hold + 120` s). Only that submission can be
+    asked about, by **this session**, from the tab of the own mailbox that sent it, while the entry that sent it is
+    still open here; it is read with that entry after the own sign-in is proven. Nothing is kept on the server, so it
+    works whichever process answers (an in-process map did not: in `next dev` each route had its own service instance;
+    see the session entry). Anything else — a forged, altered, expired or another session's ticket, another
+    submission or mailbox, a submission the account doesn't have — is a 404 `not_found`.
+  - **What counts:** only `delivered: "no"` (the server gave up; this includes a `452 4.4.5` throttle refusal, which
+    is never retried). `queued`, `unknown` and `yes` are not failures (external recipients stay `queued` while the
+    queue works on them, and bounce normally later). `server/webmail/delivery.ts` turns the reply into the enhanced
+    code (or the 3-digit code) and a plain reason ("No mailbox with this address exists." for x.1.1/x.1.2, mailbox
+    full, too large, …); the server's reply **text** never leaves the BFF, addresses are only the envelope recipients
+    the person entered (plain `local@domain`, at most 100), and nothing about them is logged (rules 12, 24).
+  - **The UI** (`components/webmail/delivery-notice.ts`, `webmail-app.tsx` `onSent`): an error toast that stays until
+    dismissed — "Not delivered to <address>" with "No mailbox with this address exists. (5.1.2)", or "Not delivered
+    to N addresses" with one line per reason (at most 5 addresses named, "And N more."). An address already named at
+    send isn't named again after the hold. "Message sent." with **Undo** shows only while something is held. The Sent
+    copy stays; nothing destructive is offered.
+  - **Not done:** a pre-check of local recipients while composing (it would let anyone probe which addresses exist
+    on our domains faster than SMTP's own slowdown allows).
 - **Uploads** (`POST /api/webmail/upload`) are capped while reading the body; the content type is reduced to a plain
   MIME token pair.
 - **Rich text and HTML (2026-10-24; one composer 2026-10-29).** The composer always starts in rich text with the

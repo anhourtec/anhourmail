@@ -1,6 +1,6 @@
 # 03 — Anti-spam and abuse
 
-Last updated: 2026-10-30. Research: `research/deliverability.md` §6–8, `research/market-and-legal.md` §4.
+Last updated: 2026-11-04 (the webmail reads `deliveryStatus` after a send). 2026-10-30. Research: `research/deliverability.md` §6–8, `research/market-and-legal.md` §4.
 
 Outbound abuse is the priority. One spammer on a shared IP hurts every user's inbox placement, and under CASL a host that knowingly helps spammers can be liable.
 
@@ -149,8 +149,9 @@ Lists multiply one message into many deliveries, so they are an abuse amplifier 
   creates the `EmailSubmission` and refuses the local recipient inside it: `deliveryStatus[<address>]` is
   `delivered: "no"`, `smtpReply: "550 5.1.2 Mailbox does not exist."`, and **no DSN** is sent (there is no setting for
   one; `x:DsnReportSettings` only shapes DSNs). SMTP clients see the 550 at `RCPT`. Nothing is accepted and lost on the
-  server, but a JMAP client that ignores `deliveryStatus` shows the mail as sent: the webmail must read it after
-  sending (or pre-check local recipients) and tell the sender. `stack:verify` pins this behaviour.
+  server, but a JMAP client that ignores `deliveryStatus` shows the mail as sent. The webmail reads it at send and after
+  the undo hold and tells the sender (2026-11-04, `05-webmail.md` "Delivery problems"). `stack:verify` pins this
+  behaviour.
 
 ## Platform reputation (CLAUDE.md rule 62)
 
