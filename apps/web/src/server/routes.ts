@@ -563,6 +563,17 @@ export const ROUTES: readonly RouteSpec[] = [
     audits: "billing.portal_opened",
     probeStatus: 409,
   },
+  // Dev only (ADR-0029 §3): drives the fake billing provider; 404 unless billing is the fake outside production, and
+  // never routed on production builds (proxy.ts). The body is checked first, so the harness's empty body is a 400 for
+  // everyone; a real call needs `billing.manage` on the fake object's account. It changes only the fake: the events it
+  // sends are recorded by the webhook and audited by the sync.
+  {
+    method: "POST",
+    path: "/api/dev/billing/simulate",
+    file: "app/api/dev/billing/simulate/route.ts",
+    guard: "public",
+    probeStatus: 400,
+  },
   // Staff: customer accounts (metadata only; opening one is audited in that account's log).
   {
     method: "GET",
