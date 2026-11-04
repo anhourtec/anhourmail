@@ -104,7 +104,15 @@ mail clients ─► Stalwart 465/587/993/995 (TLS by Stalwart itself)    MX traf
   accepts and then bounces (research/stalwart.md "Billing access states"). Mailbox, people and storage ceilings follow
   the add-ons in force, and the account-wide address ceiling (`ACCOUNT_ADDRESS_CEILING`, not published, staff override
   per account) refuses mailbox and alias creation. Non-payment never deletes anything (plan holds, `computeHolds`).
-  Checkout, portal, changes, timers and the console come in later slices.
+  Slices 8–10 (2026-11-05): the person-facing services `billing/checkout.ts` (overview, checkout, portal),
+  `billing/changes.ts` (preview, plan and add-on changes, cancel, undo, the 14-day refund) and `billing/lapse.ts`
+  ("Choose what stays on", `runBillingTimers`) behind `/api/accounts/:accountId/billing/*`; each calls the provider
+  first, then records the request and queues `billing.sync`, so the account's state still comes only from the sync.
+  The hourly scheduler job `job:billing-timers` ends subscriptions restricted past `BILLING.restrictedDays`, syncs
+  ended comps, drops holds on deleted items and pins held mailboxes' storage (they leave the pool arithmetic). In dev
+  the fake provider is driven from `/dev/billing/checkout/:id` and `/dev/billing/portal/:id` through
+  `POST /api/dev/billing/simulate`, whose events go through the real webhook; none of it exists in production (three
+  guards). The console Billing page comes in slice 11.
 - Provisioning is a **job**, never an inline request (CLAUDE.md rule 26): write intent (e.g. mailbox `status = provisioning`), enqueue, the worker applies it through `stalwart-client` (idempotent upserts by natural key), then set `active` or `failed` with an error code.
 - The **reconciler** (scheduler `job:reconcile`, hourly; plus the every-minute `job:service-accounts` check of the management keys' owners) compares Postgres intent with Stalwart (`x:Domain`, `x:Account` lists). It **reports** drift (audit `platform.reconciler_drift`; the alert channel comes with monitoring) and re-queues missing non-destructive state. It **never deletes** a Stalwart account or mail automatically. Deletions are explicit jobs with a grace period.
 
@@ -120,6 +128,14 @@ Two identities, deliberately separate:
 | Used by     | Console, webmail (via BFF)                                                                               | IMAP/SMTP/JMAP clients                                                                                                                                          |
 
 We **never store mailbox passwords** (rule 23). Stalwart hashes them.
+
+**Self-service sign-up** (`SIGNUP_MODE=open`, ADR-0031): the sign-up page fetches a signed challenge
+(`POST /api/sign-up/challenge`) and solves a proof-of-work in a Web Worker as it opens; `POST /api/auth/sign-up/email`
+carries the proof in headers and passes the sign-up gate (`apps/web/src/server/auth/sign-up-gate.ts`: the proof checked
+and spent once, the body's shape, an attempts limit, then per-address and per-network account limits taken before
+better-auth runs and given back unless it created the login, all fail closed; refusals `auth.sign_up_refused`). The challenge format, check and refusal audit live in `packages/core/src/sign-up`; the
+shared facts (headers, difficulty range, hash input) in `packages/shared/src/proof-of-work.ts`. Email confirmation
+follows as before.
 
 **"Add a user"** (`packages/core/src/mailboxes/add-user.ts`) creates both identities at once: a mailbox and a console
 login whose sign-in email is the new address (verified, no invite), with a membership and the owner link, in one audited
