@@ -109,6 +109,7 @@ export async function withSessionReads<T>(fn: () => Promise<T>): Promise<T> {
 
 const PURPOSE = "webmail-session";
 const VIEW_KEY_PURPOSE = "webmail-view-key";
+const SEND_TICKET_PURPOSE = "webmail-send-ticket";
 /** Where a session's view key lives, next to its record. */
 const viewKeyKey = (sessionKey: string) => sessionKey.replace("am:wm:s:", "am:wm:vk:");
 const SESSION_ID = /^[A-Za-z0-9_-]{43}$/;
@@ -139,6 +140,25 @@ export class WebmailSessionStore {
 
   #key(sessionId: string): string {
     return `am:wm:s:${createHash("sha256").update(sessionId).digest("base64url")}`;
+  }
+
+  /**
+   * Seals a small value that only this session can open again (encrypted, bound to the session's key): a send from a
+   * mailbox shared with the person hands one to the browser so the delivery report after the hold can be asked for
+   * that submission only, without the server keeping anything (`WebmailService.deliveryReportOf`).
+   */
+  sealSendTicket(sessionId: string, value: string): string {
+    return this.#ring.encrypt(SEND_TICKET_PURPOSE, value, this.#key(sessionId));
+  }
+
+  /** Opens a `sealSendTicket` value; null when it isn't this session's, was altered, or isn't ours at all. */
+  openSendTicket(sessionId: string, sealed: string): string | null {
+    if (!isSessionId(sessionId)) return null;
+    try {
+      return this.#ring.decrypt(SEND_TICKET_PURPOSE, sealed, this.#key(sessionId));
+    } catch {
+      return null;
+    }
   }
 
   async create(data: WebmailSession): Promise<string> {

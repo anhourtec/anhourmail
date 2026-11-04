@@ -183,3 +183,23 @@ describe("the view key (the browser copy's key)", () => {
     expect(await store.viewKey("not-a-session")).toBeNull();
   });
 });
+
+describe("send tickets (a shared-mailbox send's delivery report)", () => {
+  it("open only for the session that sealed them, unaltered, and store nothing", async () => {
+    const kv = memoryKv();
+    const store = new WebmailSessionStore(kv, ring());
+    const id = await store.create(session());
+    const other = await store.create(session());
+    const before = kv.size();
+    const sealed = store.sealSendTicket(id, '{"s":"sub1"}');
+    expect(sealed).not.toContain("sub1");
+    expect(kv.size()).toBe(before);
+    expect(store.openSendTicket(id, sealed)).toBe('{"s":"sub1"}');
+    expect(store.openSendTicket(other, sealed)).toBeNull();
+    expect(store.openSendTicket(id, `${sealed.slice(0, -2)}AA`)).toBeNull();
+    expect(store.openSendTicket(id, "")).toBeNull();
+    expect(store.openSendTicket("not-a-session", sealed)).toBeNull();
+    // Another store with other keys can't open it either.
+    expect(new WebmailSessionStore(kv, ring()).openSendTicket(id, sealed)).toBeNull();
+  });
+});
