@@ -947,6 +947,48 @@ customer's account without the customer knowing.
   Logins of people whose account was deleted are kept until they delete them (no automatic expiry of account-less
   logins yet).
 
+## Billing webhook, sync and access states (ADR-0029, 2026-11-04)
+
+- **Webhook (`POST /api/billing/webhook`).** Outside every session; the provider signs it, so `route()` skips the
+  same-origin write check for this one route only (`origin: "signed"`), and the handler verifies before anything else
+  reads the body. The raw body is read as bytes with a 512 KiB cap (refused when the declared length is over, and again
+  while streaming, so a missing or false `Content-Length` doesn't get past it). Verification is the shared
+  `verifyStripeSignature`: HMAC-SHA256 over `t.body`, ±300 s, `timingSafeEqual` on equal lengths, any configured
+  secret during a rotation, then the minimal event shape and the key's mode (`livemode`). A rejection is
+  `400 bad_signature`, logged with the reason only (never the body, the header or an id) and not audited. With billing
+  off the route is a 404. Tier `webhook` (per address, fail open: the signature is the gate).
+- **Events are triggers, never data.** Only the provider event id, type, object id and time are stored (no payload:
+  it carries names, emails and addresses). The account comes from our `provider_customer_id`; the payload's
+  `metadata.account_id` is a cross-check only: when it disagrees, or the customer is unknown, the event is an orphan
+  for staff and nothing is synced on its say-so. Dispute events name no customer: the worker asks the provider whose
+  payment it was (`billing.resolve`, `getDispute`) and attaches the event only when that customer is ours.
+- **The sync fetches the truth.** `billing.sync` reads the live subscription and the disputes from the provider
+  (outside any lock) and derives our state under the account lock; reordered, duplicated or forged-but-valid events
+  can only cause a redundant sync. A provider outage or rate limit throws before any write, so **an outage never
+  restricts a customer**; a provider answer it must not guess past (catalogue drift, two live subscriptions) changes
+  nothing and is audited for staff. A stale run (its job claim taken over) can't write: the claim is re-confirmed
+  inside the locked transaction. Disputes are tracked one by one (`billing_dispute`), so one won dispute never lifts
+  the restriction another lost or open one holds; a staff clear is never undone by a provider read.
+- **Send-blocked on the mail server** (rule 27: enforced server-side, not only in our UI). A restricted account's
+  mailboxes, and held ones, get `SEND_BLOCKED_PERMISSIONS`: `emailSend` (SMTP AUTH on 465/587 refused) **and**
+  `jmapEmailSubmissionCreate` — verified on v0.16.27 that `emailSend` alone still lets JMAP `EmailSubmission/set`
+  send (research/stalwart.md "Billing access states"). Sign-in, reading, drafts and delivery stay. Staff suspension
+  wins over it. App passwords are refused the same way (verified). Two things still go out, by decision (ADR-0029
+  update, SA60-03/04): the mailbox's Sieve forwarding and automatic replies for mail it receives (the managed script
+  is only the web app's to write), and messages a client asked the server to hold (up to 7 days) before the
+  restriction — release isn't re-checked; to decide before launch.
+- **Nothing new on what a downgrade held:** creating a mailbox or alias refuses a custom domain the effective plan
+  doesn't include, a held domain and a held mailbox (`403 plan_limit`, audited `denied`), so a lapsed account can't
+  use a held domain through a new address on its kept mailbox.
+- **Receive-blocked is not applied yet.** On the pinned server `emailReceive` accepts mail at RCPT and then bounces it
+  to the envelope sender — backscatter for mail from the internet (rule 62). Held mailboxes past their window keep
+  receiving until held recipients are refused during the SMTP conversation. The same accept-then-bounce applies to
+  suspended mailboxes today (open item).
+- **Address ceiling.** Mailboxes + aliases + masked aliases per account ≤ `ACCOUNT_ADDRESS_CEILING` (required in
+  production, value only in the ops repo, never published or put in a message or the account's audit entries),
+  checked under the account lock in every create path, staff included; a failed read fails the create (closed). Staff
+  raise it per account with `platform.billing.manage` and a fresh step-up, audited in the account's log.
+
 ## Review process
 
 1. Every change: the author runs `/security-review` on what they wrote (rule 5) and the full test suite (rule 37).

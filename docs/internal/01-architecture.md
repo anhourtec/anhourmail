@@ -84,16 +84,27 @@ mail clients ─► Stalwart 465/587/993/995 (TLS by Stalwart itself)    MX traf
   to the mailbox's identities (within the mail server's 2 KB limit) for other JMAP apps. Only the forwarding
   target's confirmation lives in the control plane (`forwarding_target`), and the BFF writes a redirect only to a
   confirmed target. Mail-flow changes are audited.
-- **Billing (ADR-0029; slices 1–4 built 2026-11-04):** the payment processor is the source of truth for payments and
+- **Billing (ADR-0029; slices 1–7 built 2026-11-04):** the payment processor is the source of truth for payments and
   subscriptions, reached only through the `BillingProvider` port (`packages/core/src/billing/ports.ts`; adapters in
   `packages/adapters/src/billing-stripe/` over plain `fetch`, no SDK, with a pinned API version, and a fake in
   `billing-fake/` whose state is in memory for tests and in Redis in dev, so the web app and the worker share it).
   `BILLING_PROVIDER` (`off`/`fake`/`stripe`) picks one; boot refuses the fake in production and an incomplete or
-  mismatched processor configuration (web `env.ts`, worker `billing.ts`). Webhooks will be triggers only: the sync
-  reads the subscription fresh and derives the account's state with the pure `deriveBilling`
-  (`packages/core/src/billing/lifecycle.ts`) into `account_billing`; `customer_account.plan` stays the effective plan
-  the rest of the code reads. Non-payment never deletes anything (plan holds, `computeHolds`). Webhook route, sync job,
-  mail-server access states and the console come in later slices.
+  mismatched processor configuration (web `env.ts`, worker `billing.ts`). Webhooks are triggers only:
+  `POST /api/billing/webhook` (signed, no same-origin check, raw body ≤ 512 KiB) verifies, records the provider event
+  id once (`billing/ingest.ts`, no payload) and queues `billing.sync` on the provisioning queue; dispute events, which
+  name no customer, are orphans resolved by the `billing.resolve` job through the provider. The sync
+  (`billing/sync.ts`) reads the subscription and disputes fresh outside any lock, then under the account lock derives
+  the state with the pure `deriveBilling` (`packages/core/src/billing/lifecycle.ts`) into `account_billing`, tracks
+  disputes one by one (`billing_dispute`), writes `customer_account.plan` (the effective plan the rest of the code
+  reads), applies or lifts plan holds and queues `mailbox.ensure`/`domain.ensure`, audited in the same transaction; a
+  provider outage throws before any write (nothing changes). The scheduler's nightly `job:billing-reconcile` re-syncs
+  accounts not synced for a day, retries dispute orphans and prunes old events. `mailbox.ensure` gives a restricted
+  account's (or held) mailbox Stalwart's send-blocked permissions (`SEND_BLOCKED_PERMISSIONS`: SMTP submission and
+  JMAP sending off; sign-in, reading and delivery on); receiving is not turned off yet, because the pinned server
+  accepts and then bounces (research/stalwart.md "Billing access states"). Mailbox, people and storage ceilings follow
+  the add-ons in force, and the account-wide address ceiling (`ACCOUNT_ADDRESS_CEILING`, not published, staff override
+  per account) refuses mailbox and alias creation. Non-payment never deletes anything (plan holds, `computeHolds`).
+  Checkout, portal, changes, timers and the console come in later slices.
 - Provisioning is a **job**, never an inline request (CLAUDE.md rule 26): write intent (e.g. mailbox `status = provisioning`), enqueue, the worker applies it through `stalwart-client` (idempotent upserts by natural key), then set `active` or `failed` with an error code.
 - The **reconciler** (scheduler `job:reconcile`, hourly; plus the every-minute `job:service-accounts` check of the management keys' owners) compares Postgres intent with Stalwart (`x:Domain`, `x:Account` lists). It **reports** drift (audit `platform.reconciler_drift`; the alert channel comes with monitoring) and re-queues missing non-destructive state. It **never deletes** a Stalwart account or mail automatically. Deletions are explicit jobs with a grace period.
 
@@ -369,7 +380,7 @@ customers to production names. Facts flow two ways from `packages/shared/src/pla
   are hosts directly under it (`app.<domain>`, `mail.<domain>`); worker processes (`apps/worker/src/platform.ts`) run
   the same check on `APP_URL` (`productionPlatformProblems` in `platform.ts`). Free `@…` addresses live on the
   platform domain itself (`Platform.freeAddressDomain`; ADR-0021): any account may create mailboxes there
-  (`domainId: "platform"`, `packages/core/src/mailboxes/platform.ts`) — Free one, paid plans within `MAX_MAILBOXES` —
+  (`domainId: "platform"`, `packages/core/src/mailboxes/platform.ts`) — Free one, paid plans within the mailbox ceiling —
   with the shared name rules (`packages/shared/src/addresses.ts`), a confirmed console email, fail-closed limits per
   account and per client address, and no reuse across accounts (`retired_platform_address`). The domain belongs to no
   account and has no `customer_domain` row; the seed creates it on the dev Stalwart, the deployment's bootstrap in

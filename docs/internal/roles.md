@@ -1,6 +1,6 @@
 # Roles and permissions
 
-Last updated: 2026-10-31 (delegates can't change a shared mailbox's Safe senders, ADR-0027, matrix unchanged; password-first sign-in and password-only step-up, ADR-0028, matrix unchanged; webmail sender name route; names edited through the profile rule; matrix unchanged; 2026-10-30: mailbox delegation, ADR-0026: mailboxes shared with the person in the webmail; console routes and RBAC harness rows; `delegation.manage.any` for User Administrators with guard rail 8; data export and account deletion, ADR-0025; staff support access / act-as, ADR-0023; profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
+Last updated: 2026-11-04 (guard rail 20: billing ceilings and the staff address-ceiling override route, the public signed billing webhook, ADR-0029 slices 5–7, matrix unchanged); 2026-10-31 (delegates can't change a shared mailbox's Safe senders, ADR-0027, matrix unchanged; password-first sign-in and password-only step-up, ADR-0028, matrix unchanged; webmail sender name route; names edited through the profile rule; matrix unchanged; 2026-10-30: mailbox delegation, ADR-0026: mailboxes shared with the person in the webmail; console routes and RBAC harness rows; `delegation.manage.any` for User Administrators with guard rail 8; data export and account deletion, ADR-0025; staff support access / act-as, ADR-0023; profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
 
 **Source of truth: `packages/shared/src/rbac`.** That code is canonical: the permission list, the role → permission matrix, critical-permission flags and guard rails. The UI (what to show), the API (what to allow) and the RBAC harness (`npm run test:rbac`) all derive from it. This document explains the matrix for people. If the two disagree, the code wins, and this file is updated in the same change (rule 35).
 
@@ -248,7 +248,7 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
 15. **Free platform addresses** (`packages/core/src/mailboxes/platform.ts`, ADR-0021): creating a mailbox on the
     platform domain is `mailbox.manage` like any mailbox, plus: the person's sign-in email confirmed (403
     `email_unverified`, audited as denied), the shared name rules (400), the plan's allowance (Free one, paid within
-    `MAX_MAILBOXES`; 403 `plan_limit`), a name no account holds or held (409, never saying which), refused during act-as
+    the mailbox ceiling; 403 `plan_limit`), a name no account holds or held (409, never saying which), refused during act-as
     (403 `act_as`). The availability check (`GET …/mailboxes/platform-address`) is `mailbox.manage` (404 for other
     accounts), answers only someone with a confirmed email and free-address allowance left (one generic 403
     otherwise), and answers only available or not. **Staff:** `platform.mailbox.create` ★ (Global Administrator only)
@@ -302,6 +302,16 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
     (`delegation.read`) and the optional `{ delegateTo }` body on `DELETE …/people/:userId` (`member.manage`). The RBAC
     harness probes every one as every persona (random ids → 404; the empty batch → 400 for allowed callers); unit tests
     cover every refusal, and route tests (`apps/web/src/server/delegation-routes.test.ts`) the HTTP mapping.
+20. **Billing ceilings and the address ceiling override** (ADR-0029 §7, `packages/core/src/billing/`): the mailbox and
+    people ceilings follow the extra mailboxes in force, and every mailbox and alias create path (staff's included)
+    stops at the account's address ceiling (**409** `address_ceiling`, audited `denied`, never the number). Only
+    `platform.billing.manage` ★ (Global and Billing Administrators) sets or resets an account's override
+    (`PUT /api/platform/accounts/:accountId/billing/address-ceiling`): without it **403** (audited in the platform log),
+    unknown account **404**, a fresh step-up (**403** `step_up_required`), never while acting as someone. Audited
+    `billing.ceiling_changed` by staff in the account's log (rule 49). Nobody, staff included, adds a mailbox or alias
+    on a custom domain the effective plan excludes, a held domain or a held mailbox (**403** `plan_limit`, denied).
+    The billing webhook
+    (`POST /api/billing/webhook`) is public and signed: no session, no role. No matrix change.
 
 ## Webmail
 

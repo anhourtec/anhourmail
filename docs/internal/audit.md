@@ -1,6 +1,6 @@
 # Audit
 
-Last updated: 2026-10-31 (`junk_rules.changed` meta `via`, `change`, `kind` and the shared-mailbox refusal, ADR-0027; password-first sign-in, ADR-0028: `auth.second_step_started`, `password+passkey`, password-only step-up; accepted exceptions: queue-only data migrations 0031/0032 and the bootstrap's file storage cleanup; names as one source: `account.profile_changed` `name`, `via: webmail`; `identity.changed` retired; 2026-10-30: `platform.mail_rules_upgraded` for the managed-script upgrade; mailbox delegation, ADR-0026: `delegation.sent_as`, `delegation.sent_on_behalf`, `delegation.send_failed`, `delegation.send_cancelled` and `delegation.tagged_copy_left` for sending from a delegated mailbox, slice 13; `delegation.mailbox_opened` for opening a delegated mailbox in the webmail; `delegation.granted` / `delegation.revoked` per change, `mailbox.converted_to_shared`, `MutationOutcome.also`; `account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
+Last updated: 2026-11-04 (billing, ADR-0029 slices 5–7: the sync's `billing.*` entries and their meta, ingestion not audited, `billing.sync_failed` in the platform scope, `billing.ceiling_changed`, `address_ceiling` denials, `billing.suspended`/`billing.reactivated` retired); 2026-10-31 (`junk_rules.changed` meta `via`, `change`, `kind` and the shared-mailbox refusal, ADR-0027; password-first sign-in, ADR-0028: `auth.second_step_started`, `password+passkey`, password-only step-up; accepted exceptions: queue-only data migrations 0031/0032 and the bootstrap's file storage cleanup; names as one source: `account.profile_changed` `name`, `via: webmail`; `identity.changed` retired; 2026-10-30: `platform.mail_rules_upgraded` for the managed-script upgrade; mailbox delegation, ADR-0026: `delegation.sent_as`, `delegation.sent_on_behalf`, `delegation.send_failed`, `delegation.send_cancelled` and `delegation.tagged_copy_left` for sending from a delegated mailbox, slice 13; `delegation.mailbox_opened` for opening a delegated mailbox in the webmail; `delegation.granted` / `delegation.revoked` per change, `mailbox.converted_to_shared`, `MutationOutcome.also`; `account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
 
 Every meaningful action is recorded, tamper-evident, searchable and visible to the right people. Audit is a core module, not a logging side effect.
 
@@ -99,6 +99,30 @@ over Free's rolling yearly cap (`aliasCreationsPerYear`) it is `denied` `alias_y
 aliases it is `denied` `alias_mailbox_limit` (meta `kind`, `perMailbox`, `mailbox` — redacted like every address).
 Nothing is created and nothing is counted. Over the account's at-a-time limit stays `failed` `plan_limit`. No new
 action names: the catalogue above is unchanged.
+
+Billing (ADR-0029 §12; slices 5–7 built 2026-11-04). **Webhook ingestion writes no audit row**
+(`packages/core/src/billing/ingest.ts`): it records a provider event id and queues a job; a rejected signature is
+logged with its reason only (unauthenticated noise would flood the chain). Every change it leads to is audited by
+`billing.sync` (actor: system `billing-sync`), in the account scope with the target `account_billing`, in the same
+transaction as the change (`recordSystemChanges` in `mutation.ts`; a sync that changes nothing writes nothing):
+`billing.state_changed` (meta `fromState`, `toState`, `reason`; `to` is a redacted key), `billing.plan_changed`
+(`fromPlan`, `toPlan`, `source`), `billing.addons_changed` (`storageBlocksFrom/To`, `extraMailboxesFrom/To`),
+`billing.supporter_amount_changed` (`fromMinor`, `toMinor`, `currency`), `billing.payment_succeeded` /
+`billing.payment_failed` (`invoiceId`, `amountMinor`, `currency`), `billing.cancel_scheduled` (`at`) /
+`billing.cancel_undone`, `billing.dispute_opened`, `billing.dispute_closed` (`disputeId`, `outcome`: `won`, `lost`,
+`warning_closed`, `open` or `unknown`), `billing.refunded` for a refund made outside the console (`objectId`,
+`amountMinor`, `currency`, `source: provider`), `billing.holds_applied` / `billing.holds_lifted` (counts of
+`mailboxes`, `domains`, `aliases`). A provider answer the sync must not guess past (catalogue drift, two live
+subscriptions) is `billing.sync_failed` in the **platform** scope (meta `accountId`, `error`); an outage writes nothing
+(the queue retries; after the last attempt the job gives up with `platform.provisioning_failed`, kind `billing.sync`).
+Provider ids (customer, subscription, invoice, dispute) are allowed in meta; card details, addresses, tax ids, the
+payer's email and payloads never are. `billing.suspended` / `billing.reactivated` are retired (never written). Staff
+setting an account's address ceiling override (`platform.billing.manage`, step-up) write `billing.ceiling_changed` by
+staff in the account's log with meta `override: set | reset` only (the ceiling is not published, rule 33), and a
+platform copy with `accountId`, `from`, `set`; refusals are `denied` (`forbidden`, `not_found` in the platform log;
+`step_up_required`). A mailbox or alias create over the address ceiling is `mailbox.created` / `alias.created` /
+`masked_alias.created` `denied` `address_ceiling` (never the number). A new mailbox or alias on a custom domain the
+effective plan doesn't include, on a held domain or onto a held mailbox is the same action `denied` `plan_limit`.
 
 Mailbox lifecycle: `mailbox.suspended` and `mailbox.unsuspended` (resume), `mailbox.deletion_scheduled` (meta: the
 status it came from, `purgeAfter`, alias count) and `mailbox.restored` are written by the person in the console;
