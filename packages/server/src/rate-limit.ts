@@ -23,6 +23,19 @@ export const LIMITS = {
   // layer's per-challenge and per-account lockout.
   authFactor: { limit: 10, windowSec: 300, by: "ip", failMode: "closed" },
   publicForm: { limit: 10, windowSec: 900, by: "ip", failMode: "closed" },
+  // Sign-up (ADR-0031): issuing a proof-of-work challenge per client address; sign-up attempts with an accepted
+  // proof per address (an IPv6 client counts by its /64); then accounts created, per address and per network (IPv4
+  // /24, IPv6 /64 per hour and per day, plus IPv6 /56 and /48 per day). The account tiers are taken before the
+  // identity layer runs and given back unless it created the account, so failed sign-ups never use them up. The
+  // numbers are defaults; the `SIGNUP_LIMIT_*` settings replace them. All fail closed (rule 14).
+  signupChallenge: { limit: 30, windowSec: 600, by: "ip", failMode: "closed" },
+  signupAttempt: { limit: 20, windowSec: 3600, by: "ip", failMode: "closed" },
+  signup: { limit: 5, windowSec: 3600, by: "ip", failMode: "closed" },
+  signupDay: { limit: 10, windowSec: 86_400, by: "ip", failMode: "closed" },
+  signupNetwork: { limit: 10, windowSec: 3600, by: "ip", failMode: "closed" },
+  signupNetworkDay: { limit: 30, windowSec: 86_400, by: "ip", failMode: "closed" },
+  signupNetwork56Day: { limit: 60, windowSec: 86_400, by: "ip", failMode: "closed" },
+  signupNetwork48Day: { limit: 120, windowSec: 86_400, by: "ip", failMode: "closed" },
   // Per signed-in caller: each invite or resend sends an email (plus a per-account daily cap in the service).
   invite: { limit: 20, windowSec: 900, by: "caller", failMode: "closed" },
   // Role changes and removals of people (per caller, fail closed).
@@ -89,7 +102,16 @@ export type LimitName = keyof typeof LIMITS;
 /** Increments `key` in a window of `windowSec` and returns the new count. */
 export type Counter = (key: string, windowSec: number) => Promise<number>;
 
-export type RateLimitResult = { allowed: boolean; headers: Record<string, string>; degraded: boolean };
+export type RateLimitResult = {
+  allowed: boolean;
+  headers: Record<string, string>;
+  degraded: boolean;
+  /** The key that was counted (absent when the store failed): `Uncount` gives the request back. */
+  key?: string;
+};
+
+/** Gives one counted request back (Redis `DECR`), e.g. a sign-up that didn't create an account. */
+export type Uncount = (key: string) => Promise<void>;
 
 /** Dev/test only: multiplies every limit (RATE_LIMIT_MULTIPLIER), so harness runs don't trip production limits. */
 const multiplier = () => {
@@ -123,7 +145,7 @@ export async function checkRateLimit(
       "RateLimit-Reset": String(reset),
     };
     if (count > max) headers["Retry-After"] = String(reset);
-    return { allowed: count <= max, headers, degraded: false };
+    return { allowed: count <= max, headers, degraded: false, key };
   } catch (err) {
     log.warn("rate limiter unavailable", { component: "rate-limit", limit: name, failMode: limit.failMode, err });
     return { allowed: limit.failMode === "open", headers: {}, degraded: true };
@@ -142,14 +164,30 @@ export function redisCounter(redis: {
   };
 }
 
-/** In-process counter for tests. */
-export function memoryCounter(): Counter {
-  const counts = new Map<string, number>();
+/** Only while the window's key still exists, so a give-back after the window ended leaves no stray key behind. */
+const UNCOUNT_SCRIPT = "if redis.call('EXISTS', KEYS[1]) == 1 then return redis.call('DECR', KEYS[1]) end return 0";
+
+export function redisUncount(redis: {
+  eval(script: string, numKeys: number, ...args: (string | number)[]): Promise<unknown>;
+}): Uncount {
   return async (key) => {
+    await redis.eval(UNCOUNT_SCRIPT, 1, key);
+  };
+}
+
+/** In-process counter for tests; `uncount` gives a counted request back. */
+export function memoryCounter(): Counter & { uncount: Uncount } {
+  const counts = new Map<string, number>();
+  const counter = async (key: string) => {
     const n = (counts.get(key) ?? 0) + 1;
     counts.set(key, n);
     return n;
   };
+  return Object.assign(counter, {
+    uncount: async (key: string) => {
+      counts.set(key, (counts.get(key) ?? 0) - 1);
+    },
+  });
 }
 
 /**
