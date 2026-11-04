@@ -57,6 +57,14 @@ export const JOBS: readonly Job[] = [
     timeoutMs: 5 * 60_000,
     enabled: true,
   },
+  // ADR-0029 §4: stale accounts re-synced with the billing provider, dispute orphans resolved, old events pruned.
+  {
+    name: "billing-reconcile",
+    script: "job:billing-reconcile",
+    everyMs: 24 * 3600_000,
+    timeoutMs: 15 * 60_000,
+    enabled: true,
+  },
   // Storage used per mailbox for the console (sizes only, read with the provisioning key; keeps the last good value).
   { name: "storage-usage", script: "job:storage-usage", everyMs: 10 * 60_000, timeoutMs: 5 * 60_000, enabled: true },
 ];

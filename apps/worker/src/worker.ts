@@ -25,7 +25,7 @@ process.on("SIGINT", () => {
   state.stopping = true;
 });
 
-const { deps, mail, close } = runtime("worker");
+const { deps, mail, billing, close } = runtime("worker");
 // The provisioning key must be exactly its documented set (no `impersonate`): refuse to start otherwise.
 await verifyStalwartCredentials("worker");
 const beat = () => {
@@ -37,7 +37,7 @@ l.info("worker started");
 
 while (!stopping()) {
   try {
-    const job = await runNextJob(deps, mail);
+    const job = await runNextJob(deps, mail, { billing: billing() });
     if (job?.lockLost) {
       // This run's claim went stale and another worker took the job over: its outcome was discarded.
       l.warn("job lock lost", { jobId: job.id, kind: job.kind, attempt: job.attempts });
