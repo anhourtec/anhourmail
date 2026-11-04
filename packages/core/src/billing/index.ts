@@ -9,6 +9,7 @@ export * from "./held";
 export * from "./holds";
 export * from "./ingest";
 export * from "./invite-codes";
+export * from "./lapse";
 export * from "./lifecycle";
 export * from "./ports";
 export type * from "./repository";
