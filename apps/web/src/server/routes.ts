@@ -610,6 +610,16 @@ export const ROUTES: readonly RouteSpec[] = [
     audits: "billing.refunded",
     probeStatus: 409,
   },
+  // "Choose what stays on" after a lapse (ADR-0029 §6). The harness's accounts aren't lapsed: allowed callers get 400.
+  {
+    method: "PUT",
+    path: "/api/accounts/:accountId/billing/holds",
+    file: "app/api/accounts/[accountId]/billing/holds/route.ts",
+    guard: "billing.manage",
+    accountParam: "accountId",
+    audits: "billing.holds_changed",
+    probeStatus: 400,
+  },
   // Dev only (ADR-0029 §3): drives the fake billing provider; 404 unless billing is the fake outside production, and
   // never routed on production builds (proxy.ts). The body is checked first, so the harness's empty body is a 400 for
   // everyone; a real call needs `billing.manage` on the fake object's account. It changes only the fake: the events it
