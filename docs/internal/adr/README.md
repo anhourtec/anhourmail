@@ -35,3 +35,4 @@ One decision per file, numbered, never rewritten. A later ADR supersedes an earl
 | [0029](0029-billing.md)                                      | Billing: Stripe behind a port, state fetched on events, holds not deletion     | Accepted                                          |
 | [0030](0030-mail-and-contacts-import.md)                     | Mail and contacts import: IMAP-only import credential, importer process        | Accepted                                          |
 | [0031](0031-sign-up-proof-of-work.md)                        | Sign-up proof-of-work and sign-up limits instead of SMS                        | Accepted                                          |
+| [0032](0032-webmail-settings-part-2.md)                      | Webmail settings part 2: account-wide safe senders, mail rules, templates      | Accepted                                          |
