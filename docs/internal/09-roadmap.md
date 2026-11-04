@@ -107,7 +107,7 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
    access, audited, visible to account admins), remote-image proxy, push sync in
    the webmail (**built 2026-11-04**: one upstream JMAP WebSocket per session and mailbox, our own event stream, tabs
    sharing one stream, 5-minute safety check, the 30 s check when push is down; shared mailboxes keep polling),
-   webmail settings part 2 (rules, templates; senders whose images load are the mailbox's Safe senders — **built 2026-10-31**, ADR-0027: one list, verified From only, "Always for" adds to it, own Sent mail loads by itself, old fingerprints dropped at launch; next an account-wide safe-senders list for Owners and User Admins, verified-only for images and audited — maintainer, 2026-10-31; no request-to-allow-list workflow), and the leftover open items
+   webmail settings part 2 (**built 2026-11-05**, ADR-0032: mail rules compiled into the managed script with forwarding only to the confirmed address, templates, and the account-wide safe-senders list for Owners and User Admins, verified-only for images and audited; senders whose images load are the mailbox's Safe senders — built 2026-10-31, ADR-0027; no request-to-allow-list workflow), and the leftover open items
    in the handoff (alias admin-lock, daily alias creation cap, provisioning-queue lock token, unknown-recipient
    rejection at SMTP time).
 9. **Billing and migration** (Phase 5): Stripe Checkout/Portal/Tax, webhooks, plan changes and the account
@@ -199,7 +199,8 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
   signatures, profile photos, Archive. Console → webmail handoff built 2026-10-29 (ADR-0024). First load built
   2026-10-31 (folders and the first window inside the page, an IndexedDB copy of the first view, `Server-Timing`;
   `05-webmail.md` "First load"; waits for the next deploy). Push sync built 2026-11-04 (`05-webmail.md` "Push"; new
-  mail in the list 0.4 s after submission on dev). Not built: per-type `*/changes` sync across visits, settings part 2, calendar, the Playwright performance tests the exit needs.
+  mail in the list 0.4 s after submission on dev). Settings part 2 (mail rules, templates, account-wide safe senders)
+  built 2026-11-05 (ADR-0032). Not built: per-type `*/changes` sync across visits, calendar, the Playwright performance tests the exit needs.
 - **Exit:** performance budgets met in Playwright perf tests; XSS corpus (HTML email test suite) passes; Playwright MCP pass light/dark at 1440/390 as every role that can open webmail.
 
 ## Phase 5 — Billing and migration
