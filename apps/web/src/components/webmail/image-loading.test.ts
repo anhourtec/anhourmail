@@ -158,6 +158,27 @@ describe("loading images into the message frame", () => {
     expect(rememberOffer(ask, unverified, "news@club.example", false, false).kind).toBe("unverified");
   });
 
+  it("loads an account Safe sender's images and never offers to remove the entry here (ADR-0032 §1)", () => {
+    const ask = { mode: "ask", senders: [] } as const;
+    const account = { kind: "domain" as const, value: "club.example", source: "account" as const };
+    expect(loadsWithoutAsking(ask, verified({ safeSender: account }), "news@club.example", new Set())).toBe(true);
+    expect(rememberOffer(ask, verified({ safeSender: account }), "news@club.example")).toEqual({
+      kind: "safe",
+      sender: "news@club.example",
+      match: { kind: "domain", value: "club.example", source: "account" },
+      canChange: false,
+    });
+    // A forged From still asks.
+    expect(
+      loadsWithoutAsking(
+        ask,
+        { ...verified({ safeSender: account }), senderVerified: false },
+        "x@club.example",
+        new Set(),
+      ),
+    ).toBe(false);
+  });
+
   it("loads the person's own sent mail by itself, saying nothing about its sender", () => {
     const ask = { mode: "ask", senders: [] } as const;
     const none = new Set<string>();

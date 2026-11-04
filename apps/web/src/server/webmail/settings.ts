@@ -88,6 +88,8 @@ export type SettingsOverview = {
   identities: Identity[];
   quota: { used: number; limit: number | null };
   rules: { vacation: Vacation; junk: Junk; forwarding: MailRules["forwarding"] };
+  /** The account's Safe senders (ADR-0032 §1), shown read-only beside the mailbox's own. */
+  accountSafe: string[];
   rulesState: RulesState;
   /** The forwarding target and whether its owner confirmed it (control plane). */
   forwardingTarget: ForwardingView | null;
@@ -142,6 +144,8 @@ export class WebmailSettings {
       mailer: Mailer;
       /** Reads a message's From for Safe senders changes made from it. */
       messageSender: MessageSender;
+      /** The account-wide Safe senders for a mailbox, by its address (ADR-0032 §1); absent: none. */
+      accountSafe?: (address: string) => Promise<readonly string[]>;
       webmailUrl: string;
       /** The deployment's public site host, for the footer of the confirmation email. */
       siteHost: string;
@@ -167,13 +171,14 @@ export class WebmailSettings {
 
   async overview(sessionId: string): Promise<SettingsOverview> {
     const address = await this.#address(sessionId);
-    const [preferences, identities, quota, rules, forwardingTarget, sender] = await Promise.all([
+    const [preferences, identities, quota, rules, forwardingTarget, sender, accountSafe] = await Promise.all([
       this.d.settings.preferences(address),
       this.d.mail.identities(sessionId),
       this.d.mail.quota(sessionId),
       this.d.mail.mailRules(sessionId),
       this.d.settings.forwarding(address),
       this.d.senderNames.get(address),
+      this.d.accountSafe?.(address) ?? Promise.resolve([]),
     ]);
     return {
       accountId: rules.accountId,
@@ -183,6 +188,7 @@ export class WebmailSettings {
       identities,
       quota,
       rules: { vacation: rules.rules.vacation, junk: rules.rules.junk, forwarding: rules.rules.forwarding },
+      accountSafe: [...accountSafe],
       rulesState: rules.state,
       forwardingTarget,
     };

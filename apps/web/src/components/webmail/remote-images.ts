@@ -206,6 +206,15 @@ export function rememberOffer(
         sender.safeSender.kind === "domain"
           ? shownDomain(sender.safeSender.value)
           : shownAddress(sender.safeSender.value);
+      // An entry the account's administrators added (ADR-0032 §1) can't be removed from here.
+      if (sender.safeSender.source === "account") {
+        return {
+          kind: "safe",
+          sender: shown,
+          match: { kind: sender.safeSender.kind, value, source: "account" },
+          canChange: false,
+        };
+      }
       return { kind: "safe", sender: shown, match: { kind: sender.safeSender.kind, value }, canChange };
     }
     if (sender.senderKey !== null && policy.senders.includes(sender.senderKey)) {

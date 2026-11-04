@@ -500,6 +500,33 @@ function SenderList({
   );
 }
 
+/**
+ * The account's Safe senders (ADR-0032 §1), read-only: set by the account's administrators in the console. They load
+ * images and skip "Only trust my contacts and safe senders" like the person's own; the person's Blocked senders win.
+ */
+function OrganisationSafeSenders({ entries }: { entries: readonly string[] }) {
+  const id = useId();
+  if (entries.length === 0) return null;
+  return (
+    <section aria-labelledby={`${id}-h`} className="flex flex-col gap-2">
+      <h3 id={`${id}-h`} className="font-medium text-[14px]">
+        Added by your organisation
+      </h3>
+      <p className="am-small max-w-prose">
+        Your organisation trusts these for everyone. Their images load, and “Only trust my contacts and safe senders”
+        doesn&apos;t send them to Junk. Anyone on your Blocked senders stays blocked.
+      </p>
+      <ul aria-label="Safe senders added by your organisation" className="flex flex-wrap gap-1.5 rounded-xl border p-4">
+        {entries.map((e) => (
+          <li key={e} className="inline-flex items-center rounded-md bg-accent px-2 py-0.5 text-[12.5px]">
+            <span className="font-mono">{e}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function JunkPanel({
   data,
   client,
@@ -547,6 +574,7 @@ export function JunkPanel({
         entries={safe}
         onChange={setSafe}
       />
+      <OrganisationSafeSenders entries={data.accountSafe} />
       <Group title="Stricter filtering">
         <Toggle
           label="Only trust my contacts and safe senders"

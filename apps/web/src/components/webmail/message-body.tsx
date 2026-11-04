@@ -564,6 +564,11 @@ function ImageNotice({
               Images from <bdi className="font-mono">{added}</bdi> will load, and their mail won't go to Junk.
             </p>
           )}
+          {offer.kind === "safe" && offer.match.source === "account" && (
+            <p className="am-micro">
+              Your organisation added <bdi className="font-mono">{offer.match.value}</bdi> to Safe senders.
+            </p>
+          )}
           {unverified}
         </div>
         {confirming && safe ? (
