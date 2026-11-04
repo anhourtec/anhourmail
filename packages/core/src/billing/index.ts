@@ -2,7 +2,9 @@
 export * from "./entitlements";
 export * from "./entity";
 export * from "./holds";
+export * from "./ingest";
 export * from "./invite-codes";
 export * from "./lifecycle";
 export * from "./ports";
 export type * from "./repository";
+export * from "./sync";
