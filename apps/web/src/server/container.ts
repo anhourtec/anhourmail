@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import "server-only";
 
+import { createBillingProvider } from "@anhourmail/adapters/billing";
 import { createMailer, type Mailer } from "@anhourmail/adapters/mail";
 import { devResolver, systemResolver } from "@anhourmail/adapters/dns";
 import { db, devDomainClaims, PgUnitOfWork } from "@anhourmail/adapters/postgres";
 import { type Deps, systemClock } from "@anhourmail/core";
+import type { BillingProvider } from "@anhourmail/core/billing";
 import type { DnsResolver } from "@anhourmail/core/domains";
 import type { PasswordHasher } from "@anhourmail/core/mailboxes";
 import type { BreachedPasswords } from "@anhourmail/core/security";
@@ -29,6 +31,10 @@ export type Container = {
   passwords: PasswordHasher;
   /** New console passwords (sign-up, reset, invite logins) are checked with the same breached-password check. */
   breaches: BreachedPasswords;
+  /**
+   * The billing provider (ADR-0029 §3): null when billing is off. Absent in tests that don't set one (= off).
+   */
+  billing?: BillingProvider | null;
 };
 
 let override: Container | null = null;
@@ -49,6 +55,13 @@ export function container(): Container {
         : devResolver(systemResolver(), (name) => devDomainClaims(db(), name), platform()),
     passwords: mailboxPasswords(env().MAILBOX_PASSWORD_GRANT_KEY, breaches),
     breaches,
+    // The env check refused a bad configuration at boot (env.ts); the fake keeps its state in Redis (dev and tests).
+    billing: createBillingProvider({
+      env: { ...process.env, NODE_ENV: env().NODE_ENV },
+      appUrl: env().APP_URL,
+      fakeSeed: env().BETTER_AUTH_SECRET,
+      redis,
+    }),
   };
   return real;
 }
