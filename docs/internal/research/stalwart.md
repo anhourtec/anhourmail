@@ -253,6 +253,50 @@ while Stalwart's HTTP port is reachable from the app network alone. A throttled 
 
 ---
 
+### Billing access states (verified on the pinned v0.16.27, 2026-11-04)
+
+ADR-0029 §5–6 needs a mailbox that can't send (billing `restricted`, or held after a downgrade) and one that can't
+receive either (held past its receive window), with sign-in, reading and export kept. Probed with a throwaway domain
+and three accounts on the dev stack (then destroyed), permissions written as `Merge` on top of `CUSTOMER_PERMISSIONS`;
+pinned in `packages/adapters/src/stalwart/billing-access.int.test.ts`, which runs with the production provisioning key.
+
+| Check                                                    | `emailSend` only                                              | `emailSend` + `jmapEmailSubmissionCreate` (`SEND_BLOCKED_PERMISSIONS`) |
+| -------------------------------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| SMTP AUTH on 465 (implicit TLS) and 587 (after STARTTLS) | `550 5.7.1 Your account is not authorized to use this service.` | same                                                                   |
+| JMAP `EmailSubmission/set` create                        | **succeeds, and the message is delivered**                    | `forbidden` "You are not authorized to create objects of this type"   |
+| JMAP `Email/set` (save a draft), `Email/query`, session  | work                                                          | work                                                                   |
+| IMAP LOGIN + SELECT (993)                                | work                                                          | work                                                                   |
+| Mail to it (465 from another account, 25 from outside)   | delivered                                                     | delivered                                                              |
+
+So `emailSend` alone is **not** enough: it covers SMTP AUTH only, and JMAP sending needs `jmapEmailSubmissionCreate`
+denied too (`jmapEmailSubmissionUpdate` stays, so a pending send can still be cancelled). The provisioning key may write
+these denials (verified). A submission made before the change with a future `sendAt` (the webmail's undo window) is
+not checked here; it is seconds long.
+
+Follow-up checks (pre-commit review run-60, same day; pinned in the same integration test):
+
+- **App passwords** (SMTP, IMAP, JMAP scopes) under `SEND_BLOCKED_PERMISSIONS`: SMTP AUTH on 465 and 587 `550 5.7.1`,
+  JMAP `EmailSubmission/set` `forbidden`, IMAP LOGIN + SELECT work. The account's denials win over the credential's
+  scope, as for suspension.
+- **Sieve still runs:** a send-blocked account's script still `redirect`s incoming mail to an outside address and still
+  sends `vacation` replies (both reached Mailpit). No account permission stops Sieve execution (the schema's Sieve
+  permissions are ManageSieve and `SieveScript/*` methods only); only the script itself can. Our decision: ADR-0029
+  update "Forwarding and automatic replies keep running".
+- **Held sends are released without a re-check:** after AUTH, 465 advertises `FUTURERELEASE 604800 <date>` (7 days),
+  `DELIVERBY`, `MT-PRIORITY` and `DSN`; a JMAP submission with `HOLDUNTIL` made before the account was send-blocked was
+  delivered when its time came, after the block. The JMAP session's submission capability is empty here.
+
+**Receive-blocked (`… + emailReceive`, `RECEIVE_BLOCKED_PERMISSIONS`):** sign-in and IMAP reading still work and SMTP
+AUTH is refused, but mail to the account is **not refused at RCPT**: inbound on 25 got `250 2.1.5` at RCPT and
+`250 2.0.0 Message queued` at DATA, nothing was delivered, and a "Failed to deliver message" notice from
+`MAILER-DAEMON` went to the envelope sender (caught by Mailpit). Same for its alias and for mail submitted by another
+account. For mail from the internet that is **backscatter** to a possibly forged sender, which hurts our reputation
+(rule 62). The worker therefore applies a held mailbox past its window as send-blocked only (it keeps receiving) until
+held recipients are refused during the SMTP conversation. Candidates, not built: a system Sieve script on the RCPT
+stage (`x:MtaStageRcpt.script`, an expression naming the script, default `false`) that rejects addresses from a list
+the provisioning job maintains, or the `rewrite` expression. Suspension (`SUSPENDED_PERMISSIONS`, which also denies
+`emailReceive`) has the same accept-then-bounce behaviour today (see "Suspending an account").
+
 ### App passwords (verified on the pinned v0.16.27, 2026-10-22)
 
 Throwaway `apppw-probe.test` domain and accounts, destroyed afterwards (ADR-0020):
