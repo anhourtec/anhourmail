@@ -4,11 +4,14 @@ import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-or
 import {
   type AccountBilling,
   BILLING_STATES,
+  type BillingDispute,
+  type BillingDisputeStatus,
   type BillingEvent,
   BILLING_EVENT_STATUSES,
   type BillingEventStatus,
   type BillingRepository,
   type BillingState,
+  DISPUTE_STATUSES,
   type HoldSubject,
   HOLD_SUBJECTS,
   type InviteCode,
@@ -23,7 +26,7 @@ import {
 import { BILLING, type Currency, isPaidPlan, type PaidPlanId } from "@anhourmail/shared/plans";
 
 import type { Executor } from "./client";
-import { accountBilling, billingEvent, inviteCode, planHold } from "./schema";
+import { accountBilling, billingDispute, billingEvent, inviteCode, planHold } from "./schema";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isId = (v: string) => UUID.test(v);
@@ -157,13 +160,13 @@ export class PgBillingRepository implements BillingRepository {
     objectId: string;
     providerCreatedAt: Date;
     receivedAt: Date;
-  }): Promise<boolean> {
-    const rows = await this.x
+  }): Promise<string | null> {
+    const [row] = await this.x
       .insert(billingEvent)
       .values({ ...input, status: input.accountId === null ? "orphan" : "queued" })
       .onConflictDoNothing({ target: billingEvent.providerEventId })
       .returning({ id: billingEvent.id });
-    return rows.length > 0;
+    return row?.id ?? null;
   }
 
   async pendingEvents(accountId: string): Promise<BillingEvent[]> {
@@ -187,6 +190,12 @@ export class PgBillingRepository implements BillingRepository {
       )
       .returning({ id: billingEvent.id });
     return rows.length;
+  }
+
+  async getEvent(id: string): Promise<BillingEvent | null> {
+    if (!isId(id)) return null;
+    const [r] = await this.x.select().from(billingEvent).where(eq(billingEvent.id, id));
+    return r ? toEvent(r) : null;
   }
 
   async listEvents(status: BillingEventStatus, limit: number): Promise<BillingEvent[]> {
@@ -225,6 +234,40 @@ export class PgBillingRepository implements BillingRepository {
       .where(and(inArray(billingEvent.status, ["processed", "dismissed"]), lt(billingEvent.receivedAt, before)))
       .returning({ id: billingEvent.id });
     return rows.length;
+  }
+
+  async disputes(accountId: string): Promise<BillingDispute[]> {
+    if (!isId(accountId)) return [];
+    const rows = await this.x
+      .select()
+      .from(billingDispute)
+      .where(eq(billingDispute.accountId, accountId))
+      .orderBy(asc(billingDispute.openedAt), asc(billingDispute.disputeId));
+    return rows.map((r) => ({
+      accountId: r.accountId,
+      disputeId: r.disputeId,
+      // A status this release doesn't know (a newer one wrote it) restricts: never read as lifted.
+      status: oneOf<BillingDisputeStatus>(DISPUTE_STATUSES, r.status, "open"),
+      openedAt: r.openedAt,
+      closedAt: r.closedAt,
+      updatedAt: r.updatedAt,
+    }));
+  }
+
+  async saveDisputes(accountId: string, rows: readonly BillingDispute[]): Promise<void> {
+    if (!isId(accountId)) throw new Error("not an account id");
+    for (const d of rows) {
+      const set = { status: d.status, closedAt: d.closedAt, updatedAt: d.updatedAt };
+      await this.x
+        .insert(billingDispute)
+        .values({ disputeId: d.disputeId, accountId, openedAt: d.openedAt, ...set })
+        // Only the account's own row is updated: a dispute id tracked for another account is never moved or changed.
+        .onConflictDoUpdate({
+          target: billingDispute.disputeId,
+          set,
+          setWhere: eq(billingDispute.accountId, accountId),
+        });
+    }
   }
 
   async holds(accountId: string): Promise<PlanHold[]> {

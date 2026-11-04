@@ -149,8 +149,8 @@ export function describeBillingContract(name: string, factory: AdapterFactory): 
           receivedAt: T,
         });
         const dup = `evt_${randomUUID()}`;
-        expect(await uow.run((r) => r.billing.recordEvent(evt(a, at(2), dup)))).toBe(true);
-        expect(await uow.run((r) => r.billing.recordEvent(evt(a, at(2), dup)))).toBe(false);
+        expect(await uow.run((r) => r.billing.recordEvent(evt(a, at(2), dup)))).toEqual(expect.any(String));
+        expect(await uow.run((r) => r.billing.recordEvent(evt(a, at(2), dup)))).toBeNull();
         await uow.run((r) => r.billing.recordEvent(evt(a, at(1))));
         await uow.run((r) => r.billing.recordEvent(evt(b, at(0))));
         const orphanId = `evt_${randomUUID()}`;
@@ -210,6 +210,59 @@ export function describeBillingContract(name: string, factory: AdapterFactory): 
         expect((await uow.run((r) => r.billing.listEvents("processed", 10_000))).some((e) => e.accountId === a)).toBe(
           false,
         );
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("disputes: tracked per id, updated in place, scoped; never moved to another account; getEvent by id", async () => {
+      const { uow, cleanup } = await factory();
+      try {
+        const a = await newAccount(uow);
+        const b = await newAccount(uow);
+        const d1 = `dp_${randomUUID()}`;
+        const d2 = `dp_${randomUUID()}`;
+        const dispute = (disputeId: string, status: "open" | "lost" | "won", opened: Date) => ({
+          accountId: a,
+          disputeId,
+          status,
+          openedAt: opened,
+          closedAt: status === "open" ? null : at(3),
+          updatedAt: at(3),
+        });
+        await uow.run((r) => r.billing.saveDisputes(a, [dispute(d2, "open", at(2)), dispute(d1, "open", at(1))]));
+        await uow.run((r) => r.billing.saveDisputes(a, [dispute(d1, "lost", at(1))]));
+        expect(await uow.run((r) => r.billing.disputes(a))).toEqual([
+          dispute(d1, "lost", at(1)),
+          { ...dispute(d2, "open", at(2)), updatedAt: at(3) },
+        ]);
+        // Another account saving the same dispute id changes nothing, and reads only its own.
+        await uow.run((r) => r.billing.saveDisputes(b, [{ ...dispute(d1, "won", at(1)), accountId: b }]));
+        expect(await uow.run((r) => r.billing.disputes(b))).toEqual([]);
+        expect((await uow.run((r) => r.billing.disputes(a)))[0]?.status).toBe("lost");
+        expect(await uow.run((r) => r.billing.disputes("not-an-id"))).toEqual([]);
+
+        const id = await uow.run((r) =>
+          r.billing.recordEvent({
+            providerEventId: `evt_${randomUUID()}`,
+            type: "charge.dispute.created",
+            accountId: null,
+            objectId: d1,
+            providerCreatedAt: T,
+            receivedAt: T,
+          }),
+        );
+        expect(await uow.run((r) => r.billing.getEvent(id ?? ""))).toMatchObject({ status: "orphan", objectId: d1 });
+        expect(await uow.run((r) => r.billing.getEvent(randomUUID()))).toBeNull();
+        expect(await uow.run((r) => r.billing.getEvent("not-an-id"))).toBeNull();
+
+        // The effective plan the rest of the code reads; the billing sync is its only writer.
+        await uow.run((r) => r.accounts.setPlan(a, "plus"));
+        expect((await uow.run((r) => r.accounts.get(a)))?.plan).toBe("plus");
+        expect((await uow.run((r) => r.accounts.get(b)))?.plan).toBe("free");
+
+        expect(await uow.run((r) => r.dataLifecycle.deleteAccount(a))).toBe(true);
+        expect(await uow.run((r) => r.billing.disputes(a))).toEqual([]);
       } finally {
         await cleanup();
       }

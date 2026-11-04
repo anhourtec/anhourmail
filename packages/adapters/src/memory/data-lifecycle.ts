@@ -37,6 +37,7 @@ export function memoryDataLifecycle(s: MemoryState): DataLifecycleRepository {
     s.accountSuspensions = without(s.accountSuspensions, accountId);
     s.billing = s.billing.filter((b) => b.accountId !== accountId);
     s.billingEvents = s.billingEvents.filter((e) => e.accountId !== accountId);
+    s.billingDisputes = s.billingDisputes.filter((d) => d.accountId !== accountId);
     s.planHolds = s.planHolds.filter((h) => h.accountId !== accountId);
     for (const c of s.inviteCodes) if (c.redeemedAccountId === accountId) c.redeemedAccountId = null; // set null
   };

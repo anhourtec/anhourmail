@@ -53,6 +53,7 @@ import type { AccountDeletion } from "@anhourmail/core/data";
 import type { DelegationGrant } from "@anhourmail/core/delegation";
 import {
   type AccountBilling,
+  type BillingDispute,
   type BillingEvent,
   defaultBilling,
   type InviteCode,
@@ -151,6 +152,7 @@ export type MemoryState = {
   /** Billing rows, received provider events, plan holds and invite codes (Postgres: ADR-0029 §11 tables). */
   billing: AccountBilling[];
   billingEvents: BillingEvent[];
+  billingDisputes: BillingDispute[];
   planHolds: PlanHold[];
   inviteCodes: InviteCode[];
 };
@@ -201,6 +203,7 @@ export const emptyState = (): MemoryState => ({
   delegations: [],
   billing: [],
   billingEvents: [],
+  billingDisputes: [],
   planHolds: [],
   inviteCodes: [],
 });

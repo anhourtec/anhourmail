@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 
 import type {
   AccountBilling,
+  BillingDispute,
   BillingEvent,
   BillingRepository,
   HoldSubject,
@@ -17,6 +18,7 @@ type State = {
   userEmails: Record<string, string>;
   billing: AccountBilling[];
   billingEvents: BillingEvent[];
+  billingDisputes: BillingDispute[];
   planHolds: PlanHold[];
   inviteCodes: InviteCode[];
 };
@@ -71,10 +73,11 @@ export function memoryBilling(s: State): BillingRepository {
         .map((b) => b.accountId),
 
     recordEvent: async (input) => {
-      if (s.billingEvents.some((e) => e.providerEventId === input.providerEventId)) return false;
+      if (s.billingEvents.some((e) => e.providerEventId === input.providerEventId)) return null;
       if (input.accountId !== null && !accountExists(input.accountId)) throw new Error(`no account ${input.accountId}`);
+      const id = randomUUID();
       s.billingEvents.push({
-        id: randomUUID(),
+        id,
         providerEventId: input.providerEventId,
         type: input.type,
         accountId: input.accountId,
@@ -85,7 +88,7 @@ export function memoryBilling(s: State): BillingRepository {
         receivedAt: clone(input.receivedAt),
         processedAt: null,
       });
-      return true;
+      return id;
     },
 
     pendingEvents: async (accountId) =>
@@ -101,6 +104,8 @@ export function memoryBilling(s: State): BillingRepository {
       }
       return n;
     },
+
+    getEvent: async (id) => clone(s.billingEvents.find((e) => e.id === id) ?? null),
 
     listEvents: async (status, limit) =>
       clone(
@@ -131,6 +136,23 @@ export function memoryBilling(s: State): BillingRepository {
       const n = s.billingEvents.filter((e) => !keep(e)).length;
       s.billingEvents = s.billingEvents.filter(keep);
       return n;
+    },
+
+    disputes: async (accountId) =>
+      clone(
+        s.billingDisputes
+          .filter((d) => d.accountId === accountId)
+          .sort((a, b) => a.openedAt.getTime() - b.openedAt.getTime() || a.disputeId.localeCompare(b.disputeId)),
+      ),
+
+    saveDisputes: async (accountId, rows) => {
+      if (!accountExists(accountId)) throw new Error(`no account ${accountId}`);
+      for (const r of rows) {
+        const cur = s.billingDisputes.find((d) => d.disputeId === r.disputeId);
+        if (cur && cur.accountId !== accountId) continue; // never moved between accounts
+        const row = { ...clone(r), accountId };
+        s.billingDisputes = [...s.billingDisputes.filter((d) => d.disputeId !== r.disputeId), row];
+      }
     },
 
     holds: async (accountId) =>

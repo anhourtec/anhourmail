@@ -3,6 +3,7 @@ import type { PaidPlanId } from "@anhourmail/shared/plans";
 
 import type {
   AccountBilling,
+  BillingDispute,
   BillingEvent,
   BillingEventStatus,
   BillingState,
@@ -30,8 +31,8 @@ export type BillingRepository = {
   dueForSync(before: Date, limit: number): Promise<string[]>;
 
   /**
-   * Records a received event once: false when that provider event id was already recorded (a duplicate delivery).
-   * `accountId` null records an orphan.
+   * Records a received event once and returns its id: null when that provider event id was already recorded (a
+   * duplicate delivery). `accountId` null records an orphan.
    */
   recordEvent(input: {
     providerEventId: string;
@@ -40,11 +41,13 @@ export type BillingRepository = {
     objectId: string;
     providerCreatedAt: Date;
     receivedAt: Date;
-  }): Promise<boolean>;
+  }): Promise<string | null>;
   /** The account's queued events, oldest provider time first. */
   pendingEvents(accountId: string): Promise<BillingEvent[]>;
   /** Marks queued events of the account processed (or failed with an error name). Returns how many changed. */
   markEventsProcessed(accountId: string, ids: readonly string[], at: Date, error?: string): Promise<number>;
+  /** One event by our id, whatever its account (the worker resolving an orphan), or null. */
+  getEvent(id: string): Promise<BillingEvent | null>;
   /** Events in one status across accounts, newest first (staff: orphans). */
   listEvents(status: BillingEventStatus, limit: number): Promise<BillingEvent[]>;
   /**
@@ -57,6 +60,14 @@ export type BillingRepository = {
   dismissOrphan(id: string, at: Date): Promise<boolean>;
   /** Deletes processed and dismissed events received before `before`; orphans are kept. Returns how many. */
   pruneEvents(before: Date): Promise<number>;
+
+  /** The account's tracked disputes, oldest first. */
+  disputes(accountId: string): Promise<BillingDispute[]>;
+  /**
+   * Inserts or updates these disputes of the account (by provider dispute id). A dispute id already tracked for another
+   * account is left alone (never moved between accounts).
+   */
+  saveDisputes(accountId: string, rows: readonly BillingDispute[]): Promise<void>;
 
   /** The account's plan holds, mailboxes first, then domains, then aliases, oldest first. */
   holds(accountId: string): Promise<PlanHold[]>;

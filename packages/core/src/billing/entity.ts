@@ -82,6 +82,31 @@ export type BillingEvent = {
   processedAt: Date | null;
 };
 
+export const DISPUTE_STATUSES = ["open", "won", "lost", "warning_closed", "cleared"] as const;
+/**
+ * A dispute's status as we track it. `open` also covers a close whose outcome couldn't be read (it never lifts a
+ * restriction); `warning_closed` is an inquiry closed without a chargeback; `cleared` is a staff clear, which provider
+ * reads never change again. `open` and `lost` restrict sending (ADR-0029 §5).
+ */
+export type BillingDisputeStatus = (typeof DISPUTE_STATUSES)[number];
+
+/**
+ * One dispute on an account's payments (Postgres `billing_dispute`), tracked per dispute id so that one dispute closing
+ * as won never clears another that is still open or was lost. No amounts, reasons or evidence: only the outcome.
+ */
+export type BillingDispute = {
+  accountId: string;
+  /** The provider's dispute id. */
+  disputeId: string;
+  status: BillingDisputeStatus;
+  openedAt: Date;
+  closedAt: Date | null;
+  updatedAt: Date;
+};
+
+/** Dispute statuses that keep sending off. */
+export const isRestrictingDispute = (s: BillingDisputeStatus): boolean => s === "open" || s === "lost";
+
 export const HOLD_SUBJECTS = ["mailbox", "domain", "alias"] as const;
 export type HoldSubject = (typeof HOLD_SUBJECTS)[number];
 
