@@ -20,6 +20,25 @@ import {
 } from "../billing-stripe";
 
 export { billingProviderKind, type BillingProviderKind, billingSettingsProblems } from "../billing-stripe";
+export {
+  type FakeBillingProvider,
+  type FakeDelivery,
+  type FakeObjectView,
+  isFakeBillingProvider,
+} from "../billing-fake";
+
+/** The processor's hosted checkout and portal (the only origins its URLs may have; ADR-0029 §2). */
+const PROCESSOR_ORIGINS = ["https://checkout.stripe.com", "https://billing.stripe.com"] as const;
+
+/**
+ * The origins a provider's checkout or portal URL may have (no open redirect): the processor's hosted pages, or, for
+ * the fake, the console's own `/dev/billing` pages. None when billing is off.
+ */
+export function billingRedirectOrigins(provider: BillingProvider | null, appUrl: string): readonly string[] {
+  if (!provider) return [];
+  if (provider.kind === "stripe") return PROCESSOR_ORIGINS;
+  return [new URL(appUrl).origin];
+}
 
 export type BillingProviderDeps = {
   env: Record<string, string | undefined>;

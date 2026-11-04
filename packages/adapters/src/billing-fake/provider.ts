@@ -43,8 +43,39 @@ export type FakeBillingOptions = {
 export type FakeDelivery = { body: string; signature: string };
 
 /** Fake-only controls behind the dev pages' buttons (ADR-0029 §3) and the tests. Each returns the events it emitted. */
+/** What the dev checkout and portal pages show about one fake object, and the account it belongs to. */
+export type FakeObjectView = {
+  accountId: string;
+  customerId: string;
+  now: Date;
+  cardFails: boolean;
+  checkout: {
+    id: string;
+    plan: "plus" | "supporter";
+    currency: Currency;
+    /** The first year's total: plan plus add-ons, tax-exclusive. */
+    totalMinor: number;
+    storageBlocks: number;
+    extraMailboxes: number;
+    open: boolean;
+  } | null;
+  subscription: {
+    id: string;
+    status: ProviderSubscription["status"];
+    plan: "plus" | "supporter";
+    currency: Currency;
+    yearMinor: number;
+    periodEnd: Date;
+    cancelAtPeriodEnd: boolean;
+    latestInvoice: { status: FakeInvoice["status"]; amountMinor: number; refundedMinor: number } | null;
+    dispute: "open" | "won" | "lost" | "warning_closed" | null;
+  } | null;
+};
+
 export type FakeBillingControls = {
   now(): Promise<Date>;
+  /** A checkout session or a customer as the dev pages show it, or null when the fake doesn't know it. */
+  describe(kind: "checkout" | "customer", id: string): Promise<FakeObjectView | null>;
   /** Pays (or declines) an open checkout session; paying creates the subscription and its first invoice. */
   completeCheckout(sessionId: string, outcome: "pay" | "decline"): Promise<FakeEvent[]>;
   /** The customer's card fails (or works again) on every future charge. */
@@ -373,6 +404,49 @@ export function createFakeBillingProvider(opts: FakeBillingOptions): FakeBilling
 
     now: async () => new Date(nowOf(await store.read())),
 
+    describe: async (kind, id) => {
+      const s = await store.read();
+      const cs = kind === "checkout" ? s.checkouts[id] : undefined;
+      const customerId = kind === "checkout" ? cs?.customerId : id;
+      const customer = customerId === undefined ? undefined : s.customers[customerId];
+      if (!customer || (kind === "checkout" && !cs)) return null;
+      const subs = Object.values(s.subscriptions).filter((x) => x.customerId === customer.id);
+      const sub = subs.find((x) => isLiveSubStatus(x.status)) ?? subs.at(-1);
+      const inv = sub?.latestInvoiceId ? s.invoices[sub.latestInvoiceId] : undefined;
+      return {
+        accountId: customer.accountId,
+        customerId: customer.id,
+        now: new Date(nowOf(s)),
+        cardFails: customer.cardFails,
+        checkout: cs
+          ? {
+              id: cs.id,
+              plan: cs.plan,
+              currency: cs.currency,
+              totalMinor: yearAmount(cs),
+              storageBlocks: cs.storageBlocks,
+              extraMailboxes: cs.extraMailboxes,
+              open: cs.status === "open" && nowOf(s) <= cs.createdAt + CHECKOUT_TTL_MS,
+            }
+          : null,
+        subscription: sub
+          ? {
+              id: sub.id,
+              status: sub.status,
+              plan: sub.plan,
+              currency: sub.currency,
+              yearMinor: yearAmount(sub),
+              periodEnd: new Date(sub.periodEnd),
+              cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
+              latestInvoice: inv
+                ? { status: inv.status, amountMinor: inv.amountMinor, refundedMinor: inv.refundedMinor }
+                : null,
+              dispute: inv?.dispute?.status ?? null,
+            }
+          : null,
+      };
+    },
+
     completeCheckout: (sessionId, outcome) =>
       store.update((s) => {
         const cs = s.checkouts[sessionId];
@@ -525,6 +599,11 @@ export function createFakeBillingProvider(opts: FakeBillingOptions): FakeBilling
  * payment intent and carries no customer and no metadata of ours, like the real one (ADR-0029 §4, update 2026-11-04);
  * a charge carries its customer and payment intent.
  */
+/** The provider is the fake (dev and tests): only then do the dev pages and the simulate route have anything to drive. */
+
+export const isFakeBillingProvider = (p: BillingProvider | null | undefined): p is FakeBillingProvider =>
+  p?.kind === "fake" && typeof (p as Partial<FakeBillingControls>).completeCheckout === "function";
+
 export function eventBody(e: FakeEvent): string {
   const object =
     e.objectKind === "dispute"

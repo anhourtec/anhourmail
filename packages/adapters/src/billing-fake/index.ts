@@ -8,6 +8,8 @@ export {
   type FakeBillingOptions,
   type FakeBillingProvider,
   type FakeDelivery,
+  type FakeObjectView,
+  isFakeBillingProvider,
 } from "./provider";
 export {
   emptyFakeBillingState,
