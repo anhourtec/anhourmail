@@ -72,6 +72,7 @@ import {
   type SharedMailbox,
 } from "./mail-client";
 import { iconButtonClass, Menu, type MenuEntry } from "./menu";
+import { startPush } from "./push";
 import { MessageList } from "./message-list";
 import { type MailChange, restoreTarget } from "./conversation";
 import {
@@ -79,8 +80,11 @@ import {
   coalescer,
   FOLDER_RELOAD_MS,
   newMailToAnnounce,
+  nextCheckDelay,
   playChime,
-  pollDelay,
+  PUSH_CATCH_UP_MS,
+  PUSH_SETTLE_MS,
+  pushedTypes,
   raceFirstPaint,
   shouldPoll,
   tabTitle,
@@ -787,9 +791,12 @@ function Mailroom({
     announceChange({ all: true, threadIds: new Set(), emailIds: new Set() });
   }, [refresh, announceChange]);
 
-  // Automatic refresh (until push lands): one cheap request (Email/changes and Mailbox/changes) every 30 s while the
-  // tab is visible, at once when it becomes visible, gains focus or comes back online, backing off after errors. Only
-  // a real change reloads: changed mail reloads the list and the counts, changed folders alone just the counts.
+  // Automatic refresh (05-webmail.md "Push"). Push first: the BFF's stream says which types changed and this tab asks
+  // for those changes only (one request: Email/changes and/or Mailbox/changes), at once while the tab is visible, else
+  // when it becomes visible. While push is up a safety check runs every 5 minutes; while it is down (not available,
+  // a mailbox shared with the person, the stream lost) the check runs every 30 s as before. Checks also run at once
+  // when the tab becomes visible, gains focus or comes back online, and back off after errors. Only a real change
+  // reloads: changed mail reloads the list and the counts, changed folders alone just the counts.
   const syncRefs = useRef({ refresh, reloadCounts, announceChange, signedOut, roles, mine, prefs });
   useEffect(() => {
     syncRefs.current = { refresh, reloadCounts, announceChange, signedOut, roles, mine, prefs };
@@ -799,15 +806,29 @@ function Mailroom({
     let failures = 0;
     let timer: number | undefined;
     let running = false;
+    let pushUp = false;
+    let everUp = false;
+    /** Types a push said changed that no check has asked about yet (null: none). */
+    let pushed: { email: boolean; mailbox: boolean } | null = null;
+    let pushTimer: number | undefined;
+    /** A check was asked for while one was out: run once more after it. */
+    let again: { email: boolean; mailbox: boolean } | "all" | null = null;
     const life = { stopped: false };
     const stoppedNow = () => life.stopped;
-    const tick = async () => {
+    const tick = async (only?: { email: boolean; mailbox: boolean }) => {
+      if (life.stopped) return;
+      if (running) {
+        again = only === undefined || again === "all" ? "all" : merge(again, only);
+        return;
+      }
       window.clearTimeout(timer);
-      if (life.stopped || running || !shouldPoll(document.visibilityState, navigator.onLine)) return;
+      if (!shouldPoll(document.visibilityState, navigator.onLine)) return;
+      // A full check covers what a push asked for.
+      if (only === undefined) pushed = null;
       running = true;
       try {
         const first = state === null;
-        const r = await client.mailChanges(state);
+        const r = await client.mailChanges(state, first ? undefined : only);
         state = r.state;
         failures = 0;
         if (!first && !r.changed && r.foldersChanged) syncRefs.current.reloadCounts();
@@ -851,9 +872,30 @@ function Mailroom({
         running = false;
       }
       // The page may have closed while the check was out.
-      if (!stoppedNow()) timer = window.setTimeout(() => void tick(), pollDelay(failures));
+      if (stoppedNow()) return;
+      const next = again;
+      again = null;
+      if (next !== null) {
+        void tick(next === "all" ? undefined : next);
+        return;
+      }
+      schedule();
     };
-    const wake = () => void tick();
+    const schedule = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => void tick(), nextCheckDelay(pushUp, failures));
+    };
+    const merge = (
+      a: { email: boolean; mailbox: boolean } | null,
+      b: { email: boolean; mailbox: boolean },
+    ): { email: boolean; mailbox: boolean } => ({
+      email: (a?.email ?? false) || b.email,
+      mailbox: (a?.mailbox ?? false) || b.mailbox,
+    });
+    const wake = () => {
+      // Back in view: one full check (it covers anything pushed while hidden).
+      void tick();
+    };
     document.addEventListener("visibilitychange", wake);
     window.addEventListener("focus", wake);
     window.addEventListener("online", wake);
@@ -862,13 +904,59 @@ function Mailroom({
       if (life.stopped) return;
       if (b && state === null) {
         state = b.state;
-        window.clearTimeout(timer);
-        timer = window.setTimeout(() => void tick(), pollDelay(0));
+        schedule();
       } else void tick();
     });
+    // Push: started after the first load (which brings the session, so naming the stream costs no request); a tab
+    // showing a shared mailbox gets null and keeps polling.
+    let stopPush: (() => void) | null = null;
+    void client
+      .firstLoad()
+      .catch(() => null)
+      .then(() => (life.stopped ? null : client.push()))
+      .then((p) => {
+        if (life.stopped || !p) return;
+        stopPush = startPush(p.url, p.key, {
+          onUp: () => {
+            pushUp = true;
+            // Catch up with anything missed before push was up (or while it was down). The first time, a moment later:
+            // the first load's states are seconds old at most, and the first paint's own requests go first.
+            if (!everUp && state !== null) {
+              window.clearTimeout(timer);
+              timer = window.setTimeout(() => void tick(), PUSH_CATCH_UP_MS);
+            } else void tick();
+            everUp = true;
+          },
+          onDown: () => {
+            pushUp = false;
+            if (!running) schedule();
+          },
+          onState: (changed) => {
+            const types = pushedTypes(changed, state);
+            if (!types) return;
+            pushed = merge(pushed, types);
+            if (!shouldPoll(document.visibilityState, navigator.onLine)) return;
+            window.clearTimeout(pushTimer);
+            pushTimer = window.setTimeout(() => {
+              const only = pushed;
+              pushed = null;
+              if (only) void tick(only);
+            }, PUSH_SETTLE_MS);
+          },
+          // The session ended (here or in another tab): no push any more, and the next ordinary check meets the sign-in
+          // flow. Not at once: a tab signing out is already on its way to the sign-in page.
+          onSignedOut: () => {
+            pushUp = false;
+            if (!running) schedule();
+          },
+        });
+      })
+      .catch(() => undefined);
     return () => {
       life.stopped = true;
       window.clearTimeout(timer);
+      window.clearTimeout(pushTimer);
+      stopPush?.();
       document.removeEventListener("visibilitychange", wake);
       window.removeEventListener("focus", wake);
       window.removeEventListener("online", wake);
