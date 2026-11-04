@@ -7,6 +7,7 @@ import type { DnsResolver } from "@anhourmail/core/domains";
 import type { MailServer } from "@anhourmail/core/provisioning";
 import { stalwartProvisioning } from "@anhourmail/stalwart-client";
 
+import { checkBillingSettings } from "./billing";
 import { workerPlatform } from "./platform";
 import { checkStalwartSettings, type WorkerProcess } from "./stalwart";
 
@@ -24,6 +25,7 @@ export function runtime(kind: WorkerProcess = "job"): {
   if (!url) throw new Error("DATABASE_URL is not set");
   const platform = workerPlatform();
   checkStalwartSettings(kind);
+  checkBillingSettings();
   const { db, pool } = createDb(url);
   return {
     deps: { uow: new PgUnitOfWork(db), clock: systemClock, platform },
