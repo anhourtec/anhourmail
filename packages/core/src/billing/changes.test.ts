@@ -475,3 +475,25 @@ describe("paid capacity belongs to its period (security review run-62 F1)", () =
     expect((await previewBillingChange(w.d, w.ctx, owner, ACCOUNT_A, { storageBlocks: 3 })).billed).toBe("now");
   });
 });
+
+describe("one self-service refund per account (security review run-62 F2)", () => {
+  it("a second refund after resubscribing is refused with a pointer to staff; the subscription stays", async () => {
+    const w = await subscribed();
+    w.stepUp(owner.userId);
+    await refundSubscription(w.d, w.ctx, owner, ACCOUNT_A, SESSION, req);
+    await w.sync();
+    expect((await w.row()).selfServiceRefundAt).toEqual(w.clock.now());
+    // Subscribe again a day later and ask for a refund inside the new window.
+    w.clock.set(new Date(w.clock.now().getTime() + DAY));
+    const { url } = await startCheckout(w.d, w.ctx, owner, ACCOUNT_A, { plan: "plus", currency: "USD" }, req);
+    await w.fake.completeCheckout(url.split("/").pop() ?? "", "pay");
+    await w.sync();
+    expect((await w.row()).state).toBe("active");
+    await expect(refundSubscription(w.d, w.ctx, owner, ACCOUNT_A, SESSION, req)).rejects.toThrow(
+      "already had its self-service refund",
+    );
+    expect(w.audit("billing.refunded").at(-1)).toMatchObject({ result: "denied", errorCode: "refund_not_eligible" });
+    expect(await w.fake.getSubscription(w.customerId)).not.toBeNull();
+    expect((await billingOverview(w.d, w.ctx, owner, ACCOUNT_A)).refund.mayBeEligible).toBe(false);
+  });
+});

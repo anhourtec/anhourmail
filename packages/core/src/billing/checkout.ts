@@ -189,6 +189,7 @@ export async function billingOverview(
           b.state === "active" &&
           b.planSource === "stripe" &&
           b.disputedAt === null &&
+          b.selfServiceRefundAt === null &&
           b.lastInvoiceStatus === "paid" &&
           windowEndsAt !== null &&
           now <= windowEndsAt,

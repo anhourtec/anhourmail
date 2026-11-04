@@ -10,7 +10,8 @@
  *   a decrease that would leave the account over the new figure at renewal is refused (409 `addon_in_use`).
  * - Cancelling (at period end), undoing it and the refund need a fresh password step-up (ADR-0028).
  * - The refund is the 14-day self-service one: the first or a renewal invoice, paid at most 14 days ago, nothing refunded
- *   yet, no open dispute. It refunds the invoice in full and ends the subscription now; the sync then lapses the account.
+ *   yet, no open dispute, and only once per account (later refunds are staff's). It refunds the invoice in full and ends
+ *   the subscription now; the sync then lapses the account.
  *
  * The provider is called first, then our unit of work records the request and queues the account's sync; the account's
  * state follows from the sync, so a crash between the two heals on the next sync.
@@ -429,13 +430,17 @@ export function undoCancelSubscription(
   return cancelOrUndo(deps, ctx, actor, accountId, session, req, true);
 }
 
-const REFUND_MESSAGES: Record<RefundRefusal | "disputed", string> = {
+/** Why a self-service refund is refused beyond the invoice rules: a dispute is open, or the account already had one. */
+type RefundRefusalReason = RefundRefusal | "disputed" | "already_used";
+
+const REFUND_MESSAGES: Record<RefundRefusalReason, string> = {
   no_invoice: "There's no payment to refund.",
   not_paid: "There's no paid invoice to refund.",
   not_plan_invoice: "Only the first payment or a renewal can be refunded here. Contact support about other charges.",
   outside_window: `Refunds are possible within ${String(BILLING.refundWindowDays)} days of paying. Contact support about this one.`,
   already_refunded: "This payment was already refunded.",
   disputed: "This payment is disputed with the card issuer, so support handles it.",
+  already_used: "This account has already had its self-service refund. Contact support: our staff can help.",
 };
 
 /**
@@ -476,7 +481,7 @@ export async function refundSubscription(
   const provider = await requireProvider(deps, actor, req, spec, ctx);
   const b = await deps.uow.run((r) => billingOf(r, accountId, deps.clock.now()));
   if (!b) throw new NotFoundError();
-  const notEligible = (reason: RefundRefusal | "disputed") =>
+  const notEligible = (reason: RefundRefusalReason) =>
     refuse(
       deps,
       actor,
@@ -497,6 +502,9 @@ export async function refundSubscription(
     );
   }
   if (b.disputedAt !== null) return notEligible("disputed");
+  // One self-service refund per account (security review run-62 F2): otherwise checkout → refund → checkout would give
+  // unlimited 14-day paid periods. A press that finishes an earlier one never got this far (its record wasn't written).
+  if (b.selfServiceRefundAt !== null) return notEligible("already_used");
   await requireStepUp(deps, actor, req, spec, session);
 
   const sub = await callProvider(deps, actor, req, spec, () => provider.getSubscription(customerId));
@@ -528,7 +536,11 @@ export async function refundSubscription(
     provider.cancel({ subscriptionId: sub.subscriptionId, when: "now", intentId: `refund-cancel:${inv.id}` }),
   );
   return mutation(deps, actor, req, spec, async (r) => {
-    await r.provisioning.enqueue({ kind: "billing.sync", subjectId: accountId, runAfter: deps.clock.now() });
+    await r.accounts.lock(accountId);
+    const at = deps.clock.now();
+    const current = await billingOf(r, accountId, at);
+    if (current) await r.billing.save({ ...current, selfServiceRefundAt: at, updatedAt: at });
+    await r.provisioning.enqueue({ kind: "billing.sync", subjectId: accountId, runAfter: at });
     return {
       result: refunded,
       meta: {
