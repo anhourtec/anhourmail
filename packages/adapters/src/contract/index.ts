@@ -378,7 +378,7 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
         });
         expect((await uow.run((r) => r.aliases.listByAccount(a.id)))[0]).toMatchObject({ adminLocked: true });
         expect((await uow.run((r) => r.directory.getMailbox(m.id)))?.aliases).toEqual([
-          { address: alias.address, kind: "masked", enabled: false, description: "shop" },
+          { id: alias.id, address: alias.address, kind: "masked", enabled: false, description: "shop" },
         ]);
         await uow.run((r) => r.aliases.setEnabled(alias.id, false, false));
         expect(await uow.run((r) => r.aliases.get(a.id, alias.id))).toMatchObject({

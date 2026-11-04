@@ -46,7 +46,14 @@ export const STALE_RUNNING_MS = 10 * 60 * 1000;
 
 export type DomainState = { id: string; accountId: string; name: string; status: string; stalwartId: string | null };
 
-export type AliasState = { address: string; kind: "alias" | "masked"; enabled: boolean; description: string | null };
+export type AliasState = {
+  /** The alias row's id (plan holds name aliases by id). */
+  id: string;
+  address: string;
+  kind: "alias" | "masked";
+  enabled: boolean;
+  description: string | null;
+};
 
 export type MailboxState = {
   id: string;

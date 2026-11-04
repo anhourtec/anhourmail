@@ -494,6 +494,7 @@ class PgMailDirectoryRepository implements MailDirectoryRepository {
       purgeAfter: m.purgeAfter,
       displayName: m.displayName,
       aliases: aliases.map((a) => ({
+        id: a.id,
         address: a.address,
         kind: a.kind === "masked" ? "masked" : "alias",
         enabled: a.enabled,

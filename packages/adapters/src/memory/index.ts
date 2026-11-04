@@ -401,7 +401,7 @@ function repositories(s: MemoryState): Repositories {
         aliases: s.aliases
           .filter((a) => a.mailboxId === m.id)
           .sort((a, b) => a.address.localeCompare(b.address))
-          .map((a) => ({ address: a.address, kind: a.kind, enabled: a.enabled, description: a.description })),
+          .map((a) => ({ id: a.id, address: a.address, kind: a.kind, enabled: a.enabled, description: a.description })),
         pendingPasswordHash: passwordOf(m.id)?.pendingHash ?? null,
         pendingPasswordGrant: passwordOf(m.id)?.grant ?? null,
         pendingPasswordByOwner: passwordOf(m.id)?.byOwner === true,
