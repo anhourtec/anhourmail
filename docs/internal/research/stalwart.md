@@ -806,7 +806,42 @@ pinned in `packages/adapters/src/stalwart/handoff.int.test.ts`:
   (`x:AppPassword/get`, `x:Account.credentials` with `description`, `createdAt`, `expiresAt`, `permissions`) until it
   is destroyed. `expiresAt` takes whole seconds (`2026-10-29T12:01:01Z`).
 - `maxAppPasswords` (default 5) counts it; `quotas.maxAppPasswords: 6` on the account (set by `mailbox.ensure` with the
-  provisioning key) leaves room for it next to five app passwords.
+  provisioning key) leaves room for it next to five app passwords (7 since ADR-0030, for an import's credential).
+
+### Mail import over IMAP (verified on the pinned v0.16.27, 2026-11-04 and 2026-11-05)
+
+For ADR-0030, with a throwaway domain and customer account and the real service keys, destroyed afterwards; pinned in
+`packages/adapters/src/stalwart/import-credential.int.test.ts` (the ADR's own table has the 2026-11-04 probes):
+
+- **The import credential:** `x:AppPassword/set` by the operations key with `Disable` of everything but
+  `IMPORT_CREDENTIAL_ALLOW` signs in over IMAPS; `CREATE "Imported/Old Stuff"` creates the missing parent too (IMAP
+  CREATE works where customers' JMAP `Mailbox/set create` is denied); `SUBSCRIBE` works; `APPEND` with LITERAL+
+  answers `APPENDUID` and keeps INTERNALDATE and keywords (`\Seen \Flagged $Forwarded custom_kw`, case-insensitive);
+  `UID FETCH … BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]` works with `imapFetch`.
+- **No de-duplication:** the same message appended twice is two messages. **Message-ID isn't searchable:** `UID SEARCH
+  HEADER Message-ID` matches nothing while `SUBJECT` does. A synchronising literal over 52,428,800 bytes is refused up
+  front (`BAD [PARSE] Literal exceeds the maximum request size`). `GETQUOTAROOT INBOX` answers `STORAGE used limit`
+  in KiB.
+- **APPEND isn't delivery:** an active managed Sieve script (`addflag`) marks mail delivered on port 25 and not an
+  appended message; the appended message gets no `X-Spam-Status`, `X-Spam-Result` or `Authentication-Results`.
+- **APPEND trains the spam classifier.** Every APPEND adds an `x:SpamTrainingSample` for the account: into the Junk
+  folder, or with `$Junk`, as spam; anywhere else as ham, whatever the other keywords (`$NotJunk`, `Junk`,
+  `NonJunk` or none). Delivery on port 25 adds none. No setting in the schema turns this off per credential or per
+  command (`x:SpamClassifier` has reservoir and frequency settings only). Consequence for imports: ADR-0030 "Update".
+- **One shared model** (checked 2026-11-05 for run-64): `x:SpamClassifier` is a server singleton (one `model`, one
+  `reservoirCapacity`, one training schedule; `GET /api/schema`); `x:SpamTrainingSample` has `accountId` (nullable),
+  `blobId`, `isSpam`, `deleteAfterUse`, `expiresAt`, `from`, `subject`, no per-account model setting. Stalwart's
+  classifier documentation: "The model is shared by all users of the server, with an additional component for each
+  account", and a sample without an account "trains the shared weights only". The samples an APPEND creates carry the
+  account's id (observed), so they train that account's component **and** the shared weights; one user's samples
+  influence everyone's classification "to a lesser degree". Samples also store the message's From and Subject
+  (`serverSet`) and a blob, held 180 days by default (`holdSamplesFor`).
+- **Refusals:** with the credential, `STORE`, `EXPUNGE`, `DELETE` and `RENAME` get no tagged reply (the server closes
+  the connection or stays silent; the folder is unchanged); submission on 465 doesn't accept `MAIL FROM`; POP3 doesn't
+  open the maildrop; JMAP methods are `forbidden`.
+- **Revocation:** `revokeAppPasswordCredential` with the provisioning key cuts an open IMAP session off (the next
+  mail command gets no OK; on 2026-11-04 a `NOOP` still answered once, the `STATUS` after it got nothing); HTTP
+  Basic with it then answers 401. A credential past `expiresAt` answers 401 too.
 
 ## 7. Outbound controls
 

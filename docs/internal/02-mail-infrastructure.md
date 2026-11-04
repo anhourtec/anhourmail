@@ -209,6 +209,17 @@ and 175 more`. Without `impersonate` these permissions apply to its own account 
     integration tests run with real keys of each kind (`packages/adapters/src/stalwart/credentials.int.test.ts`,
     `app-passwords.int.test.ts`). The recovery admin is **never set in production**: it works in normal mode too.
   - `Replace`-type app password permissions are not used: they could only grant what the operations key holds.
+  - **Mail import credential** (ADR-0030 §1; built 2026-11-05, slice 1): per running import, the web app's
+    operations key mints an `x:AppPassword` with description `AnhourMail import` and exactly
+    `importCredentialPermissions()` — IMAP sign-in, capability, id, enable, namespace, list/lsub, status,
+    select/examine, create, subscribe, append, fetch, search; everything else off (no STORE, COPY, MOVE, EXPUNGE,
+    DELETE, RENAME, ACL, IDLE, POP3, SMTP, JMAP, DAV) — expiring after 7 days (14 with cut-over sync). The
+    provisioning key revokes it through `x:Account.credentials` when the import ends; Stalwart refuses it after
+    `expiresAt`. Customer accounts have `maxAppPasswords` 7 (`CUSTOMER_APP_PASSWORD_QUOTA`: five app passwords, the
+    handoff's moment, one import). Verified behaviours the importer relies on (no de-duplication, Message-ID not
+    searchable, APPEND keeps dates and keywords and runs no Sieve or spam filter **but feeds spam training** by folder,
+    50 MiB literals, refused commands get no reply, revocation cuts the session): `research/stalwart.md` "Mail import
+    over IMAP", pinned in `packages/adapters/src/stalwart/import-credential.int.test.ts`.
 
 - Stalwart's HTTP listener has no host port. On the public client host (`imap.`), NGINX proxies only what mail,
   contact and calendar apps use — `/jmap` (JMAP for third-party clients, `CLIENT_ENDPOINTS`), `/dav/*` and

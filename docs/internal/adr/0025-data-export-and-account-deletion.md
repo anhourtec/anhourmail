@@ -121,6 +121,12 @@ part of an export:
    (b) Cancelling a deletion needs no step-up: it only moves in the safe direction (nothing is removed; mailboxes
    resume), and everyone in the account is emailed.
 
+**Update (2026-11-05): import is not export (ADR-0030).** Option B (a sealed throwaway credential for a worker) stays
+rejected for mail **export**. Mail **import** uses a sealed, IMAP-only credential per import in its own importer
+process because the two reasons don't apply there: nothing is stored (messages stream from source to destination one
+at a time in memory) and the credential can't reach `/api/auth` from that container. Contacts import keeps this ADR's
+pattern (the person's own webmail session). This decision doesn't change.
+
 ## Consequences
 
 - People can leave with everything: mail and contacts in standard formats from the webmail, account and personal

@@ -189,6 +189,16 @@ ones, so a customer mailbox keeps 162 permissions instead of 186 and the provisi
 the time of the decision). No app password scope ever allowed them. Existing accounts get the denials from migration
 0032; the key change needs a bootstrap run and key rotation before the deploy (`08-operations.md`).
 
+**Update (2026-11-05): a mail import's credential (ADR-0030).** A third kind of `x:AppPassword` exists next to the
+ones people hold and the handoff credential: the operations key mints one per running import
+(`createImportCredential`, description `IMPORT_CREDENTIAL_DESCRIPTION`, exactly `importCredentialPermissions()` —
+IMAP sign-in, list, status, select/examine, create, subscribe, append, fetch and search; everything else off), expiring
+after 7 days (14 with cut-over sync), sealed for the importer and revoked by the provisioning key when the import ends.
+The "hand the secret to a queue" alternative above stays rejected for app passwords people use: this one is never
+shown to anyone and belongs to the job. Customer accounts' `maxAppPasswords` (`CUSTOMER_APP_PASSWORD_QUOTA`) is now 7
+(five app passwords, the handoff's moment, one import); existing mailboxes pick it up on their next `mailbox.ensure`.
+Pinned in `packages/adapters/src/stalwart/import-credential.int.test.ts`.
+
 ## Consequences
 
 - Mail apps work for console-made mailboxes without anyone choosing or knowing a mailbox password.
