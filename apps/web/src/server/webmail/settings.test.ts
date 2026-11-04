@@ -7,7 +7,7 @@ import { MemoryUnitOfWork } from "@anhourmail/adapters/memory";
 import { NotFoundError } from "@anhourmail/core";
 import type { MailMessage } from "@anhourmail/adapters/mail";
 import { setWebmailSenderName, webmailSenderName, webmailSendingNames } from "@anhourmail/core/people";
-import { WebmailSettingsService, WebmailSignaturesService } from "@anhourmail/core/webmail";
+import { WebmailSettingsService, WebmailSignaturesService, WebmailTemplatesService } from "@anhourmail/core/webmail";
 import { createKeyRing } from "@anhourmail/server/keyring";
 import { setLogSinkForTests } from "@anhourmail/server/log";
 import { memorySlidingQuota } from "@anhourmail/server/rate-limit";
@@ -271,6 +271,7 @@ async function setup() {
     mail: svc,
     settings: core,
     signatures,
+    templates: new WebmailTemplatesService(deps),
     senderNames: {
       get: (address) => webmailSenderName(deps, address),
       set: (address, input, r) => setWebmailSenderName(deps, address, input, r),
@@ -1063,6 +1064,36 @@ describe("webmail settings: control plane and mail server together", () => {
     expect(SafeSenderInput.safeParse({ emailId: "Ma1b2", address: "x@y.example" }).success).toBe(false);
     expect(SafeSenderInput.safeParse({ emailId: "a@b.example" }).success).toBe(false);
     expect(SafeSenderInput.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("templates", () => {
+  it("sanitises on save (no images), lists by name, and refuses another mailbox than the active one", async () => {
+    const t = await setup();
+    const list = await t.settings.createTemplate(
+      t.sessionId,
+      "acc1",
+      { name: "Thanks", html: '<p>Thanks!<img src="https://t.example/p.gif"></p><script>x()</script>' },
+      req,
+    );
+    expect(list).toEqual([
+      { id: expect.any(String) as string, name: "Thanks", html: "<p>Thanks!</p>", text: "Thanks!" },
+    ]);
+    expect(await t.settings.templates(t.sessionId)).toHaveLength(1);
+    await expect(
+      t.settings.createTemplate(t.sessionId, "acc1", { name: "Empty", html: "<p> </p>" }, req),
+    ).rejects.toThrow("Write the template's text.");
+    const id = list[0]?.id ?? "";
+    expect((await t.settings.updateTemplate(t.sessionId, "acc1", id, { name: "Thank you" }, req))[0]?.name).toBe(
+      "Thank you",
+    );
+    await expect(
+      t.settings.createTemplate(t.sessionId, "other-account", { name: "X", html: "<p>x</p>" }, req),
+    ).rejects.toBeInstanceOf(WebmailRefusedError);
+    expect(await t.settings.removeTemplate(t.sessionId, "acc1", id, req)).toEqual([]);
+    expect(t.uow.state.audit.map((a) => a.action)).toEqual(
+      expect.arrayContaining(["webmail.template_added", "webmail.template_changed", "webmail.template_removed"]),
+    );
   });
 });
 

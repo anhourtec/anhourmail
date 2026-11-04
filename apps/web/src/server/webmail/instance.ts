@@ -16,6 +16,7 @@ import {
   webmailAccess,
   WebmailSettingsService,
   WebmailSignaturesService,
+  WebmailTemplatesService,
 } from "@anhourmail/core/webmail";
 import { setWebmailSenderName, webmailSenderName, webmailSendingNames } from "@anhourmail/core/people";
 import { openPushChannel } from "@anhourmail/jmap-client/push";
@@ -279,6 +280,7 @@ export function webmailSettings(): WebmailSettings {
     mail: webmail(),
     settings: settingsService(),
     signatures: new WebmailSignaturesService(container().deps),
+    templates: new WebmailTemplatesService(container().deps),
     senderNames: {
       get: (address) => webmailSenderName(container().deps, address),
       set: (address, input, req) => setWebmailSenderName(container().deps, address, input, req),

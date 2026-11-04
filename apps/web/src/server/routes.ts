@@ -1051,6 +1051,31 @@ export const ROUTES: readonly RouteSpec[] = [
     file: "app/api/webmail/settings/junk/route.ts",
     guard: "webmail",
   },
+  // Templates (canned replies, ADR-0032 §3): the session's own mailbox only.
+  {
+    method: "GET",
+    path: "/api/webmail/settings/templates",
+    file: "app/api/webmail/settings/templates/route.ts",
+    guard: "webmail",
+  },
+  {
+    method: "POST",
+    path: "/api/webmail/settings/templates",
+    file: "app/api/webmail/settings/templates/route.ts",
+    guard: "webmail",
+  },
+  {
+    method: "PATCH",
+    path: "/api/webmail/settings/templates/:templateId",
+    file: "app/api/webmail/settings/templates/[templateId]/route.ts",
+    guard: "webmail",
+  },
+  {
+    method: "DELETE",
+    path: "/api/webmail/settings/templates/:templateId",
+    file: "app/api/webmail/settings/templates/[templateId]/route.ts",
+    guard: "webmail",
+  },
   // Mail rules (ADR-0032 §2): the session's own mailbox only, compiled into the managed script.
   {
     method: "GET",

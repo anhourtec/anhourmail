@@ -12,10 +12,12 @@ import {
   type SignatureChange,
   type WebmailSettingsService,
   type WebmailSignaturesService,
+  type WebmailTemplatesService,
 } from "@anhourmail/core/webmail";
 import { MAIL_RULES, type MailRule, MailRuleList } from "@anhourmail/shared/mail-rules";
 import { fromAddress, matchSafeSender, MAX_SENDER_ENTRIES, type SafeSenderMatch } from "@anhourmail/shared/senders";
 import { SIGNATURE_HTML_MAX, type SignatureSet } from "@anhourmail/shared/signatures";
+import { TEMPLATE_HTML_MAX, type TemplateView } from "@anhourmail/shared/templates";
 import type { WebmailPreferences } from "@anhourmail/shared/webmail";
 import { log } from "@anhourmail/server/log";
 
@@ -32,6 +34,7 @@ import {
   type WebmailService,
 } from "./service";
 import { cleanSignature, identitySignature, textAsHtml } from "./signature-html";
+import { cleanTemplate } from "./template-html";
 import { isJmapId } from "./view";
 
 /**
@@ -136,6 +139,20 @@ export const SignatureDefaultsInput = z.object({ newMessage: sigId, reply: sigId
  */
 export type SignatureResult = SignatureSet & { mirrored: boolean; shortened: boolean };
 
+/** The longest template request body: the HTML cap plus room for JSON escaping and the name. */
+export const MAX_TEMPLATE_BODY = TEMPLATE_HTML_MAX * 2 + 4096;
+
+/** A new template or a change to one (the HTML is sanitised by `cleanTemplate` before anything is stored). */
+export const TemplateInput = z
+  .object({
+    name: z.string().max(400).optional(),
+    html: z
+      .string()
+      .max(TEMPLATE_HTML_MAX * 2)
+      .optional(),
+  })
+  .strict();
+
 export const VacationChange = z.object({ vacation: VacationInput, timeZone: z.string().max(64) });
 
 /** `PUT /api/webmail/settings/rules`: the whole ordered list, against the version it was read at (ADR-0032 §2). */
@@ -183,6 +200,8 @@ export class WebmailSettings {
       mail: MailServer;
       settings: WebmailSettingsService;
       signatures: WebmailSignaturesService;
+      /** Templates (canned replies, ADR-0032 §3); absent where a caller doesn't use them. */
+      templates?: WebmailTemplatesService;
       senderNames: SenderNames;
       mailer: Mailer;
       /** Reads a message's From for Safe senders changes made from it. */
@@ -362,6 +381,56 @@ export class WebmailSettings {
   ): Promise<SignatureResult> {
     const { address } = await this.#pinned(sessionId, account);
     return this.#mirror(sessionId, account, await this.d.signatures.setDefaults(address, defaults, req));
+  }
+
+  // ---- templates (canned replies, ADR-0032 §3) ----------------------------------------------------------------
+
+  #templatesService(): WebmailTemplatesService {
+    if (!this.d.templates) throw new Error("templates are not configured");
+    return this.d.templates;
+  }
+
+  #template(html: string): { html: string; text: string } {
+    const clean = cleanTemplate(html);
+    if (clean.problem !== null) throw new WebmailRefusedError(clean.problem);
+    return { html: clean.html, text: clean.text };
+  }
+
+  async templates(sessionId: string): Promise<TemplateView[]> {
+    return this.#templatesService().list(await this.#address(sessionId));
+  }
+
+  async createTemplate(
+    sessionId: string,
+    account: string,
+    input: z.infer<typeof TemplateInput>,
+    req: RequestMeta,
+  ): Promise<TemplateView[]> {
+    const { address } = await this.#pinned(sessionId, account);
+    const content = this.#template(input.html ?? "");
+    return this.#templatesService().create(address, { name: input.name, ...content }, req);
+  }
+
+  async updateTemplate(
+    sessionId: string,
+    account: string,
+    id: string,
+    input: z.infer<typeof TemplateInput>,
+    req: RequestMeta,
+  ): Promise<TemplateView[]> {
+    const { address } = await this.#pinned(sessionId, account);
+    const content = input.html === undefined ? {} : this.#template(input.html);
+    return this.#templatesService().update(
+      address,
+      id,
+      { ...(input.name !== undefined ? { name: input.name } : {}), ...content },
+      req,
+    );
+  }
+
+  async removeTemplate(sessionId: string, account: string, id: string, req: RequestMeta): Promise<TemplateView[]> {
+    const { address } = await this.#pinned(sessionId, account);
+    return this.#templatesService().remove(address, id, req);
   }
 
   /**
