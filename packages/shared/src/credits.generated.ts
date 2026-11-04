@@ -775,6 +775,13 @@ export const CREDITS: readonly Credit[] = [
     repository: "https://github.com/PeculiarVentures/x509",
   },
   {
+    name: "@pinojs/redact",
+    version: "0.4.0",
+    license: "MIT",
+    url: "https://github.com/pinojs/redact#readme",
+    repository: "https://github.com/pinojs/redact",
+  },
+  {
     name: "@radix-ui/number",
     version: "1.1.3",
     license: "MIT",
@@ -1246,6 +1253,13 @@ export const CREDITS: readonly Credit[] = [
     repository: "https://github.com/yuku-toolchain/yuku",
   },
   {
+    name: "@zone-eu/mailsplit",
+    version: "5.4.29",
+    license: "MIT OR EUPL-1.1+",
+    url: "https://github.com/zone-eu/mailsplit",
+    repository: "https://github.com/zone-eu/mailsplit",
+  },
+  {
     name: "acorn",
     version: "8.19.0",
     license: "MIT",
@@ -1279,6 +1293,13 @@ export const CREDITS: readonly Credit[] = [
     license: "MIT",
     url: "https://github.com/davidbonnet/astring",
     repository: "https://github.com/davidbonnet/astring",
+  },
+  {
+    name: "atomic-sleep",
+    version: "1.0.0",
+    license: "MIT",
+    url: "https://github.com/davidmarkclements/atomic-sleep#readme",
+    repository: "https://github.com/davidmarkclements/atomic-sleep",
   },
   {
     name: "bail",
@@ -1497,6 +1518,13 @@ export const CREDITS: readonly Credit[] = [
     repository: "https://github.com/drizzle-team/drizzle-orm",
   },
   {
+    name: "encoding-japanese",
+    version: "2.4.0",
+    license: "MIT",
+    url: "https://github.com/polygonplanet/encoding.js",
+    repository: "https://github.com/polygonplanet/encoding.js",
+  },
+  {
     name: "entities",
     version: "8.1.0",
     license: "BSD-2-Clause",
@@ -1700,6 +1728,20 @@ export const CREDITS: readonly Credit[] = [
     repository: "https://github.com/fb55/htmlparser2",
   },
   {
+    name: "iconv-lite",
+    version: "0.7.3",
+    license: "MIT",
+    url: "https://github.com/pillarjs/iconv-lite",
+    repository: "https://github.com/pillarjs/iconv-lite",
+  },
+  {
+    name: "imapflow",
+    version: "2.10.0",
+    license: "MIT",
+    url: "https://imapflow.com/",
+    repository: "https://github.com/postalsys/imapflow",
+  },
+  {
     name: "inline-style-parser",
     version: "0.2.7",
     license: "MIT",
@@ -1712,6 +1754,13 @@ export const CREDITS: readonly Credit[] = [
     license: "MIT",
     url: "https://github.com/redis/ioredis",
     repository: "https://github.com/redis/ioredis",
+  },
+  {
+    name: "ip-address",
+    version: "10.7.6",
+    license: "MIT",
+    url: "https://github.com/beaugunderson/ip-address",
+    repository: "https://github.com/beaugunderson/ip-address",
   },
   {
     name: "is-alphabetical",
@@ -1768,6 +1817,27 @@ export const CREDITS: readonly Credit[] = [
     license: "MIT",
     url: "https://github.com/apostrophecms/apostrophe/tree/main/packages/launder#readme",
     repository: "https://github.com/apostrophecms/apostrophe",
+  },
+  {
+    name: "libbase64",
+    version: "1.4.1",
+    license: "MIT",
+    url: "https://github.com/nodemailer/libbase64",
+    repository: "https://github.com/nodemailer/libbase64",
+  },
+  {
+    name: "libmime",
+    version: "5.6.3",
+    license: "MIT",
+    url: "https://github.com/nodemailer/libmime",
+    repository: "https://github.com/nodemailer/libmime",
+  },
+  {
+    name: "libqp",
+    version: "3.0.1",
+    license: "MIT",
+    url: "https://github.com/nodemailer/libqp",
+    repository: "https://github.com/nodemailer/libqp",
   },
   {
     name: "longest-streak",
@@ -2216,6 +2286,13 @@ export const CREDITS: readonly Credit[] = [
     repository: "https://github.com/nebrelbug/npm-to-yarn",
   },
   {
+    name: "on-exit-leak-free",
+    version: "2.1.2",
+    license: "MIT",
+    url: "https://github.com/mcollina/on-exit-or-gc#readme",
+    repository: "https://github.com/mcollina/on-exit-or-gc",
+  },
+  {
     name: "oniguruma-parser",
     version: "0.12.2",
     license: "MIT",
@@ -2311,6 +2388,27 @@ export const CREDITS: readonly Credit[] = [
     url: "https://github.com/micromatch/picomatch",
   },
   {
+    name: "pino",
+    version: "10.3.1",
+    license: "MIT",
+    url: "https://getpino.io",
+    repository: "https://github.com/pinojs/pino",
+  },
+  {
+    name: "pino-abstract-transport",
+    version: "3.0.0",
+    license: "MIT",
+    url: "https://github.com/pinojs/pino-abstract-transport#readme",
+    repository: "https://github.com/pinojs/pino-abstract-transport",
+  },
+  {
+    name: "pino-std-serializers",
+    version: "7.1.0",
+    license: "MIT",
+    url: "https://github.com/pinojs/pino-std-serializers#readme",
+    repository: "https://github.com/pinojs/pino-std-serializers",
+  },
+  {
     name: "postcss",
     version: "8.5.23",
     license: "MIT",
@@ -2347,6 +2445,13 @@ export const CREDITS: readonly Credit[] = [
     url: "bendrucker/postgres-interval",
   },
   {
+    name: "process-warning",
+    version: "5.1.1",
+    license: "MIT",
+    url: "https://github.com/fastify/fastify-warning#readme",
+    repository: "https://github.com/fastify/process-warning",
+  },
+  {
     name: "property-information",
     version: "7.2.0",
     license: "MIT",
@@ -2365,6 +2470,13 @@ export const CREDITS: readonly Credit[] = [
     license: "MIT",
     url: "https://github.com/PeculiarVentures/pvutils",
     repository: "https://github.com/PeculiarVentures/pvutils",
+  },
+  {
+    name: "quick-format-unescaped",
+    version: "4.0.4",
+    license: "MIT",
+    url: "https://github.com/davidmarkclements/quick-format#readme",
+    repository: "https://github.com/davidmarkclements/quick-format",
   },
   {
     name: "react",
@@ -2407,6 +2519,20 @@ export const CREDITS: readonly Credit[] = [
     license: "MIT",
     url: "https://github.com/paulmillr/readdirp",
     repository: "https://github.com/paulmillr/readdirp",
+  },
+  {
+    name: "real-require",
+    version: "0.2.0",
+    license: "MIT",
+    url: "https://github.com/pinojs/real-require",
+    repository: "https://github.com/pinojs/real-require",
+  },
+  {
+    name: "real-require",
+    version: "1.0.0",
+    license: "MIT",
+    url: "https://github.com/pinojs/real-require",
+    repository: "https://github.com/pinojs/real-require",
   },
   {
     name: "recma-build-jsx",
@@ -2525,6 +2651,20 @@ export const CREDITS: readonly Credit[] = [
     url: "h3js/rou3",
   },
   {
+    name: "safe-stable-stringify",
+    version: "2.5.0",
+    license: "MIT",
+    url: "https://github.com/BridgeAR/safe-stable-stringify#readme",
+    repository: "https://github.com/BridgeAR/safe-stable-stringify",
+  },
+  {
+    name: "safer-buffer",
+    version: "2.1.2",
+    license: "MIT",
+    url: "https://github.com/ChALkeR/safer-buffer",
+    repository: "https://github.com/ChALkeR/safer-buffer",
+  },
+  {
     name: "sanitize-html",
     version: "2.18.1",
     license: "MIT",
@@ -2577,6 +2717,27 @@ export const CREDITS: readonly Credit[] = [
     license: "MIT",
     url: "https://github.com/shikijs/shiki#readme",
     repository: "https://github.com/shikijs/shiki",
+  },
+  {
+    name: "smart-buffer",
+    version: "4.2.0",
+    license: "MIT",
+    url: "https://github.com/JoshGlazebrook/smart-buffer/",
+    repository: "https://github.com/JoshGlazebrook/smart-buffer",
+  },
+  {
+    name: "socks",
+    version: "2.8.10",
+    license: "MIT",
+    url: "https://github.com/JoshGlazebrook/socks/",
+    repository: "https://github.com/JoshGlazebrook/socks",
+  },
+  {
+    name: "sonic-boom",
+    version: "4.2.1",
+    license: "MIT",
+    url: "https://github.com/pinojs/sonic-boom#readme",
+    repository: "https://github.com/pinojs/sonic-boom",
   },
   {
     name: "source-map",
@@ -2643,6 +2804,13 @@ export const CREDITS: readonly Credit[] = [
     license: "MIT",
     url: "https://github.com/dcastil/tailwind-merge",
     repository: "https://github.com/dcastil/tailwind-merge",
+  },
+  {
+    name: "thread-stream",
+    version: "4.2.1",
+    license: "MIT",
+    url: "https://github.com/mcollina/thread-stream#readme",
+    repository: "https://github.com/mcollina/thread-stream",
   },
   {
     name: "tinyexec",
