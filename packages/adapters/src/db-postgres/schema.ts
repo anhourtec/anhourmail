@@ -885,3 +885,29 @@ export const billingEvent = pgTable(
     check("billing_event_orphan", sql`(${t.accountId} is null) = (${t.status} in ('orphan', 'dismissed'))`),
   ],
 );
+
+/**
+ * Plan holds after a downgrade to Free: a mailbox, domain or alias the account keeps but can't use fully (ADR-0029 §6).
+ * Never a deletion. `receive_until` (mailboxes): receiving stops after it; reading, sign-in and export never do.
+ * `subject_id` has no foreign key (it points at one of three tables); a hold whose subject is gone is inert, and the
+ * account's holds are rewritten as a whole by the sync and the Owner's swap.
+ */
+export const planHold = pgTable(
+  "plan_hold",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    subjectType: text("subject_type").notNull(),
+    subjectId: uuid("subject_id").notNull(),
+    heldAt: timestamp("held_at", { withTimezone: true }).notNull().defaultNow(),
+    receiveUntil: timestamp("receive_until", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("plan_hold_subject_idx").on(t.subjectType, t.subjectId),
+    index("plan_hold_account_idx").on(t.accountId),
+    check("plan_hold_subject_type", sql`${t.subjectType} in ('mailbox', 'domain', 'alias')`),
+    check("plan_hold_receive_until", sql`${t.receiveUntil} is null or ${t.subjectType} = 'mailbox'`),
+  ],
+);
