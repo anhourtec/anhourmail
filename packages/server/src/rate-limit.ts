@@ -98,6 +98,9 @@ export const LIMITS = {
   // mailbox" by address). Each one mints and destroys a mail-server credential, and a typed address is a probe: fail
   // closed, so a Redis outage refuses opens (the person's own mailbox still works).
   webmailDelegatedOpen: { limit: 20, windowSec: 600, by: "caller", failMode: "closed" },
+  // The account-wide Safe senders list (ADR-0032 §1): each change rewrites a line in every mailbox's managed script in
+  // the background, so tighter than other console writes; no sending effect, so it fails open.
+  accountSafeSenders: { limit: 30, windowSec: 600, by: "caller", failMode: "open" },
 } as const satisfies Record<string, RateLimit>;
 
 export type LimitName = keyof typeof LIMITS;
