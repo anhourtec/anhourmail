@@ -17,7 +17,10 @@
     "./mail/data-lifecycle": "./src/mail/data-lifecycle.ts",
     "./stalwart": "./src/stalwart/index.ts",
     "./dns": "./src/dns/index.ts",
-    "./image": "./src/image/index.ts"
+    "./image": "./src/image/index.ts",
+    "./billing": "./src/billing/index.ts",
+    "./billing-fake": "./src/billing-fake/index.ts",
+    "./billing-stripe": "./src/billing-stripe/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
