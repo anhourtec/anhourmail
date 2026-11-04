@@ -184,23 +184,35 @@ export function buildScript(
     authservIds: readonly string[];
     /** The mailbox's own domain (its address's), for the forwarding guard's own-domain part. */
     mailboxDomain: string | null;
+    /** The account's Safe senders (ADR-0032 §1), `senderEntry` form; none when absent. */
+    accountSafe?: readonly string[];
   },
 ): string {
   const r = MailRules.parse(rules);
   const requires = new Set(["fileinto", "special-use", "mailbox"]);
   const body: string[] = [];
 
-  // 1. Junk rules: safe senders skip them; blocked senders go to Junk; with "trusted only", everyone else too.
+  // 1. Junk rules: safe senders skip them; blocked senders go to Junk; with "trusted only", everyone else too. The
+  //    account's Safe senders (ADR-0032 §1) come after the person's Blocked senders (theirs win) and before the
+  //    trusted-only catch-all, on one line after a fixed marker, so the web app can replace just that line
+  //    (`applyAccountSafeSenders`) for a mailbox nobody saves.
   const safe = [...r.junk.safe, ...(r.junk.trustedOnly ? ctx.contacts : [])];
-  const branches: [string, string][] = [];
+  const branches: [string, string, string?][] = [];
   if (safe.length > 0)
     branches.push([anyof(senderTests(safe)), "  # A safe sender: the junk rules below don't apply."]);
   if (r.junk.blocked.length > 0) branches.push([anyof(senderTests(r.junk.blocked)), `  ${JUNK}\n  stop;`]);
-  if (r.junk.trustedOnly) branches.push(["true", `  ${JUNK}\n  stop;`]);
+  if (r.junk.trustedOnly) {
+    branches.push([
+      accountSafeTest(ctx.accountSafe ?? []),
+      "  # On the account's Safe senders: the trusted-only rule below doesn't apply.",
+      ACCOUNT_SAFE_MARKER,
+    ]);
+    branches.push(["true", `  ${JUNK}\n  stop;`]);
+  }
   // A lone "safe" branch would do nothing.
   if (!(branches.length === 1 && safe.length > 0)) {
-    branches.forEach(([test, action], i) => {
-      body.push(`${i === 0 ? "if" : "elsif"} ${test} {\n${action}\n}`);
+    branches.forEach(([test, action, before], i) => {
+      body.push(`${before === undefined ? "" : `${before}\n`}${i === 0 ? "if" : "elsif"} ${test} {\n${action}\n}`);
     });
   }
 
@@ -264,6 +276,68 @@ export function buildScript(
     ...body,
     "",
   ].join("\n");
+}
+
+/** The comment line right before the account Safe senders branch (ADR-0032 §1). Never change it: scripts carry it. */
+export const ACCOUNT_SAFE_MARKER = "# AnhourMail account safe senders (set by the account's administrators).";
+
+/** The account Safe senders test: the entries as address and domain tests on the From, or `false` for none. */
+export function accountSafeTest(entries: readonly string[]): string {
+  const valid = [...new Set(entries.map((e) => senderEntry(e)).filter((e): e is string => e !== null))];
+  return valid.length === 0 ? "false" : anyof(senderTests(valid));
+}
+
+/**
+ * For each line of a script, whether it starts in code (not inside a quoted string), and whether the text ends in
+ * code; null when the text uses anything the webmail never writes (`text:` multi-line strings, bracketed comments), so
+ * nothing is rewritten in a script we can't read exactly. A line of a person's own text (an automatic reply spans lines
+ * inside one quoted string) never counts as code.
+ */
+function codeLines(text: string): { starts: boolean[]; endsInCode: boolean } | null {
+  const starts: boolean[] = [];
+  let inString = false;
+  for (const line of text.split("\n")) {
+    starts.push(!inString);
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (inString) {
+        if (c === "\\") i += 1;
+        else if (c === '"') inString = false;
+        continue;
+      }
+      if (c === "#") break;
+      if (c === '"') inString = true;
+      else if (c === "/" && line[i + 1] === "*") return null;
+      else if (line.startsWith("text:", i)) return null;
+    }
+  }
+  return { starts, endsInCode: !inString };
+}
+
+/**
+ * The script with only its account Safe senders line replaced by `entries` (ADR-0032 §1), for a mailbox's script the
+ * web app updates without the person's session (no contacts needed). Null when there is nothing to do or the text
+ * isn't exactly what `buildScript` writes: not ours, no marker (trusted-only off, so the list has no effect in Sieve),
+ * the marker more than once or not in code, or the line after it not one whole `if`/`elsif … {` line of code.
+ */
+export function applyAccountSafeSenders(text: string, entries: readonly string[]): string | null {
+  const rules = parseScript(text);
+  if (rules?.junk.trustedOnly !== true) return null;
+  const code = codeLines(text);
+  if (code?.endsInCode !== true) return null;
+  const lines = text.split("\n");
+  const at = lines.flatMap((l, i) => (l === ACCOUNT_SAFE_MARKER ? [i] : []));
+  const i = at[0];
+  if (at.length !== 1 || i === undefined || code.starts[i] !== true) return null;
+  const next = lines[i + 1];
+  // The branch line must start and end in code: the line after it starts in code too.
+  if (next === undefined || code.starts[i + 1] !== true || code.starts[i + 2] !== true) return null;
+  const m = /^(if|elsif) .+ \{$/.exec(next);
+  if (!m) return null;
+  const line = `${m[1] ?? "elsif"} ${accountSafeTest(entries)} {`;
+  if (line === next) return null;
+  lines[i + 1] = line;
+  return lines.join("\n");
 }
 
 /**
