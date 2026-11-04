@@ -246,14 +246,18 @@ export function parseCheckout(input: CheckoutRequest): ParsedCheckout {
 }
 
 /**
- * The checkout's intent id: the same request within the same hour gets the same id, so a double click or a retried
- * request reuses the provider's session (its idempotency key) instead of opening a second one.
+ * The checkout's intent id: the same request in the same billing state within the same hour gets the same id, so a
+ * double click or a retried request reuses the provider's session (its idempotency key) instead of opening a second
+ * one. The state's start is part of it: after a subscription ends (a refund, a lapse), a new checkout is a new intent,
+ * never the earlier, completed session.
  */
-export function checkoutIntentId(accountId: string, c: ParsedCheckout, now: Date): string {
+export function checkoutIntentId(accountId: string, c: ParsedCheckout, now: Date, stateSince: Date): string {
   const hour = Math.floor(now.getTime() / CHECKOUT_PENDING_MS);
   return createHash("sha256")
     .update(
-      [accountId, c.plan, c.currency, c.amountMinor, c.storageBlocks, c.extraMailboxes, hour].map(String).join(":"),
+      [accountId, c.plan, c.currency, c.amountMinor, c.storageBlocks, c.extraMailboxes, hour, stateSince.getTime()]
+        .map(String)
+        .join(":"),
     )
     .digest("hex")
     .slice(0, 32);
@@ -350,6 +354,7 @@ export async function startCheckout(
     throw new ValidationError(`This account pays in ${pre.billing.currency}.`);
   }
 
+  const stateSince = pre.billing.stateSince;
   const withProvider = { ...ctx, provider };
   const customerId = await customerFor(deps, withProvider, actor, accountId, pre.billing, pre.account.name, req, spec);
   const { url } = await callProvider(deps, actor, req, spec, () =>
@@ -363,7 +368,7 @@ export async function startCheckout(
       extraMailboxes: c.extraMailboxes,
       successUrl: billingPageUrl(ctx, accountId, "?checkout=done"),
       cancelUrl: billingPageUrl(ctx, accountId, "?checkout=cancelled"),
-      intentId: checkoutIntentId(accountId, c, now),
+      intentId: checkoutIntentId(accountId, c, now, stateSince),
     }),
   );
   const safe = assertRedirect(ctx, url);

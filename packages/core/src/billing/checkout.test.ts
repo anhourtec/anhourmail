@@ -89,16 +89,20 @@ describe("parseCheckout", () => {
     expect(() => parseCheckout(input)).toThrow(message);
   });
 
-  it("gives the same intent for the same request within the hour, a new one after it", () => {
+  it("gives the same intent for the same request within the hour and state, a new one after either changes", () => {
     const c = parseCheckout(plus);
     const t = new Date("2026-11-05T10:00:00Z");
-    expect(checkoutIntentId(ACCOUNT_A, c, t)).toBe(checkoutIntentId(ACCOUNT_A, c, new Date(t.getTime() + 60_000)));
-    expect(checkoutIntentId(ACCOUNT_A, c, t)).not.toBe(
-      checkoutIntentId(ACCOUNT_A, c, new Date(t.getTime() + 3_600_000)),
+    const since = new Date("2026-01-01T00:00:00Z");
+    expect(checkoutIntentId(ACCOUNT_A, c, t, since)).toBe(
+      checkoutIntentId(ACCOUNT_A, c, new Date(t.getTime() + 60_000), since),
     );
-    expect(checkoutIntentId(ACCOUNT_A, c, t)).not.toBe(checkoutIntentId(ACCOUNT_B, c, t));
-    expect(checkoutIntentId(ACCOUNT_A, c, t)).not.toBe(
-      checkoutIntentId(ACCOUNT_A, parseCheckout({ ...plus, storageBlocks: 1 }), t),
+    expect(checkoutIntentId(ACCOUNT_A, c, t, since)).not.toBe(
+      checkoutIntentId(ACCOUNT_A, c, new Date(t.getTime() + 3_600_000), since),
+    );
+    expect(checkoutIntentId(ACCOUNT_A, c, t, since)).not.toBe(checkoutIntentId(ACCOUNT_B, c, t, since));
+    expect(checkoutIntentId(ACCOUNT_A, c, t, since)).not.toBe(checkoutIntentId(ACCOUNT_A, c, t, new Date(1)));
+    expect(checkoutIntentId(ACCOUNT_A, c, t, since)).not.toBe(
+      checkoutIntentId(ACCOUNT_A, parseCheckout({ ...plus, storageBlocks: 1 }), t, since),
     );
   });
 });
