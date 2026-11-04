@@ -1,6 +1,6 @@
 # 05 — Webmail
 
-Last updated: 2026-11-04 (delivery problems: the send and a check after the undo hold read the submission's `deliveryStatus` and name the recipients the mail server refused, `POST /api/webmail/send/status`; handoff item 14); 2026-10-31 (remote images, ADR-0027: Safe senders load their images when the From is verified, in every Reading mode, checked on the server with a per-process cache and a Redis rules version; "Always for" / "Stop loading" change Safe senders from the message; the person's own Sent mail loads by itself; old fingerprints read-only; managed-script writes are compare-and-swap; first load: session, folders and the opened view's first window in one answer, streamed inside the page for the person's own mailbox, `GET /api/webmail/bootstrap` otherwise; this browser's copy of the first view painted at once; `Server-Timing` on the webmail API; customer mailboxes have no file storage; remote images: the person's own mail in Sent loads once with no unverified line or remember choice; sender name = the one source in the control plane, identities renamed to it; mailboxes shared with you: no "Shared with you" list or in-place switch in the UI — they open only with Open another mailbox, in a tab named after the mailbox, with Your mailbox in its account menu; no banner; a session left on a shared mailbox goes back to the own one; the account menu tidied (maintainer decision); forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
+Last updated: 2026-11-04 (undo from a shared mailbox is stateless: it carries the send's sealed ticket, the end of the hold asks the mail server whether it was undone, and report reads pass the delegation gate; handoff item 21); 2026-11-04 (delivery problems: the send and a check after the undo hold read the submission's `deliveryStatus` and name the recipients the mail server refused, `POST /api/webmail/send/status`; handoff item 14); 2026-10-31 (remote images, ADR-0027: Safe senders load their images when the From is verified, in every Reading mode, checked on the server with a per-process cache and a Redis rules version; "Always for" / "Stop loading" change Safe senders from the message; the person's own Sent mail loads by itself; old fingerprints read-only; managed-script writes are compare-and-swap; first load: session, folders and the opened view's first window in one answer, streamed inside the page for the person's own mailbox, `GET /api/webmail/bootstrap` otherwise; this browser's copy of the first view painted at once; `Server-Timing` on the webmail API; customer mailboxes have no file storage; remote images: the person's own mail in Sent loads once with no unverified line or remember choice; sender name = the one source in the control plane, identities renamed to it; mailboxes shared with you: no "Shared with you" list or in-place switch in the UI — they open only with Open another mailbox, in a tab named after the mailbox, with Your mailbox in its account menu; no banner; a session left on a shared mailbox goes back to the own one; the account menu tidied (maintainer decision); forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
 notifications; quoted replies; compose image placeholders; first-sign-in password step; sign-in links not pre-filled).
 
 **Status (2026-10-22): slice 1 is built** — webmail sign-in (OAuth code flow + PKCE, tokens sealed server-side), the
@@ -115,7 +115,9 @@ frame-ancestors 'none'` unless the route sets its own sandboxing one). `next.con
 - **Uploads:** at most 4 in flight per process (each holds up to 20 MB once; the body isn't streamed because the
   upstream request may be retried).
 - **Undo** (`POST /api/webmail/send/undo`) cancels the held submission and moves the message back to Drafts; once it
-  is released Stalwart refuses the cancel and the person sees "It has already been sent".
+  is released Stalwart refuses the cancel and the person sees "It has already been sent". Undo keeps nothing in the
+  server process (it asks the mail server; from a shared mailbox it also carries the send's sealed ticket, below), so
+  any process or route module instance can answer it.
 - **Delivery problems (2026-11-04, handoff item 14).** Stalwart refuses an unknown address on one of its own domains
   at `RCPT`, and for a JMAP submission that refusal sends **no DSN**: the submission is created with
   `deliveryStatus[addr] = { delivered: "no", smtpReply: "550 5.1.2 …" }`. Verified on v0.16.27 (2026-11-04): the
@@ -133,9 +135,11 @@ frame-ancestors 'none'` unless the route sets its own sandboxing one). `next.con
     (`#call` with `inactive`, so a switch in another tab still reads the mailbox that sent; a mailbox not signed in
     here is refused). Shared-mailbox sends: the send answers a `reportTicket`, sealed with the session store's key ring
     (purpose `webmail-send-ticket`, AAD = the session's record key) and naming the mailbox, the submission, the
-    delegated entry (mailbox id, via), the own account and an expiry (`hold + 120` s). Only that submission can be
-    asked about, by **this session**, from the tab of the own mailbox that sent it, while the entry that sent it is
-    still open here; it is read with that entry after the own sign-in is proven. Nothing is kept on the server, so it
+    delegated entry (mailbox id, via), the own account, the copy kept in that mailbox's Sent, the person's own draft
+    and an expiry (`hold + 120` s); undo uses the same ticket. Only that submission can be asked about, by **this
+    session**, from the tab of the own mailbox that sent it, while the entry that sent it is still open here and the
+    delegation gate still allows sending from it (a revoked grant stops report reads at once; the gate's check also
+    proves the own sign-in); it is read with that entry. Nothing is kept on the server, so it
     works whichever process answers (an in-process map did not: in `next dev` each route had its own service instance;
     see the session entry). Anything else — a forged, altered, expired or another session's ticket, another
     submission or mailbox, a submission the account doesn't have — is a 404 `not_found`.
@@ -814,14 +818,22 @@ token; the browser never does (rule 21).
      never matched a just-created message on v0.16.27.)
 
   The person's own draft stays until the undo hold is over and is then removed (only if it is still a BFF-built
-  draft). **Undo** (`POST /api/webmail/send/undo` `{ submissionId, mailbox }`) uses only the entry the send used, still
-  in the session — it never opens a mailbox (no credential minted; without the entry: "It has already been sent.").
+  draft, and only once the mail server says the submission is `final`; cancelled, still pending or unknown — the
+  entry is gone, the read fails — and the draft stays). **Undo** (`POST /api/webmail/send/undo` `{ submissionId, mailbox, ticket }`,
+  `ticket` = the send's sealed `reportTicket`) opens the ticket first: this session's, unaltered, naming this
+  submission, mailbox and the tab's own account, unexpired — anything else is a 404 `not_found`. It uses only the
+  entry the send used, still in the session — it never opens a mailbox (no credential minted; without the entry: "It
+  has already been sent.").
   It does **not** re-check the send right (decision: cancelling the BFF's own held submission only reduces what is
   sent, so a revoke during the hold doesn't block it); the person's own sign-in is still proven first. It cancels the
   submission, removes the stored copy, hands the own draft back and records `delegation.send_cancelled` (retried once;
-  if it still can't be written the answer is an error after the cancel, so a missing audit row is never silent). What
-  undo needs is held in the web process for the hold (a restart in those seconds: the message is sent, the own draft
-  stays). Recipients of a delegated send are not auto-saved to contacts. Refusals: no send right, read and manage only,
+  if it still can't be written the answer is an error after the cancel, so a missing audit row is never silent). A
+  submission already cancelled (a replayed undo, read in the same request before the update) or past its hold is "It
+  has already been sent.", never cancelled or audited twice. Nothing is kept in the web process: what undo needs comes
+  from the ticket (an in-process map did not work — under `next dev` the send and undo routes had different service
+  instances, so undo answered "already sent" and the message went; fixed 2026-11-04, handoff item 21). The end of the
+  hold is still an in-process timer in the process that sent (a restart in those seconds: the message is sent, the own
+  draft stays). Recipients of a delegated send are not auto-saved to contacts. Refusals: no send right, read and manage only,
   another account's mailbox, an unknown address → the same 404; a shared mailbox active (unpinned) → 403
   `own_mailbox_only`. A shared mailbox's own view writes through the person's own mailbox with an **own pin** (below),
   so this path is unchanged: the request sees the own mailbox active.
@@ -904,7 +916,7 @@ token; the browser never does (rule 21).
     disabled.
   - **From picker**: `GET /api/webmail/senders` fills **From** with the person's identities, then a "Shared mailboxes"
     group with each label (the mailbox, or "<name> on behalf of <mailbox>"); sending passes `from` and undo passes
-    `mailbox`. `503 send_unconfirmed` shows its message ("We couldn't confirm whether this was sent. Check Sent before
+    `mailbox` and the send's `reportTicket`. `503 send_unconfirmed` shows its message ("We couldn't confirm whether this was sent. Check Sent before
     sending it again."). The choice isn't stored with the draft (it is the person's own); reopening a draft starts
     from their own address again.
   - **"On behalf of" in the reader**: the message view has `sender` — the `Sender:` header when it is one address

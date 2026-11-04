@@ -553,6 +553,20 @@ accepted and gated as before; the UI just doesn't use them. The From picker's gr
 conventional enterprise layout (the mailbox's name, expandable to Inbox, Drafts, Sent, Deleted, Archive and Junk);
 recorded in `09-roadmap.md`.
 
+**Update (2026-11-04, undo from a shared mailbox is stateless).** This amends slice 13's "what undo needs is held in
+the web process for the hold". That map lived in one `WebmailService` instance, and under `next dev` the send and undo
+routes had different instances: Undo inside the hold answered "It has already been sent." and the message went. Now
+the send's sealed `reportTicket` (session store key ring, purpose `webmail-send-ticket`, AAD = the session's record
+key) also carries the copy kept in the mailbox's Sent and the person's own draft, and undo sends it back
+(`POST /api/webmail/send/undo` `{ submissionId, mailbox, ticket }`): only this session's ticket, unaltered, naming this
+submission, mailbox and own account, unexpired, else 404. The rest is unchanged — the entry the send used must still be
+in the session through the same own mailbox, undo never opens a mailbox, the own sign-in is proven, and the
+**decision stands that undo does not re-check the send right** (a revoke in the hold must not stop a cancel). A
+submission already cancelled is "already sent" (no second cancel or audit row). The end of the hold asks the mail
+server whether the submission was cancelled instead of reading the map, and keeps the own draft when it can't tell.
+Separately, the delivery report read for a shared-mailbox send now passes the delegation gate (`need: "send"`), not
+only the own sign-in proof, so a revoked grant stops report reads at once (security audit 2026-11-04).
+
 ## Consequences
 
 - Delegation, shared mailboxes and the leaver hand-over ship with **no new mail-server key, no management-proxy
