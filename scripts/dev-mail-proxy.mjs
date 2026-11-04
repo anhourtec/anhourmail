@@ -40,8 +40,14 @@ const server = http.createServer((req, res) => {
     },
   );
   upstream.on("error", () => {
+    if (res.destroyed) return;
     if (!res.headersSent) res.writeHead(502, { "Content-Type": "text/plain" });
     res.end("Webmail dev server is starting — retry in a moment.");
+  });
+  // The browser went away before the answer ended (a closed push stream, a cancelled request): end the request to the
+  // app too, so a long-lived stream there doesn't outlive the tab.
+  res.on("close", () => {
+    if (!res.writableFinished) upstream.destroy();
   });
   req.pipe(upstream);
 });
