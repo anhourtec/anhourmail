@@ -504,9 +504,12 @@ export function createFakeBillingProvider(opts: FakeBillingOptions): FakeBilling
 
     drainDeliveries: () =>
       store.update((s) => {
+        // Signed at delivery time on the real clock, like the processor's deliveries (`t` is when it signed, not when
+        // the event happened): events made after "advance clock" carry a future `created` but still verify.
+        const t = Math.floor(clock().getTime() / 1000);
         const out = s.outbox.map((e) => {
           const body = eventBody(e);
-          return { body, signature: signatureHeader(webhookSecret, e.created, body) };
+          return { body, signature: signatureHeader(webhookSecret, t, body) };
         });
         s.outbox = [];
         return out;

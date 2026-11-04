@@ -302,6 +302,20 @@ describe("fake billing provider", () => {
     expect(e.paymentIntentId).toMatch(/^pi_fake_/);
   });
 
+  it("deliveries are signed at delivery time on the real clock, so events after advancing the clock still verify", async () => {
+    const p = make();
+    const c = await customer(p);
+    await p.completeCheckout(c.session, "pay");
+    await p.drainDeliveries();
+    await p.advanceClock(366);
+    const deliveries = await p.drainDeliveries();
+    expect(deliveries.length).toBeGreaterThan(0);
+    for (const d of deliveries) {
+      const e = p.verifyWebhook(d.body, d.signature, T0);
+      expect(e.createdAt.getTime()).toBeGreaterThan(T0.getTime() + 365 * 86_400_000);
+    }
+  });
+
   it("controls refuse what can't happen", async () => {
     const p = make();
     const c = await customer(p);
