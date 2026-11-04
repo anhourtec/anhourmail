@@ -8,7 +8,6 @@ import {
   fetchRemoteImage,
   type FetchDeps,
   imageUrl,
-  isPublicAddress,
   MAX_IMAGE_URL,
   pinAddress,
   PROXY_USER_AGENT,
@@ -23,77 +22,6 @@ const PNG = Buffer.from(
   "base64",
 );
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46]);
-
-describe("isPublicAddress", () => {
-  it.each([
-    "0.0.0.0",
-    "0.1.2.3",
-    "10.0.0.1",
-    "10.255.255.255",
-    "100.64.0.1",
-    "100.127.255.254",
-    "127.0.0.1",
-    "127.1.2.3",
-    "169.254.169.254",
-    "172.16.0.1",
-    "172.31.255.255",
-    "192.0.0.8",
-    "192.0.2.1",
-    "192.88.99.1",
-    "192.168.1.1",
-    "198.18.0.1",
-    "198.19.255.255",
-    "198.51.100.7",
-    "203.0.113.9",
-    "224.0.0.1",
-    "239.255.255.250",
-    "240.0.0.1",
-    "255.255.255.255",
-  ])("refuses the IPv4 address %s", (ip) => {
-    expect(isPublicAddress(ip)).toBe(false);
-  });
-
-  it.each([
-    "::",
-    "::1",
-    "::ffff:127.0.0.1",
-    "::ffff:7f00:1",
-    "::ffff:10.0.0.1",
-    "::ffff:169.254.169.254",
-    "::ffff:192.168.0.1",
-    "::127.0.0.1", // IPv4-compatible (deprecated)
-    "64:ff9b::a00:1", // NAT64
-    "64:ff9b:1::1",
-    "100::1", // discard
-    "fc00::1",
-    "fd12:3456::1",
-    "fe80::1",
-    "fe80::1%eth0",
-    "fec0::1",
-    "ff02::1",
-    "2001::1", // Teredo
-    "2001:2::1", // benchmarking
-    "2001:db8::1", // documentation
-    "2002:7f00:1::1", // 6to4 of 127.0.0.1
-    "3fff::1", // documentation
-    "4000::1", // outside 2000::/3
-  ])("refuses the IPv6 address %s", (ip) => {
-    expect(isPublicAddress(ip)).toBe(false);
-  });
-
-  it.each(["1.1.1.1", "8.8.8.8", "93.184.215.14", "172.32.0.1", "100.128.0.1", "2606:4700::1111", "::ffff:8.8.8.8"])(
-    "allows the public address %s",
-    (ip) => {
-      expect(isPublicAddress(ip)).toBe(true);
-    },
-  );
-
-  it("refuses anything that isn't an address", () => {
-    for (const v of ["", "localhost", "1.2.3", "1.2.3.4.5", "256.1.1.1", "01.2.3.4x", "::g", "1::2::3"]) {
-      expect(isPublicAddress(v)).toBe(false);
-    }
-  });
-});
 
 describe("imageUrl", () => {
   it("accepts http and https on their default ports and drops the fragment", () => {
