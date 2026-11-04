@@ -26,9 +26,9 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `forwarding` | `forwarding.changed`, `forwarding.verification_sent`, `forwarding.confirmed` |
 | `sieve` | `sieve.changed` |
 | `vacation` | `vacation.changed` |
-| `junk_rules` | `junk_rules.changed` |
+| `junk_rules` | `junk_rules.changed`, `junk_rules.account_safe_added`, `junk_rules.account_safe_removed` |
 | `identity` | `identity.changed` |
-| `webmail` | `webmail.preferences_changed`, `webmail.signature_added`, `webmail.signature_changed`, `webmail.signature_removed`, `webmail.signature_defaults_changed`, `webmail.handoff_started`, `webmail.handoff_redeemed` |
+| `webmail` | `webmail.preferences_changed`, `webmail.signature_added`, `webmail.signature_changed`, `webmail.signature_removed`, `webmail.signature_defaults_changed`, `webmail.template_added`, `webmail.template_changed`, `webmail.template_removed`, `webmail.handoff_started`, `webmail.handoff_redeemed` |
 | `billing` | `billing.plan_changed`, `billing.payment_succeeded`, `billing.payment_failed`, `billing.refunded`, `billing.suspended`, `billing.reactivated`, `billing.state_changed`, `billing.addons_changed`, `billing.supporter_amount_changed`, `billing.cancel_scheduled`, `billing.cancel_undone`, `billing.dispute_opened`, `billing.dispute_closed`, `billing.holds_applied`, `billing.holds_lifted`, `billing.ceiling_changed`, `billing.sync_failed`, `billing.customer_created`, `billing.checkout_started`, `billing.portal_opened`, `billing.holds_changed`, `billing.subscription_ended` |
 | `trust` | `trust.tier_changed`, `trust.limits_changed`, `trust.restricted`, `trust.suspended`, `trust.unsuspended` |
 | `abuse` | `abuse.report_received`, `abuse.report_resolved` |
@@ -301,6 +301,19 @@ message, plus `change`: `added` | `removed` and `kind`: `address` | `domain`). N
 The script lives on the mail server, so these are written right after a successful write (a failed audit is logged at
 error level). Tried in a tab of a mailbox shared with the person, it is `denied` `own_mailbox_only` (meta
 `via: message`), actor = the person named by the mailbox they signed in with, in the shared mailbox's account.
+
+Account-wide Safe senders (ADR-0032 §1), in the account's log with the console person as actor, target = the account:
+`junk_rules.account_safe_added` (meta `added`, `addresses`, `domains`, `total`) and `junk_rules.account_safe_removed`
+(meta `kind`: `address` | `domain`, `total`), in the same transaction as the change. Members, Domain Administrators,
+Read-only and staff acting as someone are `denied` (`forbidden`). Never an entry, a hash of one or a domain (rule 48).
+
+Mail rules (ADR-0032 §2), in the mailbox's account as a `system` actor named by the mailbox address, target = the
+mailbox: `sieve.changed` (label "Filters changed") on each save of the rules list, meta `rules`, `enabled`,
+`forwarding` (enabled rules that forward), `moving` (enabled rules that move or delete) — counts only, never a rule
+name, a match value or a folder (they are the person's correspondents and folders). Written right after the managed
+script on the mail server, as junk rules are (ADR-0027 §7). Templates (ADR-0032 §3), same actor and target:
+`webmail.template_added` / `_changed` / `_removed`, meta `template` (id), `bytes`, `renamed`, `templates` (count);
+never a name or any text.
 
 Webmail signatures (05-webmail.md "Signatures"), in the mailbox's account as a `system` actor named by the mailbox
 address, target = the mailbox: `webmail.signature_added` (meta `signature` id, `bytes` of HTML, `images`, `signatures`

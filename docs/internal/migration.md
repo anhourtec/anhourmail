@@ -35,6 +35,8 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 | #    | Migration                            | Commit    | Date       | Change                                                                                                            | Rollback        |
 | ---- | ------------------------------------ | --------- | ---------- | ----------------------------------------------------------------------------------------------------------------- | --------------- |
+| 0040 | `0040_webmail_template`              | —         | 2026-11-05 | `webmail_template` table: templates (canned replies) per mailbox, text only (ADR-0032 §3)                         | Safe            |
+| 0039 | `0039_account_safe_sender`           | —         | 2026-11-05 | `account_safe_sender` table: the account-wide Safe senders list (ADR-0032 §1)                                     | Safe            |
 | 0038 | `0038_billing_period_refund`         | —         | 2026-11-05 | `account_billing`: `period_paid_for`, `self_service_refund_at` (ADR-0029, run-62 F1/F2)                           | Safe            |
 | 0037 | `0037_billing_dispute`               | —         | 2026-11-04 | `billing_dispute` table: disputes tracked one by one, so a won one never clears another lost one (ADR-0029 §5)    | Safe            |
 | 0036 | `0036_invite_code`                   | —         | 2026-11-04 | `invite_code` table: staff-made sign-up and comp codes, sha256 only, single use (ADR-0029 §8)                     | Safe            |
@@ -102,6 +104,27 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0040_webmail_template · — · 2026-11-05 · Safe
+
+- Added: `webmail_template` (id uuid primary key, mailbox_id → `mailbox` on delete cascade, account_id →
+  `customer_account` on delete cascade, name text (1–64 characters, unique per mailbox ignoring case), html text
+  (≤ 65,536 characters, sanitised by the BFF, no images), text text (≤ 20,000), created_at, updated_at).
+- Changed: —
+- Removed: —
+- Data: none.
+- Rollback: drop the table (templates are lost; nothing else reads it).
+
+### 0039_account_safe_sender · — · 2026-11-05 · Safe
+
+- Added: `account_safe_sender` (id uuid primary key, account_id → `customer_account` on delete cascade, entry text
+  (3–254 characters, `senderEntry` form), created_by → `auth_user` on delete set null, created_at; unique
+  (account_id, entry)). Numbered after the billing work's uncommitted 0038.
+- Changed: —
+- Removed: —
+- Data: none.
+- Rollback: drop the table. Mailbox scripts keep the last list written into them until their next save, which then
+  writes none.
 
 ### 0038_billing_period_refund · — · 2026-11-05 · Safe
 
