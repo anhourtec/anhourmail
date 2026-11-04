@@ -176,6 +176,7 @@ describe("webmail delegation gate", () => {
     for (const key of [
       "POST send/route.ts",
       "POST send/undo/route.ts",
+      "POST send/status/route.ts",
       "PUT drafts/route.ts",
       "POST upload/route.ts",
       "GET identities/route.ts",
