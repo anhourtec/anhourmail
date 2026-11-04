@@ -562,6 +562,79 @@ Each slice ships with its tests, docs and handoff entry, in small commits (rule 
 13. **Docs and ops** — public import guides and changelog, internal docs listed under Consequences, self-hosting
     guide and ops notes for the importer container (egress 993/143, IMAPS-only route, env), README.
 
+**Update (2026-11-05): slices 1–5 built** (credential and pins, net guard, facts and roles, tables, IMAP adapter;
+uncommitted at the time of writing). Where the build went beyond or differs from the text above:
+
+- **APPEND trains the spam classifier** (slice 1's check, `research/stalwart.md` "Mail import over IMAP"): every
+  appended message becomes an `x:SpamTrainingSample` — into Junk, or with `$Junk`, as spam; anywhere else as ham,
+  whatever the keywords. There is no per-credential or per-command switch. The importer drops spam-training keywords
+  (`IMPORT_DROPPED_KEYWORDS`) so a source can't mark Inbox mail as spam, but folder placement still trains, so an
+  import feeds the classifier with mail from someone else's server. Answered in the run-64 update below (shared model;
+  slice-7 prerequisite). The int test pins the behaviour so an upgrade that changes it is noticed.
+- Refused commands: with the import credential `STORE`, `EXPUNGE`, `DELETE` and `RENAME` get no tagged reply (the
+  server closes the connection or stays silent). After revocation an open session's next mail command gets no OK (on
+  2026-11-04 a `NOOP` still answered once). Both pinned in `import-credential.int.test.ts`.
+- `createImportCredential(accountId, expiresAt)` rounds the expiry **down** to whole seconds and returns the
+  creation time Stalwart recorded; `isImportCredential` accepts a lifetime up to 14 days plus a minute.
+- **Net guard API** (`@anhourmail/server/net-guard`): `isPublicAddress`, `pinHost`, `hostName` (normalisation),
+  `guardTarget({ host, port }, { ports, allow })`, `parseDevAllowList(value, env, name)`. The allow-list overrides the
+  address check for exact `host:port` pairs only; the port rule (993/143) still applies, so a dev importer on the host
+  needs the dev server's IMAP ports reachable as 993/143 (the integration tests map them with a test-only
+  `connectTo` hook; slice 7 decides the dev wiring).
+- **The destination doesn't go through the public-address guard**: it is our own configured endpoint
+  (`IMPORT_DESTINATION_IMAP`, an internal address), always implicit TLS, the certificate checked against the public
+  IMAP host name; `insecureDevCertificate` (`IMPORT_DEV_DESTINATION_INSECURE`) throws in production.
+- **Ports use numbers for UIDs** (IMAP UIDs are 32-bit); `uidValidity` and the folder checkpoint (`last_uid`) stay
+  `bigint` as in §12.
+- **Dedupe across our marker:** a copy carries `X-AnhourMail-Imported`, so its stored size is larger than the
+  original's; the destination index subtracts the marker line before fingerprinting (`destinationDedupeKey`), so a
+  message without a Message-ID copied in one slice is recognised in the next (int-tested).
+- **Repository:** `MailImportRepository.end()` is the only way to a terminal status and wipes both secrets, the source
+  username and every folder path in the same write; Postgres also enforces it (`mail_import_wiped` check). Claims run
+  under one transaction-scoped advisory lock with `FOR UPDATE SKIP LOCKED`; "running" for the caps means "holds a
+  live lease" (a `syncing` import keeps its status while a pass runs). `mail_import_folder` has a `created_at` (the
+  order folders were recorded). The memory repository is `memory/mail-imports.ts` (§9's `memory/imports.ts` stays
+  free for the source and destination fakes).
+- **Presets:** `IMPORT_SOURCE_PRESETS` holds only "Other IMAP server" for now; provider presets (named as setup
+  text) come with the public guides (§17–18).
+- **CSV:** `parseCsv` keeps values exactly (a `+` phone number stays); `toCsv` / `csvCell` prefix formula-like cells
+  with `'` for every CSV we write. `IMPORT_CSV_COLUMNS` and `detectCsvColumns` give the auto-detected mapping.
+- `REDACT_KEYS` also gains `sourceUsername` and `sourcePath`. ESLint keeps `imapflow` inside
+  `packages/adapters/src/imap` (the rest of the adapters package, core, apps and the worker can't import it).
+- Migration **0041** (`0041_mail_import`), after ADR-0032's 0039 and 0040.
+
+**Update (2026-11-05, run-64 pre-commit review of slices 1–5):** no confirmed vulnerability; hardening done in the
+same change, and three items become conditions for later slices.
+
+- **Done:** `createImportCredential` refuses an expiry in the past or more than `IMPORT_CREDENTIAL_MAX_LIFETIME_MS`
+  ahead (SA-64-02). `claim()` and `end()` each run in their own transaction (a savepoint inside a unit of work) and the
+  claim's UPDATE re-checks `status` and `lease_until <= at`; a contract test runs three claimers at once (SA-64-03).
+  `sourceHost` joins `REDACT_KEYS`; the folder path AAD is now `mail_import_folder:<import id>:<folder id>` (SA-64-04).
+  `destinationPath` refuses paths under `Shared Folders` or any other/shared namespace the server announces, ignoring
+  case, and empty levels (SA-64-05).
+- **Source host in finished history (decision, SA-64-04):** while an import is live the full host is kept (the
+  importer needs it); the write that ends it keeps only the registrable domain (`finishedSourceHost`: the last two
+  labels, three for `co.uk`-style suffixes; IP literals become `IP address`). Audit meta keeps host and port as §14
+  says (metadata; the account's own admins see it).
+- **Deploy gate (ops repo, before the importer runs anywhere):** the importer's network reaches only Stalwart's IMAPS
+  port and public TCP 993/143; a connection from the importer container to Stalwart HTTP (`/api/auth`, the management
+  listener, the management proxy) and to Redis **must fail** — checked by the deploy, not assumed — and the importer
+  image runs with `NODE_ENV=production`, so the dev allow-list and the dev destination flag are refused at start.
+  Threat T17 in `07-security.md`.
+- **Spam training, answered:** `x:SpamClassifier` is one server-wide model with a per-account component; the samples an
+  APPEND creates carry the account id and so train both (`research/stalwart.md`). The model is shared, so the reviewer's
+  plan is a **slice-7 prerequisite**: (1) never APPEND into Junk — copy the source's Junk as an ordinary
+  `Imported Junk` folder, or skip it (`excludeJunkTrash` stays on by default); (2) a narrowly scoped key that can only
+  get and destroy `x:SpamTrainingSample` (`sysSpamTrainingSample{Get,Query,Destroy}`), behind the management proxy, so
+  the importer's samples are removed when the import ends (an ADR-0020 key-split update and a rule-27
+  `security-reviewer` pass); (3) per-import message caps below the trusted tiers until that removal exists. Ham samples
+  from ordinary folders remain until (2) is built.
+- **Slice-7 prerequisite (SA-64-01):** the webmail must treat a message whose topmost header is our import marker
+  (`X-AnhourMail-Imported`) as not verified: `original.ts` (`ourAuthResultsHeader`, `authResults`) and
+  `sender-check.ts` (`isInternalMail`) must not count a `Received` / `Authentication-Results` pair or the internal
+  marker inside an imported message, since the old provider (or whoever wrote the source mailbox) controls every
+  header below ours. Built and tested before the runner appends anything.
+
 ## Questions for the maintainer (defaults this ADR builds)
 
 1. **OAuth sources are deferred**, so business mailboxes at the largest provider that refuses password IMAP can't be
