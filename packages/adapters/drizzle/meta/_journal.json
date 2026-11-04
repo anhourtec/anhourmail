@@ -274,6 +274,20 @@
       "when": 1793821170365,
       "tag": "0038_billing_period_refund",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1793821609507,
+      "tag": "0039_account_safe_sender",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1793823548293,
+      "tag": "0040_webmail_template",
+      "breakpoints": true
     }
   ]
 }

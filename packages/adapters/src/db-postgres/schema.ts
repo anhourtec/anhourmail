@@ -556,6 +556,55 @@ export const webmailSignature = pgTable(
 );
 
 /**
+ * A mailbox's templates (canned replies, ADR-0032 §3). `html` is sanitised by the webmail BFF before it is stored (no
+ * images at all) and `text` is generated from it; personal, never logged or audited.
+ */
+export const webmailTemplate = pgTable(
+  "webmail_template",
+  {
+    id: uuid("id").primaryKey(),
+    mailboxId: uuid("mailbox_id")
+      .notNull()
+      .references(() => mailbox.id, { onDelete: "cascade" }),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    html: text("html").notNull(),
+    text: text("text").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("webmail_template_name_idx").on(t.mailboxId, sql`lower(${t.name})`),
+    check("webmail_template_name_length", sql`char_length(${t.name}) BETWEEN 1 AND 64`),
+    check("webmail_template_size", sql`char_length(${t.html}) <= 65536 AND char_length(${t.text}) <= 20000`),
+  ],
+);
+
+/**
+ * An account's Safe senders list (ADR-0032 §1): addresses and domains (`senderEntry` form) its Owners and User
+ * Administrators trust for every mailbox. Images from them load when the From is verified, and their mail skips the
+ * "trusted only" Junk check. Admin configuration, not mail content; never logged or audited.
+ */
+export const accountSafeSender = pgTable(
+  "account_safe_sender",
+  {
+    id: uuid("id").primaryKey(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    entry: text("entry").notNull(),
+    createdBy: text("created_by").references(() => authUser.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("account_safe_sender_entry_idx").on(t.accountId, t.entry),
+    check("account_safe_sender_entry_length", sql`char_length(${t.entry}) BETWEEN 3 AND 254`),
+  ],
+);
+
+/**
  * A mailbox's one forwarding target and its confirmation (the target's owner must confirm before forwarding can be
  * turned on). The token is stored as its sha256 only. Forwarding itself is a rule in the mail server.
  */
