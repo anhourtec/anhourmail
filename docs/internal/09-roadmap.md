@@ -1,6 +1,6 @@
 # 09 — Roadmap
 
-Last updated: 2026-10-31 (webmail first load: inside the page, IndexedDB first-view copy, `Server-Timing`; names as one source and the file-storage lockdown deployed at 6545a16; Safe senders load images and own Sent mail loads its images, ADR-0027 built). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
+Last updated: 2026-11-04 (mail and contacts import designed, ADR-0030; webmail first load: inside the page, IndexedDB first-view copy, `Server-Timing`; names as one source and the file-storage lockdown deployed at 6545a16; Safe senders load images and own Sent mail loads its images, ADR-0027 built). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
 
 ## Path to production (as of 2026-10-29)
 
@@ -211,6 +211,10 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
 
 Make switching painless for whole accounts, not just one mailbox. Runs as worker jobs (rule 26), one job per
 mailbox, resumable, with progress in the console and a summary email when done.
+
+Designed 2026-11-04 in ADR-0030 (`adr/0030-mail-and-contacts-import.md`): an importer process copies over IMAP with a
+per-import, IMAP-only credential the web app mints and the worker revokes; contacts upload stays in the webmail; OAuth
+sources deferred; 13 build slices.
 
 - **Mail import over IMAP from any provider:** source host, port, username and an app password; folders mapped onto
   ours (Inbox, Sent, Drafts, Junk, Trash, custom folders kept), flags and dates preserved, duplicates skipped by
