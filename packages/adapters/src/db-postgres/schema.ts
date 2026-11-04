@@ -887,6 +887,29 @@ export const billingEvent = pgTable(
 );
 
 /**
+ * Disputes on an account's payments, one row per provider dispute id (ADR-0029 §5): `open` and `lost` keep sending off,
+ * so one dispute won never clears another. Only the outcome is kept (no amount, reason or evidence). Written by the
+ * billing sync under the account row lock; goes with the account row.
+ */
+export const billingDispute = pgTable(
+  "billing_dispute",
+  {
+    disputeId: text("dispute_id").primaryKey(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    status: text("status").notNull(),
+    openedAt: timestamp("opened_at", { withTimezone: true }).notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("billing_dispute_account_idx").on(t.accountId, t.openedAt),
+    check("billing_dispute_status", sql`${t.status} in ('open', 'won', 'lost', 'warning_closed', 'cleared')`),
+  ],
+);
+
+/**
  * Plan holds after a downgrade to Free: a mailbox, domain or alias the account keeps but can't use fully (ADR-0029 §6).
  * Never a deletion. `receive_until` (mailboxes): receiving stops after it; reading, sign-in and export never do.
  * `subject_id` has no foreign key (it points at one of three tables); a hold whose subject is gone is inert, and the

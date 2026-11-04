@@ -35,6 +35,7 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 | #    | Migration                            | Commit    | Date       | Change                                                                                                            | Rollback        |
 | ---- | ------------------------------------ | --------- | ---------- | ----------------------------------------------------------------------------------------------------------------- | --------------- |
+| 0037 | `0037_billing_dispute`               | —         | 2026-11-04 | `billing_dispute` table: disputes tracked one by one, so a won one never clears another lost one (ADR-0029 §5)    | Safe            |
 | 0036 | `0036_invite_code`                   | —         | 2026-11-04 | `invite_code` table: staff-made sign-up and comp codes, sha256 only, single use (ADR-0029 §8)                     | Safe            |
 | 0035 | `0035_plan_hold`                     | —         | 2026-11-04 | `plan_hold` table: mailboxes, domains and aliases held after a downgrade to Free, never deleted (ADR-0029 §6)     | Safe            |
 | 0034 | `0034_account_billing_backfill`      | —         | 2026-11-04 | One `account_billing` row per existing account: `free`, or an `active` staff grant on Plus/Supporter              | Safe            |
@@ -100,6 +101,19 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0037_billing_dispute · — · 2026-11-04 · Safe
+
+- Added: `billing_dispute` (dispute_id text primary key (the provider's id), account_id (→ `customer_account`,
+  cascade), status (`CHECK in ('open', 'won', 'lost', 'warning_closed', 'cleared')`), opened_at, closed_at,
+  updated_at); index on (account_id, opened_at). Written by `billing.sync` under the account lock; a dispute id tracked
+  for one account is never moved to another (`ON CONFLICT … DO UPDATE … WHERE account_id = …`). ADR-0029 §5, update
+  2026-11-04 (the residual "dispute state is per account" fixed).
+- Changed: —
+- Removed: —
+- Data: none (no dispute was ever recorded before this: the webhook route ships in the same change).
+- Rollback: drop the table (no code before this reads it). Older code ignores it; disputes then fall back to the
+  account-level `account_billing.disputed_at` stickiness.
 
 ### 0036_invite_code · — · 2026-11-04 · Safe
 
