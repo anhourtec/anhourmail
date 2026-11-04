@@ -419,6 +419,33 @@ export const ROUTES: readonly RouteSpec[] = [
     // The harness sends no policy: allowed callers get a validation error.
     probeStatus: 400,
   },
+  // The account-wide Safe senders list (ADR-0032 §1). The harness's empty body is a 400 for allowed callers; a random
+  // entry id is a 404.
+  {
+    method: "GET",
+    path: "/api/accounts/:accountId/safe-senders",
+    file: "app/api/accounts/[accountId]/safe-senders/route.ts",
+    guard: "safe_sender.read",
+    accountParam: "accountId",
+  },
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/safe-senders",
+    file: "app/api/accounts/[accountId]/safe-senders/route.ts",
+    guard: "safe_sender.manage",
+    accountParam: "accountId",
+    audits: "junk_rules.account_safe_added",
+    probeStatus: 400,
+  },
+  {
+    method: "DELETE",
+    path: "/api/accounts/:accountId/safe-senders/:entryId",
+    file: "app/api/accounts/[accountId]/safe-senders/[entryId]/route.ts",
+    guard: "safe_sender.manage",
+    accountParam: "accountId",
+    audits: "junk_rules.account_safe_removed",
+    probeStatus: 404,
+  },
   // People and roles (roles.md guard rails; packages/core/src/people).
   {
     method: "GET",
