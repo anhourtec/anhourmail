@@ -488,9 +488,13 @@ export function createMailClient(
      * The mail state for automatic refresh, in one request: with `since` null just the current states; otherwise
      * what changed since then (`Email/changes`, with the newly created messages' summaries for the new-mail sound,
      * and `Mailbox/changes`, whose counts move when mail is read, moved or deleted anywhere — another device, an
-     * IMAP app). `reset` when the server can't say (a state is too old): the caller reloads everything.
+     * IMAP app). `reset` when the server can't say (a state is too old): the caller reloads everything. `only`: ask
+     * about these types alone (push said only they changed); the other's state is kept as it was.
      */
-    async mailChanges(since: SyncState | null): Promise<{
+    async mailChanges(
+      since: SyncState | null,
+      only: { email: boolean; mailbox: boolean } = { email: true, mailbox: true },
+    ): Promise<{
       state: SyncState;
       /** Messages were created, changed or removed since `since`. */
       changed: boolean;
@@ -519,19 +523,30 @@ export function createMailClient(
           reset: false,
         };
       }
+      const email = only.email || !only.mailbox;
       try {
         const res = await call([
-          ["Email/changes", { accountId: a, sinceState: since.email, maxChanges: 200 }, "c"],
-          [
-            "Email/get",
-            {
-              accountId: a,
-              "#ids": { resultOf: "c", name: "Email/changes", path: "/created" },
-              properties: SUMMARY,
-            },
-            "g",
-          ],
-          ["Mailbox/changes", { accountId: a, sinceState: since.mailbox, maxChanges: 200 }, "b"],
+          ...(email
+            ? ([
+                ["Email/changes", { accountId: a, sinceState: since.email, maxChanges: 200 }, "c"],
+                [
+                  "Email/get",
+                  {
+                    accountId: a,
+                    "#ids": { resultOf: "c", name: "Email/changes", path: "/created" },
+                    properties: SUMMARY,
+                  },
+                  "g",
+                ],
+              ] satisfies [string, Record<string, unknown>, string][])
+            : []),
+          ...(only.mailbox
+            ? ([["Mailbox/changes", { accountId: a, sinceState: since.mailbox, maxChanges: 200 }, "b"]] satisfies [
+                string,
+                Record<string, unknown>,
+                string,
+              ][])
+            : []),
         ]);
         const c = res.get("c") ?? {};
         const b = res.get("b") ?? {};
@@ -797,6 +812,16 @@ export function createMailClient(
       const text = await res.text();
       const max = 2 * 1024 * 1024;
       return { text: text.slice(0, max), cut: text.length > max };
+    },
+
+    /**
+     * The push stream for this client's mailbox (`GET /api/webmail/push`) and the key tabs share it under (the JMAP
+     * account id); null in a tab showing a mailbox shared with the person, which keeps polling (05-webmail.md "Push").
+     */
+    async push(): Promise<{ url: string; key: string } | null> {
+      if (shared !== undefined || own !== undefined) return null;
+      const a = await accountId();
+      return { url: `${origin}/api/webmail/push?account=${encodeURIComponent(a)}`, key: a };
     },
 
     rawDownloadUrl: (emailId: string) =>

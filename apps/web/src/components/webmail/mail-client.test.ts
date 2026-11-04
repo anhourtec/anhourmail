@@ -382,6 +382,39 @@ describe("automatic refresh", () => {
     expect(again).toMatchObject({ changed: true, foldersChanged: false, touched: ["x"], reset: false });
   });
 
+  it("asks only about the types a push said changed, keeping the other state", async () => {
+    const server = jmapServer((calls) =>
+      calls.map(([name, , id]) =>
+        name === "Email/changes"
+          ? [name, { newState: "e2", created: [], updated: ["x"], destroyed: [] }, id]
+          : name === "Mailbox/changes"
+            ? [name, { newState: "m2", created: [], updated: ["inbox"], destroyed: [] }, id]
+            : [name, { list: [] }, id],
+      ),
+    );
+    vi.stubGlobal("fetch", server.fetchFn);
+    const client = createMailClient(ORIGIN);
+    const folders = await client.mailChanges({ email: "e1", mailbox: "m1" }, { email: false, mailbox: true });
+    expect(server.requests).toEqual([["Mailbox/changes"]]);
+    expect(folders).toMatchObject({ state: { email: "e1", mailbox: "m2" }, changed: false, foldersChanged: true });
+    const mail = await client.mailChanges({ email: "e1", mailbox: "m1" }, { email: true, mailbox: false });
+    expect(server.requests[1]).toEqual(["Email/changes", "Email/get"]);
+    expect(mail).toMatchObject({ state: { email: "e2", mailbox: "m1" }, changed: true, foldersChanged: false });
+    // Neither asked for: the mail changes are asked anyway (never an empty request).
+    await client.mailChanges({ email: "e1", mailbox: "m1" }, { email: false, mailbox: false });
+    expect(server.requests[2]).toEqual(["Email/changes", "Email/get"]);
+  });
+
+  it("names the push stream for its own mailbox only", async () => {
+    vi.stubGlobal("fetch", jmapServer(() => []).fetchFn);
+    expect(await createMailClient(ORIGIN).push()).toEqual({
+      url: `${ORIGIN}/api/webmail/push?account=acc1`,
+      key: "acc1",
+    });
+    expect(await createMailClient(ORIGIN, { shared: "desk@x.test" }).push()).toBeNull();
+    expect(await createMailClient(ORIGIN, { own: "me@x.test" }).push()).toBeNull();
+  });
+
   it("starts again from fresh states when the server can't calculate the changes", async () => {
     let first = true;
     const server = jmapServer((calls) => {
