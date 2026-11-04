@@ -115,6 +115,9 @@ export const AUDIT_ACTIONS = [
   "billing.holds_lifted",
   "billing.ceiling_changed",
   "billing.sync_failed",
+  "billing.customer_created",
+  "billing.checkout_started",
+  "billing.portal_opened",
   // trust and safety
   "trust.tier_changed",
   "trust.limits_changed",

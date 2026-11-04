@@ -29,7 +29,7 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `junk_rules` | `junk_rules.changed` |
 | `identity` | `identity.changed` |
 | `webmail` | `webmail.preferences_changed`, `webmail.signature_added`, `webmail.signature_changed`, `webmail.signature_removed`, `webmail.signature_defaults_changed`, `webmail.handoff_started`, `webmail.handoff_redeemed` |
-| `billing` | `billing.plan_changed`, `billing.payment_succeeded`, `billing.payment_failed`, `billing.refunded`, `billing.suspended`, `billing.reactivated`, `billing.state_changed`, `billing.addons_changed`, `billing.supporter_amount_changed`, `billing.cancel_scheduled`, `billing.cancel_undone`, `billing.dispute_opened`, `billing.dispute_closed`, `billing.holds_applied`, `billing.holds_lifted`, `billing.ceiling_changed`, `billing.sync_failed` |
+| `billing` | `billing.plan_changed`, `billing.payment_succeeded`, `billing.payment_failed`, `billing.refunded`, `billing.suspended`, `billing.reactivated`, `billing.state_changed`, `billing.addons_changed`, `billing.supporter_amount_changed`, `billing.cancel_scheduled`, `billing.cancel_undone`, `billing.dispute_opened`, `billing.dispute_closed`, `billing.holds_applied`, `billing.holds_lifted`, `billing.ceiling_changed`, `billing.sync_failed`, `billing.customer_created`, `billing.checkout_started`, `billing.portal_opened` |
 | `trust` | `trust.tier_changed`, `trust.limits_changed`, `trust.restricted`, `trust.suspended`, `trust.unsuspended` |
 | `abuse` | `abuse.report_received`, `abuse.report_resolved` |
 | `staff` | `staff.role_granted`, `staff.role_revoked`, `staff.act_as_started`, `staff.act_as_renewed`, `staff.act_as_ended`, `staff.account_viewed`, `staff.credentials_reset` |
