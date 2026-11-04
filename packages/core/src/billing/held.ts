@@ -44,3 +44,15 @@ export async function assertMailboxNotHeld(repos: Repositories, accountId: strin
     );
   }
 }
+
+/**
+ * A held mailbox's storage is pinned to the mail it holds while it is held (ADR-0029 §6): it is out of the pool
+ * arithmetic, so its quota can't be changed until the account resubscribes (403 `plan_limit`, audited denied).
+ */
+export async function assertQuotaNotPinned(repos: Repositories, accountId: string, mailboxId: string): Promise<void> {
+  if ((await repos.billing.heldIds(accountId, "mailbox", [mailboxId])).length > 0) {
+    throw heldRefusal(
+      "This mailbox is held since the paid plan ended: its storage stays as it is until you resubscribe.",
+    );
+  }
+}

@@ -20,7 +20,7 @@ import {
   entitledAddonsOf,
   mailboxCeilingMessage,
 } from "../billing/ceilings";
-import { assertDomainUsable } from "../billing/held";
+import { assertDomainUsable, assertQuotaNotPinned } from "../billing/held";
 import { turnOffCatchAllFor } from "../domains/catch-all";
 import {
   ConflictError,
@@ -150,17 +150,27 @@ export async function assertDomainHeld(repos: Repositories, accountId: string, a
 /**
  * The account's storage pool as it stands (plan storage plus purchased blocks; blocks are 0 until billing opens): what
  * its mailboxes are given, what is left, and what each holds. Every mailbox counts, suspended or being deleted too —
- * they still hold their mail.
+ * they still hold their mail — except one held after a downgrade (ADR-0029 §6): its quota is pinned to its mail and it
+ * leaves the pool arithmetic, so the mailbox kept on Free gets the pool on its own.
  */
 async function poolOf(repos: Repositories, accountId: string) {
   const account = await repos.accounts.get(accountId);
   if (!account) throw new NotFoundError();
   const mailboxes = await repos.mailboxes.listByAccount(accountId);
+  const held = new Set(
+    await repos.billing.heldIds(
+      accountId,
+      "mailbox",
+      mailboxes.map((m) => m.id),
+    ),
+  );
   const used = new Map((await repos.mailboxStorage.byAccount(accountId)).map((x) => [x.mailboxId, x.usedBytes]));
   const { storageBlocks } = await entitledAddonsOf(repos, accountId, account.plan);
   const pool = storagePool(
     accountPoolBytes(account.plan, storageBlocks),
-    mailboxes.map((m) => ({ quotaBytes: m.quotaBytes, storageUsedBytes: used.get(m.id) ?? null })),
+    mailboxes
+      .filter((m) => !held.has(m.id))
+      .map((m) => ({ quotaBytes: m.quotaBytes, storageUsedBytes: used.get(m.id) ?? null })),
   );
   return { plan: PLANS[account.plan], pool, count: mailboxes.length, used };
 }
@@ -579,6 +589,7 @@ export async function setMailboxQuota(
       const m = await scoped(repos, accountId, id);
       if (m.status === "deleting") throw new ConflictError(BEING_DELETED);
       await assertDomainHeld(repos, accountId, m.address);
+      await assertQuotaNotPinned(repos, accountId, m.id);
       if (input.quotaGb === undefined || input.quotaGb === null || input.quotaGb === "") {
         throw new ValidationError("Choose a quota in GB.");
       }
