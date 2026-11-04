@@ -12,6 +12,7 @@
     "./client-ip": "./src/client-ip.ts",
     "./rate-limit": "./src/rate-limit.ts",
     "./keyring": "./src/keyring.ts",
+    "./net-guard": "./src/net-guard.ts",
     "./one-time": "./src/one-time.ts",
     "./zip": "./src/zip.ts"
   },
