@@ -51,7 +51,9 @@ import {
   WEBMAIL_SIGNATURES,
 } from "@anhourmail/shared";
 import { AVATAR } from "@anhourmail/shared/profile";
-import { MAX_SENDER_ENTRIES } from "@anhourmail/shared/senders";
+import { MAIL_RULES } from "@anhourmail/shared/mail-rules";
+import { ACCOUNT_SAFE_SENDERS, MAX_SENDER_ENTRIES } from "@anhourmail/shared/senders";
+import { WEBMAIL_TEMPLATES } from "@anhourmail/shared/templates";
 
 import { CopyButton } from "./copy-button";
 
@@ -142,6 +144,16 @@ const VALUES = {
   remoteImageSenders: String(REMOTE_IMAGES.maxSenders),
   // Blocked and Safe senders in webmail settings, each (packages/shared/src/senders.ts)
   senderListEntries: String(MAX_SENDER_ENTRIES),
+  // The account-wide Safe senders list (packages/shared/src/senders.ts, ADR-0032 §1)
+  accountSafeSenderEntries: String(ACCOUNT_SAFE_SENDERS.maxEntries),
+  // Mail rules (packages/shared/src/mail-rules.ts, ADR-0032 §2)
+  mailRulesPerMailbox: String(MAIL_RULES.maxRules),
+  mailRuleConditions: String(MAIL_RULES.maxConditions),
+  mailRuleValueChars: String(MAIL_RULES.valueChars),
+  // Templates (packages/shared/src/templates.ts, ADR-0032 §3)
+  templatesPerMailbox: String(WEBMAIL_TEMPLATES.perMailbox),
+  templateNameChars: String(WEBMAIL_TEMPLATES.nameChars),
+  templateMaxSize: `${String(WEBMAIL_TEMPLATES.templateKb)} KB`,
   bulkAddOnName: ADDONS[BULK_MAIL.addOnId].name,
   bulkAddOnStatus: ADDONS[BULK_MAIL.addOnId].status === "planned" ? "coming later" : "available now",
   bulkAddOnPlans: ADDONS[BULK_MAIL.addOnId].requires.map((id) => PLANS[id].name).join(" and "),

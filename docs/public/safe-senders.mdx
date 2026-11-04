@@ -1,0 +1,35 @@
+---
+title: Safe senders for everyone
+description: Owners and User Administrators can list addresses and domains everyone in the account trusts, so their images load and their mail stays out of Junk.
+---
+
+Some senders everyone in your account trusts: your school, your team's tools, a partner company. Instead of each
+person adding them, an Owner or a User Administrator can add them once in the console, under **Mail → Safe
+senders**. Read-only people can see the list; other roles don't see it.
+
+## What a safe sender does
+
+For every mailbox in the account, mail from a safe sender:
+
+- **loads its images by itself**, through our privacy proxy, but only when we can confirm the message really comes
+  from that sender. A message that only pretends to be from them still asks first;
+- **isn't moved to Junk** by the **Only trust my contacts and safe senders** setting.
+
+People's own choices come first: anyone a person put on their own **Blocked senders** stays blocked for them. Our spam
+checks still apply to everyone.
+
+## Adding and removing
+
+1. Open **Mail → Safe senders** in the console.
+2. Type an address (`jane@example.com`) or a domain (`example.com`) and choose **Add**. Separate several with commas.
+   A domain covers that domain exactly, not its subdomains: `example.com` doesn't include `news.example.com`.
+3. To take one off the list, choose **Remove** next to it.
+
+Changes reach every mailbox within a minute. The list holds up to <Value of="accountSafeSenderEntries" /> entries.
+Every change is recorded in the [audit log](/docs/audit-log), without the addresses themselves.
+
+## What people see
+
+In the webmail, **Settings → Junk and blocked senders** shows the list under **Added by your organisation**,
+read-only, beside each person's own Safe senders. When an image loads because of it, the note on the message says
+your organisation added that sender. See [Webmail settings](/docs/webmail-settings#junk-and-blocked-senders).

@@ -1,6 +1,6 @@
 ---
 title: Webmail settings
-description: Make the webmail look and behave the way you like — theme, density and reading pane, signatures, automatic replies, forwarding, blocked and safe senders, your photo and sender name, dates and keyboard shortcuts.
+description: Make the webmail look and behave the way you like — theme, density and reading pane, signatures and templates, mail rules, automatic replies, forwarding, blocked and safe senders, your photo and sender name, dates and keyboard shortcuts.
 ---
 
 Open settings with **Settings** at the bottom of the webmail sidebar, or press `,` (comma). On a phone, open the
@@ -10,8 +10,8 @@ Type in **Search settings** to find a setting by name or by what it does — "va
 "forward" and so on. Settings are saved for your mailbox, so they follow you to any browser where you sign in to it.
 
 Most settings take effect as soon as you change them and the mail behind the window updates straight away.
-Automatic replies, forwarding, blocked senders and your sender name have their own **Save** button (signatures save from their own editor),
-because they change how your mail is handled. Your photo is saved as soon as you choose it.
+Automatic replies, forwarding, blocked senders and your sender name have their own **Save** button (signatures,
+templates and rules save from their own editor), because they change how your mail is handled. Your photo is saved as soon as you choose it.
 
 ## Appearance
 
@@ -55,9 +55,41 @@ because they change how your mail is handled. Your photo is saved as soon as you
   forwards** choose the signature each kind of message starts with (or **(No signature)**), and the **Signature**
   button in a message lets you switch while you write. Signatures work with every address you send from. Mail apps
   on your phone or computer keep their own signatures. See [Signatures](/docs/folders-and-signatures#signatures).
+- **Templates:** text you write often, such as a thank-you or directions to your office. **Add template** gives it a
+  name and the text, with formatting; images are left out. While you write, the **Templates** button at the bottom of
+  the message inserts one where your cursor is. Each mailbox keeps up to <Value of="templatesPerMailbox" /> templates
+  of up to <Value of="templateMaxSize" /> each, with names of up to <Value of="templateNameChars" /> characters.
 - **Reply button:** whether **Reply** and the `r` key reply to the sender or to everyone.
 - **Undo send:** how long you have to take a message back after choosing **Send** — 5, 10, 20 or 30 seconds.
 - **Always show Cc and Bcc** in new messages.
+
+## Rules
+
+Rules sort new mail as it arrives, in the order they're listed. **Add rule**, give it a name, then choose:
+
+- **When a message arrives**, matching **all** or **any** of up to <Value of="mailRuleConditions" /> conditions:
+  **From** or **To or Cc** contains some text or is an exact address; **Subject** contains; **Mailing list
+  (List-Id)** contains; **Has an attachment**; **Size** over or under so many KB. Text is matched without regard to
+  capitals, up to <Value of="mailRuleValueChars" /> characters.
+- **Do this:** **Move to** a folder or to **Trash**, **Mark as read**, **Flag it**, **Forward a copy**, and **Stop
+  processing more rules**. Moving a message or sending it to Trash always ends the list for that message, so it lands
+  in one place. Nothing is ever deleted for good by a rule.
+
+**Check Inbox** shows recent Inbox messages the conditions match, so you can try a rule before saving it; it's a
+close check, and new mail is matched exactly as it arrives. Each rule can be switched off, moved up or down, edited or
+deleted. A mailbox can have up to <Value of="mailRulesPerMailbox" /> rules.
+
+- Rules run after your [junk rules](#junk-and-blocked-senders): mail sent to Junk isn't sorted, and a rule never takes
+  spam out of Junk.
+- **Forward a copy** sends to your confirmed forwarding address only (set it up under [Forwarding](#forwarding)),
+  with the same protections: mailing-list, automated and junk mail and mail that fails its sender's checks is never
+  forwarded. If you remove or change that address, rules stop forwarding until the new one is confirmed and you save
+  your rules or forwarding again.
+- If you rename or delete a folder a rule moves mail to, the rule shows a warning and mail stays in your Inbox until
+  you edit and save the rule.
+- If you save rules in two windows at once, the second save asks you to reload them first, so nothing is lost.
+
+Rules run on our mail server, so they also sort mail you read in other apps.
 
 ## Automatic replies
 
@@ -93,13 +125,15 @@ forgets the address; to forward somewhere else, remove it and start again.
   can confirm the message really comes from them). **Always for** on a message's image note adds a sender here.
   Domains match exactly: `example.com` doesn't include `news.example.com`. Each list holds up to
   <Value of="senderListEntries" /> entries.
+- **Added by your organisation:** if your account's admins added
+  [safe senders for everyone](/docs/safe-senders), they're listed here, read-only. They count as your safe senders
+  too, except that anyone on your own **Blocked senders** stays blocked.
 - **Only trust my contacts and safe senders:** everything else goes to Junk. Check your Junk folder now and then if
   you turn this on.
 
 To deal with one message, use **Report spam** (`!`) or **Not spam** on it instead. Your automatic replies,
-forwarding and junk rules run on our mail server, so they also apply to mail you read in other apps. These rules are
-managed here, in your account's control panel and the webmail — a filter editor for your own rules is a later
-feature.
+forwarding and junk rules run on our mail server, so they also apply to mail you read in other apps. Your own
+rules for sorting mail are under [Rules](#rules).
 
 ## Account
 
