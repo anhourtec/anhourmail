@@ -9,12 +9,16 @@ const Undo = z.object({
   submissionId: z.string().regex(/^[A-Za-z0-9_-]{1,255}$/),
   /** The mailbox shared with the person it was sent from (`from` of the send), if any. */
   mailbox: z.email().max(254).optional(),
+  /** With `mailbox`: the send's `reportTicket` (sealed for this session; names this submission). */
+  ticket: z.string().max(2048).optional(),
 });
 
 /**
  * Cancels a just-sent message while it is still held, and puts it back in Drafts. A send from a mailbox shared with
- * the person names it (`mailbox`): the copy in that mailbox's Sent is removed, the person's own draft is handed back,
- * and the undo is audited (`delegation.send_cancelled`).
+ * the person names it (`mailbox`) with the send's sealed `ticket` (only the submission it names, by this session, in
+ * the last minutes; anything else is a 404): the copy in that mailbox's Sent is removed, the person's own draft is
+ * handed back, and the undo is audited (`delegation.send_cancelled`). Nothing is kept between the send and the undo,
+ * so any server process can answer it.
  */
 export const POST = route(
   async ({ req, meta }) => {
@@ -25,10 +29,16 @@ export const POST = route(
     if (!account) return noAccount();
     const parsed = Undo.safeParse(await readJson(req));
     if (!parsed.success) return badRequest("Nothing to undo.");
-    const { submissionId, mailbox } = parsed.data;
+    const { submissionId, mailbox, ticket } = parsed.data;
+    if (mailbox !== undefined && ticket === undefined) return badRequest("Nothing to undo.");
     return handleWebmail(async () =>
       ok(
-        await webmail().undoSend(id, submissionId, account, mailbox === undefined ? undefined : { mailbox, req: meta }),
+        await webmail().undoSend(
+          id,
+          submissionId,
+          account,
+          mailbox === undefined ? undefined : { mailbox, ticket: ticket ?? "", req: meta },
+        ),
       ),
     );
   },

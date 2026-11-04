@@ -263,14 +263,21 @@ export type SendResult = {
   undelivered: Undelivered[];
   held: boolean;
   /**
-   * A send from a mailbox shared with the person: what asking for its delivery report after the hold needs (sealed for
-   * this session, naming this submission and mailbox, valid a couple of minutes; `deliveryReportOf`).
+   * A send from a mailbox shared with the person: what undoing it in its hold (`undoSend`) and asking for its delivery
+   * report after the hold (`deliveryReportOf`) need — sealed for this session, naming this submission and mailbox,
+   * valid a couple of minutes.
    */
   reportTicket?: string;
 };
 
-/** What a delegated send's `reportTicket` holds (sealed, so the browser can neither read nor change it). */
-type SendTicket = { m: string; s: string; id: string; v: string; a: string; u: number };
+/**
+ * What a delegated send's `reportTicket` holds (sealed for the session, so the browser can neither read nor change
+ * it): the mailbox (`m`), the submission (`s`), the mailbox's id (`id`) and the own mailbox it went through (`v`),
+ * the own account that sent it (`a`), the copy kept in that mailbox's Sent (`st`) and the person's own draft (`dr`),
+ * and when it stops being valid (`u`, epoch ms). Undo and the delivery report after the hold both need only this, so
+ * neither depends on which server process (or route module instance) answers.
+ */
+type SendTicket = { m: string; s: string; id: string; v: string; a: string; st: string; dr: string; u: number };
 
 /** When `deliveryReportOf` re-checks an unsettled submission (ms after the first read; about 3 s at most). */
 const DELIVERY_RECHECKS_MS = [750, 1500, 3000] as const;
@@ -390,22 +397,6 @@ const rulesVersion = (content: string, state: string): string => (state === "" ?
 /** How long a proof that the session's own mailbox still signs in (for delegated use) holds: the gate's cache, 10 s. */
 const VIA_PROOF_MS = 10_000;
 
-/** A delegated send in its undo hold (`#heldSends`). */
-type HeldSend = {
-  /** The delegated entry it went from. */
-  mailbox: string;
-  mailboxId: string;
-  granteeUserId: string;
-  via: string;
-  /** The copy kept in that mailbox's Sent (destroyed by undo). */
-  storedId: string;
-  /** The person's own draft it was built from (destroyed once the hold is over; kept, and answered, by undo). */
-  ownDraftId: string;
-  ownAccount: string;
-  /** Epoch ms after which it is forgotten. */
-  until: number;
-};
-
 /** A saved draft with what rebuilding it in another mailbox needs (`#sendDelegated`). */
 type FullDraft = StoredDraft & {
   subject: string | null;
@@ -513,12 +504,6 @@ export class WebmailService {
   readonly #identities = new Map<string, { at: number; list: Identity[] }>();
   /** Own mailboxes of a session proven against the mail server for delegated use (ADR-0026), until when. */
   readonly #viaProven = new Map<string, number>();
-  /**
-   * Delegated sends still in their undo hold, by session, mailbox and submission: what undo needs (the stored copy
-   * in that mailbox, the person's own draft) and what the end of the hold cleans up. In this process only, like the
-   * contacts auto-save (a restart in those seconds leaves the own draft behind; the message is sent).
-   */
-  readonly #heldSends = new Map<string, HeldSend>();
 
   constructor(deps: WebmailDeps) {
     this.#d = {
@@ -2189,10 +2174,6 @@ export class WebmailService {
     return out;
   }
 
-  #heldKey(sessionId: string, mailbox: string, submissionId: string): string {
-    return `${this.#gateKey(sessionId)}\0${mailbox}\0${submissionId}`;
-  }
-
   /** Destroys emails in a delegated entry's account, retried once; true when the mail server confirmed every one. */
   async #destroyDelegated(sessionId: string, entry: MailboxTokens, ids: string[]): Promise<boolean> {
     if (ids.length === 0) return true;
@@ -2284,8 +2265,9 @@ export class WebmailService {
    * 5. anything that stops it after the audit entry — a refusal, a method error, a lost answer (then the mail server is
    *    asked what was made or submitted) — destroys every copy that wasn't sent and records `delegation.send_failed`;
    *    a tagged copy that outlives a sent message is destroyed (retried once) or recorded `delegation.tagged_copy_left`;
-   * 6. the own draft stays until the undo hold is over, then is removed; undo (`undoSend` with `mailbox`) cancels the
-   *    submission, removes the stored copy and hands the own draft back.
+   * 6. the own draft stays until the undo hold is over, then is removed unless undone; undo (`undoSend` with `mailbox`
+   *    and the sealed `reportTicket` this answers) cancels the submission, removes the stored copy and hands the own
+   *    draft back.
    */
   async #sendDelegated(
     sessionId: string,
@@ -2541,12 +2523,11 @@ export class WebmailService {
         submittedAt = { id: found };
       }
 
-      // Sent: undo and the end of the hold come first, whatever happens to the cleanup and its record below.
-      this.#holdDelegated(sessionId, {
-        key: this.#heldKey(sessionId, want, submittedAt.id),
-        mailbox: want,
-        ...who,
-        storedId: stored,
+      // Sent: the end of the hold is scheduled first, whatever happens to the cleanup and its record below.
+      this.#afterDelegatedHold(sessionId, {
+        username: entry.username,
+        mailboxId: who.mailboxId,
+        submissionId: submittedAt.id,
         ownDraftId: draftId,
         ownAccount,
         hold,
@@ -2564,14 +2545,16 @@ export class WebmailService {
       const report = await this.#readReport(sentId, (build) =>
         this.#callDelegated(sessionId, entry, build, USING_SUBMISSION),
       ).catch(() => null);
-      // Lets this session (and only it) ask for this submission's report after the hold; nothing is kept here, so it
-      // works whichever server process answers.
+      // Lets this session (and only it) undo this submission in its hold and ask for its report after it; nothing is
+      // kept here, so both work whichever server process (or route module instance) answers.
       const ticket: SendTicket = {
         m: want,
         s: sentId,
         id: who.mailboxId,
         v: who.via,
         a: ownAccount,
+        st: stored,
+        dr: draftId,
         u: this.#d.now() + (hold + 120) * 1000,
       };
       return {
@@ -2620,101 +2603,151 @@ export class WebmailService {
     }
   }
 
-  /** Keeps what undo and the end of the hold need for a delegated send (`#heldSends`) and schedules the end. */
-  #holdDelegated(sessionId: string, h: Omit<HeldSend, "until"> & { key: string; hold: number }): void {
-    const { key, hold, ...rest } = h;
-    if (this.#heldSends.size > 1_000) {
-      const now = this.#d.now();
-      for (const [k, v] of this.#heldSends) if (v.until < now) this.#heldSends.delete(k);
-    }
-    this.#heldSends.set(key, { ...rest, until: this.#d.now() + (hold + 60) * 1000 });
+  /**
+   * Schedules the end of a delegated send's undo hold: unless it was undone, the person's own draft it was built from
+   * goes. Whether it was undone is asked of the mail server (the submission's `undoStatus` in that mailbox, with the
+   * entry that sent it), not of this process, since undo may be answered by another one. When that can't be told
+   * (the entry is gone, the read fails) the draft stays: a draft left behind is harmless, one handed back by undo and
+   * then removed would lose the person's work. A restart in those seconds leaves the draft too (the message is sent).
+   */
+  #afterDelegatedHold(
+    sessionId: string,
+    h: {
+      username: string;
+      mailboxId: string;
+      submissionId: string;
+      ownDraftId: string;
+      ownAccount: string;
+      hold: number;
+    },
+  ): void {
+    const run = async (): Promise<void> => {
+      const cur = await this.#d.store.read(sessionId);
+      const entry = cur
+        ? [cur, ...(cur.others ?? [])].find((m) => m.delegated?.mailboxId === h.mailboxId && m.username === h.username)
+        : undefined;
+      if (!entry) return;
+      const r = await this.#callDelegated(
+        sessionId,
+        entry,
+        (t) => [
+          ["EmailSubmission/get", { accountId: t.accountId, ids: [h.submissionId], properties: ["undoStatus"] }, "g"],
+        ],
+        USING_SUBMISSION,
+      );
+      const status = ((r.get("g")?.list ?? []) as { undoStatus?: unknown }[])[0]?.undoStatus;
+      // Only once it can no longer be undone. Undone (the draft is the person's again), still pending (an undo may
+      // yet hand it back) or not known: the draft stays.
+      if (status !== "final") return;
+      const got = await this.#call(
+        sessionId,
+        (x) => [["Email/get", { accountId: x.accountId, ids: [h.ownDraftId], properties: ["keywords"] }, "g"]],
+        USING,
+        h.ownAccount,
+        { inactive: true },
+      );
+      const found = ((got.get("g")?.list ?? []) as { keywords: Record<string, boolean> }[])[0];
+      // Only the draft the BFF built, still a draft: never a message the person moved or changed since.
+      if (found?.keywords.$draft !== true || found.keywords[COMPOSED_KEYWORD] !== true) return;
+      await this.#call(
+        sessionId,
+        (x) => [["Email/set", { accountId: x.accountId, destroy: [h.ownDraftId] }, "d"]],
+        USING,
+        h.ownAccount,
+        { inactive: true },
+      );
+    };
     this.#d.defer(
       () => {
-        this.#afterDelegatedHold(sessionId, key).catch((err: unknown) => {
+        run().catch((err: unknown) => {
           log.warn("webmail: own draft not removed after a delegated send", {
             component: "webmail",
             error: err instanceof Error ? err.name : "unknown",
           });
         });
       },
-      (hold + 2) * 1000,
-    );
-  }
-
-  /** The undo hold of a delegated send is over (not undone): the person's own draft it came from goes. */
-  async #afterDelegatedHold(sessionId: string, key: string): Promise<void> {
-    const held = this.#heldSends.get(key);
-    if (!held) return; // Undone: the draft is the person's again.
-    this.#heldSends.delete(key);
-    const r = await this.#call(
-      sessionId,
-      (x) => [["Email/get", { accountId: x.accountId, ids: [held.ownDraftId], properties: ["keywords"] }, "g"]],
-      USING,
-      held.ownAccount,
-      { inactive: true },
-    );
-    const found = ((r.get("g")?.list ?? []) as { keywords: Record<string, boolean> }[])[0];
-    // Only the draft the BFF built, still a draft: never a message the person moved or changed since.
-    if (found?.keywords.$draft !== true || found.keywords[COMPOSED_KEYWORD] !== true) return;
-    await this.#call(
-      sessionId,
-      (x) => [["Email/set", { accountId: x.accountId, destroy: [held.ownDraftId] }, "d"]],
-      USING,
-      held.ownAccount,
-      { inactive: true },
+      (h.hold + 2) * 1000,
     );
   }
 
   /**
-   * Undo of a delegated send (`undoSend` with `mailbox`): see `#sendDelegated`. Only with the entry the send used,
-   * still in this session — undo never opens a mailbox (no credential is minted for it, review L3). It does **not**
-   * re-check the send right: cancelling the BFF's own held submission only reduces what is sent, so a revoke during the
-   * hold doesn't stop it (decision recorded in ADR-0026 slice 13). The person's own sign-in is still proven first, and
-   * an entry the gate or the mail server dropped meanwhile is gone (then "It has already been sent.": the message goes).
-   * The cancel is recorded (`delegation.send_cancelled`, retried once); a record that can't be written answers an error
-   * after the cancel, so a missing audit row is never silent.
+   * Opens a delegated send's sealed `reportTicket` (`SendTicket`) for `submissionId` from `mailbox`, sent from the
+   * tab's own `account`: only this session's ticket, unaltered, naming exactly those, still fresh. Anything else is
+   * the one 404 (`WebmailNotFoundError`), whatever was wrong.
+   */
+  #openTicket(sessionId: string, sealed: string, mailbox: string, submissionId: string, account: string): SendTicket {
+    const missing = () => new WebmailNotFoundError("no such submission");
+    const opened = this.#d.store.openSendTicket(sessionId, sealed);
+    let t: Partial<SendTicket>;
+    try {
+      t = opened === null ? {} : (JSON.parse(opened) as Partial<SendTicket>);
+    } catch {
+      t = {};
+    }
+    const { m, s, id, v, a, st, dr, u } = t;
+    if (m !== mailbox || s !== submissionId || a !== account || typeof u !== "number" || u < this.#d.now()) {
+      throw missing();
+    }
+    if (typeof id !== "string" || typeof v !== "string" || typeof st !== "string" || typeof dr !== "string") {
+      throw missing();
+    }
+    return { m, s, id, v, a, st, dr, u };
+  }
+
+  /**
+   * Undo of a delegated send (`undoSend` with `mailbox` and the send's `ticket`): see `#sendDelegated`. Stateless:
+   * everything it needs comes from the sealed ticket the send answered (`#openTicket`: this session's, naming this
+   * submission, mailbox and own account, fresh — else 404), so it works whichever server process answers. Only with
+   * the entry the send used, still in this session through the same own mailbox — undo never opens a mailbox (no
+   * credential is minted for it, review L3); without it, "It has already been sent." (the message goes). It does
+   * **not** re-check the send right: cancelling the BFF's own held submission only reduces what is sent, so a revoke
+   * during the hold doesn't stop it (decision recorded in ADR-0026 slice 13). The person's own sign-in is still proven
+   * first. A submission already cancelled (a replayed undo) or past its hold is "already sent". The cancel is recorded
+   * (`delegation.send_cancelled`, retried once); a record that can't be written answers an error after the cancel, so
+   * a missing audit row is never silent.
    */
   async #undoDelegated(
     sessionId: string,
     submissionId: string,
     account: string | undefined,
     mailbox: string,
+    sealed: string,
     req: RequestMeta,
   ): Promise<{ draftId: string }> {
     const s = await this.#pin(sessionId, account);
     const want = mailbox.trim().toLowerCase();
-    const key = this.#heldKey(sessionId, want, submissionId);
-    const held = this.#heldSends.get(key);
+    const t = this.#openTicket(sessionId, sealed, want, submissionId, s.accountId);
     const already = () => new WebmailRefusedError("It has already been sent.");
-    if (held?.ownAccount !== s.accountId || held.until < this.#d.now()) throw already();
     const cur = await this.#d.store.read(sessionId);
     const entry = cur
-      ? [cur, ...(cur.others ?? [])].find(
-          (m) => m.delegated?.mailboxId === held.mailboxId && m.username.toLowerCase() === want,
-        )
+      ? [cur, ...(cur.others ?? [])].find((m) => m.delegated?.mailboxId === t.id && m.username.toLowerCase() === want)
       : undefined;
-    if (!cur || entry?.delegated?.via !== held.via) throw already();
-    await this.#proveOwn(sessionId, cur, held.via);
+    const granted = entry?.delegated;
+    if (!cur || !entry || granted?.via !== t.v) throw already();
+    const who = { mailboxId: t.id, granteeUserId: granted.granteeUserId, via: t.v };
+    await this.#proveOwn(sessionId, cur, t.v);
     const r = await this.#callDelegated(
       sessionId,
       entry,
-      (t) => [
+      (x) => [
+        ["EmailSubmission/get", { accountId: x.accountId, ids: [submissionId], properties: ["undoStatus"] }, "g"],
         [
           "EmailSubmission/set",
-          { accountId: t.accountId, update: { [submissionId]: { undoStatus: "canceled" } } },
+          { accountId: x.accountId, update: { [submissionId]: { undoStatus: "canceled" } } },
           "u",
         ],
       ],
       USING_SUBMISSION,
     );
+    // Read before the update in the same request: one already cancelled is a replay, never cancelled (or audited) twice.
+    const before = ((r.get("g")?.list ?? []) as { undoStatus?: unknown }[])[0]?.undoStatus;
     const updated = r.get("u")?.updated as Record<string, unknown> | undefined;
-    if (!updated || !(submissionId in updated)) throw already();
-    this.#heldSends.delete(key);
-    if (!(await this.#destroyDelegated(sessionId, entry, [held.storedId]))) {
+    if (before === undefined || before === "canceled" || !updated || !(submissionId in updated)) throw already();
+    if (!(await this.#destroyDelegated(sessionId, entry, [t.st]))) {
       log.warn("webmail: undone delegated copy not removed", { component: "webmail" });
     }
-    await this.#recordOutcome(held, { kind: "cancelled" }, req);
-    return { draftId: held.ownDraftId };
+    await this.#recordOutcome(who, { kind: "cancelled" }, req);
+    return { draftId: t.dr };
   }
 
   /**
@@ -3147,6 +3180,12 @@ export class WebmailService {
     return report;
   }
 
+  /**
+   * The reader for a delegated send's report (`deliveryReportOf`): only the submission its sealed ticket names
+   * (`#openTicket`), with the entry that sent it, still in this session through the same own mailbox, and only while
+   * the delegation gate still allows sending from it (which also proves the person's own sign-in): a revoked grant
+   * stops report reads at once (the gate never caches a refusal). Every refusal is the one 404.
+   */
   async #delegatedReportReader(
     sessionId: string,
     submissionId: string,
@@ -3155,28 +3194,14 @@ export class WebmailService {
   ): Promise<(id: string) => Promise<DeliveryReport | null | undefined>> {
     const want = delegated.mailbox.trim().toLowerCase();
     const missing = () => new WebmailNotFoundError("no such submission");
-    const opened = this.#d.store.openSendTicket(sessionId, delegated.ticket);
-    let t: Partial<SendTicket>;
-    try {
-      t = opened === null ? {} : (JSON.parse(opened) as Partial<SendTicket>);
-    } catch {
-      t = {};
-    }
-    // Only the submission, mailbox and own mailbox the ticket was made for, by this session, while it is fresh.
-    const { m, s, id: mailboxId, v: via, a, u } = t;
-    if (m !== want || s !== submissionId || a !== account || typeof u !== "number" || u < this.#d.now()) {
-      throw missing();
-    }
-    if (typeof mailboxId !== "string" || typeof via !== "string") throw missing();
+    const t = this.#openTicket(sessionId, delegated.ticket, want, submissionId, account);
     const cur = await this.#d.store.read(sessionId);
     const entry = cur
-      ? [cur, ...(cur.others ?? [])].find(
-          (x) => x.delegated?.mailboxId === mailboxId && x.username.toLowerCase() === want,
-        )
+      ? [cur, ...(cur.others ?? [])].find((x) => x.delegated?.mailboxId === t.id && x.username.toLowerCase() === want)
       : undefined;
-    // The entry that sent it, still open in this session through the same own mailbox.
-    if (!cur || !entry || entry.delegated?.via !== via) throw missing();
-    await this.#proveOwn(sessionId, cur, via);
+    // The entry that sent it, still open in this session through the same own mailbox, and still allowed to send.
+    if (!cur || !entry || entry.delegated?.via !== t.v) throw missing();
+    if (!(await this.#delegatedOk(sessionId, cur, entry, "send"))) throw missing();
     return (id) => this.#readReport(id, (build) => this.#callDelegated(sessionId, entry, build, USING_SUBMISSION));
   }
 
@@ -3185,10 +3210,12 @@ export class WebmailService {
     sessionId: string,
     submissionId: string,
     account?: string,
-    /** A send from a mailbox shared with the person: its address, and the request for the audit. */
-    delegated?: { mailbox: string; req: RequestMeta },
+    /** A send from a mailbox shared with the person: its address, the send's `reportTicket`, the request for the audit. */
+    delegated?: { mailbox: string; ticket: string; req: RequestMeta },
   ): Promise<{ draftId: string }> {
-    if (delegated) return this.#undoDelegated(sessionId, submissionId, account, delegated.mailbox, delegated.req);
+    if (delegated) {
+      return this.#undoDelegated(sessionId, submissionId, account, delegated.mailbox, delegated.ticket, delegated.req);
+    }
     const pinned = (await this.#pin(sessionId, account)).accountId;
     const roles = await this.roles(sessionId);
     if (!roles.drafts || !roles.sent) throw new WebmailUnavailableError("no Drafts or Sent folder");

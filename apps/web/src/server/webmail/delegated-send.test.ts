@@ -352,73 +352,77 @@ function setup(opts: { key?: string | null; rotate?: boolean } = {}) {
   const deferred: (() => void)[] = [];
   let outcomeFails = 0;
   let revokeBeforeAuthorize = false;
-  const svc = new WebmailService({
-    store: new WebmailSessionStore(
-      memoryKv(() => now),
-      createKeyRing([{ id: "k1", key: randomBytes(32) }]),
-      {
-        now: () => now,
-      },
-    ),
-    oauth: {
-      signIn: async (name, secret): Promise<OAuthTokens> => {
-        if (secret !== "right") throw new GrantRefusedError("no");
-        return { accessToken: `at-${name}`, refreshToken: `rt-${name}`, expiresAt: now + 3_600_000 };
-      },
-      refresh: async (token) => {
-        refreshes.push(token);
-        if (!opts.rotate) {
-          const who = token.replace(/^rt-/, "");
-          return { accessToken: `at-${who}-r1`, refreshToken: token, expiresAt: now + 3_600_000 };
-        }
-        // Rotating refresh tokens: each is good once; using one again is refused (as a reuse would be).
-        await new Promise((r) => setTimeout(r, 5));
-        if (spent.has(token)) throw new GrantRefusedError("refresh token reused");
-        spent.add(token);
-        const [, who = "", n = "0"] = /^rt-(.+?)(?:~(\d+))?$/.exec(token) ?? [];
-        const next = Number(n) + 1;
-        return {
-          accessToken: `at-${who}-r${String(next)}`,
-          refreshToken: `rt-${who}~${String(next)}`,
-          expiresAt: now + 3_600_000,
-        };
-      },
+  const store = new WebmailSessionStore(
+    memoryKv(() => now),
+    createKeyRing([{ id: "k1", key: randomBytes(32) }]),
+    {
+      now: () => now,
     },
-    handoffSignIn: async ({ address }) => {
-      minted.push(address);
-      return { accessToken: `at-${address}`, refreshToken: `rt-${address}`, expiresAt: now + 3_600_000 };
-    },
-    delegation: {
-      list: (owners) => delegatedMailboxesFor(deps, owners),
-      open: (input, signIn, r) => openDelegatedMailbox(deps, access, input, signIn, r),
-      gate: new DelegationGate(delegationCheck(deps, access), { ttlMs: 0, now: () => now }),
-      authorizeSend: (input, r) => {
-        if (revokeBeforeAuthorize) revoke("send_as");
-        return authorizeDelegatedSend(deps, access, input, r);
+  );
+  // One instance per route module under `next dev`: `another()` makes a second one over the same session store.
+  const make = () =>
+    new WebmailService({
+      store,
+      oauth: {
+        signIn: async (name, secret): Promise<OAuthTokens> => {
+          if (secret !== "right") throw new GrantRefusedError("no");
+          return { accessToken: `at-${name}`, refreshToken: `rt-${name}`, expiresAt: now + 3_600_000 };
+        },
+        refresh: async (token) => {
+          refreshes.push(token);
+          if (!opts.rotate) {
+            const who = token.replace(/^rt-/, "");
+            return { accessToken: `at-${who}-r1`, refreshToken: token, expiresAt: now + 3_600_000 };
+          }
+          // Rotating refresh tokens: each is good once; using one again is refused (as a reuse would be).
+          await new Promise((r) => setTimeout(r, 5));
+          if (spent.has(token)) throw new GrantRefusedError("refresh token reused");
+          spent.add(token);
+          const [, who = "", n = "0"] = /^rt-(.+?)(?:~(\d+))?$/.exec(token) ?? [];
+          const next = Number(n) + 1;
+          return {
+            accessToken: `at-${who}-r${String(next)}`,
+            refreshToken: `rt-${who}~${String(next)}`,
+            expiresAt: now + 3_600_000,
+          };
+        },
       },
-      checkSend: (input) => delegatedSendCheck(deps, access, input),
-      sendOutcome: async (input, outcome, r) => {
-        if (outcomeFails > 0) {
-          outcomeFails -= 1;
-          throw new Error("audit store down");
-        }
-        await recordDelegatedSendOutcome(deps, input, outcome, r);
+      handoffSignIn: async ({ address }) => {
+        minted.push(address);
+        return { accessToken: `at-${address}`, refreshToken: `rt-${address}`, expiresAt: now + 3_600_000 };
       },
-    },
-    ...(opts.key === null ? {} : { onBehalfKey: () => opts.key ?? KEY }),
-    consoleSessionAlive: async () => true,
-    stalwartUrl: "http://stalwart:8080",
-    access,
-    quota,
-    sieve: { read: async () => null, write: async () => true },
-    confirmedForward: async () => null,
-    fetch: server.fetchImpl,
-    now: () => now,
-    sleep: async () => undefined,
-    defer: (fn) => {
-      deferred.push(fn);
-    },
-  });
+      delegation: {
+        list: (owners) => delegatedMailboxesFor(deps, owners),
+        open: (input, signIn, r) => openDelegatedMailbox(deps, access, input, signIn, r),
+        gate: new DelegationGate(delegationCheck(deps, access), { ttlMs: 0, now: () => now }),
+        authorizeSend: (input, r) => {
+          if (revokeBeforeAuthorize) revoke("send_as");
+          return authorizeDelegatedSend(deps, access, input, r);
+        },
+        checkSend: (input) => delegatedSendCheck(deps, access, input),
+        sendOutcome: async (input, outcome, r) => {
+          if (outcomeFails > 0) {
+            outcomeFails -= 1;
+            throw new Error("audit store down");
+          }
+          await recordDelegatedSendOutcome(deps, input, outcome, r);
+        },
+      },
+      ...(opts.key === null ? {} : { onBehalfKey: () => opts.key ?? KEY }),
+      consoleSessionAlive: async () => true,
+      stalwartUrl: "http://stalwart:8080",
+      access,
+      quota,
+      sieve: { read: async () => null, write: async () => true },
+      confirmedForward: async () => null,
+      fetch: server.fetchImpl,
+      now: () => now,
+      sleep: async () => undefined,
+      defer: (fn) => {
+        deferred.push(fn);
+      },
+    });
+  const svc = make();
   /** Kim's own draft, as the BFF saves it. */
   const draft = async (sessionId: string, extra: Record<string, unknown> = {}) =>
     (
@@ -439,6 +443,8 @@ function setup(opts: { key?: string | null; rotate?: boolean } = {}) {
     ).id;
   return {
     svc,
+    another: make,
+    store,
     s,
     server,
     refreshes,
@@ -731,12 +737,16 @@ describe("sending from a mailbox shared with the person (ADR-0026 §6, §8; slic
     t.grant(DESK, "send_on_behalf");
     const { sessionId } = await t.svc.signIn("kim@family.test", "right");
     const draftId = await t.draft(sessionId);
-    const { submissionId } = await t.svc.send(sessionId, draftId, KIM_ID, "acc-kim@family.test", {
+    const { submissionId, reportTicket } = await t.svc.send(sessionId, draftId, KIM_ID, "acc-kim@family.test", {
       from: "desk@family.test",
       req,
     });
     expect(
-      await t.svc.undoSend(sessionId, submissionId, "acc-kim@family.test", { mailbox: "desk@family.test", req }),
+      await t.svc.undoSend(sessionId, submissionId, "acc-kim@family.test", {
+        mailbox: "desk@family.test",
+        ticket: reportTicket ?? "",
+        req,
+      }),
     ).toEqual({ draftId });
     const desk = t.server.box("desk@family.test");
     expect(desk.submissions[0]?.undoStatus).toBe("canceled");
@@ -750,7 +760,11 @@ describe("sending from a mailbox shared with the person (ADR-0026 §6, §8; slic
     await new Promise((r) => setTimeout(r, 0));
     expect(t.server.box("kim@family.test").emails.has(draftId)).toBe(true);
     await expect(
-      t.svc.undoSend(sessionId, submissionId, "acc-kim@family.test", { mailbox: "desk@family.test", req }),
+      t.svc.undoSend(sessionId, submissionId, "acc-kim@family.test", {
+        mailbox: "desk@family.test",
+        ticket: reportTicket ?? "",
+        req,
+      }),
     ).rejects.toBeInstanceOf(WebmailRefusedError);
   });
 
@@ -852,7 +866,12 @@ describe("sending from a mailbox shared with the person (ADR-0026 §6, §8; slic
     // Undo from the same tab, pinned the same way.
     const undone = await withPinnedMailbox(
       "kim@family.test",
-      () => t.svc.undoSend(sessionId, out.submissionId, "acc-kim@family.test", { mailbox: "desk@family.test", req }),
+      () =>
+        t.svc.undoSend(sessionId, out.submissionId, "acc-kim@family.test", {
+          mailbox: "desk@family.test",
+          ticket: out.reportTicket ?? "",
+          req,
+        }),
       "own",
     );
     expect(t.server.box("kim@family.test").emails.has(undone.draftId)).toBe(true);
@@ -1040,7 +1059,11 @@ describe("sending from a mailbox shared with the person (ADR-0026 §6, §8; slic
     // The hold was registered: undo works and hands the own draft back.
     t.server.refuseDestroys(false);
     expect(
-      await t.svc.undoSend(sessionId, out.submissionId, "acc-kim@family.test", { mailbox: "desk@family.test", req }),
+      await t.svc.undoSend(sessionId, out.submissionId, "acc-kim@family.test", {
+        mailbox: "desk@family.test",
+        ticket: out.reportTicket ?? "",
+        req,
+      }),
     ).toEqual({ draftId });
   });
 
@@ -1063,13 +1086,17 @@ describe("sending from a mailbox shared with the person (ADR-0026 §6, §8; slic
     t.grant(DESK, "send_as");
     const { sessionId } = await t.svc.signIn("kim@family.test", "right");
     const draftId = await t.draft(sessionId);
-    const { submissionId } = await t.svc.send(sessionId, draftId, KIM_ID, "acc-kim@family.test", {
+    const { submissionId, reportTicket } = await t.svc.send(sessionId, draftId, KIM_ID, "acc-kim@family.test", {
       from: "desk@family.test",
       req,
     });
     await t.svc.dropDelegated(sessionId, new Set(["desk@family.test"]));
     await expect(
-      t.svc.undoSend(sessionId, submissionId, "acc-kim@family.test", { mailbox: "desk@family.test", req }),
+      t.svc.undoSend(sessionId, submissionId, "acc-kim@family.test", {
+        mailbox: "desk@family.test",
+        ticket: reportTicket ?? "",
+        req,
+      }),
     ).rejects.toThrow(/already been sent/);
     expect(t.minted).toEqual(["desk@family.test"]);
     expect(t.server.box("desk@family.test").submissions[0]?.undoStatus).toBe("pending");
@@ -1080,13 +1107,17 @@ describe("sending from a mailbox shared with the person (ADR-0026 §6, §8; slic
     t.grant(DESK, "send_as");
     const { sessionId } = await t.svc.signIn("kim@family.test", "right");
     const draftId = await t.draft(sessionId);
-    const { submissionId } = await t.svc.send(sessionId, draftId, KIM_ID, "acc-kim@family.test", {
+    const { submissionId, reportTicket } = await t.svc.send(sessionId, draftId, KIM_ID, "acc-kim@family.test", {
       from: "desk@family.test",
       req,
     });
     t.revoke("send_as");
     expect(
-      await t.svc.undoSend(sessionId, submissionId, "acc-kim@family.test", { mailbox: "desk@family.test", req }),
+      await t.svc.undoSend(sessionId, submissionId, "acc-kim@family.test", {
+        mailbox: "desk@family.test",
+        ticket: reportTicket ?? "",
+        req,
+      }),
     ).toEqual({ draftId });
     expect(t.server.box("desk@family.test").submissions[0]?.undoStatus).toBe("canceled");
   });
@@ -1098,16 +1129,159 @@ describe("sending from a mailbox shared with the person (ADR-0026 §6, §8; slic
     const d1 = await t.draft(sessionId);
     const s1 = await t.svc.send(sessionId, d1, KIM_ID, "acc-kim@family.test", { from: "desk@family.test", req });
     t.failOutcomes(1);
-    await t.svc.undoSend(sessionId, s1.submissionId, "acc-kim@family.test", { mailbox: "desk@family.test", req });
+    await t.svc.undoSend(sessionId, s1.submissionId, "acc-kim@family.test", {
+      mailbox: "desk@family.test",
+      ticket: s1.reportTicket ?? "",
+      req,
+    });
     expect(t.outcomes("delegation.send_cancelled")).toHaveLength(1);
     const d2 = await t.draft(sessionId);
     const s2 = await t.svc.send(sessionId, d2, KIM_ID, "acc-kim@family.test", { from: "desk@family.test", req });
     t.failOutcomes(2);
     await expect(
-      t.svc.undoSend(sessionId, s2.submissionId, "acc-kim@family.test", { mailbox: "desk@family.test", req }),
+      t.svc.undoSend(sessionId, s2.submissionId, "acc-kim@family.test", {
+        mailbox: "desk@family.test",
+        ticket: s2.reportTicket ?? "",
+        req,
+      }),
     ).rejects.toBeInstanceOf(WebmailUnavailableError);
     // Cancelled all the same.
     expect(t.server.box("desk@family.test").submissions[1]?.undoStatus).toBe("canceled");
+  });
+
+  it("undoes in another service instance than the one that sent (nothing kept in process), its hold end keeps the draft", async () => {
+    const t = setup();
+    t.grant(DESK, "send_as");
+    const { sessionId } = await t.svc.signIn("kim@family.test", "right");
+    const draftId = await t.draft(sessionId);
+    const out = await t.svc.send(sessionId, draftId, KIM_ID, "acc-kim@family.test", { from: "desk@family.test", req });
+    const desk = t.server.box("desk@family.test");
+    expect(desk.emails.size).toBe(1);
+    expect(
+      await t.another().undoSend(sessionId, out.submissionId, "acc-kim@family.test", {
+        mailbox: "desk@family.test",
+        ticket: out.reportTicket ?? "",
+        req,
+      }),
+    ).toEqual({ draftId });
+    expect(desk.submissions[0]?.undoStatus).toBe("canceled");
+    expect(desk.emails.size).toBe(0);
+    expect(t.outcomes("delegation.send_cancelled")).toHaveLength(1);
+    // The sending instance's end of the hold asks the mail server, sees it undone, and leaves the draft alone.
+    for (const fn of t.deferred) fn();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(t.server.box("kim@family.test").emails.has(draftId)).toBe(true);
+  });
+
+  it("refuses an undo with 404 for a forged, altered, another session's, another submission's or a stale ticket", async () => {
+    const t = setup();
+    t.grant(DESK, "send_as");
+    t.grant(DESK, "full_access");
+    const { sessionId } = await t.svc.signIn("kim@family.test", "right");
+    const out = await t.svc.send(sessionId, await t.draft(sessionId), KIM_ID, "acc-kim@family.test", {
+      from: "desk@family.test",
+      req,
+    });
+    const other = await t.svc.send(sessionId, await t.draft(sessionId), KIM_ID, "acc-kim@family.test", {
+      from: "desk@family.test",
+      req,
+    });
+    const ticket = out.reportTicket ?? "";
+    // Sealed for this session and naming this send, but without what undo needs (the report's older shape).
+    const bare = t.store.sealSendTicket(
+      sessionId,
+      JSON.stringify({
+        m: "desk@family.test",
+        s: out.submissionId,
+        id: DESK,
+        v: "kim@family.test",
+        a: "acc-kim@family.test",
+        u: Date.parse("2030-01-01T00:00:00Z"),
+      }),
+    );
+    const lee = await t.svc.signIn("lee@family.test", "right");
+    const tries: [string, string, string, string][] = [
+      [sessionId, out.submissionId, "desk@family.test", ""],
+      [sessionId, out.submissionId, "desk@family.test", "not-a-ticket"],
+      [sessionId, out.submissionId, "desk@family.test", `${ticket.slice(0, -2)}AA`],
+      [sessionId, out.submissionId, "desk@family.test", other.reportTicket ?? ""],
+      [sessionId, other.submissionId, "desk@family.test", ticket],
+      [sessionId, out.submissionId, "team@family.test", ticket],
+      [lee.sessionId, out.submissionId, "desk@family.test", ticket],
+      [sessionId, out.submissionId, "desk@family.test", bare],
+    ];
+    for (const [sid, submission, mailbox, tk] of tries) {
+      const account = sid === sessionId ? "acc-kim@family.test" : "acc-lee@family.test";
+      await expect(t.svc.undoSend(sid, submission, account, { mailbox, ticket: tk, req })).rejects.toBeInstanceOf(
+        WebmailNotFoundError,
+      );
+    }
+    // Not from the tab of another of the session's mailboxes either (the tab's mailbox changed: refused first).
+    await expect(
+      t.svc.undoSend(sessionId, out.submissionId, "acc-other@family.test", {
+        mailbox: "desk@family.test",
+        ticket,
+        req,
+      }),
+    ).rejects.toThrow(/active mailbox changed/);
+    // Stale: a few minutes later the ticket no longer opens.
+    t.advance(10 * 60_000);
+    await expect(
+      t.svc.undoSend(sessionId, out.submissionId, "acc-kim@family.test", { mailbox: "desk@family.test", ticket, req }),
+    ).rejects.toBeInstanceOf(WebmailNotFoundError);
+    // Nothing was cancelled or audited by any of them.
+    expect(t.server.box("desk@family.test").submissions.map((x) => x.undoStatus)).toEqual(["pending", "pending"]);
+    expect(t.outcomes("delegation.send_cancelled")).toEqual([]);
+  });
+
+  it("answers 'already sent' when the hold is over, and the hold's end then removes the own draft", async () => {
+    const t = setup();
+    t.grant(DESK, "send_as");
+    const { sessionId } = await t.svc.signIn("kim@family.test", "right");
+    const draftId = await t.draft(sessionId);
+    const out = await t.svc.send(sessionId, draftId, KIM_ID, "acc-kim@family.test", { from: "desk@family.test", req });
+    const [sub] = t.server.box("desk@family.test").submissions;
+    if (sub) sub.undoStatus = "final";
+    await expect(
+      t.svc.undoSend(sessionId, out.submissionId, "acc-kim@family.test", {
+        mailbox: "desk@family.test",
+        ticket: out.reportTicket ?? "",
+        req,
+      }),
+    ).rejects.toThrow(/already been sent/);
+    expect(t.outcomes("delegation.send_cancelled")).toEqual([]);
+    expect(t.server.box("desk@family.test").emails.size).toBe(1);
+    for (const fn of t.deferred) fn();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(t.server.box("kim@family.test").emails.has(draftId)).toBe(false);
+  });
+
+  it("keeps the own draft at the hold's end when it can't tell whether the send was undone (entry gone)", async () => {
+    const t = setup();
+    t.grant(DESK, "send_as");
+    const { sessionId } = await t.svc.signIn("kim@family.test", "right");
+    const draftId = await t.draft(sessionId);
+    await t.svc.send(sessionId, draftId, KIM_ID, "acc-kim@family.test", { from: "desk@family.test", req });
+    await t.svc.dropDelegated(sessionId, new Set(["desk@family.test"]));
+    for (const fn of t.deferred) fn();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(t.server.box("kim@family.test").emails.has(draftId)).toBe(true);
+  });
+
+  it("stops a delegated send's report reads at once when the send right is revoked (the gate, not only the ticket)", async () => {
+    const t = setup();
+    t.grant(DESK, "send_as");
+    const { sessionId } = await t.svc.signIn("kim@family.test", "right");
+    const draftId = await t.draft(sessionId, { to: [{ email: "nobody-1@family.test" }, { email: "ann@example.org" }] });
+    const out = await t.svc.send(sessionId, draftId, KIM_ID, "acc-kim@family.test", { from: "desk@family.test", req });
+    const shared = { mailbox: "desk@family.test", ticket: out.reportTicket ?? "" };
+    await expect(
+      t.svc.deliveryReportOf(sessionId, out.submissionId, "acc-kim@family.test", shared),
+    ).resolves.toMatchObject({ settled: true });
+    t.revoke("send_as");
+    await expect(
+      t.svc.deliveryReportOf(sessionId, out.submissionId, "acc-kim@family.test", shared),
+    ).rejects.toBeInstanceOf(WebmailNotFoundError);
   });
 
   it("keeps the proxy from writing a Sender or the tag, so a delegate's own session can't attach one", () => {

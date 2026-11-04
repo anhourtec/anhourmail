@@ -141,38 +141,41 @@ function world(rights: DelegationRight[], hold = 1) {
     clientId: WEBMAIL_OAUTH_CLIENT_ID,
     redirectUri: webmailRedirectUri(WEBMAIL_URL),
   });
-  const svc = new WebmailService({
-    store: new WebmailSessionStore(memoryKv(), createKeyRing([{ id: "t", key: randomBytes(32) }])),
-    oauth: stalwartOAuthPort({ stalwartUrl: STALWART_URL, webmailUrl: WEBMAIL_URL }),
-    handoffSignIn: async ({ address, externalId }) => {
-      const admin = stalwartDevAdmin();
-      const made = await admin.createHandoffCredential(externalId, 60_000);
-      try {
-        return await oauth.signInWithHandoffCredential(address, made.secret, ip);
-      } finally {
-        await admin.destroyAppPassword(externalId, made.id);
-      }
-    },
-    delegation: {
-      list: (owners) => delegatedMailboxesFor(deps, owners),
-      open: (input, signIn, r) => openDelegatedMailbox(deps, access, input, signIn, r),
-      gate: new DelegationGate(delegationCheck(deps, access), { ttlMs: 0 }),
-      authorizeSend: (input, r) => authorizeDelegatedSend(deps, access, input, r),
-      checkSend: (input) => delegatedSendCheck(deps, access, input),
-      sendOutcome: (input, outcome, r) => recordDelegatedSendOutcome(deps, input, outcome, r),
-    },
-    // The key the dev plan wrote into the sender-identity script.
-    onBehalfKey: () => resolveSenderDelegationKey(process.env),
-    stalwartUrl: STALWART_URL,
-    access,
-    quota: memorySlidingQuota(),
-    sieve: { read: async () => null, write: async () => true },
-    confirmedForward: async () => null,
-    holdSeconds: async () => hold,
-    fetch: lossyFetch,
-    defer: () => undefined,
-  });
-  return { svc, s };
+  const store = new WebmailSessionStore(memoryKv(), createKeyRing([{ id: "t", key: randomBytes(32) }]));
+  // One per route module under `next dev`: `another()` is a second instance over the same session store.
+  const make = () =>
+    new WebmailService({
+      store,
+      oauth: stalwartOAuthPort({ stalwartUrl: STALWART_URL, webmailUrl: WEBMAIL_URL }),
+      handoffSignIn: async ({ address, externalId }) => {
+        const admin = stalwartDevAdmin();
+        const made = await admin.createHandoffCredential(externalId, 60_000);
+        try {
+          return await oauth.signInWithHandoffCredential(address, made.secret, ip);
+        } finally {
+          await admin.destroyAppPassword(externalId, made.id);
+        }
+      },
+      delegation: {
+        list: (owners) => delegatedMailboxesFor(deps, owners),
+        open: (input, signIn, r) => openDelegatedMailbox(deps, access, input, signIn, r),
+        gate: new DelegationGate(delegationCheck(deps, access), { ttlMs: 0 }),
+        authorizeSend: (input, r) => authorizeDelegatedSend(deps, access, input, r),
+        checkSend: (input) => delegatedSendCheck(deps, access, input),
+        sendOutcome: (input, outcome, r) => recordDelegatedSendOutcome(deps, input, outcome, r),
+      },
+      // The key the dev plan wrote into the sender-identity script.
+      onBehalfKey: () => resolveSenderDelegationKey(process.env),
+      stalwartUrl: STALWART_URL,
+      access,
+      quota: memorySlidingQuota(),
+      sieve: { read: async () => null, write: async () => true },
+      confirmedForward: async () => null,
+      holdSeconds: async () => hold,
+      fetch: lossyFetch,
+      defer: () => undefined,
+    });
+  return { svc: make(), another: make, s };
 }
 
 /** Signs Kim in and saves a draft to `to` in her own mailbox; returns what `send` needs. */
@@ -309,16 +312,19 @@ describe("sending from a shared mailbox in the webmail on the dev Stalwart", () 
     expect(after.undelivered).toEqual([refused]);
   }, 90_000);
 
-  it("undoes a send on behalf in its hold: nothing delivered, no copy left, the own draft handed back", async () => {
+  it("undoes a send on behalf in its hold from another service instance: nothing delivered, own draft back", async () => {
     const t = world(["send_on_behalf"], 8);
     const to = fresh("undo");
     const subject = `int dsend undo ${tag}`;
     const d = await kimDraft(t.svc, to, subject);
-    const { submissionId } = await asClient(() =>
+    const { submissionId, reportTicket } = await asClient(() =>
       t.svc.send(d.sessionId, d.draftId, d.identityId, d.account, { from: deskAddress, req }),
     );
+    // Answered by another instance (another route module or process): nothing it needs was kept in the first.
     const back = await asClient(() =>
-      t.svc.undoSend(d.sessionId, submissionId, d.account, { mailbox: deskAddress, req }),
+      t
+        .another()
+        .undoSend(d.sessionId, submissionId, d.account, { mailbox: deskAddress, ticket: reportTicket ?? "", req }),
     );
     expect(back).toEqual({ draftId: d.draftId });
     await sleep(12_000);
