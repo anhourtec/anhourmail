@@ -606,3 +606,56 @@ read-only); the RBAC harness and the e2e role journeys add the new routes (rule 
     `audit.md`, `rate-limits.md`, `01-architecture.md`, `codemap.md`, `06` lifecycle section pointing here.
 14. **Live verification** — `tests/billing-live` test-clock suite run locally with test keys, results in the handoff;
     full e2e lifecycle on the fake; `security-reviewer` pass (rule 27: sending restriction and signup codes).
+
+## Update (2026-11-04): slices 1–4 built
+
+Facts and pure lifecycle (`plans.ts`; `packages/core/src/billing/`), the `BillingProvider` port with the fake (memory
+and Redis stores) and the shared signature code, the processor adapter over `fetch` with env checks, and the four
+tables with memory and Postgres repositories (migrations 0033–0036) are built and tested. No webhook route, sync job,
+mail-server effect or console yet (slices 5+). Choices made while building, within this decision:
+
+- **Maintainer defaults recorded as placeholders:** Supporter maximum 100 × the minimum, `MAX_STORAGE_BLOCKS` 10,
+  `MAX_EXTRA_MAILBOXES` 40; a dispute restricts sending at once; holds are kept indefinitely; invite codes are
+  staff-only; Plus ↔ Supporter changes features at once and the price at renewal.
+- **API version pinned:** `STRIPE_API_VERSION = "2026-10-28.endive"` (current on the processor's upgrades page on
+  2026-11-04). The adapter reads the period from the subscription items, the paid time from
+  `status_transitions.paid_at`, and refunds and disputes through the invoice's payments; the live suite (slice 14) must
+  confirm these shapes and `invoices/create_preview` with `always_invoice` before launch.
+- **One error code added:** `multiple_subscriptions` (two live subscriptions for one customer; §4 already says the sync
+  refuses them).
+- **Disputes lift only when won (§5), and are sticky:** once open, the restriction stays until the dispute closes as
+  `won` (or an inquiry closes as `warning_closed`, no money moved) or staff clear it, even when the latest invoice moves
+  on (the processor only reports disputes on the latest invoice's payment). Events store no payload, so the sync reads
+  each closed dispute's outcome with the new port method `getDispute` and passes it to `deriveBilling`
+  (`PendingBillingEvent.disputeOutcome`). **A lost dispute keeps the account `restricted`** (the payer got the money
+  back): no timeout lapses it (`restrictedTimedOut` excludes disputes); it ends only by a staff clear (after the account
+  pays, or staff decide) or when the subscription ends, which lapses the account like any other end. A close whose
+  outcome can't be read counts as not won. `ProviderSubscription` gains `disputeLost` so a lost dispute on the latest
+  payment restricts even without its event. Dispute statuses we don't know count as open.
+- **Dispute events carry no customer** (the processor's dispute object names its charge and payment intent).
+  `ProviderEvent` gains `paymentIntentId` and `chargeId`, and the port gains `getDispute(id)` → outcome, customer (via
+  the payment intent, else the charge) and payment intent. The fake now emits disputes in that shape (no customer, no
+  metadata), so it can't hide the gap. How slice 5 resolves them, failing safe: the webhook makes no provider call; a
+  dispute event without a customer is recorded as an `orphan` (never dropped, never pruned). The worker's sync and the
+  nightly `billing.reconcile` resolve dispute orphans with `getDispute`; when the customer maps to an account, the event
+  is attached and queued (`BillingRepository.adoptOrphan`) and that account syncs. Unresolvable (provider down, no
+  customer, unknown customer) stays an orphan for the next attempt and is listed for staff on Platform billing. The
+  metadata hint is never enough on its own.
+- **`incomplete` counts as no subscription** (grants nothing), so `deriveBilling` needs no special case for it.
+- **One change, one direction:** `changeProration` refuses to mix an increase with a decrease or a plan or amount
+  change, so a credit never silently offsets a charge.
+- **Invite codes are 160-bit** (20 random bytes = 32 Crockford characters in 8 groups of 4), above the 128-bit floor;
+  look-alikes I/L/O are mapped on entry. The bound email is stored lower-cased with a `CHECK` (the schema uses no
+  citext).
+- **A missing `account_billing` row reads as `defaultBilling`** (Free, or a staff grant on a paid plan, the backfill
+  rule): account creation writes the row in its transaction, the backfill covers older accounts, and rows inserted
+  outside the repository (the demo seed) still read correctly.
+- **The fake's webhook secret** is derived from the dev secret (`fakeWebhookSecret(BETTER_AUTH_SECRET)`), so nothing new
+  is configured and no fixed value ships.
+- **Slice 14 checklist (live suite, test mode) adds:** at the pinned `2026-10-28.endive`, whether the dispute object
+  carries `customer` at all (we assume not and resolve through the payment); that `GET /v1/disputes/{id}` with
+  `expand[]=payment_intent&expand[]=charge` returns the customer on the payment intent; the dispute statuses seen for
+  won, lost and closed inquiries (`won`, `lost`, `warning_closed`); and the field shapes above.
+- **Signature vector:** the processor publishes the header format (`t=…,v1=…,v0=…`, parsed in the tests exactly as
+  published) but no secret/body/signature triple; the HMAC is pinned against an independent OpenSSL computation. The
+  live suite checks real deliveries.

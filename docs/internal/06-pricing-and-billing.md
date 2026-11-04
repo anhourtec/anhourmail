@@ -1,6 +1,6 @@
 # 06 — Pricing and billing
 
-Last updated: 2026-11-04 (billing designed in ADR-0029). Research: `research/market-and-legal.md` (not legal or tax advice; confirm with an accountant).
+Last updated: 2026-11-04 (billing designed in ADR-0029; slices 1–4 built: webhook event set and column name aligned with it). Research: `research/market-and-legal.md` (not legal or tax advice; confirm with an accountant).
 
 ## Plans
 
@@ -65,7 +65,7 @@ ADR wins; its lifecycle replaces the "Account lifecycle" diagram below (no data 
 - **Customer Portal** for card updates, invoices and cancellation. Plan switching to Supporter is disabled in the portal; we handle it in our own flow.
 - **Stripe Tax** is on from day one for calculation and records. Registration is tracked by us (Stripe does not warn about Canadian thresholds).
 - **Smart Retries** (8 tries over 2 weeks), renewal reminder email 7 days before renewal (CASL transactional), receipts from Stripe.
-- **Webhooks** (idempotent on `stripe_event_id`, processed by the worker): `checkout.session.completed`, `customer.subscription.created|updated|deleted`, `invoice.paid`, `invoice.payment_failed`, `invoice.upcoming`, `charge.refunded`, `charge.dispute.created`.
+- **Webhooks** (recorded once by `billing_event.provider_event_id`, triggers for the worker's sync; the handled set is ADR-0029 §4): `checkout.session.completed`, `customer.subscription.created|updated|deleted|paused|resumed`, `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`, `charge.refunded`, `charge.dispute.created|closed`, `customer.deleted`.
 - **Refunds:** automatic within 14 days of first purchase or renewal via the console (Billing Administrator or Owner). Stripe fees are not returned, which is accepted.
 - **Fees:** Stripe fees are absorbed, not surcharged. Add a USD bank account to avoid the 2% conversion on USD sales.
 - Stripe secrets go in the key ring (rule 16) and are never logged.
