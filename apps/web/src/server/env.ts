@@ -16,6 +16,7 @@ import {
   platformFacts,
   productionPlatformProblems,
 } from "@anhourmail/shared/platform";
+import { POW_BITS } from "@anhourmail/shared/proof-of-work";
 
 import { billingSettingsProblems } from "@anhourmail/adapters/billing";
 
@@ -23,6 +24,13 @@ import { stalwartSettingsProblems } from "./adapters/stalwart-settings";
 
 /** An http(s) URL: these become links and origins, so no other scheme is accepted in any mode. */
 const httpUrl = z.url({ protocol: /^https?$/ });
+
+/** A whole number in `[min, max]`, or unset (blank counts as unset). */
+const optionalInt = (min: number, max: number) =>
+  z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.coerce.number().int().min(min).max(max).optional(),
+  );
 
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -44,6 +52,16 @@ const schema = z.object({
   BETTER_AUTH_SECRET: z.string().min(32),
   // Closed unless explicitly opened (the maintainer opens it while the app is behind the IP allow-list).
   SIGNUP_MODE: z.enum(["open", "closed"]).default("closed"),
+  // Sign-up proof-of-work difficulty and sign-up limits (ADR-0031). Blank = the defaults (`POW_BITS.default`, the
+  // `signup*` tiers in rate-limit.ts).
+  SIGNUP_POW_BITS: optionalInt(POW_BITS.min, POW_BITS.max),
+  SIGNUP_LIMIT_ATTEMPTS_HOUR: optionalInt(1, 10_000),
+  SIGNUP_LIMIT_ADDRESS_HOUR: optionalInt(1, 10_000),
+  SIGNUP_LIMIT_ADDRESS_DAY: optionalInt(1, 10_000),
+  SIGNUP_LIMIT_NETWORK_HOUR: optionalInt(1, 100_000),
+  SIGNUP_LIMIT_NETWORK_DAY: optionalInt(1, 100_000),
+  SIGNUP_LIMIT_NETWORK56_DAY: optionalInt(1, 100_000),
+  SIGNUP_LIMIT_NETWORK48_DAY: optionalInt(1, 100_000),
   MAIL_TRANSPORT_URL: z.string().min(1),
   MAIL_FROM: z.string().min(3),
   TRUST_PROXY: z.enum(["true", "false"]).default("false"),
