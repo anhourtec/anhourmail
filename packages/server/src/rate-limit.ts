@@ -44,6 +44,9 @@ export const LIMITS = {
   webmailHandoff: { limit: 10, windowSec: 600, by: "caller", failMode: "closed" },
   webmailHandoffIp: { limit: 30, windowSec: 300, by: "ip", failMode: "closed" },
   webmailDownload: { limit: 120, windowSec: 60, by: "caller", failMode: "open" },
+  // The push stream (05-webmail.md "Push"): one long-lived stream per browser and mailbox, opened again after a drop
+  // or a leader-tab change. Fail open: over the cap or with Redis down the webmail polls instead.
+  webmailPush: { limit: 30, windowSec: 300, by: "caller", failMode: "open" },
   // The image proxy: each request makes an outbound fetch from our servers (a message loads at most 100 images).
   // Fail closed: without the limiter, nothing would bound what a session makes us fetch.
   webmailImage: { limit: 300, windowSec: 60, by: "caller", failMode: "closed" },
