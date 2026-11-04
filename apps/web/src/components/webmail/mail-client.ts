@@ -8,6 +8,7 @@ import type { WebmailPreferences } from "@anhourmail/shared/webmail";
 import type { BookView, ContactInput, ContactView } from "@/server/webmail/contacts";
 import type { Bootstrap, BootstrapInput } from "@/server/webmail/bootstrap";
 import type { DelegatedSender, MailboxList, SendResult } from "@/server/webmail/service";
+import type { Undelivered } from "@/server/webmail/delivery";
 import type { Junk, Vacation } from "@/server/webmail/sieve";
 import type { SenderNameView, SettingsOverview, SignatureResult } from "@/server/webmail/settings";
 import type { Address, MessageView } from "@/server/webmail/view";
@@ -852,6 +853,18 @@ export function createMailClient(
           body: JSON.stringify({ submissionId, ...(mailbox === undefined ? {} : { mailbox }) }),
         }),
       );
+    },
+    /**
+     * After the undo hold: recipients the mail server couldn't deliver to (with `shared` — the mailbox and the send's
+     * `reportTicket` — for a send from a mailbox shared with the person). Not a change: nothing to reload.
+     */
+    deliveryReport: async (submissionId: string, shared?: { mailbox: string; ticket: string }) => {
+      const headers = { [ACCOUNT]: await accountId() };
+      return bff<{ undelivered: Undelivered[]; settled: boolean }>(`${origin}/api/webmail/send/status`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ submissionId, ...(shared ?? {}) }),
+      });
     },
     upload: async (file: File) =>
       bff<Attachment & { blobId: string }>(`${origin}/api/webmail/upload`, {

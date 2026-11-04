@@ -292,6 +292,26 @@ describe("telling the app about changes", () => {
     expect(seen).toHaveBeenCalledTimes(3);
   });
 
+  it("asks for a send's delivery report pinned to the tab's mailbox, naming a shared one, as no change", async () => {
+    const report = { undelivered: [{ email: "nobody@dev.test", code: "5.1.2", reason: "No mailbox." }], settled: true };
+    const server = jmapServer(setOk, () => Response.json({ data: report }));
+    vi.stubGlobal("fetch", server.fetchFn);
+    const client = createMailClient(ORIGIN);
+    const seen = vi.fn();
+    client.onChange(seen);
+    await expect(client.deliveryReport("s1")).resolves.toEqual(report);
+    await client.deliveryReport("s2", { mailbox: "desk@dev.test", ticket: "sealed" });
+    const posts = server.fetchFn.mock.calls.filter(([u]) =>
+      (typeof u === "string" ? u : u instanceof URL ? u.href : u.url).endsWith("/api/webmail/send/status"),
+    );
+    expect(posts.map(([, init]) => init?.body)).toEqual([
+      JSON.stringify({ submissionId: "s1" }),
+      JSON.stringify({ submissionId: "s2", mailbox: "desk@dev.test", ticket: "sealed" }),
+    ]);
+    expect(new Headers(posts[0]?.[1]?.headers).get("X-Webmail-Account")).toBe("acc1");
+    expect(seen).not.toHaveBeenCalled();
+  });
+
   it("keeps the change even when a listener throws", async () => {
     vi.stubGlobal("fetch", jmapServer(setOk).fetchFn);
     const client = createMailClient(ORIGIN);
