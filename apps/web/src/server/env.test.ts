@@ -31,6 +31,9 @@ function production(overrides: Record<string, string | undefined> = {}) {
     STALWART_DEV_ADMIN_PASSWORD: undefined,
     BREACHED_PASSWORD_CHECK: undefined,
     MAIL_AUTHSERV_ID: undefined,
+    BILLING_PROVIDER: undefined,
+    STRIPE_SECRET_KEY: undefined,
+    BILLING_ALLOW_TEST_KEYS: undefined,
     ...overrides,
   };
   for (const [k, v] of Object.entries(base)) vi.stubEnv(k, v);
@@ -190,5 +193,24 @@ describe("BREACHED_PASSWORD_CHECK", () => {
     expect(() => env()).toThrow(/BREACHED_PASSWORD_CHECK/);
     production({ PLATFORM_DOMAIN: "anhourmail.com", BREACHED_PASSWORD_CHECK: "maybe" });
     expect(() => env()).toThrow();
+  });
+});
+
+describe("BILLING_PROVIDER (ADR-0029 §3)", () => {
+  it("defaults to off in production and boots", () => {
+    production({ PLATFORM_DOMAIN: "anhourmail.com" });
+    expect(() => env()).not.toThrow();
+  });
+
+  it("refuses the fake provider in production", () => {
+    production({ PLATFORM_DOMAIN: "anhourmail.com", BILLING_PROVIDER: "fake" });
+    expect(() => env()).toThrow(/BILLING_PROVIDER=fake is for development and tests only/);
+  });
+
+  it("refuses the processor without its settings, naming them and never a value", () => {
+    production({ PLATFORM_DOMAIN: "anhourmail.com", BILLING_PROVIDER: "stripe", STRIPE_SECRET_KEY: "sk_test_abc123" });
+    expect(() => env()).toThrow(/test key in production/);
+    expect(() => env()).toThrow(/Set STRIPE_WEBHOOK_SECRET/);
+    expect(() => env()).not.toThrow(/sk_test_abc123/);
   });
 });

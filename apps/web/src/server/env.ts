@@ -17,6 +17,8 @@ import {
   productionPlatformProblems,
 } from "@anhourmail/shared/platform";
 
+import { billingSettingsProblems } from "@anhourmail/adapters/billing";
+
 import { stalwartSettingsProblems } from "./adapters/stalwart-settings";
 
 /** An http(s) URL: these become links and origins, so no other scheme is accepted in any mode. */
@@ -76,6 +78,11 @@ const checked = schema.superRefine((e, ctx) => {
   // (ADR-0020 "Credential split"). Read from the raw environment: these settings aren't part of `Env`.
   for (const message of stalwartSettingsProblems({ ...process.env, NODE_ENV: e.NODE_ENV })) {
     ctx.addIssue({ code: "custom", path: ["STALWART"], message });
+  }
+  // Billing (ADR-0029 §3): BILLING_PROVIDER and the processor's settings, by name only. The fake provider is refused in
+  // production (the first of three guards). Read from the raw environment: these settings aren't part of `Env`.
+  for (const message of billingSettingsProblems({ ...process.env, NODE_ENV: e.NODE_ENV })) {
+    ctx.addIssue({ code: "custom", path: ["BILLING_PROVIDER"], message });
   }
   const delegationKey = (e.SENDER_DELEGATION_KEY ?? "").trim();
   if (delegationKey !== "" && !isSenderDelegationKey(delegationKey)) {
