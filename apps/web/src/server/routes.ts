@@ -1051,6 +1051,19 @@ export const ROUTES: readonly RouteSpec[] = [
     file: "app/api/webmail/settings/junk/route.ts",
     guard: "webmail",
   },
+  // Mail rules (ADR-0032 §2): the session's own mailbox only, compiled into the managed script.
+  {
+    method: "GET",
+    path: "/api/webmail/settings/rules",
+    file: "app/api/webmail/settings/rules/route.ts",
+    guard: "webmail",
+  },
+  {
+    method: "PUT",
+    path: "/api/webmail/settings/rules",
+    file: "app/api/webmail/settings/rules/route.ts",
+    guard: "webmail",
+  },
   // "Always for <sender>" / "Stop loading" from a message: Safe senders (ADR-0027 §4), own mailbox only.
   {
     method: "POST",

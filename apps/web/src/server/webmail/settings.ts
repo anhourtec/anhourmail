@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { randomUUID } from "node:crypto";
+
 import { z } from "zod";
 
 import { NotFoundError, type RequestMeta } from "@anhourmail/core";
@@ -11,6 +13,7 @@ import {
   type WebmailSettingsService,
   type WebmailSignaturesService,
 } from "@anhourmail/core/webmail";
+import { MAIL_RULES, type MailRule, MailRuleList } from "@anhourmail/shared/mail-rules";
 import { fromAddress, matchSafeSender, MAX_SENDER_ENTRIES, type SafeSenderMatch } from "@anhourmail/shared/senders";
 import { SIGNATURE_HTML_MAX, type SignatureSet } from "@anhourmail/shared/signatures";
 import type { WebmailPreferences } from "@anhourmail/shared/webmail";
@@ -47,6 +50,7 @@ type MailServer = Pick<
   | "refreshIdentities"
   | "legacySignature"
   | "mirrorSignature"
+  | "folderPaths"
 >;
 type Mailer = { send(message: ReturnType<typeof forwardingConfirmEmail>): Promise<void> };
 
@@ -133,6 +137,45 @@ export const SignatureDefaultsInput = z.object({ newMessage: sigId, reply: sigId
 export type SignatureResult = SignatureSet & { mirrored: boolean; shortened: boolean };
 
 export const VacationChange = z.object({ vacation: VacationInput, timeZone: z.string().max(64) });
+
+/** `PUT /api/webmail/settings/rules`: the whole ordered list, against the version it was read at (ADR-0032 §2). */
+export const RulesChange = z
+  .object({
+    rules: z.array(z.record(z.string(), z.unknown())).max(MAIL_RULES.maxRules),
+    version: z.string().max(512).nullable(),
+  })
+  .strict();
+
+/** Mail rules as Settings shows them: the list, the version to save against, folders and the forwarding target. */
+export type RulesView = {
+  rules: MailRule[];
+  /** The rules version read (null: no rules script yet). Saving answers 409 if it changed meanwhile. */
+  version: string | null;
+  /** The mailbox's folders with their current paths (a rule whose folder moved shows a warning). */
+  folders: { id: string; path: string }[];
+  /** The confirmed forwarding address a rule's "forward" sends to, or null (rules can't forward then). */
+  forwardTo: string | null;
+  rulesState: RulesState;
+};
+
+/** The mail server's namespace for folders other accounts share (Stalwart's default name). */
+export const SHARED_FOLDERS_PREFIX = "Shared Folders";
+
+/**
+ * Whether a rule's folder path is one of the person's own folders: not under the shared-folders namespace, and every
+ * level of it ("A", "A/B", "A/B/C") is itself one of their folders, so a "/" inside a folder name can't make the
+ * path name another folder.
+ */
+export function ownFolderPath(path: string, own: ReadonlySet<string>): boolean {
+  const parts = path.split("/");
+  const first = parts[0] ?? "";
+  if (first.trim().toLowerCase() === SHARED_FOLDERS_PREFIX.toLowerCase() || parts.some((p) => p === "")) return false;
+  return parts.every((_, i) => own.has(parts.slice(0, i + 1).join("/")));
+}
+
+export const RULES_CHANGED = "Your rules changed in another window. Reload them and try again.";
+export const RULE_FORWARD_UNCONFIRMED =
+  "A rule can forward only to your confirmed forwarding address. Set one up in Forwarding first.";
 
 export class WebmailSettings {
   constructor(
@@ -379,6 +422,117 @@ export class WebmailSettings {
     return junk;
   }
 
+  // ---- mail rules (ADR-0032 §2) ------------------------------------------------------------------------------
+
+  /**
+   * Where a rule's forward would go: the confirmed forwarding address, or null without one or while the mailbox's trust
+   * tier is `restricted` (the same check as Forwarding; a billing send-block keeps forwarding on, ADR-0029 SA60-03).
+   */
+  async #forwardTo(address: string): Promise<string | null> {
+    if (sendingTier(address) === "restricted") return null;
+    const f = await this.d.settings.forwarding(address);
+    return f?.status === "confirmed" ? f.address : null;
+  }
+
+  async rules(sessionId: string): Promise<RulesView> {
+    const s = ownMailbox(await this.d.mail.session(sessionId));
+    const [current, paths, forwardTo] = await Promise.all([
+      this.d.mail.mailRules(sessionId),
+      this.d.mail.folderPaths(sessionId, s.accountId),
+      this.#forwardTo(s.username),
+    ]);
+    return {
+      rules: current.rules.filters,
+      version: current.version ?? null,
+      folders: [...paths].map(([id, path]) => ({ id, path })).sort((a, b) => a.path.localeCompare(b.path)),
+      forwardTo,
+      rulesState: current.state,
+    };
+  }
+
+  /**
+   * Saves the whole ordered list of rules (ADR-0032 §2) against the version the browser read: a change made meanwhile
+   * answers 409 rather than being lost. New rules get ids here; each move's folder path is resolved now from its id
+   * with the session's token; a forward needs the confirmed forwarding address (the rule holds no address). Audited
+   * `sieve.changed` with counts only — never a name, a value or a folder (rule 48).
+   */
+  async saveRules(
+    sessionId: string,
+    account: string,
+    input: z.infer<typeof RulesChange>,
+    req: RequestMeta,
+  ): Promise<RulesView> {
+    const { address } = await this.#pinned(sessionId, account);
+    const seen = new Set<string>();
+    const withIds = input.rules.map((r) => {
+      const id = typeof r.id === "string" && !seen.has(r.id) ? r.id : randomUUID();
+      seen.add(id);
+      return { ...r, id };
+    });
+    // Never `parse`: its error would carry a value into the logs (rule 24). Our messages name no value.
+    const parsed = MailRuleList.safeParse(withIds);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      throw new WebmailRefusedError(
+        issue?.code === "custom" || issue?.code === "too_small" ? issue.message : "One of these rules can't be saved.",
+      );
+    }
+    const paths = await this.d.mail.folderPaths(sessionId, account);
+    const own = new Set(paths.values());
+    const filters: MailRule[] = [];
+    for (const rule of parsed.data) {
+      const move = rule.actions.move;
+      if (move?.kind === "folder") {
+        const path = paths.get(move.folderId);
+        if (path === undefined) {
+          throw new WebmailRefusedError("A rule moves mail to a folder that no longer exists. Choose another folder.");
+        }
+        // Only a path made of the person's own folders, level by level, and never one under the mail server's shared
+        // folders prefix (security review run-63, SA-63-02): a folder name with "/" in it can't point elsewhere.
+        if (!ownFolderPath(path, own)) {
+          throw new WebmailRefusedError("A rule can only move mail to one of your own folders. Choose another folder.");
+        }
+        filters.push({ ...rule, actions: { ...rule.actions, move: { ...move, path } } });
+      } else filters.push(rule);
+    }
+    const forwarding = filters.filter((f) => f.enabled && f.actions.forward).length;
+    if (forwarding > 0) {
+      if (sendingTier(address) === "restricted") {
+        throw new WebmailRefusedError("Forwarding is paused while sending from this mailbox is paused.");
+      }
+      if ((await this.#forwardTo(address)) === null) throw new WebmailRefusedError(RULE_FORWARD_UNCONFIRMED);
+    }
+    const { rules, at } = await this.#rulesAt(sessionId);
+    const now = at.ifInState === undefined ? undefined : at.ifInState;
+    if (now !== undefined && now !== input.version) throw new WebmailConflictError(RULES_CHANGED);
+    try {
+      await this.d.mail.saveMailRules(sessionId, account, { ...rules, filters }, at);
+    } catch (err) {
+      if (err instanceof WebmailConflictError) throw new WebmailConflictError(RULES_CHANGED);
+      throw err;
+    }
+    try {
+      await this.d.settings.recordMailFlow(
+        address,
+        "sieve.changed",
+        {
+          rules: filters.length,
+          enabled: filters.filter((f) => f.enabled).length,
+          forwarding,
+          moving: filters.filter((f) => f.enabled && f.actions.move !== null).length,
+        },
+        req,
+      );
+    } catch (err) {
+      // Written on the mail server first (outside our transaction), audited right after, as junk rules are.
+      log.error("mail rules change not audited", {
+        component: "webmail",
+        error: err instanceof Error ? err.name : "unknown",
+      });
+    }
+    return this.rules(sessionId);
+  }
+
   /** `junk_rules.changed`, counts and kinds only — never an address or a domain (rule 48). */
   async #auditJunk(address: string, junk: Junk, extra: Record<string, string>, req: RequestMeta): Promise<void> {
     const meta = { ...extra, blocked: junk.blocked.length, safe: junk.safe.length, trustedOnly: junk.trustedOnly };
@@ -496,17 +650,37 @@ export class WebmailSettings {
   ): Promise<{ target: string; emailed: boolean }> {
     const { address } = await this.#pinned(sessionId, account);
     const identities = await this.d.mail.identities(sessionId);
-    const rules = await this.#rules(sessionId);
     const out = await this.d.settings.requestForwarding(
       address,
       { target, ownAddresses: identities.map((i) => i.email), tier: sendingTier(address) },
       req,
     );
-    if (rules.forwarding.enabled && rules.forwarding.address !== out.target) {
-      await this.d.mail.saveMailRules(sessionId, account, {
-        ...rules,
-        forwarding: { ...rules.forwarding, enabled: false, address: null },
-      });
+    // The old target is no longer confirmed: rewrite the script whenever it has a redirect (Forwarding, or a rule that
+    // forwards, ADR-0032 §2), from a read taken now and written on that read's version, so a rules save racing this
+    // request can't leave a redirect to the old target behind (security review run-63, SA-63-03). On a conflict the
+    // rewrite runs once more on what is there then.
+    for (let attempt = 0; ; attempt++) {
+      const { rules, at } = await this.#rulesAt(sessionId);
+      const ruleForwards = rules.filters.some((f) => f.enabled && f.actions.forward);
+      if (!rules.forwarding.enabled && rules.forwarding.address === null && !ruleForwards) break;
+      try {
+        await this.d.mail.saveMailRules(
+          sessionId,
+          account,
+          {
+            ...rules,
+            forwarding:
+              rules.forwarding.address !== out.target
+                ? { ...rules.forwarding, enabled: false, address: null }
+                : rules.forwarding,
+          },
+          at,
+        );
+        break;
+      } catch (err) {
+        if (err instanceof WebmailConflictError && attempt === 0) continue;
+        throw err;
+      }
     }
     let emailed = true;
     try {
@@ -559,12 +733,31 @@ export class WebmailSettings {
   async removeForwarding(sessionId: string, account: string, req: RequestMeta): Promise<void> {
     const { address } = await this.#pinned(sessionId, account);
     const rules = await this.#rules(sessionId);
-    if (rules.forwarding.enabled || rules.forwarding.address !== null) {
-      await this.d.mail.saveMailRules(sessionId, account, {
-        ...rules,
-        forwarding: { enabled: false, address: null, keepCopy: true },
-      });
+    const ruleForwards = rules.filters.some((f) => f.enabled && f.actions.forward);
+    if (rules.forwarding.enabled || rules.forwarding.address !== null || ruleForwards) {
+      // No redirect to the target being removed, from Forwarding or from a rule (ADR-0032 §2).
+      await this.d.mail.saveMailRules(
+        sessionId,
+        account,
+        { ...rules, forwarding: { enabled: false, address: null, keepCopy: true } },
+        { dropForwardTarget: true },
+      );
     }
     await this.d.settings.removeForwarding(address, req);
+    if (rules.forwarding.enabled || rules.forwarding.address !== null || ruleForwards) {
+      // Once more now that the target is gone, on a fresh read: a rules save that started before the removal and wrote
+      // after the rewrite above is replaced (security review run-63, SA-63-03); on a conflict, once more on what is
+      // there then.
+      for (let attempt = 0; ; attempt++) {
+        const now = await this.#rulesAt(sessionId);
+        try {
+          await this.d.mail.saveMailRules(sessionId, account, now.rules, { ...now.at, dropForwardTarget: true });
+          break;
+        } catch (err) {
+          if (err instanceof WebmailConflictError && attempt === 0) continue;
+          throw err;
+        }
+      }
+    }
   }
 }

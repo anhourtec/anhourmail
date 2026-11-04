@@ -23,6 +23,9 @@ import {
 } from "./service";
 import { memoryKv, WebmailSessionStore } from "./session-store";
 import {
+  ownFolderPath,
+  RULE_FORWARD_UNCONFIRMED,
+  RULES_CHANGED,
   SAFE_SENDER_UNVERIFIED,
   SAFE_SENDERS_FULL,
   SafeSenderInput,
@@ -119,6 +122,13 @@ function fakeServer() {
       return { created };
     },
     "AddressBook/get": () => ({ list: [{ id: "b", name: "Book", isDefault: true }] }),
+    "Mailbox/get": () => ({
+      list: [
+        { id: "inbox", name: "Inbox", parentId: null, role: "inbox" },
+        { id: "fr", name: "Reading", parentId: null, role: null },
+        { id: "fn", name: "News", parentId: "fr", role: null },
+      ],
+    }),
     "Email/get": (a) => ({
       list: (a.ids as string[]).flatMap((id) => {
         const e = state.emails.get(id);
@@ -869,6 +879,176 @@ describe("webmail settings: control plane and mail server together", () => {
 
     await t.settings.removeForwarding(t.sessionId, "acc1", req);
     expect((await t.settings.overview(t.sessionId)).forwardingTarget).toBeNull();
+  });
+
+  it("saves mail rules on the version read, resolves folder paths, gives new rules ids, audits counts only", async () => {
+    const t = await setup();
+    const first = await t.settings.rules(t.sessionId);
+    expect(first).toMatchObject({ rules: [], version: null, forwardTo: null, rulesState: "none" });
+    expect(first.folders).toEqual([
+      { id: "inbox", path: "Inbox" },
+      { id: "fr", path: "Reading" },
+      { id: "fn", path: "Reading/News" },
+    ]);
+    const draft = {
+      name: "Club news",
+      enabled: true,
+      match: "all",
+      conditions: [{ field: "listId", op: "contains", value: "secret-list.example" }],
+      // The browser's path is ignored: the server writes the folder's path now.
+      actions: {
+        move: { kind: "folder", folderId: "fn", path: "Elsewhere" },
+        markRead: true,
+        flag: false,
+        forward: false,
+        stop: false,
+      },
+    };
+    const saved = await t.settings.saveRules(t.sessionId, "acc1", { rules: [draft], version: first.version }, req);
+    expect(saved.rules[0]?.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(saved.rules[0]?.actions.move).toEqual({ kind: "folder", folderId: "fn", path: "Reading/News" });
+    expect(t.script()).toContain('fileinto "Reading/News";');
+    expect(parseScript(t.script())?.filters).toHaveLength(1);
+    expect(t.uow.state.audit.at(-1)).toMatchObject({
+      action: "sieve.changed",
+      result: "success",
+      meta: { rules: 1, enabled: 1, forwarding: 0, moving: 1 },
+    });
+    expect(JSON.stringify(t.uow.state.audit)).not.toMatch(/secret-list|Club news|Reading/);
+    // Junk saves keep the rules.
+    await t.settings.saveJunk(t.sessionId, "acc1", { blocked: ["spam.example"], safe: [], trustedOnly: false }, req);
+    expect(parseScript(t.script())?.filters).toHaveLength(1);
+
+    // A save on the old version (another window saved meanwhile): 409, nothing written.
+    const before = t.script();
+    await expect(t.settings.saveRules(t.sessionId, "acc1", { rules: [], version: saved.version }, req)).rejects.toThrow(
+      RULES_CHANGED,
+    );
+    expect(t.script()).toBe(before);
+    const now = await t.settings.rules(t.sessionId);
+    expect((await t.settings.saveRules(t.sessionId, "acc1", { rules: [], version: now.version }, req)).rules).toEqual(
+      [],
+    );
+  });
+
+  it("refuses invalid rules, a missing folder, and a forward without a confirmed address", async () => {
+    const t = await setup();
+    const base = {
+      name: "R",
+      enabled: true,
+      match: "any",
+      conditions: [{ field: "attachment" }],
+      actions: { move: null, markRead: false, flag: true, forward: false, stop: false },
+    };
+    const save = async (rule: Record<string, unknown>) =>
+      t.settings.saveRules(
+        t.sessionId,
+        "acc1",
+        { rules: [rule], version: (await t.settings.rules(t.sessionId)).version },
+        req,
+      );
+    await expect(save({ ...base, name: "" })).rejects.toThrow("Give the rule a name.");
+    await expect(save({ ...base, conditions: [] })).rejects.toThrow("Add a condition.");
+    await expect(save({ ...base, actions: { ...base.actions, redirect: "x@evil.example" } })).rejects.toThrow(
+      "One of these rules can't be saved.",
+    );
+    await expect(
+      save({ ...base, actions: { ...base.actions, move: { kind: "folder", folderId: "gone", path: "Gone" } } }),
+    ).rejects.toThrow(/no longer exists/);
+    await expect(save({ ...base, actions: { ...base.actions, forward: true } })).rejects.toThrow(
+      RULE_FORWARD_UNCONFIRMED,
+    );
+    // A pending (unconfirmed) target doesn't count either.
+    await t.settings.requestForwarding(t.sessionId, "acc1", "copy@example.org", req);
+    await expect(save({ ...base, actions: { ...base.actions, forward: true } })).rejects.toThrow(
+      RULE_FORWARD_UNCONFIRMED,
+    );
+    expect(t.script()).not.toContain("redirect");
+    // Another mailbox than the active one: refused.
+    await expect(
+      t.settings.saveRules(t.sessionId, "other-account", { rules: [], version: null }, req),
+    ).rejects.toBeInstanceOf(WebmailRefusedError);
+  });
+
+  it("never leaves a rule redirect to a target replaced while a rules save was being built (run-63 SA-63-03)", async () => {
+    const t = await setup();
+    await t.settings.requestForwarding(t.sessionId, "acc1", "copy@example.org", req);
+    const token = /forwarding\/confirm\/([A-Za-z0-9_-]{43})/.exec(t.sent.at(-1)?.text ?? "")?.[1] ?? "";
+    await t.core.confirmForwarding(token, req);
+    const rule = {
+      name: "Boss",
+      enabled: true,
+      match: "all",
+      conditions: [{ field: "attachment" }],
+      actions: { move: null, markRead: false, flag: false, forward: true, stop: false },
+    };
+    // A new forwarding request lands between the save's read of the confirmed target and its write.
+    const original = t.core.forwarding.bind(t.core);
+    let calls = 0;
+    t.core.forwarding = async (address) => {
+      const f = await original(address);
+      calls += 1;
+      if (calls === 2) {
+        await t.core.requestForwarding(address, { target: "new@example.org", ownAddresses: [], tier: "new" }, req);
+      }
+      return f;
+    };
+    const view = await t.settings.rules(t.sessionId);
+    calls = 0;
+    await expect(
+      t.settings.saveRules(t.sessionId, "acc1", { rules: [rule], version: view.version }, req),
+    ).rejects.toThrow(RULES_CHANGED);
+    expect(t.script()).not.toContain("copy@example.org");
+    t.core.forwarding = original;
+
+    // With a confirmed target and a rule that forwards to it, asking for another address rewrites the script at once.
+    const asked = await t.core.requestForwarding(
+      "a@x.test",
+      { target: "copy@example.org", ownAddresses: [], tier: "new" },
+      req,
+    );
+    await t.core.confirmForwarding(asked.token, req);
+    const now = await t.settings.rules(t.sessionId);
+    await t.settings.saveRules(t.sessionId, "acc1", { rules: [rule], version: now.version }, req);
+    expect(t.script()).toContain('redirect :copy "copy@example.org";');
+    await t.settings.requestForwarding(t.sessionId, "acc1", "other@example.org", req);
+    expect(t.script()).not.toContain("redirect");
+    expect(parseScript(t.script())?.filters).toHaveLength(1);
+  });
+
+  it("moves only into the person's own folders, level by level, never the shared namespace (run-63 SA-63-02)", () => {
+    const own = new Set(["Inbox", "Reading", "Reading/News", "A/B"]);
+    expect(ownFolderPath("Reading/News", own)).toBe(true);
+    expect(ownFolderPath("Inbox", own)).toBe(true);
+    // A folder literally named "A/B" at the top: its parent "A" isn't one of theirs, so the path is refused.
+    expect(ownFolderPath("A/B", own)).toBe(false);
+    expect(ownFolderPath("Shared Folders", new Set(["Shared Folders"]))).toBe(false);
+    expect(ownFolderPath("shared folders/x@y.test/Inbox", new Set(["shared folders/x@y.test/Inbox"]))).toBe(false);
+    expect(ownFolderPath("Reading//News", own)).toBe(false);
+    expect(ownFolderPath("Elsewhere", own)).toBe(false);
+  });
+
+  it("forwards from a rule only to the confirmed address, and drops it when that address goes", async () => {
+    const t = await setup();
+    await t.settings.requestForwarding(t.sessionId, "acc1", "copy@example.org", req);
+    const token = /forwarding\/confirm\/([A-Za-z0-9_-]{43})/.exec(t.sent.at(-1)?.text ?? "")?.[1] ?? "";
+    await t.core.confirmForwarding(token, req);
+    const view = await t.settings.rules(t.sessionId);
+    expect(view.forwardTo).toBe("copy@example.org");
+    const rule = {
+      name: "Boss",
+      enabled: true,
+      match: "all",
+      conditions: [{ field: "from", op: "is", value: "boss@corp.example" }],
+      actions: { move: null, markRead: false, flag: false, forward: true, stop: false },
+    };
+    const saved = await t.settings.saveRules(t.sessionId, "acc1", { rules: [rule], version: view.version }, req);
+    expect(t.script()).toContain('redirect :copy "copy@example.org";');
+    expect(t.uow.state.audit.at(-1)?.meta).toMatchObject({ forwarding: 1 });
+    // Removing the forwarding address removes the rule's copy at once (the rule stays, forwarding nothing).
+    await t.settings.removeForwarding(t.sessionId, "acc1", req);
+    expect(t.script()).not.toContain("redirect");
+    expect(parseScript(t.script())?.filters.map((f) => f.id)).toEqual(saved.rules.map((f) => f.id));
   });
 
   it("validates sender names (signatures are named signatures now, not identity fields)", () => {

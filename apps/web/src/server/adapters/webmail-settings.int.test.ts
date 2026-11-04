@@ -26,7 +26,7 @@ import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 import { memoryKv, WebmailSessionStore } from "../webmail/session-store";
 import { WebmailService } from "../webmail/service";
 import { applyToMailboxes } from "../webmail/account-safe-apply";
-import { WebmailSettings } from "../webmail/settings";
+import { RULE_FORWARD_UNCONFIRMED, WebmailSettings } from "../webmail/settings";
 import { ourAuthResultsHeader, type RawHeader, trustedAuthservIds } from "../webmail/original";
 import { createSafeSenders, redisRulesVersions, rulesVersionKey } from "../webmail/safe-senders";
 import { DEFAULT_RULES, MANAGED_SCRIPT, parseScript } from "../webmail/sieve";
@@ -480,6 +480,82 @@ describe("webmail settings on the dev Stalwart", () => {
 
     await settings.removeForwarding(ownerSession, account, req);
     expect((await settings.overview(ownerSession)).rules.forwarding).toMatchObject({ enabled: false, address: null });
+  }, 90_000);
+
+  it("a mail rule moves a delivered message into a nested folder, marked read; forwarding needs a confirmed address", async () => {
+    // Folders as a mail app makes them over IMAP (the webmail's JMAP can't create folders): made here with the dev
+    // administrator.
+    const made = await stalwartDevAdmin().transport.rawCall(USING, [
+      [
+        "Mailbox/set",
+        {
+          accountId: account,
+          create: { p: { name: `Reading ${run}`, parentId: null }, c: { name: "News", parentId: "#p" } },
+        },
+        "m",
+      ],
+    ]);
+    const newsId = (made.get("m")?.created as Record<string, { id: string }> | undefined)?.c?.id ?? "";
+    expect(newsId).not.toBe("");
+    const view = await settings.rules(ownerSession);
+    expect(view.folders).toContainEqual({ id: newsId, path: `Reading ${run}/News` });
+    const rule = {
+      name: "From the sender",
+      enabled: true,
+      match: "all",
+      conditions: [
+        { field: "from", op: "is", value: sender.address },
+        { field: "subject", op: "contains", value: `int-rule ${run}` },
+      ],
+      actions: {
+        move: { kind: "folder", folderId: newsId, path: "" },
+        markRead: true,
+        flag: true,
+        forward: false,
+        stop: false,
+      },
+    };
+    // No confirmed forwarding address (the forwarding test removed it): a rule that forwards is refused.
+    await expect(
+      settings.saveRules(
+        ownerSession,
+        account,
+        { rules: [{ ...rule, actions: { ...rule.actions, forward: true } }], version: view.version },
+        req,
+      ),
+    ).rejects.toThrow(RULE_FORWARD_UNCONFIRMED);
+    const saved = await settings.saveRules(ownerSession, account, { rules: [rule], version: view.version }, req);
+    expect(saved.rulesState).toBe("active");
+    await send(mail, senderSession, sender.address, owner.address, `int-rule ${run}`);
+    await send(mail, senderSession, sender.address, owner.address, `int-norule ${run}`);
+    expect(await waitFor(mail, ownerSession, `int-norule ${run}`)).toEqual(["inbox"]);
+    expect(await waitFor(mail, ownerSession, `int-rule ${run}`)).toEqual(["folder"]);
+    const res = (await mail.jmapAs(ownerSession, (sess) => ({
+      using: USING,
+      methodCalls: [
+        ["Email/query", { accountId: sess.accountId, filter: { subject: `int-rule ${run}` } }, "q"],
+        [
+          "Email/get",
+          {
+            accountId: sess.accountId,
+            "#ids": { resultOf: "q", name: "Email/query", path: "/ids" },
+            properties: ["mailboxIds", "keywords"],
+          },
+          "g",
+        ],
+      ],
+    }))) as {
+      methodResponses: [
+        string,
+        { list?: { mailboxIds: Record<string, boolean>; keywords: Record<string, boolean> }[] },
+        string,
+      ][];
+    };
+    const got = res.methodResponses[1]?.[1].list?.[0];
+    expect(Object.keys(got?.mailboxIds ?? {})).toEqual([newsId]);
+    expect(got?.keywords).toMatchObject({ $seen: true, $flagged: true });
+    const now = await settings.rules(ownerSession);
+    await settings.saveRules(ownerSession, account, { rules: [], version: now.version }, req);
   }, 90_000);
 
   it("account safe senders: the one-line rewrite is accepted, and the sender skips the trusted-only Junk rule", async () => {

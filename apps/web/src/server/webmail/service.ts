@@ -41,6 +41,7 @@ import {
   sendCheck,
   senderName,
   sendingLimits,
+  sendingTier,
   sendWindows,
   type StoredDraft,
   UNDO_SECONDS,
@@ -2802,6 +2803,35 @@ export class WebmailService {
     return s.accountId;
   }
 
+  /**
+   * The own mailbox's folders by id with their full path as the mail server's Sieve `fileinto` names them (parent
+   * names joined with "/"), for mail rules (ADR-0032 §2). Read with the session's token, never cached.
+   */
+  async folderPaths(sessionId: string, account: string): Promise<Map<string, string>> {
+    const s = await this.#ownActive(sessionId);
+    if (s.accountId !== account) throw new WebmailRefusedError("Your active mailbox changed. Try again.");
+    const r = await this.#call(
+      sessionId,
+      (x) => [["Mailbox/get", { accountId: x.accountId, ids: null, properties: ["name", "parentId"] }, "m"]],
+      USING,
+      account,
+    );
+    const list = (r.get("m")?.list ?? []) as { id: string; name: string; parentId: string | null }[];
+    const byId = new Map(list.map((m) => [m.id, m]));
+    const out = new Map<string, string>();
+    for (const m of list) {
+      const parts: string[] = [];
+      let cur: (typeof list)[number] | undefined = m;
+      // A loop in the parents (never expected) stops at the depth the server allows.
+      for (let depth = 0; cur && depth < 32; depth++) {
+        parts.unshift(cur.name);
+        cur = cur.parentId === null ? undefined : byId.get(cur.parentId);
+      }
+      out.set(m.id, parts.join("/"));
+    }
+    return out;
+  }
+
   /** Ids of the special folders (Drafts, Sent, Trash, Junk…) of the active mailbox, cached for a minute. */
   async roles(sessionId: string): Promise<Roles> {
     const accountId = await this.#accountId(sessionId);
@@ -3842,14 +3872,15 @@ export class WebmailService {
     sessionId: string,
     account: string,
     rules: Omit<MailRules, "include">,
-    opts: { ifInState?: string | null } = {},
+    /** `dropForwardTarget`: the confirmed target is being removed — compile no redirect to it at all. */
+    opts: { ifInState?: string | null; dropForwardTarget?: boolean } = {},
   ): Promise<{ contactsUsed: number }> {
     const s = await this.#ownActive(sessionId);
     if (s.accountId !== account) throw new WebmailRefusedError("Your active mailbox changed. Try again.");
     // We own the one script; there is nothing of the person's to include (they can't write Sieve).
     // Forwarding only to the control-plane confirmed target: whoever calls (settings, the contacts refresh) can't
     // keep or set a redirect anywhere else.
-    const confirmed = await this.#d.confirmedForward(s.username);
+    const confirmed = opts.dropForwardTarget === true ? null : await this.#d.confirmedForward(s.username);
     const forwarding =
       rules.forwarding.enabled && confirmed !== null && rules.forwarding.address === confirmed
         ? { ...rules.forwarding, address: confirmed }
@@ -3860,7 +3891,17 @@ export class WebmailService {
     const mailboxDomain = s.username.slice(s.username.lastIndexOf("@") + 1).toLowerCase() || null;
     // The account's list only matters to the trusted-only rule (a person's own Blocked senders win over it).
     const accountSafe = full.junk.trustedOnly ? await this.#d.accountSafeSenders(s.username) : [];
-    const base = buildScript(full, { identities, contacts: [], authservIds, mailboxDomain, accountSafe });
+    // A rule's "forward" goes only to the confirmed forwarding address, and not while the mailbox's trust tier is
+    // `restricted` (as Forwarding; a billing send-block keeps both, ADR-0029 SA60-03, ADR-0032 Consequences).
+    const ruleForwardTo = sendingTier(s.username) === "restricted" ? null : confirmed;
+    const base = buildScript(full, {
+      identities,
+      contacts: [],
+      authservIds,
+      mailboxDomain,
+      accountSafe,
+      ruleForwardTo,
+    });
     let contacts: string[] = [];
     if (usesContacts(full)) {
       const { cards } = await this.#allCards(sessionId, ["emails"], account);
@@ -3870,9 +3911,14 @@ export class WebmailService {
       // Each contact can appear twice (trusted senders and the automatic-reply test).
       contacts = fitContacts(addresses, Math.floor((MAX_SCRIPT_BYTES - Buffer.byteLength(base)) / 2));
     }
-    const script = buildScript(full, { identities, contacts, authservIds, mailboxDomain, accountSafe });
+    const script = buildScript(full, { identities, contacts, authservIds, mailboxDomain, accountSafe, ruleForwardTo });
     if (new TextEncoder().encode(script).length > MAX_SCRIPT_BYTES) {
       throw new WebmailRefusedError(MAILBOX_RULES_LIMIT_MESSAGE);
+    }
+    // The confirmed target again, right before the write: a forwarding request (or removal) committed while this
+    // script was being built must not be undone by it (security review run-63, SA-63-03). Answered as a conflict.
+    if (opts.dropForwardTarget !== true && (await this.#d.confirmedForward(s.username)) !== confirmed) {
+      throw new WebmailConflictError("Your settings changed in another window. Try again.");
     }
     let written: boolean;
     try {
