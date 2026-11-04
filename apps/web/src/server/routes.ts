@@ -563,6 +563,26 @@ export const ROUTES: readonly RouteSpec[] = [
     audits: "billing.portal_opened",
     probeStatus: 409,
   },
+  // Plan and add-on changes, cancelling and the self-service refund (ADR-0029 §9). The harness's accounts have a staff
+  // plan, not a subscription: allowed callers get 409 `not_subscribed` (before any step-up). Cancel, undo and refund
+  // need a fresh step-up and use tier `sensitive`; preview and change call the provider (`billingProvider`).
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/billing/preview",
+    file: "app/api/accounts/[accountId]/billing/preview/route.ts",
+    guard: "billing.manage",
+    accountParam: "accountId",
+    probeStatus: 409,
+  },
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/billing/change",
+    file: "app/api/accounts/[accountId]/billing/change/route.ts",
+    guard: "billing.manage",
+    accountParam: "accountId",
+    audits: "billing.addons_changed",
+    probeStatus: 409,
+  },
   // Dev only (ADR-0029 §3): drives the fake billing provider; 404 unless billing is the fake outside production, and
   // never routed on production builds (proxy.ts). The body is checked first, so the harness's empty body is a 400 for
   // everyone; a real call needs `billing.manage` on the fake object's account. It changes only the fake: the events it

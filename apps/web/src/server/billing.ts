@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import "server-only";
 
+import { z } from "zod";
+
 import { billingRedirectOrigins } from "@anhourmail/adapters/billing";
 import type { BillingContext } from "@anhourmail/core/billing";
 
@@ -18,3 +20,11 @@ export function billingContext(): BillingContext {
 }
 
 export const paramOf = (v: string | string[] | undefined): string => (typeof v === "string" ? v : "");
+
+/** A plan or add-on change, shape only (the service checks plans, amounts and quantities against the facts). */
+export const ChangeBody = z.object({
+  plan: z.string().max(20).optional(),
+  supporterAmountMinor: z.number().optional(),
+  storageBlocks: z.number().optional(),
+  extraMailboxes: z.number().optional(),
+});
