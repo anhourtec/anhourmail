@@ -310,7 +310,7 @@ describe("deriveBilling: transitions", () => {
   });
 
   it("the later of reordered dispute events wins, whatever order they arrive in", () => {
-    const opened = ev("charge.dispute.created", new Date(NOW.getTime() - 2000), "evt_a");
+    const opened = { ...ev("charge.dispute.created", new Date(NOW.getTime() - 2000), "evt_a"), objectId: "dp_1" };
     const closedLater = closedAs("won", new Date(NOW.getTime() - 1000), "evt_b");
     const a = deriveBilling(paid(), sub(), [closedLater, opened], ctx());
     const b = deriveBilling(paid(), sub(), [opened, closedLater], ctx());
@@ -319,6 +319,54 @@ describe("deriveBilling: transitions", () => {
     expect(a.processedEventIds).toEqual(["evt_a", "evt_b"]);
     const lostLater = closedAs("lost", new Date(NOW.getTime() - 1000), "evt_b");
     expect(deriveBilling(paid(), sub(), [lostLater, opened], ctx()).next.state).toBe("restricted");
+  });
+
+  const tracked = (disputeId: string, status: "open" | "won" | "lost" | "warning_closed" | "cleared") => ({
+    accountId: ACCOUNT,
+    disputeId,
+    status,
+    openedAt: T0,
+    closedAt: status === "open" ? null : T0,
+    updatedAt: T0,
+  });
+
+  it("disputes are tracked one by one: a won one never clears another lost or still open", () => {
+    const disputed = paid({ state: "restricted", restrictedAt: T0, disputedAt: T0 });
+    const wonOther = { ...closedAs("won"), objectId: "dp_2" };
+    const withLost = deriveBilling(disputed, sub(), [wonOther], { ...ctx(), disputes: [tracked("dp_1", "lost")] });
+    expect(withLost.next).toMatchObject({ state: "restricted", disputedAt: T0 });
+    expect(withLost.disputes).toEqual([expect.objectContaining({ disputeId: "dp_2", status: "won", closedAt: NOW })]);
+    expect(withLost.changes).toContainEqual({ kind: "dispute_closed", disputeId: "dp_2", outcome: "won" });
+    const withOpen = deriveBilling(disputed, sub(), [wonOther], { ...ctx(), disputes: [tracked("dp_1", "open")] });
+    expect(withOpen.next.state).toBe("restricted");
+    // Once every tracked dispute is won (or cleared by staff), the provider's state returns.
+    const allWon = deriveBilling(disputed, sub(), [wonOther], { ...ctx(), disputes: [tracked("dp_1", "cleared")] });
+    expect(allWon.next).toMatchObject({ state: "active", disputedAt: null });
+  });
+
+  it("a fresh read closes a tracked open dispute without its event; a staff clear is never undone", () => {
+    const disputed = paid({ state: "restricted", restrictedAt: T0, disputedAt: T0 });
+    const healed = deriveBilling(disputed, sub(), [], {
+      ...ctx(),
+      disputes: [tracked("dp_1", "open")],
+      disputeStatuses: new Map([["dp_1", "won"]]),
+    });
+    expect(healed.next.state).toBe("active");
+    expect(healed.changes).toContainEqual({ kind: "dispute_closed", disputeId: "dp_1", outcome: "won" });
+    const cleared = deriveBilling(paid(), sub(), [closedAs("lost")], {
+      ...ctx(),
+      disputes: [tracked("dp_1", "cleared")],
+      disputeStatuses: new Map([["dp_1", "lost"]]),
+    });
+    expect(cleared.next.state).toBe("active");
+    expect(cleared.disputes).toEqual([]);
+  });
+
+  it("a created event arriving after its close never reopens the dispute", () => {
+    const late = { ...ev("charge.dispute.created"), objectId: "dp_1" };
+    const out = deriveBilling(paid(), sub(), [late], { ...ctx(), disputes: [tracked("dp_1", "won")] });
+    expect(out.next.state).toBe("active");
+    expect(out.disputes).toEqual([]);
   });
 
   it("the provider still reporting a dispute keeps it open despite a won close", () => {

@@ -6,7 +6,16 @@
  */
 import { BILLING, isPaidPlan, type PaidPlanId, type PlanId } from "@anhourmail/shared/plans";
 
-import type { AccountBilling, BillingEvent, BillingState, PlanHold, PlanSource } from "./entity";
+import {
+  type AccountBilling,
+  type BillingDispute,
+  type BillingDisputeStatus,
+  type BillingEvent,
+  type BillingState,
+  isRestrictingDispute,
+  type PlanHold,
+  type PlanSource,
+} from "./entity";
 import { type DisputeOutcome, isLiveSubStatus, type ProviderSubscription } from "./ports";
 
 const DAY_MS = 86_400_000;
@@ -110,27 +119,103 @@ export type DeriveContext = {
    * A paid plan ending with nothing to hold goes straight to `free`; a lapsed account with none left becomes `free`.
    */
   holdCount: number;
+  /** The account's tracked disputes before this sync (`BillingRepository.disputes`). */
+  disputes?: readonly BillingDispute[];
+  /**
+   * Disputes read fresh from the provider by this sync (`getDispute`): the events' disputes and every tracked one still
+   * open. A dispute missing here keeps what the event (`disputeOutcome`) or the tracked row says.
+   */
+  disputeStatuses?: ReadonlyMap<string, DisputeOutcome>;
 };
 
-export type Derivation = { next: AccountBilling; changes: BillingChange[]; processedEventIds: string[] };
+export type Derivation = {
+  next: AccountBilling;
+  changes: BillingChange[];
+  processedEventIds: string[];
+  /** Tracked disputes that are new or changed by this derivation (the sync writes them). */
+  disputes: BillingDispute[];
+};
 
 const byCreated = (a: PendingBillingEvent, b: PendingBillingEvent) =>
   a.providerCreatedAt.getTime() - b.providerCreatedAt.getTime() || a.id.localeCompare(b.id);
 
+const CLOSED: readonly BillingDisputeStatus[] = ["won", "lost", "warning_closed"];
+const liftsDispute = (s: BillingDisputeStatus) => s === "won" || s === "warning_closed";
+
+type DisputeTracking = {
+  /** New or changed rows. */
+  changed: BillingDispute[];
+  /** Every tracked dispute after this batch. */
+  all: BillingDispute[];
+  /** One per dispute that closed in this batch (an event, or a fresh read of one still open). */
+  closed: { disputeId: string; outcome: DisputeOutcome | "unknown" }[];
+  /** A dispute was won (or an inquiry closed without a chargeback) in this batch. */
+  lifted: boolean;
+};
+
 /**
- * What the batch's dispute events, latest last, say: `restrict` (opened, lost, or closed with an unknown outcome),
- * `clear` (won, or an inquiry closed without a chargeback), or null when there is none. Only a won dispute or a closed
- * inquiry lifts the restriction (ADR-0029 §5); a lost one keeps it until staff clear it or the subscription ends.
+ * Tracks disputes one by one (ADR-0029 §5, residual fixed 2026-11-04): a created event adds the dispute as open (or as
+ * the provider reports it now); a closed event, or a fresh read of a tracked open dispute, records its outcome; a close
+ * whose outcome couldn't be read keeps it open, so it still restricts. A created event never reopens a closed dispute
+ * (it can arrive after the close), and a staff clear is never undone by the provider's view. Only `open` and `lost`
+ * restrict, so one dispute won never clears another still open or lost.
  */
-function disputeSignal(events: readonly PendingBillingEvent[]): "restrict" | "clear" | null {
-  let signal: "restrict" | "clear" | null = null;
+function trackDisputes(
+  accountId: string,
+  tracked: readonly BillingDispute[],
+  events: readonly PendingBillingEvent[],
+  fresh: ReadonlyMap<string, DisputeOutcome>,
+  now: Date,
+): DisputeTracking {
+  const rows = new Map(tracked.map((d) => [d.disputeId, { ...d }] as const));
+  const before = new Map(tracked.map((d) => [d.disputeId, d.status] as const));
+  const closedEvents = new Map<string, DisputeOutcome | "unknown">();
+  const touched = new Set<string>();
+  const set = (disputeId: string, status: BillingDisputeStatus) => {
+    const cur = rows.get(disputeId);
+    if (cur?.status === "cleared") return;
+    if (!cur) {
+      rows.set(disputeId, {
+        accountId,
+        disputeId,
+        status,
+        openedAt: now,
+        closedAt: CLOSED.includes(status) ? now : null,
+        updatedAt: now,
+      });
+      touched.add(disputeId);
+      return;
+    }
+    if (cur.status === status) return;
+    Object.assign(cur, { status, closedAt: CLOSED.includes(status) ? now : null, updatedAt: now });
+    touched.add(disputeId);
+  };
   for (const e of events) {
-    if (e.type === "charge.dispute.created") signal = "restrict";
-    else if (e.type === "charge.dispute.closed") {
-      signal = e.disputeOutcome === "won" || e.disputeOutcome === "warning_closed" ? "clear" : "restrict";
+    const read = fresh.get(e.objectId) ?? e.disputeOutcome ?? null;
+    if (e.type === "charge.dispute.created") {
+      if (!rows.has(e.objectId)) set(e.objectId, read ?? "open");
+      else if (fresh.has(e.objectId) && read !== null) set(e.objectId, read);
+    } else if (e.type === "charge.dispute.closed") {
+      closedEvents.set(e.objectId, read ?? "unknown");
+      set(e.objectId, read ?? "open");
     }
   }
-  return signal;
+  for (const [id, status] of fresh) {
+    if (rows.get(id)?.status === "open") set(id, status);
+  }
+  const all = [...rows.values()];
+  const closed: DisputeTracking["closed"] = [];
+  for (const d of all) {
+    const event = closedEvents.get(d.disputeId);
+    if (event !== undefined) closed.push({ disputeId: d.disputeId, outcome: event });
+    else if (touched.has(d.disputeId) && before.get(d.disputeId) === "open" && CLOSED.includes(d.status)) {
+      closed.push({ disputeId: d.disputeId, outcome: d.status as DisputeOutcome });
+    }
+  }
+  const lifted = all.some(
+    (d) => touched.has(d.disputeId) && liftsDispute(d.status) && !liftsDispute(before.get(d.disputeId) ?? "open"),
+  );
+  return { changed: all.filter((d) => touched.has(d.disputeId)), all, closed, lifted };
 }
 
 type Target = { state: BillingState; source: PlanSource; plan: PaidPlanId | null };
@@ -201,12 +286,14 @@ export function deriveBilling(
   const sorted = [...events].sort(byCreated);
   const live = sub && isLiveSubStatus(sub.status) && sub.status !== "incomplete" ? sub : null;
 
-  const signal = disputeSignal(sorted);
+  const tracking = trackDisputes(previous.accountId, ctx.disputes ?? [], sorted, ctx.disputeStatuses ?? new Map(), now);
+  // Restricted while the provider reports a dispute on the latest payment, while any tracked dispute is open or lost,
+  // or, sticky, while one was before and none was won in this batch (a dispute whose event is still unresolved).
   const disputed =
     (live?.disputed ?? false) ||
     (live?.disputeLost ?? false) ||
-    signal === "restrict" ||
-    (signal === null && previous.disputedAt !== null);
+    tracking.all.some((d) => isRestrictingDispute(d.status)) ||
+    (previous.disputedAt !== null && !tracking.lifted);
 
   let target: Target;
   if (live) {
@@ -330,15 +417,11 @@ export function deriveBilling(
     changes.push({ kind: "cancel_scheduled", at: next.cancelAt });
   if (live && next.cancelAt === null && previous.cancelAt !== null) changes.push({ kind: "cancel_undone" });
   if (disputed && previous.disputedAt === null) changes.push({ kind: "dispute_opened" });
-  for (const e of sorted) {
-    if (e.type === "charge.dispute.closed") {
-      changes.push({ kind: "dispute_closed", disputeId: e.objectId, outcome: e.disputeOutcome ?? "unknown" });
-    }
-  }
+  for (const c of tracking.closed) changes.push({ kind: "dispute_closed", ...c });
   if (next.state === "lapsed" && previous.state !== "lapsed") changes.push({ kind: "holds_needed" });
   if (previous.state === "lapsed" && isPaidState(next.state)) changes.push({ kind: "holds_lifted" });
 
-  return { next, changes, processedEventIds: sorted.map((e) => e.id) };
+  return { next, changes, processedEventIds: sorted.map((e) => e.id), disputes: tracking.changed };
 }
 
 /**
