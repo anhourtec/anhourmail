@@ -795,3 +795,93 @@ export const accountDeletion = pgTable(
     check("account_deletion_window", sql`${t.deleteAfter} > ${t.requestedAt}`),
   ],
 );
+
+// --- billing (ADR-0029 §11): state derived from the payment processor; never card data, addresses, tax ids or payloads
+
+/**
+ * One row per account: its billing state (free / active / past_due / restricted / lapsed), where its paid plan comes
+ * from, the provider's customer and subscription ids, quantities and dates. Written by the sync under the account row
+ * lock; `customer_account.plan` is the effective plan the rest of the code reads. Goes with the account row.
+ */
+export const accountBilling = pgTable(
+  "account_billing",
+  {
+    accountId: uuid("account_id")
+      .primaryKey()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    state: text("state").notNull().default("free"),
+    stateSince: timestamp("state_since", { withTimezone: true }).notNull().defaultNow(),
+    planSource: text("plan_source").notNull().default("none"),
+    paidPlan: text("paid_plan"),
+    providerCustomerId: text("provider_customer_id").unique(),
+    providerSubscriptionId: text("provider_subscription_id").unique(),
+    currency: text("currency"),
+    planAmountMinor: integer("plan_amount_minor"),
+    storageBlocks: integer("storage_blocks").notNull().default(0),
+    extraMailboxes: integer("extra_mailboxes").notNull().default(0),
+    periodPaidStorageBlocks: integer("period_paid_storage_blocks").notNull().default(0),
+    periodPaidExtraMailboxes: integer("period_paid_extra_mailboxes").notNull().default(0),
+    currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
+    cancelAt: timestamp("cancel_at", { withTimezone: true }),
+    restrictedAt: timestamp("restricted_at", { withTimezone: true }),
+    disputedAt: timestamp("disputed_at", { withTimezone: true }),
+    lapsedAt: timestamp("lapsed_at", { withTimezone: true }),
+    compUntil: timestamp("comp_until", { withTimezone: true }),
+    lastInvoiceId: text("last_invoice_id"),
+    lastInvoiceStatus: text("last_invoice_status"),
+    checkoutPendingUntil: timestamp("checkout_pending_until", { withTimezone: true }),
+    /** Staff override of the account address ceiling (`billing.ceiling_changed`); null = the configured ceiling. */
+    addressCeilingOverride: integer("address_ceiling_override"),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("account_billing_state_idx").on(t.state, t.stateSince),
+    index("account_billing_sync_idx")
+      .on(t.lastSyncedAt)
+      .where(sql`${t.providerCustomerId} is not null`),
+    check("account_billing_state", sql`${t.state} in ('free', 'active', 'past_due', 'restricted', 'lapsed')`),
+    check("account_billing_plan_source", sql`${t.planSource} in ('none', 'stripe', 'comp', 'staff')`),
+    check("account_billing_paid_plan", sql`${t.paidPlan} is null or ${t.paidPlan} in ('plus', 'supporter')`),
+    check("account_billing_currency", sql`${t.currency} is null or ${t.currency} in ('USD', 'CAD')`),
+    check(
+      "account_billing_quantities",
+      sql`${t.storageBlocks} >= 0 and ${t.extraMailboxes} >= 0 and ${t.periodPaidStorageBlocks} >= 0 and ${t.periodPaidExtraMailboxes} >= 0`,
+    ),
+    check("account_billing_amount", sql`${t.planAmountMinor} is null or ${t.planAmountMinor} >= 0`),
+    check(
+      "account_billing_invoice_status",
+      sql`${t.lastInvoiceStatus} is null or ${t.lastInvoiceStatus} in ('paid', 'open', 'uncollectible', 'void')`,
+    ),
+    check("account_billing_ceiling", sql`${t.addressCeilingOverride} is null or ${t.addressCeilingOverride} > 0`),
+  ],
+);
+
+/**
+ * Provider events we received: triggers for a sync, recorded once by provider event id (duplicates are ignored). No
+ * payload (it carries names, emails and addresses). `account_id` null = an orphan (no account has that customer).
+ */
+export const billingEvent = pgTable(
+  "billing_event",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    providerEventId: text("provider_event_id").notNull().unique(),
+    type: text("type").notNull(),
+    accountId: uuid("account_id").references(() => customerAccount.id, { onDelete: "cascade" }),
+    objectId: text("object_id").notNull(),
+    providerCreatedAt: timestamp("provider_created_at", { withTimezone: true }).notNull(),
+    status: text("status").notNull(),
+    /** An error name when processing failed (never a message with personal data). */
+    error: text("error"),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("billing_event_pending_idx")
+      .on(t.accountId, t.providerCreatedAt)
+      .where(sql`${t.status} = 'queued'`),
+    index("billing_event_status_idx").on(t.status, t.receivedAt),
+    check("billing_event_status", sql`${t.status} in ('queued', 'processed', 'orphan', 'dismissed')`),
+    check("billing_event_orphan", sql`(${t.accountId} is null) = (${t.status} in ('orphan', 'dismissed'))`),
+  ],
+);
