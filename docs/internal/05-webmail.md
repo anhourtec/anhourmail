@@ -1,6 +1,6 @@
 # 05 — Webmail
 
-Last updated: 2026-11-04 (undo from a shared mailbox is stateless: it carries the send's sealed ticket, the end of the hold asks the mail server whether it was undone, and report reads pass the delegation gate; handoff item 21); 2026-11-04 (delivery problems: the send and a check after the undo hold read the submission's `deliveryStatus` and name the recipients the mail server refused, `POST /api/webmail/send/status`; handoff item 14); 2026-10-31 (remote images, ADR-0027: Safe senders load their images when the From is verified, in every Reading mode, checked on the server with a per-process cache and a Redis rules version; "Always for" / "Stop loading" change Safe senders from the message; the person's own Sent mail loads by itself; old fingerprints read-only; managed-script writes are compare-and-swap; first load: session, folders and the opened view's first window in one answer, streamed inside the page for the person's own mailbox, `GET /api/webmail/bootstrap` otherwise; this browser's copy of the first view painted at once; `Server-Timing` on the webmail API; customer mailboxes have no file storage; remote images: the person's own mail in Sent loads once with no unverified line or remember choice; sender name = the one source in the control plane, identities renamed to it; mailboxes shared with you: no "Shared with you" list or in-place switch in the UI — they open only with Open another mailbox, in a tab named after the mailbox, with Your mailbox in its account menu; no banner; a session left on a shared mailbox goes back to the own one; the account menu tidied (maintainer decision); forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
+Last updated: 2026-11-04 (push sync: one upstream JMAP WebSocket per session and mailbox, fanned out over our own event stream, tabs sharing one stream, a 5-minute safety check and the 30-second check when push is down; shared mailboxes keep polling); 2026-11-04 (undo from a shared mailbox is stateless: it carries the send's sealed ticket, the end of the hold asks the mail server whether it was undone, and report reads pass the delegation gate; handoff item 21); 2026-11-04 (delivery problems: the send and a check after the undo hold read the submission's `deliveryStatus` and name the recipients the mail server refused, `POST /api/webmail/send/status`; handoff item 14); 2026-10-31 (remote images, ADR-0027: Safe senders load their images when the From is verified, in every Reading mode, checked on the server with a per-process cache and a Redis rules version; "Always for" / "Stop loading" change Safe senders from the message; the person's own Sent mail loads by itself; old fingerprints read-only; managed-script writes are compare-and-swap; first load: session, folders and the opened view's first window in one answer, streamed inside the page for the person's own mailbox, `GET /api/webmail/bootstrap` otherwise; this browser's copy of the first view painted at once; `Server-Timing` on the webmail API; customer mailboxes have no file storage; remote images: the person's own mail in Sent loads once with no unverified line or remember choice; sender name = the one source in the control plane, identities renamed to it; mailboxes shared with you: no "Shared with you" list or in-place switch in the UI — they open only with Open another mailbox, in a tab named after the mailbox, with Your mailbox in its account menu; no banner; a session left on a shared mailbox goes back to the own one; the account menu tidied (maintainer decision); forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
 notifications; quoted replies; compose image placeholders; first-sign-in password step; sign-in links not pre-filled).
 
 **Status (2026-10-22): slice 1 is built** — webmail sign-in (OAuth code flow + PKCE, tokens sealed server-side), the
@@ -515,7 +515,7 @@ React UI (virtualized lists, reader iframe, composer)
 Sync engine (packages/jmap-client + webmail store)
    │  IndexedDB cache: mailboxes, thread/email summaries, state strings, bodies (LRU, size-capped)
    │  outbox queue (optimistic actions with rollback)
-Same-origin BFF  /jmap (proxy) · /jmap/push (SSE) · /jmap/upload · /jmap/download · /img (image proxy, POST)
+Same-origin BFF  /jmap (proxy) · /push (SSE) · /upload · /download · /img (image proxy, POST)   (all /api/webmail/*)
    │  attaches the user's Stalwart Bearer token server-side; rewrites session URLs
    │  (token from the headless OAuth code flow — see "Session acquisition")
 Stalwart JMAP (Core, Mail, Submission, Blob, Quota, Sieve, WebSocket push)
@@ -932,17 +932,94 @@ token; the browser never does (rule 21).
 
 ### Push
 
-- The BFF holds **one upstream push channel per active user**: the JMAP WebSocket with `WebSocketPushEnable` (preferred) or EventSource. It fans `StateChange` events out to every open tab over **our own SSE** endpoint. Tabs share one connection via `BroadcastChannel` and leader election.
-- A state change triggers `*/changes` for the affected types only. There is no polling (except a 5-min safety resync when push is down).
-- **Until push lands (built today):** the app sends one request carrying `Email/changes` and `Mailbox/changes`
-  every 30 s while the tab is visible (at once on focus, visibility or coming back online; backing off after errors;
-  `mailChanges` in `components/webmail/mail-client.ts`). Changed folders alone (counts moved by reading or moving
+Built 2026-11-04 (ADR-0018 update). `packages/jmap-client/src/push.ts` (upstream channel),
+`server/webmail/{push-hub,push-stream}.ts` and `webmailPush()` in `server/webmail/instance.ts` (BFF),
+`app/api/webmail/push/route.ts` (the browser's stream), `components/webmail/push.ts` (tabs, leader, reconnect) and the
+sync effect in `webmail-app.tsx`.
+
+- **Upstream: one JMAP WebSocket per signed-in session and mailbox.** The BFF opens `/jmap/ws` (subprotocol `jmap`)
+  on the mail server's internal address with the mailbox's own access token in the `Authorization` header (Node's
+  built-in WebSocket client), sends `WebSocketPushEnable` with `dataTypes: ["Email", "Mailbox"]`, and reads
+  `StateChange` objects back (`openPushChannel`). Only well-formed type and state names are kept (`parseStateChange`).
+  The browser never sees the token or the socket. Verified on v0.16.27 (2026-11-04, `webmail-push.int.test.ts`):
+  Bearer works on the socket, only the asked-for types arrive, a quiet socket stays open past Stalwart's 10-minute
+  `websocketTimeout` (the server's heartbeat keeps it; the BFF still re-sends `WebSocketPushEnable` every 4 minutes
+  as a keep-alive), and **a password change does not close an open socket** (the token stops working for new
+  requests only). No EventSource fallback upstream: the WebSocket is the verified path, and when it fails the browser
+  polls (below).
+- **The hub (`PushHub`, one per server process on `globalThis`)** keys channels by a hash of the session id plus the
+  mailbox address, so at most **one upstream channel per (session, mailbox)**, and one per session (a channel for
+  another of its mailboxes is from before a switch and ends as `moved`). It fans each `StateChange` for the channel's
+  JMAP account out to the session's browser streams as `{ Email?, Mailbox? }` (other accounts and types dropped).
+  Lifecycle:
+  - opens with the first stream, closes 30 s after the last one leaves (a reload or a new leader tab reuses it);
+  - checks the session every 60 s without refreshing anything (`pushTarget(…, { connect: false })` →
+    `session(…, { noRefresh })`: the record, the console session it came from, the mailbox's control-plane access):
+    signed out, ended or blocked → every stream gets `end` `signedout`; another mailbox active → `end` `moved`; the
+    store or database unsure → nothing (checked again next minute);
+  - **the upstream lives at most until the token it opened with expires** (≤ 1 h, never < 1 min), then reopens with a
+    fresh one (streams get `down`, then `ready` once the new socket is up) (`pushTarget(…, { connect: true })` refreshes). That is where a **revoked token** (password changed) is
+    noticed if nothing else did first: the refresh is refused, the session ends, the streams get `end`. In practice
+    the 5-minute safety check (below) meets the revoked token sooner through the proxy (401 → the session ends) and the
+    next minute's check closes the channel; so a password change stops push within about 6 minutes at most, and the
+    only thing the old browser could learn meanwhile is that "something changed";
+  - a lost upstream: streams get `down`, it reopens at once, then with jittered backoff (1 s doubling to 60 s), and
+    `ready` once back; a reopen asked for while a check is out runs as soon as the check ends (`pendingReconnect`);
+  - the session is always read **unpinned** (`pushTargetFrom` in `server/webmail/push-target.ts`): the hub's timers
+    are created inside the request that opened the channel and would otherwise carry its pin into every later check;
+    a pin naming a mailbox no longer in the session ends the channel (`moved`);
+  - sign-out (`DELETE /api/webmail/auth`) closes the session's channels in this process at once; other processes
+    notice within the minute.
+  - **Caps (`PUSH_LIMITS`):** 2,000 upstream channels and 8,000 streams per process, 8 streams per channel. Over a cap
+    the stream route answers 503 and the browser polls (fail open).
+- **Why `globalThis`:** route modules don't share module state under `next dev` (the undo bug of 2026-11-04 came from
+  a `WebmailService` per route module), so the hub lives on `globalThis` (`webmailPush()`): the stream route and
+  sign-out see the same channels in `next dev` and the standalone build. State that must outlive a process isn't
+  needed: a restarted process has no channels, the browser reconnects, and `ready` makes every tab catch up.
+- **The browser's stream: `GET /api/webmail/push?account=<JMAP account id>`**, server-sent events, webmail session
+  only (`route()`: per-session rate limit `webmailPush`, the mailbox access block; same origin by construction — a
+  cookie-only GET that answers an event stream, which another origin's page can't read). Events: `ready`, `down`,
+  `state` (`{"Email":"…","Mailbox":"…"}`: the new state names, exactly what a `*/changes` answer's `newState` carries —
+  no ids, no content), `end` (`{"reason":"signedout"|"moved"|"shutdown"}`). A `: ping` comment every 25 s keeps
+  proxies from timing the stream out, `retry: 5000`, and each stream ends by itself after 27–33 minutes (the browser
+  opens a new one, passing `route()`'s checks again). Headers: `text/event-stream`, `Cache-Control: no-store,
+no-transform` (no compression holding events back), `X-Accel-Buffering: no`. Answers: 401 signed out; **204 "no
+  push for this tab"** when the request pins a mailbox (`x-webmail-own`; the browser never sends a pin here, and a
+  shared pin that doesn't name an open shared entry is `route()`'s 404), the active mailbox is one shared with the
+  person, or `account` isn't the active mailbox's
+  (the event-stream answer for "don't reconnect", and no console error); 503 over a cap.
+- **Mailboxes shared with the person keep polling (decision, 2026-11-04).** Their tabs pin the mailbox with a header
+  (`x-webmail-shared`), which a stream request can't carry, and a grant can be revoked at any moment: push for them
+  would need the delegation gate on every event. The 30-second check through the proxy already runs the gate on each
+  request, so those tabs (`mail-client.push()` is null for a pinned client) and a session left on a shared mailbox
+  (204) poll as before. Revisit if shared mailboxes need instant mail.
+- **Tabs share one stream.** The tab holding the Web Lock `anhourmail-push:<account id>` (`navigator.locks`) leads: it
+  opens the stream (read with `fetch`, so the status is known) and passes every event on over a `BroadcastChannel` of
+  the same name; a new tab asks (`hello`) and the leader tells just that tab whether push is up. When the leading tab
+  closes, the lock passes to the next tab, which opens the stream (the upstream is still open for 30 s, so nothing is
+  missed: `ready` makes every tab catch up). Without Web Locks or BroadcastChannel each tab opens its own stream (the
+  server still shares one upstream). Reconnects: a stream that ended by itself reopens within a second; a network
+  error, 429 or 503 backs off 5 s doubling to 10 minutes (jittered); 401 or `end signedout` tells every tab, which run a
+  check and meet the normal sign-in flow; 204, 400, 403 or `end moved` stop push for that page.
+- **The app (`webmail-app.tsx`):** a `state` event names the types whose state moved past what the tab has
+  (`pushedTypes`); 120 ms later (`PUSH_SETTLE_MS`, so mail and folder events of one delivery share it) the tab asks
+  for **those types only** — `mailChanges(state, { email, mailbox })`: `Email/changes` + `Email/get` of the created,
+  `Mailbox/changes`, or both — in one request, and reloads as below. A hidden tab (or offline) doesn't ask: it notes
+  the push and checks once when it is shown again. `ready` runs one full check (catch-up); while push is up a **safety
+  check runs every 5 minutes** (`SAFETY_MS`); while it is down, not available or not allowed, the check runs **every
+  30 s** as before (`nextCheckDelay`). A push during a check runs once more after it. Measured on the dev stack: new
+  mail in the list 0.4 s after the sender's submission returned (`tests/e2e/webmail-push.spec.ts`; budget ≤ 2 s).
+- **What a check does (since 2026-10-23):** one request carrying `Email/changes` and `Mailbox/changes` (or just the
+  pushed type), at once on focus, visibility or coming back online, backing off after errors (`mailChanges` in
+  `components/webmail/mail-client.ts`). Changed folders alone (counts moved by reading or moving
   mail on another device or in an IMAP app) reload just the folder counts. A real mail change reloads the folders and
   the list windows in place, and is passed to the open conversation as the new messages' thread ids and the changed or
   removed message ids: when it touches the conversation (or on Refresh, or when the server can't list the changes),
   the conversation loads again in place — what the person expanded or collapsed stays, newly arrived messages open
   like on first opening, the scroll position and loaded bodies are kept (`mergeExpanded`, `touchesThread` in
   `components/webmail/conversation.ts`). New arrivals aren't marked read automatically.
+- **Proxy settings (production, ops repository):** the stream path needs response buffering off and a read timeout
+  above the 25 s heartbeat — `08-operations.md` "Webmail push through NGINX".
 - **Folder counts follow the webmail's own changes (2026-10-29):** the mail client reports every change it makes to
   folder membership or read/draft state once it has been answered (`onChange`: `Email/set` updates and destroys, a
   new draft, a send, an undone send — saving over an existing draft doesn't change a count and isn't reported; a
@@ -1209,7 +1286,7 @@ control plane); sharing changes and account folder policies are audited (`audit.
 | Open message, cached / uncached                                | ≤ 150 ms / ≤ 400 ms                       |
 | Scroll a 10k-message folder                                    | 60 fps, ≤ 50 DOM rows                     |
 | Action feedback (archive, flag)                                | ≤ 50 ms (optimistic)                      |
-| New mail visible after delivery                                | ≤ 2 s (push)                              |
+| New mail visible after delivery                                | ≤ 2 s (push; 0.4 s measured on dev)       |
 | Search results first page                                      | ≤ 800 ms                                  |
 
 Budgets are checked by Playwright performance tests with seeded mailboxes (Phase 4 exit criteria).

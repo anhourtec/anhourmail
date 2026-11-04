@@ -72,3 +72,25 @@ redirectUri, codeChallenge, codeChallengeMethod:"S256"}` returns `client_code`; 
   for a throwaway app password the operations key mints, the BFF uses once at `/api/auth` and destroys. The session it
   makes is the one decision 1 describes; the password sign-in form stays for everyone else. Still nothing in a URL
   pre-fills the address.
+
+## Update (2026-11-04): push is built
+
+- **Decision 2 is built** (05-webmail.md "Push"). The BFF holds one upstream JMAP WebSocket per signed-in session and
+  mailbox (`/jmap/ws`, subprotocol `jmap`, `WebSocketPushEnable` for `Email` and `Mailbox`, the mailbox's Bearer token
+  in the upgrade request) in a process-wide hub, and fans `StateChange` type and state names out to the browser over
+  our own server-sent event stream (`GET /api/webmail/push`). Browser tabs of one mailbox share one stream (a Web Lock
+  picks the tab that holds it, a `BroadcastChannel` passes events on), and a tab asks only for the changes of the
+  types that moved. A 5-minute safety check stays; the 30-second check runs whenever push is down, over a per-process
+  cap, or not offered.
+- **No EventSource upstream.** The WebSocket is verified on v0.16.27 (Bearer on the socket, only the asked-for types,
+  an idle socket kept past the 10-minute timeout); when it fails the browser polls, so a second upstream protocol would
+  add a path without adding availability.
+- **Found while building:** Stalwart **keeps an open push socket after a password change** (new requests with the old
+  token get 401, the socket goes on). So the hub reopens each upstream when the token it opened with expires (with a
+  fresh, refreshed token — a revoked one ends the session and its streams), and checks the session every minute; the
+  safety check through the proxy usually meets the revoked token first. What the old browser could learn in between is
+  only that something changed.
+- **Mailboxes shared with the person (ADR-0026) keep polling:** their tabs pin the mailbox per request with a header
+  a stream can't carry, and every use must pass the delegation gate; the proxy's 30-second check already does.
+- Long-lived channels still don't count against `maxConcurrentRequests` (Context); the ≤ 4 in-flight queue is
+  unchanged and push makes fewer requests than the 30-second check did.
