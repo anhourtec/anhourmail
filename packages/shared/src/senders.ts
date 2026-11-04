@@ -13,6 +13,15 @@
 /** Entries in each of the blocked and safe lists. */
 export const MAX_SENDER_ENTRIES = 300;
 
+/**
+ * The account-wide Safe senders list (ADR-0032 §1), set in the console by Owners and User Administrators: entries, and
+ * characters across all of them (every entry is written into every mailbox's managed script, so it has a byte budget).
+ */
+export const ACCOUNT_SAFE_SENDERS = { maxEntries: 300, maxChars: 12_000 } as const;
+
+/** Characters an account list uses in the budget: each entry plus a separator. */
+export const accountSafeChars = (entries: readonly string[]): number => entries.reduce((n, e) => n + e.length + 1, 0);
+
 /** A domain of ASCII labels (A-labels allowed), at least two of them. */
 export const SENDER_DOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 /**
@@ -66,8 +75,11 @@ export function senderEntry(input: string): string | null {
   return d !== null && d.length <= 253 && SENDER_DOMAIN.test(d) ? d : null;
 }
 
-/** Which entry of a list a sender matched: its whole address, or its domain exactly (never a parent domain). */
-export type SafeSenderMatch = { kind: "address" | "domain"; value: string };
+/**
+ * Which entry of a list a sender matched: its whole address, or its domain exactly (never a parent domain). `source`:
+ * the mailbox's own list (absent: the mailbox's) or the account-wide list its administrators keep (ADR-0032).
+ */
+export type SafeSenderMatch = { kind: "address" | "domain"; value: string; source?: "mailbox" | "account" };
 
 /** A sender list split for lookups (`matchSafeSender` takes either form). */
 export type SenderSets = { addresses: ReadonlySet<string>; domains: ReadonlySet<string> };

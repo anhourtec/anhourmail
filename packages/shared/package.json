@@ -10,6 +10,7 @@
     "./addresses": "./src/addresses.ts",
     "./data-lifecycle": "./src/data-lifecycle.ts",
     "./delegation": "./src/delegation.ts",
+    "./mail-rules": "./src/mail-rules.ts",
     "./names": "./src/names.ts",
     "./platform": "./src/platform.ts",
     "./plans": "./src/plans.ts",
@@ -23,6 +24,7 @@
     "./senders": "./src/senders.ts",
     "./signatures": "./src/signatures.ts",
     "./storage": "./src/storage.ts",
+    "./templates": "./src/templates.ts",
     "./webmail": "./src/webmail.ts"
   },
   "scripts": {
