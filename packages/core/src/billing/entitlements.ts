@@ -34,12 +34,17 @@ export type BillingErrorCode =
   | "address_ceiling"
   | "invite_code_invalid"
   | "refund_not_eligible"
-  | "invalid_change";
+  | "invalid_change"
+  /** The processor declined the card for a charge made now (an add-on increase): HTTP 402. */
+  | "card_declined"
+  /** An increase was asked for without confirming the amount it charges now, or the amount moved since the preview. */
+  | "confirmation_required";
 
 /**
  * A billing rule refused the request. The HTTP layer maps the code (409 for conflicts like `addon_in_use`,
- * `checkout_pending`, `address_ceiling`; 503 for `billing_unavailable`; 403 for `billing_restricted`; 404 for
- * `invite_code_invalid`; 400 for `invalid_change`).
+ * `checkout_pending`, `address_ceiling`, `already_subscribed`, `not_subscribed`, `refund_not_eligible`,
+ * `confirmation_required`; 503 for `billing_unavailable`; 403 for `billing_restricted`; 404 for `invite_code_invalid`;
+ * 400 for `invalid_change`; 402 for `card_declined`).
  */
 export class BillingError extends DomainError {
   constructor(code: BillingErrorCode, message: string) {
