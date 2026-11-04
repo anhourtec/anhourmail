@@ -20,6 +20,7 @@
     "./data": "./src/data/index.ts",
     "./delegation": "./src/delegation/index.ts",
     "./app-passwords": "./src/app-passwords/index.ts",
+    "./imports": "./src/imports/index.ts",
     "./webmail": "./src/webmail/index.ts",
     "./people": "./src/people/index.ts",
     "./platform": "./src/platform/index.ts"
