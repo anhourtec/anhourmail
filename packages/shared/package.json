@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./addresses": "./src/addresses.ts",
+    "./csv": "./src/csv.ts",
     "./data-lifecycle": "./src/data-lifecycle.ts",
     "./delegation": "./src/delegation.ts",
     "./import": "./src/import.ts",
