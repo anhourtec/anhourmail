@@ -305,3 +305,20 @@ describe("sliding send quotas", async () => {
     expect(calls[0]?.slice(1)).toEqual([2, "k1", "k2", 7, 2, "x", 60, 5, 600, 9]);
   });
 });
+
+describe("redaction of billing secrets (ADR-0029 §1)", () => {
+  it("redacts the processor's key, webhook secret and signature, client secrets and idempotency keys", () => {
+    const out = redact({
+      STRIPE_SECRET_KEY: "rk_test_x",
+      STRIPE_WEBHOOK_SECRET: "whsec_x",
+      "stripe-signature": "t=1,v1=ab",
+      "Stripe-Signature": "t=1,v1=ab",
+      client_secret: "cs_x",
+      "Idempotency-Key": "k",
+      idempotencyKey: "k",
+      ok: "fine",
+    }) as Record<string, unknown>;
+    const expected = Object.fromEntries(Object.keys(out).map((k) => [k, k === "ok" ? "fine" : "[redacted]"]));
+    expect(out).toEqual(expected);
+  });
+});

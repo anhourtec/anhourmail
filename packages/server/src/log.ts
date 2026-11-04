@@ -112,6 +112,9 @@ export const REDACT_KEYS: readonly string[] = [
   "imappassword",
   "stripesecretkey",
   "stripewebhooksecret",
+  // Billing (ADR-0029 §1): the webhook signature header and request idempotency keys (`client_secret` is above)
+  "stripesignature",
+  "idempotencykey",
   // Webmail OAuth (headless code flow) and the secrets key ring. `access_token` / `refresh_token` normalise to the
   // token keys above.
   "accountsecret",
