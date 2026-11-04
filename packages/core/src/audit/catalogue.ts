@@ -87,12 +87,19 @@ export const AUDIT_ACTIONS = [
   "forwarding.verification_sent",
   "forwarding.confirmed",
   "junk_rules.changed",
+  // the account-wide Safe senders list (ADR-0032 §1): counts and kinds only, never an entry
+  "junk_rules.account_safe_added",
+  "junk_rules.account_safe_removed",
   "identity.changed",
   "webmail.preferences_changed",
   "webmail.signature_added",
   "webmail.signature_changed",
   "webmail.signature_removed",
   "webmail.signature_defaults_changed",
+  // templates (canned replies, ADR-0032 §3): ids and sizes only
+  "webmail.template_added",
+  "webmail.template_changed",
+  "webmail.template_removed",
   // console → webmail handoff (ADR-0024): the code minted, then redeemed (or refused)
   "webmail.handoff_started",
   "webmail.handoff_redeemed",
