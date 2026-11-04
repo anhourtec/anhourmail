@@ -162,6 +162,11 @@ export default tseslint.config(
           ],
         },
       ],
+      // Network I/O lives behind ports in adapters (rule 38; ADR-0029 §1): core never calls the global fetch.
+      "no-restricted-globals": [
+        "error",
+        { name: "fetch", message: "Core does no I/O: call a port; the adapter in packages/adapters uses fetch." },
+      ],
     },
   },
   // Server code logs only through the logger (rule 12).
