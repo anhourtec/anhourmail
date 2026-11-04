@@ -2,7 +2,14 @@
 import { describe, expect, it } from "vitest";
 
 import { isOverQuotaError, StalwartError, StalwartTransport } from "./client";
-import { CUSTOMER_PERMISSIONS, StalwartManagement, SUSPENDED_PERMISSIONS } from "./management";
+import {
+  accessOf,
+  CUSTOMER_PERMISSIONS,
+  RECEIVE_BLOCKED_PERMISSIONS,
+  SEND_BLOCKED_PERMISSIONS,
+  StalwartManagement,
+  SUSPENDED_PERMISSIONS,
+} from "./management";
 
 type Call = { url: string; body: unknown; auth: string | null };
 
@@ -189,8 +196,62 @@ describe("StalwartManagement", () => {
     expect(await m.getUser("u1")).toEqual({ id: "u1", address: "alice@a.test", suspended: true });
     expect(await m.getUser("gone")).toBeUndefined();
     expect(await m.listUsers()).toEqual([
-      { id: "u1", address: "alice@a.test", quotaBytes: null, aliases: [], suspended: false, sieveLocked: false },
+      {
+        id: "u1",
+        address: "alice@a.test",
+        quotaBytes: null,
+        aliases: [],
+        suspended: false,
+        access: "active",
+        sieveLocked: false,
+      },
     ]);
+  });
+
+  it("billing access states (ADR-0029 §5): send-blocked and receive-blocked are supersets; suspension wins", async () => {
+    const updates: Record<string, Record<string, unknown>>[] = [];
+    const s = fakeServer({
+      "x:Domain/get": () => ({ list: [{ id: "d1", name: "a.test" }] }),
+      "x:Account/get": () => ({ list: [{ id: "u1", name: "alice", domainId: "d1" }] }),
+      "x:Account/set": (args) => {
+        updates.push(args.update as Record<string, Record<string, unknown>>);
+        return { updated: {} };
+      },
+    });
+    const m = new StalwartManagement(transport(s.fetchImpl));
+    const base = { name: "alice", domain: "a.test", password: "pw", quotaBytes: 1 };
+    await m.upsertUser({ ...base, access: "send_blocked" });
+    await m.upsertUser({ ...base, access: "receive_blocked" });
+    await m.upsertUser({ ...base, access: "active" });
+    await m.upsertUser({ ...base, suspended: true, access: "active" });
+    await m.upsertUser({ ...base, suspended: false, access: "send_blocked" });
+    expect(updates.map((u) => u.u1?.permissions)).toEqual([
+      SEND_BLOCKED_PERMISSIONS,
+      RECEIVE_BLOCKED_PERMISSIONS,
+      CUSTOMER_PERMISSIONS,
+      SUSPENDED_PERMISSIONS,
+      SEND_BLOCKED_PERMISSIONS,
+    ]);
+    // SMTP AUTH (emailSend) and JMAP submission (verified: emailSend alone doesn't stop it) are both off; sign-in stays.
+    expect(SEND_BLOCKED_PERMISSIONS.disabledPermissions).toMatchObject({
+      ...CUSTOMER_PERMISSIONS.disabledPermissions,
+      emailSend: true,
+      jmapEmailSubmissionCreate: true,
+    });
+    expect("authenticate" in SEND_BLOCKED_PERMISSIONS.disabledPermissions).toBe(false);
+    expect("emailReceive" in SEND_BLOCKED_PERMISSIONS.disabledPermissions).toBe(false);
+    expect(RECEIVE_BLOCKED_PERMISSIONS.disabledPermissions).toMatchObject({
+      ...SEND_BLOCKED_PERMISSIONS.disabledPermissions,
+      emailReceive: true,
+    });
+    expect("authenticate" in RECEIVE_BLOCKED_PERMISSIONS.disabledPermissions).toBe(false);
+    expect([
+      accessOf(undefined),
+      accessOf(CUSTOMER_PERMISSIONS),
+      accessOf(SEND_BLOCKED_PERMISSIONS),
+      accessOf(RECEIVE_BLOCKED_PERMISSIONS),
+      accessOf(SUSPENDED_PERMISSIONS),
+    ]).toEqual(["active", "active", "send_blocked", "receive_blocked", "suspended"]);
   });
 
   it("reads storage used for the given accounts only, name and usedDiskQuota only", async () => {

@@ -59,6 +59,10 @@ export {
   CUSTOMER_PERMISSIONS,
   FILE_STORAGE_PERMISSIONS,
   SUSPENDED_PERMISSIONS,
+  SEND_BLOCKED_PERMISSIONS,
+  RECEIVE_BLOCKED_PERMISSIONS,
+  type MailboxAccess,
+  accessOf,
   type UserInput,
 } from "./management";
 export {

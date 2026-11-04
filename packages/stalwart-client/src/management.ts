@@ -42,9 +42,15 @@ export type UserInput = {
   resetPassword?: boolean;
   /**
    * true: suspend (see `SUSPENDED_PERMISSIONS`); false: back to the role's permissions; omitted: leave them as
-   * they are.
+   * they are. `true` wins over `access`.
    */
   suspended?: boolean;
+  /**
+   * What the account may do, when not suspended (`MAILBOX_ACCESS_PERMISSIONS`): `active`, `send_blocked` (reading and
+   * delivery stay), `receive_blocked` (sending and delivery off; reading stays) or `suspended`. Omitted: `suspended`
+   * decides as before.
+   */
+  access?: MailboxAccess;
   aliases?: { name: string; domain: string; enabled: boolean; description?: string }[];
   /** The account's description (our mailbox display name); null clears it, omitted leaves it as it is. */
   description?: string | null;
@@ -159,12 +165,64 @@ export const SUSPENDED_PERMISSIONS = {
   },
 } as const;
 
+/**
+ * A mailbox that may not send (billing `restricted`, or held after a downgrade; ADR-0029 §5), verified on the pinned
+ * v0.16.27 (2026-11-04, research/stalwart.md "Billing access states"): `emailSend` alone refuses SMTP AUTH on 465 and
+ * 587 (`550 5.7.1 Your account is not authorized to use this service.`) but **not** JMAP `EmailSubmission/set`, which
+ * still sent; `jmapEmailSubmissionCreate` closes that (`forbidden`). Sign-in, IMAP and JMAP reading, saving drafts and
+ * delivery to it are untouched. A superset of `CUSTOMER_PERMISSIONS`.
+ */
+export const SEND_BLOCKED_PERMISSIONS = {
+  "@type": "Merge",
+  enabledPermissions: {},
+  disabledPermissions: { ...CUSTOMER_DENIALS, emailSend: true, jmapEmailSubmissionCreate: true },
+} as const;
+
+/**
+ * Sending and delivery off, reading kept (a held mailbox past its receive window, ADR-0029 §6). Verified on v0.16.27:
+ * `emailReceive` does **not** refuse at RCPT — the message is accepted (250 at RCPT and DATA), not delivered, and a
+ * delivery-failure notice goes to the envelope sender, which for mail from the internet is backscatter. Callers must
+ * not use it for mail from outside until recipients are refused during the SMTP conversation (research/stalwart.md).
+ */
+export const RECEIVE_BLOCKED_PERMISSIONS = {
+  "@type": "Merge",
+  enabledPermissions: {},
+  disabledPermissions: { ...SEND_BLOCKED_PERMISSIONS.disabledPermissions, emailReceive: true },
+} as const;
+
+/** What a customer mailbox may do on the mail server (most restrictive last). */
+export type MailboxAccess = "active" | "send_blocked" | "receive_blocked" | "suspended";
+
+const ACCESS_PERMISSIONS = {
+  active: null,
+  send_blocked: SEND_BLOCKED_PERMISSIONS,
+  receive_blocked: RECEIVE_BLOCKED_PERMISSIONS,
+  suspended: SUSPENDED_PERMISSIONS,
+} as const;
+
+/** The access an account's permissions give it (what the reconciler compares). */
+export function accessOf(p: { disabledPermissions?: Record<string, boolean> } | undefined): MailboxAccess {
+  const off = p?.disabledPermissions ?? {};
+  if (off.authenticate === true) return "suspended";
+  if (off.emailReceive === true) return "receive_blocked";
+  if (off.emailSend === true || off.jmapEmailSubmissionCreate === true) return "send_blocked";
+  return "active";
+}
+
 /** A normal (non-suspended) customer mailbox: the role's permissions minus `CUSTOMER_DENIALS`. */
 export const CUSTOMER_PERMISSIONS = {
   "@type": "Merge",
   enabledPermissions: {},
   disabledPermissions: { ...CUSTOMER_DENIALS },
 } as const;
+
+/** The permissions an upsert writes: suspension first, then the access state; neither given leaves them alone. */
+function permissionsFor(input: Pick<UserInput, "suspended" | "access">): { permissions?: object } {
+  if (input.suspended === true) return { permissions: SUSPENDED_PERMISSIONS };
+  if (input.access !== undefined) return { permissions: ACCESS_PERMISSIONS[input.access] ?? CUSTOMER_PERMISSIONS };
+  if (input.suspended === false) return { permissions: CUSTOMER_PERMISSIONS };
+  return {};
+}
 
 /** Sign-in turned off by our suspension (what the reconciler compares). */
 const isSuspended = (p: { disabledPermissions?: Record<string, boolean> } | undefined): boolean =>
@@ -320,9 +378,7 @@ export class StalwartManagement {
       quotas: { maxDiskQuota: input.quotaBytes, maxAppPasswords: CUSTOMER_APP_PASSWORD_QUOTA },
       // A customer mailbox never gets to write its own Sieve (CUSTOMER_PERMISSIONS); a suspended one is turned off
       // entirely (SUSPENDED_PERMISSIONS). `undefined` leaves permissions as they are.
-      ...(input.suspended === undefined
-        ? {}
-        : { permissions: input.suspended ? SUSPENDED_PERMISSIONS : CUSTOMER_PERMISSIONS }),
+      ...permissionsFor(input),
       ...(input.description === undefined ? {} : { description: input.description }),
       aliases: list(
         (input.aliases ?? []).map((a) => ({
@@ -443,6 +499,8 @@ export class StalwartManagement {
       quotaBytes: number | null;
       aliases: string[];
       suspended: boolean;
+      /** What the account may do (suspension included). */
+      access: MailboxAccess;
       /** Every customer denial is in place (the user can't change mail flow). */
       sieveLocked: boolean;
     }[]
@@ -468,6 +526,7 @@ export class StalwartManagement {
         quotaBytes: a.quotas?.maxDiskQuota ?? null,
         aliases: Object.values(a.aliases ?? {}).map((x) => `${x.name}@${domainName.get(x.domainId) ?? "?"}`),
         suspended: isSuspended(a.permissions),
+        access: accessOf(a.permissions),
         sieveLocked: isSieveLocked(a.permissions),
       }));
   }
