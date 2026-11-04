@@ -23,6 +23,7 @@
     "job:account-deletion": "tsx src/jobs/account-deletion.ts",
     "job:quota-cap": "tsx src/jobs/quota-cap.ts",
     "job:billing-reconcile": "tsx src/jobs/billing-reconcile.ts",
+    "job:billing-timers": "tsx src/jobs/billing-timers.ts",
     "job:bootstrap-admin": "tsx --env-file-if-exists=../../.env src/jobs/bootstrap-admin.ts"
   },
   "dependencies": {
