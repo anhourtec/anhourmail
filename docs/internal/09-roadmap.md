@@ -1,6 +1,6 @@
 # 09 — Roadmap
 
-Last updated: 2026-11-04 (mail and contacts import designed, ADR-0030; webmail first load: inside the page, IndexedDB first-view copy, `Server-Timing`; names as one source and the file-storage lockdown deployed at 6545a16; Safe senders load images and own Sent mail loads its images, ADR-0027 built). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
+Last updated: 2026-11-04 (billing ADR-0029 slices 1–7 built; webmail push sync built); 2026-11-04 (mail and contacts import designed, ADR-0030; webmail first load: inside the page, IndexedDB first-view copy, `Server-Timing`; names as one source and the file-storage lockdown deployed at 6545a16; Safe senders load images and own Sent mail loads its images, ADR-0027 built). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
 
 ## Path to production (as of 2026-10-29)
 
@@ -103,7 +103,9 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
    archives built by the worker, mail streamed from the person's own webmail session, deletion with a 14-day grace
    period, own-login deletion), act-as (**built 2026-10-29**, ADR-0023: read-only support
    access, audited, visible to account admins), remote-image proxy, push sync in
-   the webmail (it polls every 30 s today), webmail settings part 2 (rules, templates; senders whose images load are the mailbox's Safe senders — **built 2026-10-31**, ADR-0027: one list, verified From only, "Always for" adds to it, own Sent mail loads by itself, old fingerprints dropped at launch; next an account-wide safe-senders list for Owners and User Admins, verified-only for images and audited — maintainer, 2026-10-31; no request-to-allow-list workflow), and the leftover open items
+   the webmail (**built 2026-11-04**: one upstream JMAP WebSocket per session and mailbox, our own event stream, tabs
+   sharing one stream, 5-minute safety check, the 30 s check when push is down; shared mailboxes keep polling),
+   webmail settings part 2 (rules, templates; senders whose images load are the mailbox's Safe senders — **built 2026-10-31**, ADR-0027: one list, verified From only, "Always for" adds to it, own Sent mail loads by itself, old fingerprints dropped at launch; next an account-wide safe-senders list for Owners and User Admins, verified-only for images and audited — maintainer, 2026-10-31; no request-to-allow-list workflow), and the leftover open items
    in the handoff (alias admin-lock, daily alias creation cap, provisioning-queue lock token, unknown-recipient
    rejection at SMTP time).
 9. **Billing and migration** (Phase 5): Stripe Checkout/Portal/Tax, webhooks, plan changes and the account
@@ -194,8 +196,8 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
   forwarding, junk, managed Sieve), remote images through the privacy proxy, the rich-text composer, named
   signatures, profile photos, Archive. Console → webmail handoff built 2026-10-29 (ADR-0024). First load built
   2026-10-31 (folders and the first window inside the page, an IndexedDB copy of the first view, `Server-Timing`;
-  `05-webmail.md` "First load"; waits for the next deploy). Not built: push sync (polling today), per-type
-  `*/changes` sync across visits, settings part 2, calendar, the Playwright performance tests the exit needs.
+  `05-webmail.md` "First load"; waits for the next deploy). Push sync built 2026-11-04 (`05-webmail.md` "Push"; new
+  mail in the list 0.4 s after submission on dev). Not built: per-type `*/changes` sync across visits, settings part 2, calendar, the Playwright performance tests the exit needs.
 - **Exit:** performance budgets met in Playwright perf tests; XSS corpus (HTML email test suite) passes; Playwright MCP pass light/dark at 1440/390 as every role that can open webmail.
 
 ## Phase 5 — Billing and migration
