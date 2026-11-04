@@ -10,7 +10,8 @@ import { type BillingProvider, DEV_ADDRESS_CEILING } from "@anhourmail/core/bill
 import type { DnsResolver } from "@anhourmail/core/domains";
 import type { PasswordHasher } from "@anhourmail/core/mailboxes";
 import type { BreachedPasswords } from "@anhourmail/core/security";
-import { type Counter, redisCounter } from "@anhourmail/server/rate-limit";
+import { type OneTimeStore, redisOneTime } from "@anhourmail/server/one-time";
+import { type Counter, redisCounter, redisUncount, type Uncount } from "@anhourmail/server/rate-limit";
 import { redis } from "@anhourmail/server/redis";
 
 import { breachedPasswords } from "./adapters/breached-passwords";
@@ -25,6 +26,10 @@ import { platform } from "./platform";
 export type Container = {
   deps: Deps;
   counter: Counter;
+  /** Single-use claims (sign-up challenges, ADR-0031). Unset in tests that don't need it: claims then fail (refuse). */
+  oneTime?: OneTimeStore;
+  /** Gives a counted request back (a sign-up that created no account, ADR-0031). Unset: nothing is given back. */
+  uncount?: Uncount;
   mailer: Mailer;
   dns: DnsResolver;
   /** Mailbox passwords → argon2id PHC strings (the only form they are kept or queued in; rule 23). */
@@ -52,6 +57,8 @@ export function container(): Container {
       limits: { addressCeiling: env().ACCOUNT_ADDRESS_CEILING ?? DEV_ADDRESS_CEILING },
     },
     counter: redisCounter(redis()),
+    oneTime: redisOneTime(redis()),
+    uncount: redisUncount(redis()),
     mailer: createMailer({ url: env().MAIL_TRANSPORT_URL, from: env().MAIL_FROM }),
     // Development answers for `.test` names (devResolver); production always asks real DNS.
     dns:
