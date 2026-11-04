@@ -25,6 +25,7 @@ import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 
 import { memoryKv, WebmailSessionStore } from "../webmail/session-store";
 import { WebmailService } from "../webmail/service";
+import { applyToMailboxes } from "../webmail/account-safe-apply";
 import { WebmailSettings } from "../webmail/settings";
 import { ourAuthResultsHeader, type RawHeader, trustedAuthservIds } from "../webmail/original";
 import { createSafeSenders, redisRulesVersions, rulesVersionKey } from "../webmail/safe-senders";
@@ -479,6 +480,25 @@ describe("webmail settings on the dev Stalwart", () => {
 
     await settings.removeForwarding(ownerSession, account, req);
     expect((await settings.overview(ownerSession)).rules.forwarding).toMatchObject({ enabled: false, address: null });
+  }, 90_000);
+
+  it("account safe senders: the one-line rewrite is accepted, and the sender skips the trusted-only Junk rule", async () => {
+    await settings.saveJunk(ownerSession, account, { blocked: [], safe: [], trustedOnly: true }, req);
+    const store = {
+      read: (id: string) => stalwartDevAdmin().getSieveScript(id, MANAGED_SCRIPT),
+      write: (id: string, script: string, state: string) =>
+        stalwartDevAdmin().putSieveScriptIfUnchanged(id, MANAGED_SCRIPT, script, state),
+    };
+    const box = [{ stalwartId: account, address: owner.address }];
+    expect(await applyToMailboxes(box, [sender.address], store)).toMatchObject({ updated: 1, failed: 0 });
+    expect((await store.read(account))?.content).toContain(`"${sender.address}"`);
+    await send(mail, senderSession, sender.address, owner.address, `int-orgsafe ${run}`);
+    expect(await waitFor(mail, ownerSession, `int-orgsafe ${run}`)).toEqual(["inbox"]);
+    // Taken off the account's list: the trusted-only rule applies to them again.
+    expect(await applyToMailboxes(box, [], store)).toMatchObject({ updated: 1 });
+    await send(mail, senderSession, sender.address, owner.address, `int-orgsafe-off ${run}`);
+    expect(await waitFor(mail, ownerSession, `int-orgsafe-off ${run}`)).toEqual(["junk"]);
+    await settings.saveJunk(ownerSession, account, { blocked: [], safe: [], trustedOnly: false }, req);
   }, 90_000);
 
   it("refuses a user VacationResponse (it would switch our rules off for the server's own script)", async () => {
