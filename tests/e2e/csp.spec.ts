@@ -70,6 +70,8 @@ test("console pages carry exactly one strict nonce CSP", async ({ request }) => 
     expect(d.get("img-src")).toBe("img-src 'self' data:");
     expect(d.get("font-src")).toBe("font-src 'self'");
     expect(d.has("frame-src")).toBe(false);
+    // The sign-up proof-of-work worker (ADR-0031): same origin only.
+    expect(d.get("worker-src")).toBe("worker-src 'self'");
     await expectNonceApplied(res, nonce);
   }
   // A client can't choose the nonce.

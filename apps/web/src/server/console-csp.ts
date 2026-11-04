@@ -6,7 +6,7 @@
  * inline styles). `img-src data:` is for the CSS noise texture; the two-factor QR code is inline SVG and the
  * recovery-codes download is a `data:` link, which a CSP doesn't govern. Passkeys need nothing here. `connect-src
  * 'self'` also covers the dev server's same-origin HMR websocket; dev adds `'unsafe-eval'` (React's dev tooling),
- * production never does. The webmail has its own, wider policy (`webmail/csp.ts`: frames, blobs, workers).
+ * production never does. `worker-src 'self'` is for the sign-up proof-of-work worker. The webmail has its own, wider policy (`webmail/csp.ts`: frames, blobs, workers).
  */
 export function consoleCsp(nonce: string, dev: boolean): string {
   return [
@@ -16,6 +16,8 @@ export function consoleCsp(nonce: string, dev: boolean): string {
     "img-src 'self' data:",
     "font-src 'self'",
     "connect-src 'self'",
+    // The sign-up proof-of-work runs in a same-origin Web Worker (ADR-0031); 'strict-dynamic' alone wouldn't allow it.
+    "worker-src 'self'",
     "object-src 'none'",
     "base-uri 'none'",
     "form-action 'self'",

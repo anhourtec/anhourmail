@@ -18,6 +18,7 @@ describe("console CSP", () => {
         "img-src 'self' data:",
         "font-src 'self'",
         "connect-src 'self'",
+        "worker-src 'self'",
         "object-src 'none'",
         "base-uri 'none'",
         "form-action 'self'",
@@ -36,7 +37,8 @@ describe("console CSP", () => {
     const own = directives(consoleCsp("n", false));
     expect(new Set(own).size).toBe(own.length);
     expect(own).not.toContain("frame-src");
-    expect(own).not.toContain("worker-src");
+    // Same-origin workers only (the sign-up proof-of-work, ADR-0031).
+    expect(consoleCsp("n", false)).toContain("worker-src 'self';");
     expect(directives(webmailCsp("n", false))).toEqual(expect.arrayContaining(own));
   });
 
