@@ -312,6 +312,16 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
     on a custom domain the effective plan excludes, a held domain or a held mailbox (**403** `plan_limit`, denied).
     The billing webhook
     (`POST /api/billing/webhook`) is public and signed: no session, no role. No matrix change.
+21. **Billing for customers** (ADR-0029 §9, slices 8–10; `packages/core/src/billing/checkout.ts`, `changes.ts`,
+    `lapse.ts`): `billing.read` (Owner, Billing Administrator, Auditor; staff acting read-only) sees
+    `GET /api/accounts/:accountId/billing`. `billing.manage` ★ (Owner, Billing Administrator) starts a checkout (a
+    confirmed console email; **403** `email_unverified`), opens the portal, previews and makes plan and add-on changes,
+    cancels or undoes it and takes the 14-day refund (the last three with a fresh step-up, **403** `step_up_required`),
+    and chooses what stays on after a lapse. Domain and User Administrators, Members and Auditors get **403**, other
+    accounts **404**, staff acting as someone **403** (the act-as role holds no `billing.manage`, and the services
+    refuse act-as too). Staff refunds outside the window and staff grants come with Platform billing (slice 12). The
+    dev-only `POST /api/dev/billing/simulate` needs `billing.manage` on the fake object's account and is 404 outside a
+    dev process with the fake provider. No matrix change; the RBAC harness probes every route as every persona.
 
 ## Webmail
 
