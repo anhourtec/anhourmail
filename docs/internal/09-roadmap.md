@@ -39,7 +39,9 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
 **Maintainer decisions (2026-10-29), now in the work plan:**
 
 - **Free sign-up:** no SMS/OTP provider. Keep console email confirmation; add a self-hosted proof-of-work check (no
-  third-party requests) and tighter sign-up rate limits; sending ramps for new free mailboxes stay in Phase 6.
+  third-party requests) and tighter sign-up rate limits; sending ramps for new free mailboxes stay in Phase 6. **Built
+  2026-11-05** (ADR-0031: signed single-use challenge solved in a Web Worker, per-address and per-network sign-up
+  limits, fail closed; refusals `auth.sign_up_refused`).
 - **Alias limits:** free platform-domain accounts 10 aliases at a time and 10 new per rolling year (deleting doesn't
   return a yearly slot); paid accounts up to 400 addresses per mailbox; the per-day creation cap stays as a brake — **built
   2026-10-29** (`plans.ts` `ALIAS_CREATIONS_PER_YEAR`, `ALIASES_PER_MAILBOX`; `03-anti-spam-and-abuse.md`).
@@ -93,10 +95,10 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
    upload.
    **Exit:** smoke 100% on the real host; a customer domain verified and mailboxes sending and receiving externally;
    mail-tester ≥ 9/10; restore drill passes; `security-reviewer` pass on the deployed config.
-8. **Close the product gaps a beta needs** (Phases 3–4 remainder): free `@anhourmail.com` sign-up with SMS/OTP
-   verification (provider to choose) — **free addresses built 2026-10-23** (ADR-0021: claim from the console with a
-   confirmed email, one per Free account, name rules, no reuse, staff create; SMS/OTP and Phase 6 sending limits for
-   free mailboxes still open); **since built:** multipart text + HTML sending (the only mail-tester deduction on the
+8. **Close the product gaps a beta needs** (Phases 3–4 remainder): free `@anhourmail.com` sign-up — **free addresses
+   built 2026-10-23** (ADR-0021: claim from the console with a confirmed email, one per Free account, name rules, no
+   reuse, staff create), **sign-up proof-of-work and sign-up limits instead of SMS/OTP built 2026-11-05** (ADR-0031);
+   Phase 6 sending limits for free mailboxes still open; **since built:** multipart text + HTML sending (the only mail-tester deduction on the
    first pre-staging run), Add a user, shared addresses and Make this a user; console → webmail session handoff
    (**built 2026-10-29**, ADR-0024: one-time browser-bound code, throwaway mail-server credential, own mailbox only,
    never while acting), data export and account deletion (**built 2026-10-29**, ADR-0025: sealed control-plane
@@ -182,7 +184,7 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
   staff support access (act-as, read-only, ADR-0023, 2026-10-29), data export and account deletion (ADR-0025, 2026-10-29).
   Also built 2026-10-29: alias admin lock, free-tier alias limits (10 at a time, 10 new a year; paid 400 per
   mailbox), provisioning claim tokens. Not built: collaboration and delegation (next: leavers' mailboxes to shared,
-  Full access / Send as / Send on behalf), free sign-up proof-of-work check (no SMS, maintainer decision).
+  Full access / Send as / Send on behalf). Free sign-up proof-of-work check built 2026-11-05 (ADR-0031; no SMS).
 - **Exit:** RBAC harness covers every route × role; cross-account tests return 404; audit entries asserted for every mutation; a custom domain goes from add to active in ≤ 15 min in staging; a non-member can neither post to a members-only list nor send with a shared mailbox's From (integration tests); the reconciler reports ACL/membership drift.
 
 ## Phase 4 — Webmail v1 on JMAP
