@@ -8,13 +8,25 @@ import { useEffect, useId, useState } from "react";
 import { ACT_AS } from "@anhourmail/shared/platform";
 
 import { callApi } from "../api";
+import { reasonProblem } from "./act-as-reason";
 import { StepUpForm } from "../security/step-up-form";
 import { inputClass, primaryButtonClass, secondaryButtonClass } from "../ui-classes";
 
 const timeFmt = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
 
 /** The reason textarea with its rules: shown to the account's admins, never a secret. */
-function ReasonField({ id, value, onChange }: { id: string; value: string; onChange: (v: string) => void }) {
+function ReasonField({
+  id,
+  value,
+  onChange,
+  invalid,
+}: {
+  id: string;
+  value: string;
+  onChange: (v: string) => void;
+  /** After a submit with a reason that's too short: marks the field so the error next to it is announced. */
+  invalid: boolean;
+}) {
   const length = value.trim().length;
   return (
     <div className="flex flex-col gap-1.5">
@@ -27,6 +39,7 @@ function ReasonField({ id, value, onChange }: { id: string; value: string; onCha
         maxLength={ACT_AS.reasonMax}
         rows={3}
         aria-describedby={`${id}-hint`}
+        aria-invalid={invalid || undefined}
         onChange={(e) => {
           onChange(e.target.value);
         }}
@@ -34,14 +47,13 @@ function ReasonField({ id, value, onChange }: { id: string; value: string; onCha
         placeholder="e.g. Ticket 1234: the owner asked why their domain isn't verifying"
       />
       <p id={`${id}-hint`} className="am-micro">
-        The account&apos;s admins see this in their audit log and the Owners get it by email. Never paste passwords,
-        codes or other secrets. <span className="am-num">{`${String(length)} / ${String(ACT_AS.reasonMax)}`}</span>
+        At least {ACT_AS.reasonMin} characters. The account&apos;s admins see this in their audit log and the Owners get
+        it by email. Never paste passwords, codes or other secrets.{" "}
+        <span className="am-num">{`${String(length)} / ${String(ACT_AS.reasonMax)}`}</span>
       </p>
     </div>
   );
 }
-
-const reasonOk = (r: string) => r.trim().length >= ACT_AS.reasonMin && r.trim().length <= ACT_AS.reasonMax;
 
 /**
  * Staff (Global and Support Administrators, `platform.accounts.actAs`; ADR-0023): open a customer account read-only as
@@ -65,6 +77,11 @@ export function ActAsStart({ accountId, accountName }: { accountId: string; acco
   }
 
   async function submit() {
+    const problem = reasonProblem(reason);
+    if (problem) {
+      setError(problem);
+      return;
+    }
     setBusy(true);
     setError(null);
     const res = await callApi(`/api/platform/accounts/${encodeURIComponent(accountId)}/act-as`, {
@@ -128,14 +145,22 @@ export function ActAsStart({ accountId, accountName }: { accountId: string; acco
         {ACT_AS.minutes} minutes (you can extend it). You can&apos;t change anything, open webmail or read mail. Every
         step is recorded in the account&apos;s audit log as Anhourtec staff, and its Owners are emailed now.
       </p>
-      <ReasonField id={`${id}-reason`} value={reason} onChange={setReason} />
+      <ReasonField
+        id={`${id}-reason`}
+        value={reason}
+        onChange={(v) => {
+          setReason(v);
+          setError(null);
+        }}
+        invalid={error !== null && reasonProblem(reason) !== null}
+      />
       {error && (
         <p role="alert" className="am-small text-destructive">
           {error}
         </p>
       )}
       <div className="flex flex-wrap gap-2">
-        <button type="submit" disabled={busy || !reasonOk(reason)} className={primaryButtonClass}>
+        <button type="submit" disabled={busy} className={primaryButtonClass}>
           {busy ? "Opening…" : "Open read-only"}
         </button>
         <button type="button" onClick={close} className={secondaryButtonClass}>
@@ -209,6 +234,11 @@ export function ActAsBanner({
   }
 
   async function renew() {
+    const problem = reasonProblem(reason);
+    if (problem) {
+      setError(problem);
+      return;
+    }
     setBusy(true);
     setError(null);
     const res = await callApi("/api/me/act-as/renew", { method: "POST", body: { reason: reason.trim() } });
@@ -304,14 +334,22 @@ export function ActAsBanner({
                 Another {ACT_AS.minutes} minutes from now, up to {ACT_AS.maxMinutes / 60} hours in all. Say why you
                 still need it.
               </p>
-              <ReasonField id={`${id}-reason`} value={reason} onChange={setReason} />
+              <ReasonField
+                id={`${id}-reason`}
+                value={reason}
+                onChange={(v) => {
+                  setReason(v);
+                  setError(null);
+                }}
+                invalid={error !== null && reasonProblem(reason) !== null}
+              />
               {error && (
                 <p role="alert" className="am-small text-destructive">
                   {error}
                 </p>
               )}
               <div className="flex flex-wrap gap-2">
-                <button type="submit" disabled={busy || !reasonOk(reason)} className={primaryButtonClass}>
+                <button type="submit" disabled={busy} className={primaryButtonClass}>
                   {busy ? "Extending…" : "Extend"}
                 </button>
                 <button
