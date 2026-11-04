@@ -12,6 +12,8 @@ import { type AuditEntryInput, type AuditQuery, verifyChain } from "@anhourmail/
 import { type ClaimedJob, STALE_RUNNING_MS } from "@anhourmail/core/provisioning";
 import type { DelegationRight } from "@anhourmail/shared/delegation";
 
+import { describeBillingContract } from "./billing";
+
 /** `createUser` makes a console user the adapter can reference (memberships need one in Postgres). */
 export type AdapterFactory = () => Promise<{
   uow: UnitOfWork;
@@ -2370,4 +2372,5 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
       }
     });
   });
+  describeBillingContract(name, factory);
 }
