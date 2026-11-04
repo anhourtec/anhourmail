@@ -148,6 +148,23 @@ describe("permission matrix invariants", () => {
     for (const r of revokeOthers) expect(accountRoleCan(r, "app_password.manage.own")).toBe(true);
   });
 
+  it("mail import: every role but the Auditor into own mailboxes; any mailbox is Owner and User Admin (critical)", () => {
+    for (const r of ACCOUNT_ROLES) expect(accountRoleCan(r, "mailbox.import.own")).toBe(r !== "auditor");
+    const any = ACCOUNT_ROLES.filter((r) => accountRoleCan(r, "mailbox.import.any"));
+    expect([...any].sort()).toEqual(["owner", "user_admin"]);
+    expect(isCritical("mailbox.import.any")).toBe(true);
+    expect(isCritical("mailbox.import.own")).toBe(false);
+    // Importing into someone else's mailbox is no more reach than resetting its password, which they already hold.
+    for (const r of any) expect(accountRoleCan(r, "mailbox.password.reset")).toBe(true);
+    // Staff acting in an account hold the Auditor role: support access never imports (it mints a mail credential).
+    expect(accountRoleCan(ACT_AS_ACCOUNT_ROLE, "mailbox.import.own")).toBe(false);
+    expect(accountRoleCan(ACT_AS_ACCOUNT_ROLE, "mailbox.import.any")).toBe(false);
+    for (const r of PLATFORM_ROLES) {
+      expect(platformRoleCan(r, "mailbox.import.own")).toBe(false);
+      expect(platformRoleCan(r, "mailbox.import.any")).toBe(false);
+    }
+  });
+
   it("setting a mailbox password is Owner and User Admin only, critical, and implies managing mailboxes", () => {
     const holders = ACCOUNT_ROLES.filter((r) => accountRoleCan(r, "mailbox.password.reset"));
     expect([...holders].sort()).toEqual(["owner", "user_admin"]);

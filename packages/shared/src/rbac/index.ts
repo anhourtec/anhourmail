@@ -159,6 +159,19 @@ export const PERMISSIONS = {
     scope: "account",
     description: "Create and revoke app passwords (mail apps) for own mailboxes",
   },
+  // ADR-0030 §13: copying mail in from another IMAP server mints an IMAP-only credential on the mailbox, so starting
+  // and resuming need a fresh step-up and never happen while acting as someone (the Auditor role holds neither).
+  "mailbox.import.own": {
+    scope: "account",
+    description:
+      "Import mail into own mailboxes from another mail server (fresh step-up to start; never while acting as)",
+  },
+  "mailbox.import.any": {
+    scope: "account",
+    description:
+      "Import mail into any mailbox in the account, also many at once from a CSV (an Owner's or admin's mailbox: Owners only; step-up; the person is told)",
+    critical: true,
+  },
   // ADR-0024: the console's "Open webmail" signs the person in to their own mailbox without its password. Never the
   // Auditor role, which is also what staff hold while acting as someone (ADR-0023): act-as never reaches mail.
   "webmail.open.own": {
@@ -310,6 +323,8 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
     "alias.manage.any",
     "alias.manage.own",
     "app_password.manage.own",
+    "mailbox.import.own",
+    "mailbox.import.any",
     "webmail.open.own",
     "billing.read",
     "billing.manage",
@@ -350,6 +365,7 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
     "mailbox.read",
     "alias.manage.own",
     "app_password.manage.own",
+    "mailbox.import.own",
     "webmail.open.own",
     "distribution_list.read",
     "delegation.manage.own",
@@ -372,6 +388,8 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
     "alias.manage.any",
     "alias.manage.own",
     "app_password.manage.own",
+    "mailbox.import.own",
+    "mailbox.import.any",
     "webmail.open.own",
     "audit.read",
     "shared_mailbox.read",
@@ -403,6 +421,7 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
     "billing.manage",
     "alias.manage.own",
     "app_password.manage.own",
+    "mailbox.import.own",
     "webmail.open.own",
     "delegation.manage.own",
     "forwarding.manage.own",
@@ -412,6 +431,7 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
   member: [
     "alias.manage.own",
     "app_password.manage.own",
+    "mailbox.import.own",
     "webmail.open.own",
     "delegation.manage.own",
     "forwarding.manage.own",
