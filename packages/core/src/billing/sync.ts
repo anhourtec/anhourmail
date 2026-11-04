@@ -266,10 +266,22 @@ export async function syncAccountBilling(
     if (d.disputes.length > 0) await r.billing.saveDisputes(accountId, d.disputes);
 
     let held: HeldCounts | null = null;
+    const revoked: SystemChange[] = [];
     if (d.changes.some((c) => c.kind === "holds_needed")) {
       const planned = computeHolds(resources ?? (await holdResources(deps, r, accountId)), now);
       await r.billing.replaceHolds(accountId, planned.holds, now);
       held = countHolds(planned.holds);
+      // Free can't add people (ADR-0029 §6): pending invites are revoked; members stay members.
+      for (const invite of await r.invites.listPending(accountId)) {
+        if (await r.invites.revoke(invite.id)) {
+          revoked.push({
+            action: "account.invite_revoked",
+            accountId,
+            target: { type: "invite", id: invite.id },
+            meta: { reason: "plan_lapsed" },
+          });
+        }
+      }
     } else if (d.changes.some((c) => c.kind === "holds_lifted")) {
       held = countHolds(currentHolds);
       await r.billing.clearHolds(accountId);
@@ -290,7 +302,7 @@ export async function syncAccountBilling(
         }
       }
     }
-    await recordSystemChanges(deps, r, SYNC, req, auditOf(accountId, d.next, d.changes, held));
+    await recordSystemChanges(deps, r, SYNC, req, [...auditOf(accountId, d.next, d.changes, held), ...revoked]);
     return { status: "synced", changes: d.changes };
   });
 }
