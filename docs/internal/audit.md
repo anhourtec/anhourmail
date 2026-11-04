@@ -124,6 +124,30 @@ platform copy with `accountId`, `from`, `set`; refusals are `denied` (`forbidden
 `masked_alias.created` `denied` `address_ceiling` (never the number). A new mailbox or alias on a custom domain the
 effective plan doesn't include, on a held domain or onto a held mailbox is the same action `denied` `plan_limit`.
 
+Billing, slices 8–10 (2026-11-05). A person's billing request is audited by the person (staff acting as someone are refused:
+`denied` `forbidden`, or `act_as` should the acting role ever hold the permission), in the account scope, target `account_billing`; the sync then records what the provider reports
+under the system actor, so a change shows twice: the request, then the recorded change. `billing.customer_created`
+(meta `customerId`; `reused: true` when a concurrent request stored one first) when an account first gets a provider
+customer; `billing.checkout_started` when the checkout is claimed under the account lock, before any provider call
+(`plan`, `currency`, `amountMinor`, `storageBlocks`, `extraMailboxes`; denied `email_unverified`,
+`already_subscribed`, `checkout_pending`, `billing_unavailable`; a provider failure afterwards is a `failed` entry and
+then one with `released: true` when the claim is given back); `billing.portal_opened`
+(`state`; denied `not_subscribed`); a change is `billing.addons_changed`, `billing.plan_changed` or
+`billing.supporter_amount_changed` (meta `fromPlan`/`toPlan`, `storageBlocksFrom/To`, `extraMailboxesFrom/To`,
+`fromMinor`/`toMinor` for an amount, `chargedNowMinor`, `currency`, `billed: now | renewal`; denied
+`confirmation_required`, `addon_in_use`, `billing_restricted`, `invalid_change`, `not_subscribed`; failed
+`card_declined`); `billing.cancel_scheduled` (`at`) / `billing.cancel_undone` (denied `step_up_required`,
+`invalid_change`); `billing.refunded` (`invoiceId`, `amountMinor`, `currency`, `withinWindow: true`, `staff: false`,
+`resumed` when finishing an earlier press; denied `refund_not_eligible`, also for an account that already had its one
+self-service refund); `billing.holds_changed` for "Choose what
+stays on" (counts, `keptMailboxId`, `keptAliases`) and from the timers (system `billing-timers`, `reason: removed`
+when the Owner deleted held items); `billing.subscription_ended` (system `billing-timers`, `reason:
+restricted_timeout`, `restrictedDays`, `subscriptionId`); `account.invite_revoked` with `reason: plan_lapsed` (system
+`billing-sync`) for each pending invite revoked on a lapse; `mailbox.quota_changed` with `reason: plan_hold` when a held
+mailbox's storage is pinned to its mail. A provider failure on a person's request is `failed` with the house code
+(`billing_unavailable`, `card_declined`), never the provider's message. Preview and the overview are reads (not
+audited). The dev simulate route changes only the fake provider; what it leads to is audited by the sync.
+
 Mailbox lifecycle: `mailbox.suspended` and `mailbox.unsuspended` (resume), `mailbox.deletion_scheduled` (meta: the
 status it came from, `purgeAfter`, alias count) and `mailbox.restored` are written by the person in the console;
 `platform.mailbox_purged` is written by the system (`mailbox-purge`) **in the mailbox's account scope**, so the
