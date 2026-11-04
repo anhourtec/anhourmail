@@ -105,3 +105,9 @@ not affected (reservation applies to new claims). Other companies' names, the mo
 be listed in this public repository (CLAUDE.md rule 57); a private, deploy-time list read by the server is a
 follow-up. Staff role addresses on the platform domain (aliases to staff mailboxes on `anhourtec.com`, created only by
 the bootstrap or a Global Administrator) are the next piece.
+
+## Update (2026-11-05): proof-of-work instead of phone verification
+
+There will be no SMS/OTP provider (maintainer decision 2026-10-29). Sign-up is gated by a self-hosted proof-of-work and
+fail-closed sign-up limits per client address and per network (ADR-0031); email confirmation stays. The free address
+claim itself is unchanged: it is bounded by the number of accounts, which is what the new gate limits.
