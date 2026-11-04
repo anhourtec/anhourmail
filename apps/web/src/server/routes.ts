@@ -701,6 +701,16 @@ export const ROUTES: readonly RouteSpec[] = [
     audits: "trust.unsuspended",
     probeStatus: 404,
   },
+  // Staff: an account's address ceiling override (ADR-0029 §7; Global and Billing Administrators, fresh step-up). The
+  // harness probes random ids: allowed callers get 404.
+  {
+    method: "PUT",
+    path: "/api/platform/accounts/:accountId/billing/address-ceiling",
+    file: "app/api/platform/accounts/[accountId]/billing/address-ceiling/route.ts",
+    guard: "platform.billing.manage",
+    audits: "billing.ceiling_changed",
+    probeStatus: 404,
+  },
   // Webmail BFF (ADR-0003, ADR-0018): served on the webmail origin only (host-routing.ts).
   {
     method: "POST",
