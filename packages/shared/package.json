@@ -14,6 +14,7 @@
     "./platform": "./src/platform.ts",
     "./plans": "./src/plans.ts",
     "./profile": "./src/profile.ts",
+    "./proof-of-work": "./src/proof-of-work.ts",
     "./sending": "./src/sending.ts",
     "./dns": "./src/dns.ts",
     "./credits": "./src/credits.generated.ts",
