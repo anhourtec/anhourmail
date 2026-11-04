@@ -26,6 +26,7 @@ import {
 import { areaClass, Choice, fieldClass, Group, Note, Row, smallPrimary, smallSecondary, Toggle } from "./controls";
 import { ChangePasswordForm } from "./password-form";
 import { SignaturesSection } from "./signatures-panel";
+import { TemplatesSection } from "./templates-panel";
 
 type Change = (patch: Partial<WebmailPreferences>) => void;
 type Status = { tone: "ok" | "error"; text: string } | null;
@@ -75,6 +76,7 @@ export function WritingPanel({
   return (
     <div className="flex flex-col gap-6">
       <SignaturesSection client={client} accountId={data.accountId} onChanged={onSignatures} />
+      <TemplatesSection client={client} accountId={data.accountId} />
 
       <Group title="Sending">
         <Choice

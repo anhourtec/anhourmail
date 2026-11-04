@@ -3,6 +3,7 @@ import { JmapClient, JmapError } from "@anhourmail/jmap-client";
 
 import type { SafeSenderMatch } from "@anhourmail/shared/senders";
 import type { SignatureDefaults, SignatureSet } from "@anhourmail/shared/signatures";
+import type { TemplateView } from "@anhourmail/shared/templates";
 import type { WebmailPreferences } from "@anhourmail/shared/webmail";
 
 import type { BookView, ContactInput, ContactView } from "@/server/webmail/contacts";
@@ -1022,6 +1023,25 @@ export function createMailClient(
         method: change === "add" ? "POST" : "DELETE",
         headers: { [ACCOUNT]: await accountId() },
         body: JSON.stringify({ emailId }),
+      }),
+    /** Templates (canned replies, ADR-0032 §3), by name. */
+    templates: () => bff<TemplateView[]>(`${origin}/api/webmail/settings/templates`),
+    createTemplate: (account: string, input: { name: string; html: string }) =>
+      bff<TemplateView[]>(`${origin}/api/webmail/settings/templates`, {
+        method: "POST",
+        headers: { [ACCOUNT]: account },
+        body: JSON.stringify(input),
+      }),
+    updateTemplate: (account: string, id: string, change: { name?: string; html?: string }) =>
+      bff<TemplateView[]>(`${origin}/api/webmail/settings/templates/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { [ACCOUNT]: account },
+        body: JSON.stringify(change),
+      }),
+    deleteTemplate: (account: string, id: string) =>
+      bff<TemplateView[]>(`${origin}/api/webmail/settings/templates/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        headers: { [ACCOUNT]: account },
       }),
     /** Mail rules (ADR-0032 §2): the list, its version, the folders and the forwarding address. */
     rules: () => bff<RulesView>(`${origin}/api/webmail/settings/rules`),

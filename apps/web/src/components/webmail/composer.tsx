@@ -6,6 +6,7 @@ import {
   FileText,
   Loader2,
   Maximize2,
+  MessageSquareText,
   Minimize2,
   Paperclip,
   PenLine,
@@ -19,12 +20,14 @@ import { type KeyboardEvent, useCallback, useEffect, useId, useMemo, useRef, use
 
 import { WEBMAIL_ATTACHMENTS } from "@anhourmail/shared";
 import { defaultSignature, SIGNATURE_IMAGE_URI_MAX, type SignatureSet } from "@anhourmail/shared/signatures";
+import type { TemplateView } from "@anhourmail/shared/templates";
 
 import type { Address } from "@/server/webmail/view";
 import { Tooltip } from "@/components/tooltip";
 
 import { displayName, fileSize } from "./format";
 import { ConfirmDialog } from "./dialogs";
+import { exec, rangeIn, restore } from "./format-toolbar";
 import { Menu } from "./menu";
 import { parkRemoteImages, unparkRemoteImages } from "./remote-images";
 import { loadOutgoing, type Outgoing, RichEditor, useOutgoing } from "./rich-editor";
@@ -421,6 +424,47 @@ export function Composer({
     key: 0,
   }));
   const [richVersion, setRichVersion] = useState(0);
+
+  // Templates (canned replies, ADR-0032 §3): loaded once per composer; inserted where the caret last was.
+  const [templates, setTemplates] = useState<TemplateView[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    client
+      .templates()
+      .then((t) => {
+        if (live) setTemplates(t);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [client]);
+  const lastRange = useRef<Range | null>(null);
+  useEffect(() => {
+    const remember = () => {
+      const r = rangeIn(editor.current);
+      if (r) lastRange.current = r;
+    };
+    document.addEventListener("selectionchange", remember);
+    return () => {
+      document.removeEventListener("selectionchange", remember);
+    };
+  }, []);
+  const insertTemplate = (t: TemplateView) => {
+    if (format === "rich") {
+      const el = editor.current;
+      if (!el || !outgoing) return;
+      restore(el, lastRange.current);
+      // Sanitised again here (as everything that enters the editor is); templates hold no images.
+      exec("insertHTML", outgoing.sanitizeOutgoingHtml(t.html, { embeddedImagesOnly: true, maxDataImage: 0 }).html);
+      setRichVersion((v) => v + 1);
+      return;
+    }
+    const ta = body.current;
+    const start = ta?.selectionStart ?? 0;
+    const end = ta?.selectionEnd ?? start;
+    setText((x) => `${x.slice(0, start)}${t.text}${x.slice(end)}`);
+  };
   // Remote images are shown as placeholders while writing (nothing loads); they are put back for saving.
   const initialHtml = useMemo(
     () => (outgoing ? parkRemoteImages(outgoing.sanitizeOutgoingHtml(richSource.body).html) : null),
@@ -960,6 +1004,26 @@ export function Composer({
               })),
               ...(signatures.signatures.length === 0
                 ? [{ label: "Add signatures in Settings → Writing", disabled: true, onSelect: () => undefined }]
+                : []),
+            ]}
+          />
+        )}
+        {templates && (
+          <Menu
+            label="Templates"
+            icon={MessageSquareText}
+            side="top"
+            className="[&_[aria-haspopup=menu]]:size-9"
+            items={[
+              { heading: "Insert a template" },
+              ...templates.map((t) => ({
+                label: t.name,
+                onSelect: () => {
+                  insertTemplate(t);
+                },
+              })),
+              ...(templates.length === 0
+                ? [{ label: "Add templates in Settings → Writing", disabled: true, onSelect: () => undefined }]
                 : []),
             ]}
           />
