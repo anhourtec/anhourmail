@@ -911,3 +911,40 @@ export const planHold = pgTable(
     check("plan_hold_receive_until", sql`${t.receiveUntil} is null or ${t.subjectType} = 'mailbox'`),
   ],
 );
+
+/**
+ * Staff-made invite codes (ADR-0029 §8): sign-up while sign-up is closed, a comped plan, or both. Only the sha256 of the
+ * code is stored (shown once). Single use: redemption claims the row with a conditional update. Platform-owned.
+ * `email` (optional binding) is stored lower-cased and compared lower-cased.
+ */
+export const inviteCode = pgTable(
+  "invite_code",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    codeHash: text("code_hash").notNull().unique(),
+    /** Staff note (≤ 200 characters), never shown to the redeemer. */
+    label: text("label").notNull().default(""),
+    grantsSignup: boolean("grants_signup").notNull().default(false),
+    compPlan: text("comp_plan"),
+    compDays: integer("comp_days"),
+    email: text("email"),
+    createdBy: text("created_by").references(() => authUser.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    redeemedAt: timestamp("redeemed_at", { withTimezone: true }),
+    redeemedBy: text("redeemed_by").references(() => authUser.id, { onDelete: "set null" }),
+    redeemedAccountId: uuid("redeemed_account_id").references(() => customerAccount.id, { onDelete: "set null" }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revokedBy: text("revoked_by").references(() => authUser.id, { onDelete: "set null" }),
+  },
+  (t) => [
+    index("invite_code_created_idx").on(t.createdAt),
+    check("invite_code_grants", sql`${t.grantsSignup} or ${t.compPlan} is not null`),
+    check("invite_code_comp_plan", sql`${t.compPlan} is null or ${t.compPlan} in ('plus', 'supporter')`),
+    check("invite_code_comp", sql`(${t.compPlan} is null) = (${t.compDays} is null)`),
+    check("invite_code_comp_days", sql`${t.compDays} is null or ${t.compDays} between 1 and 365`),
+    check("invite_code_label", sql`char_length(${t.label}) <= 200`),
+    check("invite_code_email", sql`${t.email} is null or ${t.email} = lower(${t.email})`),
+    check("invite_code_expiry", sql`${t.expiresAt} > ${t.createdAt}`),
+  ],
+);
