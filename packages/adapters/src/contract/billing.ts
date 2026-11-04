@@ -130,6 +130,14 @@ export function describeBillingContract(name: string, factory: AdapterFactory): 
         expect(due).not.toContain(c); // no provider customer: nothing to sync
         expect(due.indexOf(a)).toBeLessThan(due.indexOf(b)); // never synced before synced
         expect(await uow.run((r) => r.billing.dueForSync(far(-1), 10_000))).not.toContain(b);
+        // Comps whose free period has ended (billing.timers), earliest first; a comp still running isn't listed.
+        await uow.run(async (r) => {
+          await r.billing.save(row(a, { state: "active", planSource: "comp", paidPlan: "plus", compUntil: far(-2) }));
+          await r.billing.save(row(b, { state: "active", planSource: "comp", paidPlan: "plus", compUntil: far(-3) }));
+          await r.billing.save(row(c, { state: "active", planSource: "comp", paidPlan: "plus", compUntil: far(5) }));
+        });
+        const ended = (await uow.run((r) => r.billing.compsEnded(far(0), 10_000))).filter((id) => ids.includes(id));
+        expect(ended).toEqual([b, a]);
       } finally {
         await cleanup();
       }

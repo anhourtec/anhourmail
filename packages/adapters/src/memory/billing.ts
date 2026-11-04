@@ -61,6 +61,16 @@ export function memoryBilling(s: State): BillingRepository {
           .slice(0, limit),
       ),
 
+    compsEnded: async (at, limit) =>
+      s.billing
+        .filter((b) => b.planSource === "comp" && b.compUntil !== null && b.compUntil <= at)
+        .sort(
+          (a, b) =>
+            (a.compUntil?.getTime() ?? 0) - (b.compUntil?.getTime() ?? 0) || a.accountId.localeCompare(b.accountId),
+        )
+        .slice(0, limit)
+        .map((b) => b.accountId),
+
     dueForSync: async (before, limit) =>
       s.billing
         .filter((b) => b.providerCustomerId !== null && (b.lastSyncedAt === null || b.lastSyncedAt < before))

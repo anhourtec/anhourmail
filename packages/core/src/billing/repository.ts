@@ -29,6 +29,8 @@ export type BillingRepository = {
   listByState(state: BillingState, limit: number): Promise<AccountBilling[]>;
   /** Accounts with a provider customer whose last sync is older than `before` (or never), oldest first. */
   dueForSync(before: Date, limit: number): Promise<string[]>;
+  /** Accounts on a comp (`plan_source` comp) whose free period ended at or before `at`, earliest first (`billing.timers`). */
+  compsEnded(at: Date, limit: number): Promise<string[]>;
 
   /**
    * Records a received event once and returns its id: null when that provider event id was already recorded (a

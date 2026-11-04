@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 
 import {
   type AccountBilling,
@@ -136,6 +136,16 @@ export class PgBillingRepository implements BillingRepository {
       .orderBy(asc(accountBilling.stateSince), asc(accountBilling.accountId))
       .limit(limit);
     return rows.map(toBilling);
+  }
+
+  async compsEnded(at: Date, limit: number): Promise<string[]> {
+    const rows = await this.x
+      .select({ id: accountBilling.accountId })
+      .from(accountBilling)
+      .where(and(eq(accountBilling.planSource, "comp"), lte(accountBilling.compUntil, at)))
+      .orderBy(asc(accountBilling.compUntil), asc(accountBilling.accountId))
+      .limit(limit);
+    return rows.map((r) => r.id);
   }
 
   async dueForSync(before: Date, limit: number): Promise<string[]> {
