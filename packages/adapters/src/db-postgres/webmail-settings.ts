@@ -2,15 +2,24 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 
 import type {
+  AccountSafeSender,
   ForwardingStatus,
   ForwardingTarget,
   StoredSignature,
+  StoredTemplate,
   WebmailMailbox,
   WebmailSettingsRepository,
 } from "@anhourmail/core/webmail";
 
 import type { Executor } from "./client";
-import { forwardingTarget, mailbox, webmailPreference, webmailSignature } from "./schema";
+import {
+  accountSafeSender,
+  forwardingTarget,
+  mailbox,
+  webmailPreference,
+  webmailSignature,
+  webmailTemplate,
+} from "./schema";
 
 const isId = (v: string) => /^[0-9a-f-]{36}$/i.test(v);
 
@@ -198,5 +207,81 @@ export class PgWebmailSettingsRepository implements WebmailSettingsRepository {
         .set({ [column]: true })
         .where(and(eq(webmailSignature.mailboxId, mailboxId), eq(webmailSignature.id, id)));
     }
+  }
+
+  async lockAccountSafeSenders(accountId: string): Promise<void> {
+    await this.x.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`account-safe-sender:${accountId}`}, 0))`);
+  }
+
+  async accountSafeSenders(accountId: string): Promise<AccountSafeSender[]> {
+    if (!isId(accountId)) return [];
+    return this.x
+      .select()
+      .from(accountSafeSender)
+      .where(eq(accountSafeSender.accountId, accountId))
+      .orderBy(asc(accountSafeSender.createdAt), asc(accountSafeSender.entry));
+  }
+
+  async insertAccountSafeSenders(rows: AccountSafeSender[]): Promise<void> {
+    if (rows.length === 0) return;
+    await this.x.insert(accountSafeSender).values(rows).onConflictDoNothing();
+  }
+
+  async deleteAccountSafeSender(accountId: string, id: string): Promise<boolean> {
+    if (!isId(accountId) || !isId(id)) return false;
+    const rows = await this.x
+      .delete(accountSafeSender)
+      .where(and(eq(accountSafeSender.accountId, accountId), eq(accountSafeSender.id, id)))
+      .returning({ id: accountSafeSender.id });
+    return rows.length > 0;
+  }
+
+  async lockTemplates(mailboxId: string): Promise<void> {
+    await this.x.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`webmail-template:${mailboxId}`}, 0))`);
+  }
+
+  async templates(mailboxId: string): Promise<StoredTemplate[]> {
+    if (!isId(mailboxId)) return [];
+    return this.x
+      .select()
+      .from(webmailTemplate)
+      .where(eq(webmailTemplate.mailboxId, mailboxId))
+      .orderBy(asc(webmailTemplate.name), asc(webmailTemplate.id));
+  }
+
+  async insertTemplate(t: StoredTemplate): Promise<void> {
+    await this.x.insert(webmailTemplate).values(t);
+  }
+
+  async updateTemplate(
+    mailboxId: string,
+    id: string,
+    change: { name?: string; html?: string; text?: string },
+    at: Date,
+  ): Promise<boolean> {
+    if (!isId(mailboxId) || !isId(id)) return false;
+    const rows = await this.x
+      .update(webmailTemplate)
+      .set({ ...change, updatedAt: at })
+      .where(and(eq(webmailTemplate.mailboxId, mailboxId), eq(webmailTemplate.id, id)))
+      .returning({ id: webmailTemplate.id });
+    return rows.length > 0;
+  }
+
+  async deleteTemplate(mailboxId: string, id: string): Promise<boolean> {
+    if (!isId(mailboxId) || !isId(id)) return false;
+    const rows = await this.x
+      .delete(webmailTemplate)
+      .where(and(eq(webmailTemplate.mailboxId, mailboxId), eq(webmailTemplate.id, id)))
+      .returning({ id: webmailTemplate.id });
+    return rows.length > 0;
+  }
+
+  async accountsWithSafeSenders(): Promise<string[]> {
+    const rows = await this.x
+      .selectDistinct({ accountId: accountSafeSender.accountId })
+      .from(accountSafeSender)
+      .orderBy(asc(accountSafeSender.accountId));
+    return rows.map((r) => r.accountId);
   }
 }

@@ -52,7 +52,67 @@ export type WebmailSettingsRepository = {
   /** The pending target with this token hash (any mailbox), or null. */
   forwardingByToken(tokenHash: string): Promise<ForwardingTarget | null>;
   clearForwarding(mailboxId: string): Promise<void>;
-} & SignatureRepository;
+} & SignatureRepository &
+  AccountSafeSenderRepository &
+  TemplateRepository;
+
+/**
+ * One of a mailbox's templates (canned replies, ADR-0032 §3). `html` was sanitised by the BFF (no images) and `text`
+ * generated from it; neither is ever logged or audited.
+ */
+export type StoredTemplate = {
+  id: string;
+  mailboxId: string;
+  accountId: string;
+  name: string;
+  html: string;
+  text: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type TemplateRepository = {
+  /** Holds the mailbox's templates for the rest of the transaction (the count cap). */
+  lockTemplates(mailboxId: string): Promise<void>;
+  /** The mailbox's templates, by name. */
+  templates(mailboxId: string): Promise<StoredTemplate[]>;
+  insertTemplate(template: StoredTemplate): Promise<void>;
+  /** Changes one of the mailbox's templates; false when it isn't there. */
+  updateTemplate(
+    mailboxId: string,
+    id: string,
+    change: { name?: string; html?: string; text?: string },
+    at: Date,
+  ): Promise<boolean>;
+  /** Deletes one of the mailbox's templates; false when it isn't there. */
+  deleteTemplate(mailboxId: string, id: string): Promise<boolean>;
+};
+
+/**
+ * One entry of an account's Safe senders list (ADR-0032 §1): an address or a domain in `senderEntry` form, set by the
+ * account's administrators and applied to every mailbox of the account. Never logged or audited.
+ */
+export type AccountSafeSender = {
+  id: string;
+  accountId: string;
+  entry: string;
+  /** The console person who added it (null once they are gone). */
+  createdBy: string | null;
+  createdAt: Date;
+};
+
+export type AccountSafeSenderRepository = {
+  /** Holds the account's list for the rest of the transaction (Postgres: an advisory lock keyed by the account id). */
+  lockAccountSafeSenders(accountId: string): Promise<void>;
+  /** The account's entries, oldest first. */
+  accountSafeSenders(accountId: string): Promise<AccountSafeSender[]>;
+  /** Adds entries that aren't there yet (an existing entry is left as it is). */
+  insertAccountSafeSenders(rows: AccountSafeSender[]): Promise<void>;
+  /** Removes one of the account's entries; false when it isn't there (or is another account's). */
+  deleteAccountSafeSender(accountId: string, id: string): Promise<boolean>;
+  /** Account ids that have at least one entry (the web app's start-up rewrite). */
+  accountsWithSafeSenders(): Promise<string[]>;
+};
 
 /**
  * One of a mailbox's named signatures (docs/internal/05-webmail.md "Signatures"). `html` was sanitised by the BFF

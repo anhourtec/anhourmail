@@ -30,6 +30,8 @@ export function memoryDataLifecycle(s: MemoryState): DataLifecycleRepository {
     s.aliases = s.aliases.filter((a) => a.accountId !== accountId);
     s.aliasCreations = s.aliasCreations.filter((a) => a.accountId !== accountId);
     s.appPasswords = s.appPasswords.filter((a) => a.accountId !== accountId);
+    s.accountSafeSenders = s.accountSafeSenders.filter((x) => x.accountId !== accountId);
+    s.webmailTemplates = s.webmailTemplates.filter((x) => x.accountId !== accountId);
     s.mailboxHolds = s.mailboxHolds.filter((h) => !mailboxIds.has(h.mailboxId));
     s.dataExports = s.dataExports.filter((e) => e.accountId !== accountId);
     s.accountDeletions = s.accountDeletions.filter((d) => d.accountId !== accountId);

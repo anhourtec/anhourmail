@@ -1572,6 +1572,140 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
       }
     });
 
+    it("account safe senders: per account, unique entries, oldest first, another account's id is unknown", async () => {
+      const { uow, cleanup, seedMail } = await factory();
+      try {
+        const tag = randomUUID().slice(0, 8);
+        const one = await seedMail({
+          domain: `ss-${tag}.test`,
+          address: `one@ss-${tag}.test`,
+          alias: `a@ss-${tag}.test`,
+          quotaBytes: 1024,
+        });
+        const two = await seedMail({
+          domain: `ss2-${tag}.test`,
+          address: `two@ss2-${tag}.test`,
+          alias: `b@ss2-${tag}.test`,
+          quotaBytes: 1024,
+        });
+        const acc1 = (await uow.run((r) => r.directory.getMailbox(one.mailboxId)))?.accountId ?? "";
+        const acc2 = (await uow.run((r) => r.directory.getMailbox(two.mailboxId)))?.accountId ?? "";
+        const t0 = new Date("2026-11-05T10:00:00Z");
+        const row = (accountId: string, entry: string, at: Date) => ({
+          id: randomUUID(),
+          accountId,
+          entry,
+          createdBy: null,
+          createdAt: at,
+        });
+        expect(await uow.run((r) => r.webmailSettings.accountSafeSenders(acc1))).toEqual([]);
+        expect(await uow.run((r) => r.webmailSettings.accountSafeSenders("not-a-uuid"))).toEqual([]);
+        await uow.run(async (r) => {
+          await r.webmailSettings.lockAccountSafeSenders(acc1);
+        });
+        const first = row(acc1, `partner-${tag}.example`, t0);
+        await uow.run((r) =>
+          r.webmailSettings.insertAccountSafeSenders([
+            first,
+            row(acc1, `jane@${tag}.example`, new Date(t0.getTime() + 1000)),
+          ]),
+        );
+        // The same entry again is left as it is (no error, no second row); another account may hold the same entry.
+        await uow.run((r) =>
+          r.webmailSettings.insertAccountSafeSenders([
+            row(acc1, `partner-${tag}.example`, new Date(t0.getTime() + 2000)),
+            row(acc2, `partner-${tag}.example`, t0),
+          ]),
+        );
+        const list = await uow.run((r) => r.webmailSettings.accountSafeSenders(acc1));
+        expect(list.map((x) => x.entry)).toEqual([`partner-${tag}.example`, `jane@${tag}.example`]);
+        expect(list[0]?.id).toBe(first.id);
+        expect(
+          (await uow.run((r) => r.webmailSettings.accountsWithSafeSenders()))
+            .filter((a) => a === acc1 || a === acc2)
+            .sort(),
+        ).toEqual([acc1, acc2].sort());
+        // Another account's id is unknown here.
+        const theirs = (await uow.run((r) => r.webmailSettings.accountSafeSenders(acc2)))[0]?.id ?? "";
+        expect(await uow.run((r) => r.webmailSettings.deleteAccountSafeSender(acc1, theirs))).toBe(false);
+        expect(await uow.run((r) => r.webmailSettings.deleteAccountSafeSender(acc1, first.id))).toBe(true);
+        expect(await uow.run((r) => r.webmailSettings.deleteAccountSafeSender(acc1, first.id))).toBe(false);
+        expect((await uow.run((r) => r.webmailSettings.accountSafeSenders(acc1))).map((x) => x.entry)).toEqual([
+          `jane@${tag}.example`,
+        ]);
+        expect(await uow.run((r) => r.webmailSettings.accountSafeSenders(acc2))).toHaveLength(1);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("webmail templates: per mailbox, by name, unique names ignoring case, another mailbox's id is unknown", async () => {
+      const { uow, cleanup, seedMail } = await factory();
+      try {
+        const tag = randomUUID().slice(0, 8);
+        const one = await seedMail({
+          domain: `tp-${tag}.test`,
+          address: `one@tp-${tag}.test`,
+          alias: `a@tp-${tag}.test`,
+          quotaBytes: 1024,
+        });
+        const two = await seedMail({
+          domain: `tp2-${tag}.test`,
+          address: `two@tp2-${tag}.test`,
+          alias: `b@tp2-${tag}.test`,
+          quotaBytes: 1024,
+        });
+        const acc1 = (await uow.run((r) => r.directory.getMailbox(one.mailboxId)))?.accountId ?? "";
+        const acc2 = (await uow.run((r) => r.directory.getMailbox(two.mailboxId)))?.accountId ?? "";
+        const t0 = new Date("2026-11-05T10:00:00Z");
+        const tpl = (mailboxId: string, accountId: string, name: string) => ({
+          id: randomUUID(),
+          mailboxId,
+          accountId,
+          name,
+          html: `<p>${name}</p>`,
+          text: name,
+          createdAt: t0,
+          updatedAt: t0,
+        });
+        expect(await uow.run((r) => r.webmailSettings.templates("not-a-uuid"))).toEqual([]);
+        await uow.run(async (r) => {
+          await r.webmailSettings.lockTemplates(one.mailboxId);
+        });
+        const thanks = tpl(one.mailboxId, acc1, "Thanks");
+        await uow.run((r) => r.webmailSettings.insertTemplate(thanks));
+        await uow.run((r) => r.webmailSettings.insertTemplate(tpl(one.mailboxId, acc1, "Away")));
+        const theirs = tpl(two.mailboxId, acc2, "Thanks");
+        await uow.run((r) => r.webmailSettings.insertTemplate(theirs));
+        await expect(
+          uow.run((r) => r.webmailSettings.insertTemplate(tpl(one.mailboxId, acc1, "THANKS"))),
+        ).rejects.toThrow();
+        expect((await uow.run((r) => r.webmailSettings.templates(one.mailboxId))).map((x) => x.name)).toEqual([
+          "Away",
+          "Thanks",
+        ]);
+        expect(
+          await uow.run((r) => r.webmailSettings.updateTemplate(one.mailboxId, theirs.id, { name: "Mine" }, t0)),
+        ).toBe(false);
+        expect(await uow.run((r) => r.webmailSettings.deleteTemplate(one.mailboxId, theirs.id))).toBe(false);
+        expect(
+          await uow.run((r) =>
+            r.webmailSettings.updateTemplate(
+              one.mailboxId,
+              thanks.id,
+              { name: "Thank you", html: "<p>T</p>", text: "T" },
+              t0,
+            ),
+          ),
+        ).toBe(true);
+        expect(await uow.run((r) => r.webmailSettings.deleteTemplate(one.mailboxId, thanks.id))).toBe(true);
+        expect((await uow.run((r) => r.webmailSettings.templates(one.mailboxId))).map((x) => x.name)).toEqual(["Away"]);
+        expect(await uow.run((r) => r.webmailSettings.templates(two.mailboxId))).toHaveLength(1);
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("app passwords: metadata per mailbox, newest first, conditional revoke, rows go with their mailbox", async () => {
       const { uow, cleanup, seedMail } = await factory();
       try {

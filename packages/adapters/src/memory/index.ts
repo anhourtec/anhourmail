@@ -42,7 +42,13 @@ import {
   hashEntry,
 } from "@anhourmail/core/audit";
 import type { PasskeyRecord, SecurityRepository, SessionRecord } from "@anhourmail/core/security";
-import type { ForwardingTarget, StoredSignature, WebmailSettingsRepository } from "@anhourmail/core/webmail";
+import type {
+  AccountSafeSender,
+  ForwardingTarget,
+  StoredSignature,
+  StoredTemplate,
+  WebmailSettingsRepository,
+} from "@anhourmail/core/webmail";
 import type { ProfileDetails } from "@anhourmail/shared/profile";
 import { ALIAS_YEAR_DAYS, type PlanId } from "@anhourmail/shared/plans";
 import type { SignInPolicy } from "@anhourmail/shared/security";
@@ -110,6 +116,10 @@ export type MemoryState = {
   webmailSignatures: StoredSignature[];
   /** Mailboxes whose named signatures were started, and when. */
   signaturesStarted: { mailboxId: string; at: Date }[];
+  /** Account-wide Safe senders (ADR-0032 §1). */
+  accountSafeSenders: AccountSafeSender[];
+  /** Templates (canned replies, ADR-0032 §3). */
+  webmailTemplates: StoredTemplate[];
   appPasswords: AppPassword[];
   /** Mailboxes whose credential-list lock a unit of work took (`AppPasswordRepository.lockCredentials`), in order. */
   credentialLocks: string[];
@@ -184,6 +194,8 @@ export const emptyState = (): MemoryState => ({
   forwardingTargets: [],
   webmailSignatures: [],
   signaturesStarted: [],
+  accountSafeSenders: [],
+  webmailTemplates: [],
   appPasswords: [],
   credentialLocks: [],
   mailboxPasswords: [],
@@ -657,6 +669,7 @@ function repositories(s: MemoryState): Repositories {
       s.aliases = s.aliases.filter((a) => a.mailboxId !== id); // mirrors ON DELETE CASCADE in Postgres
       s.webmailPreferences = s.webmailPreferences.filter((p) => p.mailboxId !== id);
       s.webmailSignatures = s.webmailSignatures.filter((x) => x.mailboxId !== id);
+      s.webmailTemplates = s.webmailTemplates.filter((x) => x.mailboxId !== id);
       s.signaturesStarted = s.signaturesStarted.filter((x) => x.mailboxId !== id);
       s.forwardingTargets = s.forwardingTargets.filter((t) => t.mailboxId !== id);
       s.appPasswords = s.appPasswords.filter((p) => p.mailboxId !== id); // ON DELETE CASCADE
@@ -1104,6 +1117,61 @@ function repositories(s: MemoryState): Repositories {
         v.defaultNew = v.id === defaults.newMessage;
         v.defaultReply = v.id === defaults.reply;
       }
+    },
+    lockAccountSafeSenders: async () => undefined,
+    accountSafeSenders: async (accountId) =>
+      clone(
+        s.accountSafeSenders
+          .filter((x) => x.accountId === accountId)
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.entry.localeCompare(b.entry)),
+      ),
+    insertAccountSafeSenders: async (rows) => {
+      for (const row of rows) {
+        // The Postgres unique index (account, entry): an entry already there is left as it is.
+        if (s.accountSafeSenders.some((x) => x.accountId === row.accountId && x.entry === row.entry)) continue;
+        s.accountSafeSenders.push(clone(row));
+      }
+    },
+    deleteAccountSafeSender: async (accountId, id) => {
+      const before = s.accountSafeSenders.length;
+      s.accountSafeSenders = s.accountSafeSenders.filter((x) => !(x.accountId === accountId && x.id === id));
+      return s.accountSafeSenders.length < before;
+    },
+    accountsWithSafeSenders: async () => [...new Set(s.accountSafeSenders.map((x) => x.accountId))].sort(),
+    lockTemplates: async () => undefined,
+    templates: async (mailboxId) =>
+      clone(
+        s.webmailTemplates
+          .filter((x) => x.mailboxId === mailboxId)
+          .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
+      ),
+    insertTemplate: async (t) => {
+      // The Postgres unique index: names unique per mailbox ignoring case.
+      if (
+        s.webmailTemplates.some((x) => x.mailboxId === t.mailboxId && x.name.toLowerCase() === t.name.toLowerCase())
+      ) {
+        throw new Error("duplicate template");
+      }
+      s.webmailTemplates.push(clone(t));
+    },
+    updateTemplate: async (mailboxId, id, change, at) => {
+      const x = s.webmailTemplates.find((v) => v.mailboxId === mailboxId && v.id === id);
+      if (!x) return false;
+      if (
+        change.name !== undefined &&
+        s.webmailTemplates.some(
+          (v) => v.mailboxId === mailboxId && v.id !== id && v.name.toLowerCase() === change.name?.toLowerCase(),
+        )
+      ) {
+        throw new Error("duplicate template");
+      }
+      Object.assign(x, clone(change), { updatedAt: at });
+      return true;
+    },
+    deleteTemplate: async (mailboxId, id) => {
+      const before = s.webmailTemplates.length;
+      s.webmailTemplates = s.webmailTemplates.filter((v) => !(v.mailboxId === mailboxId && v.id === id));
+      return s.webmailTemplates.length < before;
     },
   };
 
