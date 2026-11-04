@@ -41,7 +41,12 @@ test("a Support Administrator opens an account read-only, is refused changes, en
 
   await page.getByRole("button", { name: "Open with support access" }).click();
   const dialog = page.getByRole("dialog", { name: "Open this account with support access" });
-  await expect(dialog.getByRole("button", { name: "Open read-only" })).toBeDisabled();
+  // A too-short reason is explained, not a silently disabled button.
+  await expect(dialog.getByText(/At least \d+ characters/)).toBeVisible();
+  await dialog.getByLabel("Reason").fill("ticket 1");
+  await dialog.getByRole("button", { name: "Open read-only" }).click();
+  await expect(dialog.getByRole("alert")).toContainText("needs at least");
+  await expect(dialog.getByLabel("Reason")).toHaveAttribute("aria-invalid", "true");
   await dialog.getByLabel("Reason").fill(reason);
   await dialog.getByRole("button", { name: "Open read-only" }).click();
   await confirmIfAsked(page, u.password);
