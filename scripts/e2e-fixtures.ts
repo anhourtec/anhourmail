@@ -79,6 +79,7 @@ if (mode === "create") {
   const avatars: Record<string, { person: string; mailbox: string; mailboxPassword: string }> = {};
   const names: Record<string, { person: string; mailbox: string; mailboxPassword: string }> = {};
   const aliasLimits: Record<string, { owner: string; mailbox: string; day: string }> = {};
+  const billing: Record<string, { accountId: string; owner: string }> = {};
   const actAs: Record<string, { accountName: string; accountId: string; owner: string; member: string }> = {};
   const data: Record<string, { accountName: string; owner: string; member: string; leaver: string }> = {};
   const delegationWebmail: Record<
@@ -436,6 +437,16 @@ if (mode === "create") {
       { accountId: alAccount.id, day: alDay, kind: "masked", count: ALIAS_CREATIONS_PER_YEAR.free.masked },
     ]);
     aliasLimits[project] = { owner: alOwner.email, mailbox: alMailbox, day: alDay };
+    // Billing journey (ADR-0029, dev fake provider): a Free account with nothing a lapse would hold, so after the
+    // subscription ends it goes back to Free.
+    const [blAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} Billing ${project}`, plan: "free" })
+      .returning();
+    if (!blAccount) throw new Error("billing account not created");
+    const blOwner = await addLogin(`bl-${project}-owner`);
+    await db.insert(schema.accountMembership).values({ accountId: blAccount.id, userId: blOwner.id, role: "owner" });
+    billing[project] = { accountId: blAccount.id, owner: blOwner.email };
     security[project] = {
       totp: logins.totp.email,
       passkey: logins.passkey.email,
@@ -495,6 +506,7 @@ if (mode === "create") {
         names,
         data,
         aliasLimits,
+        billing,
         delegation,
         delegationWebmail,
       },

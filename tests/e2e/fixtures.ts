@@ -29,6 +29,8 @@ export type E2eUsers = {
   data: Record<string, { accountName: string; owner: string; member: string; leaver: string }>;
   /** Per browser project: the alias limits journey's Free account (its Owner, mailbox, and the day its year filled). */
   aliasLimits: Record<string, { owner: string; mailbox: string; day: string }>;
+  /** Per browser project: the billing journey's Free account (ADR-0029, the dev fake provider) and its Owner. */
+  billing: Record<string, { accountId: string; owner: string }>;
   /**
    * Per browser project: the delegation journey's account (ADR-0026) — its Owner, the person given access, a colleague
    * whose mailbox is converted to shared, a leaver who is removed, the verified domain and a shared mailbox on it.
