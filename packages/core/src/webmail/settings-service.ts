@@ -31,7 +31,7 @@ export type ForwardingView = { address: string; status: ForwardingStatus; expire
 /** Mail-flow changes made in the mail server that the control plane records (no content, no full addresses). */
 export type MailFlowAction = Extract<
   AuditAction,
-  "forwarding.changed" | "vacation.changed" | "junk_rules.changed" | "identity.changed"
+  "forwarding.changed" | "vacation.changed" | "junk_rules.changed" | "identity.changed" | "sieve.changed"
 >;
 
 const ADDRESS =
