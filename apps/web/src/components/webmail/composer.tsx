@@ -35,6 +35,7 @@ import {
   type DraftPayload,
   type Identity,
   type MailClient,
+  type SendResult,
   RefusedError,
   SignedOutError,
 } from "./mail-client";
@@ -343,8 +344,11 @@ export function Composer({
   /** Where a discarded draft goes. */
   trashId: string | undefined;
   onClose: (opts: { savedDraft: boolean }) => void;
-  /** `from`: the shared mailbox it went from (undo names it), absent for the person's own. */
-  onSent: (submissionId: string, draftId: string, holdSeconds: number, from?: string) => void;
+  /**
+   * The send's answer (`from`: the shared mailbox it went from, which undo names; `undelivered`: recipients refused
+   * already) and the draft it came from.
+   */
+  onSent: (result: SendResult, draftId: string) => void;
   onSavedDraft?: () => void;
   /** Show the Cc and Bcc fields from the start (a setting). */
   alwaysCcBcc?: boolean;
@@ -609,8 +613,8 @@ export function Composer({
     try {
       const id = dirty.current || !draftId.current ? await saveNow() : draftId.current;
       if (!id) return;
-      const { submissionId, holdSeconds } = await client.send(id, identityId, sharedFrom ?? undefined);
-      onSent(submissionId, id, holdSeconds, sharedFrom ?? undefined);
+      const result = await client.send(id, identityId, sharedFrom ?? undefined);
+      onSent({ ...result, ...(sharedFrom ? { from: sharedFrom } : {}) }, id);
     } catch (err) {
       if (err instanceof SignedOutError) throw err;
       setError(err instanceof RefusedError ? err.message : "Couldn't send. Check your connection and try again.");

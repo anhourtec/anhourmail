@@ -64,6 +64,7 @@ import {
   PAGE_SIZE,
   RefusedError,
   type SearchQuery,
+  type SendResult,
   SignedOutError,
   type SyncState,
   type View,
@@ -98,6 +99,7 @@ import {
 import { FOLDER_ROLES, mailboxTabHref, pagesBase } from "./tab-paths";
 import { type CachedView, clearViewCache, importViewKey, readCachedView, writeCachedView } from "./view-cache";
 import { ToastHost, useToasts } from "./toasts";
+import { notYetShown, type Undelivered, undeliveredNotice } from "./delivery-notice";
 
 const keyOf = listKey;
 
@@ -1466,33 +1468,86 @@ function Mailroom({
     [client, writer, openComposer, fail],
   );
 
+  /** The delivery checks still waiting for a send's undo hold to end, by submission (cancelled by undo). */
+  const deliveryChecks = useRef(new Map<string, number>());
+  useEffect(() => {
+    const checks = deliveryChecks.current;
+    return () => {
+      for (const t of checks.values()) window.clearTimeout(t);
+      checks.clear();
+    };
+  }, []);
+
+  /** A delivery problem stays until dismissed: the person has to see which addresses didn't get it. */
+  const showUndelivered = useCallback(
+    (list: readonly Undelivered[]) => {
+      const notice = undeliveredNotice(list);
+      if (notice) toasts.show({ ...notice, tone: "error", duration: null });
+    },
+    [toasts],
+  );
+
   const onSent = useCallback(
-    (submissionId: string, _draftId: string, holdSeconds: number, from?: string) => {
+    (result: SendResult, _draftId: string) => {
+      const { submissionId, holdSeconds, from, undelivered, held, reportTicket } = result;
       setComposer(null);
       setContacts([]); // New recipients may have been saved: suggestions reload next time.
       refresh();
-      toasts.show({
-        message: "Message sent.",
-        // Undo works while the server holds the message (the chosen delay), less a moment for the request.
-        duration: Math.max(3000, holdSeconds * 1000 - 500),
-        action: {
-          label: "Undo",
-          onClick: () => {
-            if (!writer) return;
-            void writer
-              .undoSend(submissionId, from)
-              .then(({ draftId }) => {
-                refresh();
-                void openDraft(draftId, { undone: true, ...(from === undefined ? {} : { from }) });
-              })
-              .catch((err: unknown) => {
-                fail(err);
-              });
+      if (held) {
+        toasts.show({
+          message: "Message sent.",
+          // Undo works while the server holds the message (the chosen delay), less a moment for the request.
+          duration: Math.max(3000, holdSeconds * 1000 - 500),
+          action: {
+            label: "Undo",
+            onClick: () => {
+              if (!writer) return;
+              const check = deliveryChecks.current.get(submissionId);
+              if (check !== undefined) window.clearTimeout(check);
+              deliveryChecks.current.delete(submissionId);
+              void writer
+                .undoSend(submissionId, from)
+                .then(({ draftId }) => {
+                  refresh();
+                  void openDraft(draftId, { undone: true, ...(from === undefined ? {} : { from }) });
+                })
+                .catch((err: unknown) => {
+                  fail(err);
+                });
+            },
           },
-        },
-      });
+        });
+      } else if (undelivered.length === 0) {
+        toasts.show({ message: "Message sent." });
+      }
+      // Refused already (an address on one of our domains that doesn't exist is refused at once): say so now.
+      const shown = new Set<string>();
+      showUndelivered(notYetShown(shown, undelivered));
+      if (!held || !writer) return;
+      // A send from a shared mailbox is asked about with the ticket its send answered (none: nothing to ask).
+      if (from !== undefined && reportTicket === undefined) return;
+      // Once the hold is over, ask once more: the mail server may refuse more as it delivers. Best effort and silent.
+      const client = writer;
+      deliveryChecks.current.set(
+        submissionId,
+        window.setTimeout(
+          () => {
+            deliveryChecks.current.delete(submissionId);
+            void client
+              .deliveryReport(
+                submissionId,
+                from === undefined || reportTicket === undefined ? undefined : { mailbox: from, ticket: reportTicket },
+              )
+              .then((r) => {
+                showUndelivered(notYetShown(shown, r.undelivered));
+              })
+              .catch(() => undefined);
+          },
+          holdSeconds * 1000 + 1000,
+        ),
+      );
     },
-    [refresh, toasts, writer, openDraft, fail],
+    [refresh, toasts, writer, openDraft, fail, showUndelivered],
   );
 
   // ---- navigation ---------------------------------------------------------------------------------------

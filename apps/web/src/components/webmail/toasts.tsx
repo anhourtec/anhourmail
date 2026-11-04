@@ -9,8 +9,10 @@ export type Toast = {
   message: string;
   action?: { label: string; onClick: () => void };
   tone?: "default" | "error";
-  /** Milliseconds before it goes away. */
-  duration?: number;
+  /** Smaller lines under the message (a delivery problem's reasons). */
+  detail?: readonly string[];
+  /** Milliseconds before it goes away; `null`: it stays until dismissed. */
+  duration?: number | null;
 };
 
 type ShowToast = (t: Omit<Toast, "id">) => number;
@@ -29,6 +31,7 @@ function ToastItem({ toast, onDone }: { toast: Toast; onDone: () => void }) {
     done.current = onDone;
   });
   useEffect(() => {
+    if (toast.duration === null) return;
     const t = window.setTimeout(() => {
       done.current();
     }, toast.duration ?? 5000);
@@ -43,7 +46,18 @@ function ToastItem({ toast, onDone }: { toast: Toast; onDone: () => void }) {
         toast.tone === "error" ? "border-destructive/40 bg-card text-destructive" : "bg-foreground text-background"
       }`}
     >
-      <p className="text-[13.5px]">{toast.message}</p>
+      {toast.detail && toast.detail.length > 0 ? (
+        <div className="min-w-0 max-w-[34rem]">
+          <p className="break-words font-medium text-[13.5px]">{toast.message}</p>
+          {toast.detail.map((line) => (
+            <p key={line} className="break-words text-[12.5px] text-muted-foreground">
+              {line}
+            </p>
+          ))}
+        </div>
+      ) : (
+        <p className="text-[13.5px]">{toast.message}</p>
+      )}
       {toast.action && (
         <button
           type="button"
