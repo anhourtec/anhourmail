@@ -24,6 +24,7 @@ import { GET as overviewRoute } from "@/app/api/accounts/[accountId]/billing/rou
 import { POST as checkoutRoute } from "@/app/api/accounts/[accountId]/billing/checkout/route";
 import { POST as cancelRoute } from "@/app/api/accounts/[accountId]/billing/cancel/route";
 import { POST as changeRoute } from "@/app/api/accounts/[accountId]/billing/change/route";
+import { PUT as holdsRoute } from "@/app/api/accounts/[accountId]/billing/holds/route";
 import { POST as portalRoute } from "@/app/api/accounts/[accountId]/billing/portal/route";
 import { POST as previewRoute } from "@/app/api/accounts/[accountId]/billing/preview/route";
 import { POST as refundRoute } from "@/app/api/accounts/[accountId]/billing/refund/route";
@@ -327,5 +328,28 @@ describe("plan and add-on changes, cancel and refund routes (ADR-0029 §9)", () 
     expect(mixed.status).toBe(400);
     expect((await json(mixed)).error?.code).toBe("invalid_change");
     expect((await call("change", { plan: 5 })).status).toBe(400);
+  });
+});
+
+describe("Choose what stays on (ADR-0029 §6)", () => {
+  const put = (body: unknown) =>
+    holdsRoute(
+      new Request(`${APP}/api/accounts/${ACCOUNT}/billing/holds`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", origin: APP, host: "localhost:43200" },
+        body: JSON.stringify(body),
+      }),
+      params(),
+    );
+
+  it("answers 400 invalid_change outside a lapse, 400 for a bad body, 403 / 404 per the matrix", async () => {
+    const res = await put({});
+    expect(res.status).toBe(400);
+    expect((await json(res)).error?.code).toBe("invalid_change");
+    expect((await put({ aliasIds: "x" })).status).toBe(400);
+    actor = member;
+    expect((await put({})).status).toBe(403);
+    actor = outsider;
+    expect((await put({})).status).toBe(404);
   });
 });
