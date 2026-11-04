@@ -16,6 +16,7 @@ import {
   WebmailConflictError,
   WebmailDelegationRefusedError,
   WebmailOwnMailboxOnlyError,
+  WebmailNotFoundError,
   WebmailQuotaError,
   WebmailSendUnconfirmedError,
   WebmailRefusedError,
@@ -106,6 +107,7 @@ export function webmailErrorResponse(err: unknown): Response | null {
     return res;
   }
   if (err instanceof WebmailOwnMailboxOnlyError) return body("own_mailbox_only", OWN_MAILBOX_ONLY, 403);
+  if (err instanceof WebmailNotFoundError) return body("not_found", "Nothing to show for this message.", 404);
   if (err instanceof WebmailQuotaError) return body("rate_limited", err.message, 429);
   if (err instanceof WebmailSendUnconfirmedError) {
     return body(

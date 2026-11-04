@@ -45,6 +45,7 @@ import {
   type StoredDraft,
   UNDO_SECONDS,
 } from "./compose";
+import { deliveryReport, type DeliveryReport, type Undelivered } from "./delivery";
 import { isLimitError, type JmapRequestBody } from "./jmap-policy";
 import {
   buildScript,
@@ -176,6 +177,11 @@ export class WebmailSendUnconfirmedError extends Error {
   override readonly name = "WebmailSendUnconfirmedError";
 }
 
+/** No such thing for this session (a delivery report of a submission it didn't make). → 404 `not_found` */
+export class WebmailNotFoundError extends Error {
+  override readonly name = "WebmailNotFoundError";
+}
+
 /** The OAuth port refused the credentials or the grant (wrong password, revoked refresh token). */
 export class GrantRefusedError extends Error {
   override readonly name = "GrantRefusedError";
@@ -244,8 +250,30 @@ export type DelegatedSender = {
   label: string;
 };
 
-/** What `send` answers. `from` is the delegated mailbox a message went from (absent for the person's own). */
-export type SendResult = { submissionId: string; sendAt: string; holdSeconds: number; from?: string };
+/**
+ * What `send` answers. `from` is the delegated mailbox a message went from (absent for the person's own).
+ * `undelivered`: recipients the mail server already refused (an unknown address on one of our domains is refused while
+ * the message is held); `held`: false when nothing is held (every recipient refused), so there is nothing to undo.
+ */
+export type SendResult = {
+  submissionId: string;
+  sendAt: string;
+  holdSeconds: number;
+  from?: string;
+  undelivered: Undelivered[];
+  held: boolean;
+  /**
+   * A send from a mailbox shared with the person: what asking for its delivery report after the hold needs (sealed for
+   * this session, naming this submission and mailbox, valid a couple of minutes; `deliveryReportOf`).
+   */
+  reportTicket?: string;
+};
+
+/** What a delegated send's `reportTicket` holds (sealed, so the browser can neither read nor change it). */
+type SendTicket = { m: string; s: string; id: string; v: string; a: string; u: number };
+
+/** When `deliveryReportOf` re-checks an unsettled submission (ms after the first read; about 3 s at most). */
+const DELIVERY_RECHECKS_MS = [750, 1500, 3000] as const;
 
 /** A mailbox shared with the session's people, for the switcher, the sidebar and (later) the From picker. */
 export type SharedMailboxView = {
@@ -2531,11 +2559,29 @@ export class WebmailService {
           await this.#recordOutcome(who, { kind: "tagged_copy_left" }, req).catch(() => undefined);
         }
       }
+      // Recipients the mail server refused already, read in that mailbox with the entry that sent it.
+      const sentId = submittedAt.id;
+      const report = await this.#readReport(sentId, (build) =>
+        this.#callDelegated(sessionId, entry, build, USING_SUBMISSION),
+      ).catch(() => null);
+      // Lets this session (and only it) ask for this submission's report after the hold; nothing is kept here, so it
+      // works whichever server process answers.
+      const ticket: SendTicket = {
+        m: want,
+        s: sentId,
+        id: who.mailboxId,
+        v: who.via,
+        a: ownAccount,
+        u: this.#d.now() + (hold + 120) * 1000,
+      };
       return {
-        submissionId: submittedAt.id,
+        submissionId: sentId,
         sendAt: submittedAt.sendAt ?? new Date(this.#d.now() + hold * 1000).toISOString(),
         holdSeconds: hold,
         from: want,
+        undelivered: report?.undelivered ?? [],
+        held: report?.held ?? true,
+        reportTicket: this.#d.store.sealSendTicket(sessionId, JSON.stringify(ticket)),
       };
     } catch (err) {
       await failed(
@@ -3011,11 +3057,127 @@ export class WebmailService {
     // Save new recipients to Other contacts once the message is really sent (after the undo hold), never while
     // the person can still undo it, and never delaying this response.
     this.#afterHold(sessionId, account, draft, created.id, 0, hold);
+    // Recipients the mail server refused already (it checks our own domains' addresses while the message is held).
+    // Never a reason to fail a send that went: any problem reading it is "nothing to report yet".
+    const report = await this.#readReport(created.id, (build) =>
+      this.#call(sessionId, build, USING_SUBMISSION, account, { inactive: true }),
+    ).catch(() => null);
     return {
       submissionId: created.id,
       sendAt: created.sendAt ?? new Date(this.#d.now() + hold * 1000).toISOString(),
       holdSeconds: hold,
+      undelivered: report?.undelivered ?? [],
+      held: report?.held ?? true,
     };
+  }
+
+  /**
+   * One read of a submission's delivery report with the given caller (the sending account's own token). Best
+   * effort: a failed read is `null` (the message went; the report after the hold may still say more), a submission
+   * the account doesn't have is `undefined`, a refusal (scope, sign-in) is thrown, and nothing about the recipients
+   * is logged.
+   */
+  async #readReport(
+    submissionId: string,
+    call: (
+      build: (s: { accountId: string }) => [string, Record<string, unknown>, string][],
+    ) => Promise<Map<string, Record<string, unknown>>>,
+  ): Promise<DeliveryReport | null | undefined> {
+    try {
+      const r = await call((s) => [
+        [
+          "EmailSubmission/get",
+          { accountId: s.accountId, ids: [submissionId], properties: ["undoStatus", "deliveryStatus"] },
+          "g",
+        ],
+      ]);
+      const found = ((r.get("g")?.list ?? []) as { undoStatus?: unknown; deliveryStatus?: unknown }[])[0];
+      return found ? deliveryReport(found) : undefined;
+    } catch (err) {
+      // Not allowed (another mailbox, signed out, blocked, refused): never a "try again".
+      if (
+        err instanceof WebmailRefusedError ||
+        err instanceof WebmailSignedOutError ||
+        err instanceof WebmailBlockedError ||
+        err instanceof WebmailOwnMailboxOnlyError ||
+        err instanceof WebmailDelegationRefusedError
+      ) {
+        throw err;
+      }
+      log.warn("webmail delivery report unavailable", {
+        component: "webmail",
+        error: err instanceof Error ? err.name : "unknown",
+      });
+      return null;
+    }
+  }
+
+  /**
+   * The delivery report of a send this session made, read after its undo hold: which recipients the mail server
+   * gave up on and why (`delivery.ts`). Re-checked a few times within about 3 s while the server is still working on
+   * it (never longer). Own sends: `account` is the mailbox that sent (the tab's), read with that mailbox's own token
+   * even if the session switched meanwhile — it must still be signed in here. A send from a mailbox shared with the
+   * person (`delegated`: the mailbox and the send's `reportTicket`): only the submission that ticket names, made by
+   * this session from that mailbox in the last minutes, read with the entry it used; nothing else of that mailbox. A submission the account doesn't have, or one this session didn't make from a shared
+   * mailbox, is the same 404 (`WebmailNotFoundError`); a report that can't be read at all is "unavailable".
+   */
+  async deliveryReportOf(
+    sessionId: string,
+    submissionId: string,
+    account: string,
+    delegated?: { mailbox: string; ticket: string },
+  ): Promise<DeliveryReport> {
+    const read =
+      delegated === undefined
+        ? (id: string) =>
+            this.#readReport(id, (build) => this.#call(sessionId, build, USING_SUBMISSION, account, { inactive: true }))
+        : await this.#delegatedReportReader(sessionId, submissionId, account, delegated);
+    const sleep = this.#d.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    let report = await read(submissionId);
+    // Not a submission of that account: the same answer as any id this session never sent.
+    if (report === undefined) throw new WebmailNotFoundError("no such submission");
+    let waited = 0;
+    for (const at of DELIVERY_RECHECKS_MS) {
+      if (report?.settled === true) break;
+      await sleep(at - waited);
+      waited = at;
+      report = (await read(submissionId)) ?? report;
+    }
+    if (!report) throw new WebmailUnavailableError("delivery report unavailable");
+    return report;
+  }
+
+  async #delegatedReportReader(
+    sessionId: string,
+    submissionId: string,
+    account: string,
+    delegated: { mailbox: string; ticket: string },
+  ): Promise<(id: string) => Promise<DeliveryReport | null | undefined>> {
+    const want = delegated.mailbox.trim().toLowerCase();
+    const missing = () => new WebmailNotFoundError("no such submission");
+    const opened = this.#d.store.openSendTicket(sessionId, delegated.ticket);
+    let t: Partial<SendTicket>;
+    try {
+      t = opened === null ? {} : (JSON.parse(opened) as Partial<SendTicket>);
+    } catch {
+      t = {};
+    }
+    // Only the submission, mailbox and own mailbox the ticket was made for, by this session, while it is fresh.
+    const { m, s, id: mailboxId, v: via, a, u } = t;
+    if (m !== want || s !== submissionId || a !== account || typeof u !== "number" || u < this.#d.now()) {
+      throw missing();
+    }
+    if (typeof mailboxId !== "string" || typeof via !== "string") throw missing();
+    const cur = await this.#d.store.read(sessionId);
+    const entry = cur
+      ? [cur, ...(cur.others ?? [])].find(
+          (x) => x.delegated?.mailboxId === mailboxId && x.username.toLowerCase() === want,
+        )
+      : undefined;
+    // The entry that sent it, still open in this session through the same own mailbox.
+    if (!cur || !entry || entry.delegated?.via !== via) throw missing();
+    await this.#proveOwn(sessionId, cur, via);
+    return (id) => this.#readReport(id, (build) => this.#callDelegated(sessionId, entry, build, USING_SUBMISSION));
   }
 
   /** Cancels a held submission and puts its message back in Drafts. "Already sent" when it is too late. */
