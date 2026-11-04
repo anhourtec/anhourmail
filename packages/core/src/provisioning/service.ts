@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { isSystemLocalPart } from "@anhourmail/shared/addresses";
 
+import type { BillingProvider } from "../billing/ports";
+import { resolveOrphanEvent, syncAccountBilling } from "../billing/sync";
 import { turnOffCatchAllFor } from "../domains/catch-all";
 import { mailboxNameOf } from "../people/names";
 import { mutation } from "../mutation";
@@ -36,12 +38,27 @@ class LockLostError extends Error {
  * transaction too. A takeover can then only land between `held` and the call itself, which the mail-server client's
  * request timeout (seconds) keeps far below the stale limit (minutes).
  */
-async function apply(deps: Deps, mail: MailServer, job: ClaimedJob): Promise<void> {
+async function apply(deps: Deps, mail: MailServer, job: ClaimedJob, handlers: JobHandlers): Promise<void> {
+  const confirm = async (r: Repositories) => {
+    if (!(await r.provisioning.renew(job, deps.clock.now()))) throw new LockLostError();
+  };
   const held = <T>(fn: (r: Repositories) => Promise<T>): Promise<T> =>
     deps.uow.run(async (r) => {
-      if (!(await r.provisioning.renew(job, deps.clock.now()))) throw new LockLostError();
+      await confirm(r);
       return fn(r);
     });
+  if (job.kind === "billing.sync" || job.kind === "billing.resolve") {
+    await held(async () => undefined); // still ours before calling the provider
+    // Billing switched off: nothing is derived without the provider, so turning billing off never ends anyone's plan.
+    // Events stay queued; the nightly reconcile syncs once it is back on.
+    if (!handlers.billing) return;
+    if (job.kind === "billing.resolve") {
+      await resolveOrphanEvent(deps, handlers.billing, job.subjectId);
+      return;
+    }
+    await syncAccountBilling(deps, handlers.billing, job.subjectId, { requestId: `job-${job.id}`, guard: confirm });
+    return;
+  }
   if (job.kind === "app_password.revoke") {
     // Subject: a mailbox. Each `revoking` app password comes off the mail server, then its row goes.
     const pending = await held((r) => r.appPasswords.revoking(job.subjectId));
@@ -249,20 +266,32 @@ export type ProcessedJob = ClaimedJob & { lockLost: boolean };
  * Every outcome is recorded only while this run's claim still holds the job (its lock token); otherwise nothing of it
  * is written and `lockLost` is set.
  */
-export async function runNextJob(deps: Deps, mail: MailServer): Promise<ProcessedJob | null> {
+/** What jobs beyond the mail server need: the billing provider for `billing.*` jobs (null or absent: billing off). */
+export type JobHandlers = { billing?: BillingProvider | null };
+
+export async function runNextJob(
+  deps: Deps,
+  mail: MailServer,
+  handlers: JobHandlers = {},
+): Promise<ProcessedJob | null> {
   const job = await deps.uow.run((r) => r.provisioning.claimNext(deps.clock.now()));
   if (!job) return null;
-  return runClaimedJob(deps, mail, job);
+  return runClaimedJob(deps, mail, job, handlers);
 }
 
 /**
  * Runs a job this worker has already claimed (`runNextJob` = claim + this). Exported for tests that hold a claim while
  * another worker takes the job over.
  */
-export async function runClaimedJob(deps: Deps, mail: MailServer, job: ClaimedJob): Promise<ProcessedJob> {
+export async function runClaimedJob(
+  deps: Deps,
+  mail: MailServer,
+  job: ClaimedJob,
+  handlers: JobHandlers = {},
+): Promise<ProcessedJob> {
   let owned = true;
   try {
-    await apply(deps, mail, job);
+    await apply(deps, mail, job, handlers);
     owned = await deps.uow.run((r) => r.provisioning.complete(job, deps.clock.now()));
   } catch (err) {
     // Taken over before a side effect: nothing of this run is recorded (the newer claim applies the latest state).
