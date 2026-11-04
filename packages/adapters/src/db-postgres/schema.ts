@@ -1024,3 +1024,157 @@ export const inviteCode = pgTable(
     check("invite_code_expiry", sql`${t.expiresAt} > ${t.createdAt}`),
   ],
 );
+
+/**
+ * An admin's CSV batch of mail imports (ADR-0030 §8): groups the imports one upload started. The CSV itself (with the
+ * source passwords) is never stored; each valid row's secret went straight into its own sealed `mail_import` row.
+ */
+export const mailImportBatch = pgTable(
+  "mail_import_batch",
+  {
+    id: uuid("id").primaryKey(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    createdBy: text("created_by").references(() => authUser.id, { onDelete: "set null" }),
+    rows: integer("rows").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("mail_import_batch_account_idx").on(t.accountId, t.createdAt),
+    check("mail_import_batch_rows", sql`${t.rows} >= 0`),
+  ],
+);
+
+/**
+ * A mail import (ADR-0030 §12): one mailbox's copy from another IMAP server. Two sealed secrets (key ring,
+ * AES-256-GCM, own purposes, AAD bound to the row: `mail-import-source` / `mail_import:<id>:source` and
+ * `mail-import-destination` / `mail_import:<id>:destination`) and the source username exist only while it is live:
+ * the write that makes it terminal (`completed`, `cancelled`, `failed`) nulls them and sets `credentials_wiped_at`
+ * (check `mail_import_wiped`). Never mail content. One live import per mailbox (`mail_import_live_mailbox_idx`).
+ */
+export const mailImport = pgTable(
+  "mail_import",
+  {
+    id: uuid("id").primaryKey(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => customerAccount.id, { onDelete: "cascade" }),
+    mailboxId: uuid("mailbox_id")
+      .notNull()
+      .references(() => mailbox.id, { onDelete: "cascade" }),
+    batchId: uuid("batch_id").references(() => mailImportBatch.id, { onDelete: "set null" }),
+    requestedBy: text("requested_by").references(() => authUser.id, { onDelete: "set null" }),
+    /** own | admin */
+    requestedAs: text("requested_as").notNull(),
+    /** imap_password (later: imap_oauth) */
+    sourceKind: text("source_kind").notNull(),
+    sourceHost: text("source_host").notNull(),
+    sourcePort: integer("source_port").notNull(),
+    sourceUsername: text("source_username"),
+    sourceSecret: text("source_secret"),
+    destinationSecret: text("destination_secret"),
+    destinationCredentialId: text("destination_credential_id"),
+    destinationCredentialCreatedAt: timestamp("destination_credential_created_at", { withTimezone: true }),
+    destinationCredentialExpiresAt: timestamp("destination_credential_expires_at", { withTimezone: true }),
+    /** { excludeJunkTrash, intoSubfolder, sync } */
+    options: jsonb("options").notNull(),
+    /** queued | running | paused | blocked | syncing | completed | cancelled | failed */
+    status: text("status").notNull(),
+    /** verifying | copying */
+    phase: text("phase"),
+    blockedReason: text("blocked_reason"),
+    errorCode: text("error_code"),
+    pauseRequested: boolean("pause_requested").notNull().default(false),
+    foldersTotal: integer("folders_total").notNull().default(0),
+    messagesTotal: integer("messages_total").notNull().default(0),
+    bytesTotal: bigint("bytes_total", { mode: "number" }).notNull().default(0),
+    messagesDone: integer("messages_done").notNull().default(0),
+    bytesDone: bigint("bytes_done", { mode: "number" }).notNull().default(0),
+    duplicates: integer("duplicates").notNull().default(0),
+    tooLarge: integer("too_large").notNull().default(0),
+    failed: integer("failed").notNull().default(0),
+    leaseToken: text("lease_token"),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    runAfter: timestamp("run_after", { withTimezone: true }).notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    syncUntil: timestamp("sync_until", { withTimezone: true }),
+    lastPassAt: timestamp("last_pass_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    credentialsWipedAt: timestamp("credentials_wiped_at", { withTimezone: true }),
+    notifiedAt: timestamp("notified_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("mail_import_live_mailbox_idx")
+      .on(t.mailboxId)
+      .where(sql`${t.status} not in ('completed', 'cancelled', 'failed')`),
+    index("mail_import_due_idx").on(t.status, t.runAfter),
+    index("mail_import_account_idx").on(t.accountId, t.createdAt),
+    index("mail_import_batch_idx")
+      .on(t.batchId)
+      .where(sql`${t.batchId} is not null`),
+    check("mail_import_requested_as", sql`${t.requestedAs} in ('own', 'admin')`),
+    check("mail_import_source_kind", sql`${t.sourceKind} in ('imap_password')`),
+    check("mail_import_source_port", sql`${t.sourcePort} in (993, 143)`),
+    check(
+      "mail_import_status",
+      sql`${t.status} in ('queued', 'running', 'paused', 'blocked', 'syncing', 'completed', 'cancelled', 'failed')`,
+    ),
+    check("mail_import_phase", sql`${t.phase} is null or ${t.phase} in ('verifying', 'copying')`),
+    check(
+      "mail_import_blocked_reason",
+      sql`${t.blockedReason} is null or ${t.blockedReason} in ('quota_full', 'source_auth', 'source_unreachable', 'source_certificate', 'source_tls_required', 'destination_credential', 'mailbox_unavailable')`,
+    ),
+    check(
+      "mail_import_wiped",
+      sql`${t.status} not in ('completed', 'cancelled', 'failed') or (${t.sourceSecret} is null and ${t.destinationSecret} is null and ${t.sourceUsername} is null and ${t.credentialsWipedAt} is not null)`,
+    ),
+    check("mail_import_host_length", sql`char_length(${t.sourceHost}) between 1 and 253`),
+    check(
+      "mail_import_counters",
+      sql`${t.messagesDone} >= 0 and ${t.duplicates} >= 0 and ${t.tooLarge} >= 0 and ${t.failed} >= 0 and ${t.attempts} >= 0`,
+    ),
+  ],
+);
+
+/**
+ * One source folder of an import (ADR-0030 §12): its role, checkpoint (`uidvalidity`, `last_uid`) and counters. The
+ * folder's path is sealed (`mail-import-folder`, AAD `mail_import_folder:<import id>:<folder id>`) and nulled when the import ends,
+ * so finished history keeps roles and counts only.
+ */
+export const mailImportFolder = pgTable(
+  "mail_import_folder",
+  {
+    id: uuid("id").primaryKey(),
+    importId: uuid("import_id")
+      .notNull()
+      .references(() => mailImport.id, { onDelete: "cascade" }),
+    /** null (a custom folder) | inbox | sent | drafts | junk | trash | archive | all */
+    role: text("role"),
+    sourcePath: text("source_path"),
+    uidValidity: bigint("uidvalidity", { mode: "bigint" }),
+    lastUid: bigint("last_uid", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    messagesTotal: integer("messages_total").notNull().default(0),
+    messagesDone: integer("messages_done").notNull().default(0),
+    duplicates: integer("duplicates").notNull().default(0),
+    tooLarge: integer("too_large").notNull().default(0),
+    failed: integer("failed").notNull().default(0),
+    bytesDone: bigint("bytes_done", { mode: "number" }).notNull().default(0),
+    /** pending | copying | done | skipped */
+    status: text("status").notNull(),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    index("mail_import_folder_import_idx").on(t.importId, t.createdAt),
+    check(
+      "mail_import_folder_role",
+      sql`${t.role} is null or ${t.role} in ('inbox', 'sent', 'drafts', 'junk', 'trash', 'archive', 'all')`,
+    ),
+    check("mail_import_folder_status", sql`${t.status} in ('pending', 'copying', 'done', 'skipped')`),
+  ],
+);

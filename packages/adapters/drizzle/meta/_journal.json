@@ -288,6 +288,13 @@
       "when": 1793823548293,
       "tag": "0040_webmail_template",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1793827917774,
+      "tag": "0041_mail_import",
+      "breakpoints": true
     }
   ]
 }
