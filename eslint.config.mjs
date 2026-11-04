@@ -13,6 +13,12 @@ import reactHooks from "eslint-plugin-react-hooks";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
+/** The IMAP library has one home: the IMAP adapter (ADR-0030 §3; mail import). */
+const IMAP_LIBRARY = {
+  group: ["imapflow", "imapflow/*"],
+  message: "IMAP lives only in packages/adapters/src/imap (ADR-0030 §3).",
+};
+
 /** SDKs, drivers and the ORM: only adapter code may import them. */
 const INFRA_IMPORTS = [
   {
@@ -30,6 +36,7 @@ const INFRA_IMPORTS = [
     group: ["@anhourmail/stalwart-client", "@anhourmail/stalwart-client/*"],
     message: "Stalwart is reached through an adapter (apps/*/src/server/adapters, apps/worker) — rule 21, ADR-0008.",
   },
+  IMAP_LIBRARY,
 ];
 
 /**
@@ -141,9 +148,16 @@ export default tseslint.config(
               message: "Worker processes hold the provisioning (and the scheduler the audit) key only (ADR-0020).",
             },
           ],
+          patterns: [IMAP_LIBRARY],
         },
       ],
     },
+  },
+  // The rest of the adapters package never speaks IMAP itself.
+  {
+    files: ["packages/adapters/**"],
+    ignores: ["packages/adapters/src/imap/**"],
+    rules: { "no-restricted-imports": ["error", { patterns: [IMAP_LIBRARY] }] },
   },
   // The domain core is plain TypeScript: no frameworks, no adapters.
   {
