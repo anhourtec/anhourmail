@@ -273,13 +273,71 @@ export const ADDONS: Readonly<Record<AddOnId, AddOn>> = {
   },
 };
 
+/** The paid plans (a live subscription, a comp code or a staff grant): everything but Free. */
+export type PaidPlanId = Exclude<PlanId, "free">;
+
+export const PAID_PLANS: readonly PaidPlanId[] = ["plus", "supporter"];
+
+export const isPaidPlan = (plan: string): plan is PaidPlanId => (PAID_PLANS as readonly string[]).includes(plan);
+
+/**
+ * The Supporter amount's upper bound, as a multiple of its minimum (ADR-0029 §2; placeholder 100 × to stop typos,
+ * maintainer default 2026-11-04, to confirm with the prices, open item 7).
+ */
+const SUPPORTER_MAXIMUM_MULTIPLE = 100;
+
+const supporterMinimum = PLANS.supporter.price ?? { USD: 0, CAD: 0 };
+
 export const BILLING = {
+  /**
+   * `planned` until paid plans open (the launch change flips it, never an env setting; ADR-0029 §3): the site and docs
+   * say "coming with billing" while it is planned.
+   */
+  status: "planned" as "planned" | "open",
   interval: "year",
   currencies: ["USD", "CAD"] as const satisfies readonly Currency[],
   refundWindowDays: 14,
   /** Paid plans have no trial: the free tier is the trial. */
   trialDays: 0,
+  /**
+   * Days an account whose payment retries ran out (or whose subscription is paused) stays `restricted` — sending off,
+   * everything else on — before the subscription is cancelled and the account drops to Free with holds (ADR-0029 §5).
+   * Customer policy, published in the docs.
+   */
+  restrictedDays: 30,
+  /**
+   * Days a mailbox held after a downgrade keeps receiving mail before receiving stops too (ADR-0029 §6). Reading,
+   * sign-in and export never stop; the holds themselves are kept indefinitely (maintainer default 2026-11-04): nothing
+   * held is ever deleted on a timer.
+   */
+  heldReceiveDays: 30,
+  /** Highest Supporter amount per year, in minor units (whole currency units only; ADR-0029 §2). */
+  supporterMaximum: {
+    USD: supporterMinimum.USD * SUPPORTER_MAXIMUM_MULTIPLE,
+    CAD: supporterMinimum.CAD * SUPPORTER_MAXIMUM_MULTIPLE,
+  } satisfies Price,
 } as const;
+
+/**
+ * Storage blocks and extra mailboxes one account can buy (ADR-0029 §2; placeholders, maintainer default 2026-11-04, to
+ * confirm). With `ALIASES_PER_MAILBOX` and the account address ceiling they bound what a paid account can hold.
+ */
+export const MAX_STORAGE_BLOCKS = 10;
+export const MAX_EXTRA_MAILBOXES = 40;
+
+/**
+ * Mailboxes an account may have: the plan's included ones plus the extra mailboxes it is entitled to (paid plans only;
+ * ADR-0029 §7). Replaces the constant `MAX_MAILBOXES` in the mailbox services once billing is wired.
+ */
+export function mailboxCeiling(plan: PlanId, extraMailboxes = 0): number {
+  const extra = isPaidPlan(plan) ? Math.min(MAX_EXTRA_MAILBOXES, Math.max(0, Math.floor(extraMailboxes))) : 0;
+  return PLANS[plan].includedMailboxes + extra;
+}
+
+/** People per account: `MAX_PEOPLE`, or more when the account may have more mailboxes than that (ADR-0029 §7). */
+export function peopleCeiling(plan: PlanId, extraMailboxes = 0): number {
+  return PLANS[plan].addPeople ? Math.max(MAX_PEOPLE, mailboxCeiling(plan, extraMailboxes)) : 1;
+}
 
 export function formatPrice(amountMinor: number, currency: Currency): string {
   return new Intl.NumberFormat(currency === "CAD" ? "en-CA" : "en-US", {
@@ -303,18 +361,24 @@ export function accountPoolBytes(plan: PlanId, storageBlocks = 0): number {
 /**
  * The paid plans' storage and extras lines for the pricing page and docs: "10 GB shared by the whole account",
  * "More storage: +10 GB for $10/year (coming with billing)", "Extra mailboxes: $1/year each (coming with billing)".
+ * The "(coming with billing)" suffix shows while `BILLING.status` is `planned`.
  */
-export function storageText(plan: Plan, currency: Currency = "USD") {
+export function storageText(
+  plan: Plan,
+  currency: Currency = "USD",
+  status: (typeof BILLING)["status"] = BILLING.status,
+) {
+  const soon = status === "planned" ? " (coming with billing)" : "";
   return {
     pool: `${String(plan.storagePoolGb)} GB shared by the whole account`,
     block:
       plan.storageBlockGb === null || plan.storageBlockPrice === null
         ? null
-        : `More storage: +${String(plan.storageBlockGb)} GB for ${formatPrice(plan.storageBlockPrice[currency], currency)}/${BILLING.interval} (coming with billing)`,
+        : `More storage: +${String(plan.storageBlockGb)} GB for ${formatPrice(plan.storageBlockPrice[currency], currency)}/${BILLING.interval}${soon}`,
     extraMailbox:
       plan.extraMailboxPrice === null
         ? null
-        : `Extra mailboxes: ${formatPrice(plan.extraMailboxPrice[currency], currency)}/${BILLING.interval} each (coming with billing)`,
+        : `Extra mailboxes: ${formatPrice(plan.extraMailboxPrice[currency], currency)}/${BILLING.interval} each${soon}`,
   };
 }
 
