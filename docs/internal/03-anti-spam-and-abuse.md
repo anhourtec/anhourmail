@@ -6,11 +6,11 @@ Outbound abuse is the priority. One spammer on a shared IP hurts every user's in
 
 ## What is public and what is not
 
-| Public (in this repo, rendered in docs)                                    | Private (private ops repo / server env only)                                                                |
-| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Trust tiers and their **sending limits**: `packages/shared/src/sending.ts` | Detection **thresholds** (bounce rate, complaint rate, velocity, content-score cut-offs, phone-risk scores) |
-| Detection **logic** (which signals, what happens)                          | Tuned values, IP lists, provider API keys                                                                   |
-| AUP                                                                        | Abuse queue contents                                                                                        |
+| Public (in this repo, rendered in docs)                                    | Private (private ops repo / server env only)                                                             |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Trust tiers and their **sending limits**: `packages/shared/src/sending.ts` | Detection **thresholds** (bounce rate, complaint rate, velocity, content-score cut-offs, sign-up limits) |
+| Detection **logic** (which signals, what happens)                          | Tuned values, IP lists, provider API keys                                                                |
+| AUP                                                                        | Abuse queue contents                                                                                     |
 
 Abuse logic can be open. Thresholds come from config (`ABUSE_*` env, supplied in production by the **private ops repo**, loaded by the worker and BFF at start) with conservative defaults in code that are safe but not the tuned values (CLAUDE.md rule 44). Self-hosters set their own.
 
@@ -80,7 +80,7 @@ The limits are the values in `packages/shared/src/sending.ts` (`TRUST_TIERS`); r
 
 Every comparable privacy-focused provider we looked at that offered open free signup later added gates — invites, verification, approval holds or paid-only signup (`research/deliverability.md` §7). Recommended launch posture:
 
-- Free sign-up stays **gated**: `SIGNUP_MODE` is `open` only while the console sits behind the production firewall IP allow-list, otherwise `closed`; plus risk-based **phone verification**.
+- Free sign-up stays **gated**: `SIGNUP_MODE` is `open` only while the console sits behind the production firewall IP allow-list, otherwise `closed`; plus a self-hosted **proof-of-work** and fail-closed **sign-up limits** per client address and per network (ADR-0031; no SMS/OTP, maintainer decision 2026-10-29).
 - Free accounts in `new` **cannot send to external domains until verified and a minimum account age passes**. Internal delivery works immediately (a model other providers use successfully).
 - Free outbound moves to a **separate outbound IP** before free signups open to the public (`01-architecture.md` v2).
 - Per-recipient counting, not per-message.
@@ -94,9 +94,17 @@ only available / not available, 4–32-character names with a reserved list (sho
 no reuse of a retired name by another account. Everything is audited; the platform audit shows staff the full client
 IP of sign-ups, reset requests and confirmations. **Still open — the main risk while sign-up is open:** sending limits
 for free mailboxes (trust tiers stored and enforced, fail-closed outbound counters, `new`-tier external-sending hold)
-are Phase 6; today a free mailbox sends under the same server-side limits as any other. Phone verification (SMS/OTP)
-remains the intended sign-up gate before a public launch. Until then: watch Platform → Accounts and the platform audit,
-and close sign-up (`SIGNUP_MODE=closed`) on abuse.
+are Phase 6; today a free mailbox sends under the same server-side limits as any other. Watch Platform → Accounts and
+the platform audit, and close sign-up (`SIGNUP_MODE=closed`) on abuse.
+
+**Built 2026-11-05 (ADR-0031) — sign-up gate without SMS:** before any account is created the browser solves a signed,
+single-use, address-bound proof-of-work in a Web Worker (difficulty `SIGNUP_POW_BITS`, about a second on a mid-range
+phone); then sign-up attempts are limited per address, and created accounts per address and per network (IPv4 /24,
+IPv6 /64, /56 and /48), fail closed — only created accounts count, so failed sign-ups on a shared network don't use up
+its allowance. The proof only raises the cost of casual abuse; the limits are the real control. Refusals are `auth.sign_up_refused` in the platform audit (at most one
+per network and reason per hour; every one is logged). Email confirmation stays. It raises the cost of scripted
+sign-ups; it doesn't replace Phase 6 sending ramps. Tuned production values (difficulty, the four limits) live in the
+ops repository.
 
 **Maintainer decision, 2026-10-23 (security review run-27, item 2 — risk accepted):** free platform-domain mailboxes may
 send to external addresses **with no extra restriction until Phase 6**, and sign-up stays open. The risk: abuse from
@@ -220,7 +228,7 @@ Stalwart directly (or use PROXY protocol) so client IPs survive.
 | Velocity (sudden volume, many new recipients)                                                                         | Control-plane counters                                   | Throttle, then `restricted`                              |
 | Outbound content score                                                                                                | Stalwart spam filter on submissions                      | Reject or hold + abuse event                             |
 | Compromised account (new country/device then a burst of sends, many failed logins, app password created then a burst) | Audit + Stalwart auth WebHook events                     | Force sign-out everywhere, `restricted`, notify the user |
-| Signup farming (same device/IP/phone patterns, disposable phone numbers)                                              | Signup flow                                              | Block or require extra verification                      |
+| Signup farming (same device/IP/network patterns, scripted sign-ups)                                                   | Signup flow                                              | Block or require extra verification                      |
 | Blocklist listing of our IPs                                                                                          | Daily sweep (scheduler)                                  | Page operator                                            |
 | Hosting provider anti-spam block on our IP                                                                            | Provider API poll                                        | Page operator                                            |
 
