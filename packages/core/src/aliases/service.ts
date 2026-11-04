@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { isReservedPlatformLocalPart } from "@anhourmail/shared/addresses";
 import { ALIAS_YEAR_DAYS, ALIASES_PER_MAILBOX, PLANS, type PlanId } from "@anhourmail/shared/plans";
 
+import { addressCeilingError, addressCeilingReached } from "../billing/ceilings";
 import { type Actor, authorize, can } from "../actor";
 import {
   AliasAdminLockedError,
@@ -203,13 +204,14 @@ export async function listAliases(deps: Deps, actor: Actor, accountId: string): 
 /**
  * Adds an alias to a mailbox. `alias`: a chosen local part on one of the account's active domains. `masked`: a
  * random address on the mailbox's own domain. Limits, aliases and masked aliases each on their own except the
- * per-mailbox one:
+ * per-mailbox one and the address ceiling:
  *   - how many can exist in the account at a time (`PLANS[plan].aliases` / `maskedAliases`): 403 `plan_limit`;
  *   - aliases and masked aliases together on the chosen mailbox (`ALIASES_PER_MAILBOX`): 409 `alias_mailbox_limit`;
  *   - creations in the rolling year (`aliasCreationsPerYear`, Free only): 429 `alias_yearly_limit`, saying the date
  *     a slot comes back;
- *   - creations per UTC day (`aliasCreationsPerDay`): 429 `alias_daily_limit`.
- * The creation caps count creations (deleting gives none back); a refused create counts nothing. The last three
+ *   - creations per UTC day (`aliasCreationsPerDay`): 429 `alias_daily_limit`;
+ *   - mailboxes and aliases together in the account (the address ceiling, from configuration): 409 `address_ceiling`.
+ * The creation caps count creations (deleting gives none back); a refused create counts nothing. The last four
  * are audited as denied. All are checked, and the creation counted, under the account lock in the same unit of work,
  * so they hold under concurrent creates and fail closed.
  */
@@ -291,6 +293,11 @@ export async function createAlias(
           `This account has created ${String(perDay)} ${KIND_LABEL[kind]} today, the most it can in one day. You can create more after midnight UTC.`,
         );
         return { result: null, meta: { kind, perDay }, denied: { code: "alias_daily_limit" } };
+      }
+      // The account-wide address ceiling (ADR-0029 §7; mailboxes and both kinds of alias together, from configuration).
+      if (await addressCeilingReached(deps, repos, accountId)) {
+        refused.error = addressCeilingError();
+        return { result: null, meta: { kind }, denied: { code: "address_ceiling" } };
       }
 
       let address = "";
