@@ -4,6 +4,7 @@ export * from "./password-change-gate";
 export * from "./settings-repository";
 export * from "./settings-service";
 export * from "./signatures-service";
+export * from "./account-safe-senders";
 export * from "./managed-script";
 export * from "./handoff";
 export * from "./on-behalf";
