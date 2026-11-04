@@ -518,6 +518,15 @@ export const ROUTES: readonly RouteSpec[] = [
     // The harness sends no token: everyone gets a validation error.
     probeStatus: 400,
   },
+  // The billing provider's webhook (ADR-0029 §4): signed, outside any session. The harness sends no signature: 400
+  // `bad_signature` for everyone (404 when billing is off). Not audited: the sync it queues audits every change.
+  {
+    method: "POST",
+    path: "/api/billing/webhook",
+    file: "app/api/billing/webhook/route.ts",
+    guard: "public",
+    probeStatus: 400,
+  },
   // Staff: customer accounts (metadata only; opening one is audited in that account's log).
   {
     method: "GET",
