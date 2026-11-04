@@ -71,7 +71,14 @@ export const systemClock: Clock = { now: () => new Date() };
 export type RequestMeta = { requestId: string; ip: string | null; userAgent: string | null };
 
 /**
- * What every service gets. `platform` is the deployment's own hostnames (from `PLATFORM_DOMAIN`): DNS templates,
- * domain verification and client settings use it, never the product's published names.
+ * Deployment limits from configuration, never published (rule 33). `addressCeiling`: mailboxes + aliases + masked
+ * aliases one account may hold (`ACCOUNT_ADDRESS_CEILING`; ADR-0029 §7), unless staff set an override for it.
  */
-export type Deps = { uow: UnitOfWork; clock: Clock; platform: Platform };
+export type DeploymentLimits = { addressCeiling: number };
+
+/**
+ * What every service gets. `platform` is the deployment's own hostnames (from `PLATFORM_DOMAIN`): DNS templates,
+ * domain verification and client settings use it, never the product's published names. `limits` absent (tests, tools)
+ * means the development defaults (`billing/ceilings.ts`); production refuses to start without them.
+ */
+export type Deps = { uow: UnitOfWork; clock: Clock; platform: Platform; limits?: DeploymentLimits };
