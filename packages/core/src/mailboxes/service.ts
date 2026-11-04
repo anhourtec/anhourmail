@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { randomUUID } from "node:crypto";
 
-import { accountPoolBytes, MAILBOX_DELETE_GRACE_DAYS, MAX_MAILBOXES, PLANS } from "@anhourmail/shared/plans";
+import { accountPoolBytes, MAILBOX_DELETE_GRACE_DAYS, PLANS } from "@anhourmail/shared/plans";
 import {
   defaultShareBytes,
   formatBytes,
@@ -13,6 +13,13 @@ import {
 
 import { type Actor, authorize, can } from "../actor";
 import { maskEmail } from "../audit/record";
+import {
+  accountCeilingsOf,
+  addressCeilingError,
+  addressCeilingReached,
+  entitledAddonsOf,
+  mailboxCeilingMessage,
+} from "../billing/ceilings";
 import { turnOffCatchAllFor } from "../domains/catch-all";
 import {
   ConflictError,
@@ -149,8 +156,9 @@ async function poolOf(repos: Repositories, accountId: string) {
   if (!account) throw new NotFoundError();
   const mailboxes = await repos.mailboxes.listByAccount(accountId);
   const used = new Map((await repos.mailboxStorage.byAccount(accountId)).map((x) => [x.mailboxId, x.usedBytes]));
+  const { storageBlocks } = await entitledAddonsOf(repos, accountId, account.plan);
   const pool = storagePool(
-    accountPoolBytes(account.plan),
+    accountPoolBytes(account.plan, storageBlocks),
     mailboxes.map((m) => ({ quotaBytes: m.quotaBytes, storageUsedBytes: used.get(m.id) ?? null })),
   );
   return { plan: PLANS[account.plan], pool, count: mailboxes.length, used };
@@ -277,7 +285,7 @@ export async function mailboxOptions(deps: Deps, actor: Actor, accountId: string
       maxQuotaGb: Math.floor(p.pool.unassignedBytes / GB),
       defaultQuotaGb: defaultShareBytes(p.pool.unassignedBytes, p.count, p.plan.includedMailboxes) / GB,
       pool: p.pool,
-      remaining: MAX_MAILBOXES - p.count,
+      remaining: Math.max(0, (await accountCeilingsOf(r, accountId)).mailboxes - p.count),
     };
   });
 }
@@ -380,11 +388,10 @@ export async function assertRoomForMailbox(
   quotaGb: unknown,
 ): Promise<number> {
   if (onPlatform) await assertPlatformAllowance(repos, deps.platform, accountId);
-  if ((await repos.mailboxes.count(accountId)) >= MAX_MAILBOXES) {
-    throw new PlanLimitError(
-      `Your plan includes ${String(MAX_MAILBOXES)} mailboxes. More mailboxes come with billing, which isn't open yet.`,
-    );
-  }
+  // The plan's mailboxes plus the extra mailboxes in force (ADR-0029 §7), then the account-wide address ceiling.
+  const { mailboxes: ceiling } = await accountCeilingsOf(repos, accountId);
+  if ((await repos.mailboxes.count(accountId)) >= ceiling) throw new PlanLimitError(mailboxCeilingMessage(ceiling));
+  if (await addressCeilingReached(deps, repos, accountId)) throw addressCeilingError();
   return newMailboxQuota(await poolOf(repos, accountId), quotaGb);
 }
 
@@ -468,6 +475,8 @@ export async function staffCreatePlatformMailbox(
         userId = owner.userId;
       }
       await assertPlatformAllowance(repos, deps.platform, accountId);
+      // Staff are held to the address ceiling too: raising it is its own audited change (`billing.ceiling_changed`).
+      if (await addressCeilingReached(deps, repos, accountId)) throw addressCeilingError();
       const address = `${local}@${deps.platform.domain}`;
       await repos.mailboxes.lockAddress(address);
       if (!(await platformAddressFree(repos, address, accountId))) {

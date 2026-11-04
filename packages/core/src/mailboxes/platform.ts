@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { platformLocalPartProblem } from "@anhourmail/shared/addresses";
-import { MAX_MAILBOXES, PLANS } from "@anhourmail/shared/plans";
+import { PLANS } from "@anhourmail/shared/plans";
 import { COMPANY_DOMAIN, type Platform } from "@anhourmail/shared/platform";
 
 import { type Actor, authorize } from "../actor";
+import { accountCeilingsOf, mailboxCeilingMessage } from "../billing/ceilings";
 import { ForbiddenError, NotFoundError, PlanLimitError, ValidationError } from "../errors";
 import type { Deps, Repositories } from "../ports";
 
@@ -11,9 +12,9 @@ import type { Deps, Repositories } from "../ports";
  * Free addresses on the platform domain (`name@<PLATFORM_DOMAIN>`, ADR-0021). The platform domain belongs to no
  * account: it is configuration (`deps.platform.domain`), never a `customer_domain` row (customers can't add it, so the
  * domain, DNS and catch-all screens never show it), and the mail server's system domain already exists. Any account
- * may hold mailboxes on it: Free up to `PLANS.free.platformMailboxes`, paid plans within `MAX_MAILBOXES`. Names follow
- * the shared platform rules (4–32 characters, reserved names) and are first come, first served across all accounts; a
- * name that was in use is never handed to a different account (`PlatformAddressRepository`).
+ * may hold mailboxes on it: Free up to `PLANS.free.platformMailboxes`, paid plans within the mailbox ceiling. Names
+ * follow the shared platform rules (4–32 characters, reserved names) and are first come, first served across all
+ * accounts; a name that was in use is never handed to a different account (`PlatformAddressRepository`).
  */
 
 /** What the create form sends as `domainId` for the platform domain (it has no row, so no uuid). */
@@ -69,7 +70,7 @@ export async function platformAllowance(
   if (!account) throw new NotFoundError();
   const max = PLANS[account.plan].platformMailboxes;
   const used = await platformMailboxCount(repos, platform, accountId);
-  const total = MAX_MAILBOXES - (await repos.mailboxes.count(accountId));
+  const total = (await accountCeilingsOf(repos, accountId)).mailboxes - (await repos.mailboxes.count(accountId));
   return { used, max, remaining: Math.max(0, Math.min(total, max === null ? total : max - used)) };
 }
 
@@ -84,9 +85,7 @@ export async function assertPlatformAllowance(repos: Repositories, platform: Pla
         : `This plan includes ${String(max)} free @${platform.domain} addresses.`,
     );
   }
-  throw new PlanLimitError(
-    `Your plan includes ${String(MAX_MAILBOXES)} mailboxes. More mailboxes come with billing, which isn't open yet.`,
-  );
+  throw new PlanLimitError(mailboxCeilingMessage((await accountCeilingsOf(repos, accountId)).mailboxes));
 }
 
 export type PlatformAddressCheck = {

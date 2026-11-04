@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { INVITE_EMAILS_PER_DAY, INVITE_TTL_DAYS, MAX_PEOPLE, PLANS } from "@anhourmail/shared/plans";
+import { INVITE_EMAILS_PER_DAY, INVITE_TTL_DAYS, PLANS } from "@anhourmail/shared/plans";
 import { ACCOUNT_ROLES, type AccountRole } from "@anhourmail/shared/rbac";
 import { firstIssue, memberRemovalSchema } from "@anhourmail/shared/delegation";
 
+import { accountCeilingsOf } from "../billing/ceilings";
 import { type Actor, authorize, can } from "../actor";
 import { maskEmail } from "../audit/record";
 import { dropGrantsNotByOwners, dropPersonGrants } from "../delegation/cascade";
@@ -138,7 +139,7 @@ export async function listPeople(deps: Deps, actor: Actor, accountId: string): P
       grantableRoles: plan.addPeople ? grantableRoles(actor, accountId) : [],
       limits: {
         used: members.length + liveInvites(invites, now).length,
-        max: MAX_PEOPLE,
+        max: (await accountCeilingsOf(r, accountId)).people,
         addPeople: plan.addPeople,
         planName: plan.name,
       },
@@ -158,8 +159,10 @@ export async function assertRoom(repos: Repositories, accountId: string, now: Da
   }
   const members = (await repos.people.list(accountId)).length;
   const invites = liveInvites(await repos.invites.listPending(accountId), now).filter((i) => i.id !== exclude);
-  if (members + invites.length >= MAX_PEOPLE) {
-    throw new PlanLimitError(`An account can have up to ${String(MAX_PEOPLE)} people, counting pending invites.`);
+  // At least `MAX_PEOPLE`, more when extra mailboxes allow more mailboxes than that (ADR-0029 §7).
+  const ceiling = (await accountCeilingsOf(repos, accountId)).people;
+  if (members + invites.length >= ceiling) {
+    throw new PlanLimitError(`An account can have up to ${String(ceiling)} people, counting pending invites.`);
   }
 }
 
@@ -622,7 +625,8 @@ export async function acceptInvite(
       const others = liveInvites(await repos.invites.listPending(invite.accountId), now).filter(
         (i) => i.id !== invite.id,
       );
-      if ((await repos.people.list(invite.accountId)).length + others.length >= MAX_PEOPLE) {
+      const ceiling = (await accountCeilingsOf(repos, invite.accountId)).people;
+      if ((await repos.people.list(invite.accountId)).length + others.length >= ceiling) {
         throw new PlanLimitError("This account already has as many people as it can. Ask the person who invited you.");
       }
       let userId: string;

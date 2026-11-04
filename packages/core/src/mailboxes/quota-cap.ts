@@ -12,6 +12,7 @@
 import { accountPoolBytes, type PlanId } from "@anhourmail/shared/plans";
 import { minQuotaBytes } from "@anhourmail/shared/storage";
 
+import { entitledAddonsOf } from "../billing/ceilings";
 import { mutation } from "../mutation";
 import type { Deps, RequestMeta } from "../ports";
 import { GB } from "./entity";
@@ -109,9 +110,18 @@ export async function rebalanceStoragePools(deps: Deps, reader: MailboxUsageRead
   const all: Row[] = await deps.uow.run((r) => r.mailboxStorage.quotas());
   const byAccount = new Map<string, Row[]>();
   for (const m of all) byAccount.set(m.accountId, [...(byAccount.get(m.accountId) ?? []), m]);
-  const over = [...byAccount.values()].filter(
-    (list) => list.reduce((s, m) => s + m.quotaBytes, 0) > accountPoolBytes(list[0]?.plan ?? "free"),
-  );
+  // Each account's pool with the storage blocks in force (ADR-0029 §7), so purchased storage is never taken back.
+  const pools = new Map<string, number>();
+  await deps.uow.run(async (r) => {
+    for (const [accountId, list] of byAccount) {
+      const plan = list[0]?.plan ?? "free";
+      pools.set(accountId, accountPoolBytes(plan, (await entitledAddonsOf(r, accountId, plan)).storageBlocks));
+    }
+  });
+  const poolOf = (accountId: string) => pools.get(accountId) ?? 0;
+  const over = [...byAccount.entries()]
+    .filter(([accountId, list]) => list.reduce((s, m) => s + m.quotaBytes, 0) > poolOf(accountId))
+    .map(([, list]) => list);
   const run: QuotaCapRun = { overPool: over.length, lowered: 0, keptAbovePool: [], unmeasured: 0 };
   const stamp = String(deps.clock.now().getTime());
 
@@ -123,7 +133,7 @@ export async function rebalanceStoragePools(deps: Deps, reader: MailboxUsageRead
       run.unmeasured += 1;
       continue;
     }
-    const poolBytes = accountPoolBytes(first.plan);
+    const poolBytes = poolOf(first.accountId);
     const targets = rebalancedQuotas(
       poolBytes,
       list.map((m) => ({ id: m.id, quotaBytes: m.quotaBytes, usedBytes: used.get(m.id) ?? 0 })),
