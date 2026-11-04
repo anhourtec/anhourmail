@@ -10,6 +10,7 @@
     "./addresses": "./src/addresses.ts",
     "./data-lifecycle": "./src/data-lifecycle.ts",
     "./delegation": "./src/delegation.ts",
+    "./import": "./src/import.ts",
     "./mail-rules": "./src/mail-rules.ts",
     "./names": "./src/names.ts",
     "./platform": "./src/platform.ts",
