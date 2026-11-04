@@ -11,6 +11,7 @@
     "./billing": "./src/billing/index.ts",
     "./account": "./src/account/index.ts",
     "./security": "./src/security/index.ts",
+    "./sign-up": "./src/sign-up/index.ts",
     "./provisioning": "./src/provisioning/index.ts",
     "./domains": "./src/domains/index.ts",
     "./mailboxes": "./src/mailboxes/index.ts",
