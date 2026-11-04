@@ -35,6 +35,7 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 | #    | Migration                            | Commit    | Date       | Change                                                                                                            | Rollback        |
 | ---- | ------------------------------------ | --------- | ---------- | ----------------------------------------------------------------------------------------------------------------- | --------------- |
+| 0041 | `0041_mail_import`                   | —         | 2026-11-05 | `mail_import`, `mail_import_folder`, `mail_import_batch`: imports, progress, sealed secrets (ADR-0030)            | Safe            |
 | 0040 | `0040_webmail_template`              | —         | 2026-11-05 | `webmail_template` table: templates (canned replies) per mailbox, text only (ADR-0032 §3)                         | Safe            |
 | 0039 | `0039_account_safe_sender`           | —         | 2026-11-05 | `account_safe_sender` table: the account-wide Safe senders list (ADR-0032 §1)                                     | Safe            |
 | 0038 | `0038_billing_period_refund`         | —         | 2026-11-05 | `account_billing`: `period_paid_for`, `self_service_refund_at` (ADR-0029, run-62 F1/F2)                           | Safe            |
@@ -104,6 +105,26 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0041_mail_import · — · 2026-11-05 · Safe
+
+- Added: `mail_import_batch` (id, account_id → `customer_account` cascade, created_by → `auth_user` set null, rows,
+  created_at); `mail_import` (id, account_id → `customer_account` cascade, mailbox_id → `mailbox` cascade, batch_id →
+  `mail_import_batch` set null, requested_by → `auth_user` set null, requested_as `own`/`admin`, source_kind
+  `imap_password`, source_host (1–253 characters), source_port 993/143, source_username, source_secret and
+  destination_secret (sealed with the key ring; null after the wipe), destination_credential_id / _created_at /
+  _expires_at, options jsonb, status, phase, blocked_reason, error_code, pause_requested, eight counters, lease_token,
+  lease_until, run_after, attempts, sync_until, last_pass_at, created_at, started_at, finished_at,
+  credentials_wiped_at, notified_at) with a unique partial index on mailbox_id while not terminal (one live import per
+  mailbox), indexes on (status, run_after), (account_id, created_at) and batch_id, and `CHECK`s on the enums and
+  `mail_import_wiped` (a terminal row holds no secret or username and has `credentials_wiped_at`);
+  `mail_import_folder` (id, import_id → `mail_import` cascade, role, source_path (sealed; null once the import ends),
+  uidvalidity, last_uid, five counters, status, created_at, updated_at). No mail content anywhere (rule 24).
+- Changed: —
+- Removed: —
+- Data: none.
+- Rollback: drop the three tables (import history is lost; nothing else reads them). Numbered after ADR-0032's 0039
+  and 0040.
 
 ### 0040_webmail_template · — · 2026-11-05 · Safe
 
