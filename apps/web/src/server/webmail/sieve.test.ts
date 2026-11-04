@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 
+import { inspectManagedScript } from "@anhourmail/core/webmail";
+import { type MailRule, MailRuleList } from "@anhourmail/shared/mail-rules";
 import { matchSafeSender } from "@anhourmail/shared/senders";
 
 import {
@@ -487,5 +489,140 @@ describe("account Safe senders in the managed script (ADR-0032 §1)", () => {
     expect(applyAccountSafeSenders(`${ours}if header :is "x" text:\nhi\n.\n{ keep; }\n`, ["a.example"])).toBeNull();
     expect(applyAccountSafeSenders(`${ours}if header :is "x" "unterminated\n`, ["a.example"])).toBeNull();
     expect(applyAccountSafeSenders(ours.replace("if false {", "if false {}"), ["a.example"])).toBeNull();
+  });
+});
+
+describe("mail rules in the managed script (ADR-0032 §2)", () => {
+  const rule = (patch: Partial<MailRule> = {}): MailRule => ({
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    name: "Newsletters",
+    enabled: true,
+    match: "all",
+    conditions: [{ field: "listId", op: "contains", value: "news.example" }],
+    actions: {
+      move: { kind: "folder", folderId: "f1", path: "Reading/News" },
+      markRead: true,
+      flag: false,
+      forward: false,
+      stop: false,
+    },
+    ...patch,
+  });
+  const withRules = (filters: MailRule[], patch: Partial<MailRules> = {}) => rules({ filters, ...patch });
+
+  it("compiles conditions and actions after the junk rules, never for spam, and keeps them in the settings line", () => {
+    const script = buildScript(
+      withRules(
+        [
+          rule(),
+          rule({
+            id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            match: "any",
+            conditions: [
+              { field: "from", op: "is", value: "Boss@Corp.example" },
+              { field: "toCc", op: "contains", value: "team" },
+              { field: "subject", op: "contains", value: "urgent" },
+              { field: "attachment" },
+              { field: "size", op: "over", kb: 1024 },
+            ],
+            actions: { move: null, markRead: false, flag: true, forward: false, stop: true },
+          }),
+          rule({ id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", enabled: false, name: "Off" }),
+        ],
+        { junk: { blocked: ["spam.example"], safe: [], trustedOnly: false } },
+      ),
+      ctx,
+    );
+    const c = code(script);
+    expect(c.indexOf('["spam.example"]')).toBeLessThan(c.indexOf('if not header :contains "X-Spam-Status" "Yes" {'));
+    expect(c).toContain(
+      'if header :contains :comparator "i;unicode-casemap" "list-id" "news.example" {\n  addflag "\\\\Seen";\n  fileinto "Reading/News";\n  stop;\n}',
+    );
+    expect(c).toContain(
+      'if anyof (address :all :comparator "i;unicode-casemap" :is "from" "boss@corp.example", header :contains :comparator "i;unicode-casemap" ["to", "cc"] "team", header :contains :comparator "i;unicode-casemap" "subject" "urgent", header :mime :anychild :contains "Content-Disposition" "attachment", size :over 1048576) {\n  addflag "\\\\Flagged";\n  stop;\n}',
+    );
+    // A switched-off rule is kept but not compiled.
+    expect(c.match(/fileinto "Reading\/News"/g)).toHaveLength(1);
+    expect(c).toMatch(/^require \[.*"imap4flags".*"mime".*\];/m);
+    expect(parseScript(script)?.filters.map((f) => f.name)).toEqual(["Newsletters", "Newsletters", "Off"]);
+  });
+
+  it("deletes to Trash (never discard) and escapes every value", () => {
+    const evil = 'x" { redirect "evil@example.org"; } if true { discard; } #';
+    const c = code(
+      buildScript(
+        withRules([
+          rule({
+            conditions: [{ field: "subject", op: "contains", value: evil }],
+            actions: { move: { kind: "trash" }, markRead: false, flag: false, forward: false, stop: false },
+          }),
+          rule({
+            id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            actions: {
+              move: { kind: "folder", folderId: "f2", path: 'A"B\\C' },
+              markRead: false,
+              flag: false,
+              forward: false,
+              stop: false,
+            },
+          }),
+        ]),
+        ctx,
+      ),
+    );
+    expect(c).toContain('fileinto :specialuse "\\\\Trash" "Trash";');
+    expect(c).not.toMatch(/\bdiscard\b(?!;\s*}\s*#)/);
+    expect(c).toContain(sieveString(evil));
+    expect(c).toContain('fileinto "A\\"B\\\\C";');
+    // Blank the strings: what's left has no redirect or discard command.
+    const commands = c.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+    expect(commands).not.toMatch(/redirect|discard/);
+  });
+
+  it("forwards only to the confirmed address, inside the suppression and DMARC guard", () => {
+    const fwd = rule({ actions: { move: null, markRead: false, flag: false, forward: true, stop: false } });
+    const none = code(buildScript(withRules([fwd]), ctx));
+    expect(none).not.toContain("redirect");
+    const script = buildScript(withRules([fwd]), { ...ctx, ruleForwardTo: "me@elsewhere.example" });
+    const guard = forwardingGuard(ctx.authservIds, ctx.mailboxDomain);
+    expect(script).toContain(`  if not ${guard ?? ""} {\n    redirect :copy "me@elsewhere.example";\n  }`);
+    expect(script).toContain('header :contains "X-Spam-Status" "Yes"');
+    // The reconciler sees one redirect, to the confirmed target, inside the expected guard.
+    const found = inspectManagedScript(script, guard);
+    expect(found.redirects).toEqual(["me@elsewhere.example"]);
+    expect(found.unguardedRedirect).toBe(false);
+    expect(found.foreign).toEqual([]);
+    // With Forwarding itself on, every message is forwarded already: rules add no second copy.
+    const both = buildScript(
+      withRules([fwd], { forwarding: { enabled: true, address: "me@elsewhere.example", keepCopy: true } }),
+      { ...ctx, ruleForwardTo: "me@elsewhere.example" },
+    );
+    expect(code(both).match(/redirect/g)).toHaveLength(1);
+  });
+
+  it("validates rules: names, conditions, values, limits and 'is' needing an address", () => {
+    const ok = (r: unknown) => MailRuleList.safeParse([r]).success;
+    expect(ok(rule())).toBe(true);
+    expect(ok({ ...rule(), name: " " })).toBe(false);
+    expect(ok({ ...rule(), conditions: [] })).toBe(false);
+    expect(ok({ ...rule(), conditions: Array.from({ length: 6 }, () => ({ field: "attachment" })) })).toBe(false);
+    expect(ok({ ...rule(), conditions: [{ field: "subject", op: "contains", value: "x".repeat(201) }] })).toBe(false);
+    expect(ok({ ...rule(), conditions: [{ field: "subject", op: "is", value: "x" }] })).toBe(false);
+    expect(ok({ ...rule(), conditions: [{ field: "from", op: "is", value: "not an address" }] })).toBe(false);
+    expect(ok({ ...rule(), conditions: [{ field: "size", op: "over", kb: 0 }] })).toBe(false);
+    expect(ok({ ...rule(), conditions: [{ field: "header", value: "x" }] })).toBe(false);
+    expect(ok({ ...rule(), actions: { move: null, markRead: false, flag: false, forward: false, stop: false } })).toBe(
+      false,
+    );
+    expect(ok({ ...rule(), actions: { ...rule().actions, redirect: "x@y.z" } })).toBe(false);
+    expect(
+      ok({ ...rule(), actions: { ...rule().actions, move: { kind: "folder", folderId: "a b", path: "x" } } }),
+    ).toBe(false);
+    // Line breaks in a value become spaces.
+    const parsed = MailRuleList.parse([
+      { ...rule(), conditions: [{ field: "subject", op: "contains", value: "a\r\nb" }] },
+    ]);
+    expect(parsed[0]?.conditions[0]).toMatchObject({ value: "a  b" });
+    expect(MailRuleList.safeParse(Array.from({ length: 51 }, () => rule())).success).toBe(false);
   });
 });

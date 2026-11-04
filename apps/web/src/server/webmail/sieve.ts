@@ -2,6 +2,7 @@
 import { z } from "zod";
 
 import { forwardingGuard, GUARD_EXTENSIONS } from "@anhourmail/core/webmail";
+import { type MailRule, MailRuleList } from "@anhourmail/shared/mail-rules";
 import { MAX_SENDER_ENTRIES, SENDER_ADDRESS, senderEntry } from "@anhourmail/shared/senders";
 import { MANAGED_SIEVE_SCRIPT, MANAGED_SIEVE_SETTINGS_PREFIX } from "@anhourmail/shared/webmail";
 
@@ -27,7 +28,8 @@ export { MAX_SENDER_ENTRIES, senderEntry };
 export const MAX_SCRIPT_BYTES = 95_000;
 /** At most this many contact addresses are written into the script (for "contacts only" rules). */
 export const MAX_CONTACT_ADDRESSES = 1_000;
-export const MAILBOX_RULES_LIMIT_MESSAGE = "Your blocked and safe sender lists are too long. Remove some entries.";
+export const MAILBOX_RULES_LIMIT_MESSAGE =
+  "Your mail rules and blocked and safe sender lists are too long. Remove some rules or entries.";
 /** One automatic reply per sender per this many days. */
 export const VACATION_DAYS = 3;
 
@@ -92,6 +94,8 @@ export const MailRules = z.object({
   vacation: VacationInput,
   forwarding: ForwardingRule,
   junk: JunkInput,
+  /** Mail rules (ADR-0032 §2), in order; scripts written before them have none. */
+  filters: MailRuleList.default([]),
   /** The person's own script that was active before ours, run after our rules. */
   include: z.string().regex(SCRIPT_NAME).nullable(),
   /** UTC offset for the automatic-reply dates ("-0700"), from the person's time zone when saved. */
@@ -103,6 +107,7 @@ export const DEFAULT_RULES: MailRules = {
   vacation: { enabled: false, from: null, to: null, subject: "", message: "", contactsOnly: false },
   forwarding: { enabled: false, address: null, keepCopy: true },
   junk: { blocked: [], safe: [], trustedOnly: false },
+  filters: [],
   include: null,
   zone: "+0000",
 };
@@ -186,6 +191,11 @@ export function buildScript(
     mailboxDomain: string | null;
     /** The account's Safe senders (ADR-0032 §1), `senderEntry` form; none when absent. */
     accountSafe?: readonly string[];
+    /**
+     * Where a rule's "forward" sends a copy: the mailbox's confirmed forwarding address (control plane), or null (no
+     * confirmed address, or sending paused) — then rule forwards compile to nothing.
+     */
+    ruleForwardTo?: string | null;
   },
 ): string {
   const r = MailRules.parse(rules);
@@ -267,6 +277,15 @@ export function buildScript(
     body.push(`if not ${SUPPRESS} {\n${indented}\n}`);
   }
 
+  // 4. Mail rules (ADR-0032 §2), in order, never for mail Stalwart flagged as spam (a rule can't pull it out of Junk).
+  const forwardTo = r.forwarding.enabled && r.forwarding.address !== null ? null : (ctx.ruleForwardTo ?? null);
+  const compiled = r.filters
+    .filter((f) => f.enabled)
+    .map((f) => compileRule(f, { forwardTo, guard: forwardingGuard(ctx.authservIds, ctx.mailboxDomain), requires }));
+  if (compiled.length > 0) {
+    body.push(`${RULES_MARKER}\nif not header :contains "X-Spam-Status" "Yes" {\n${compiled.join("\n")}\n}`);
+  }
+
   const stored = Buffer.from(JSON.stringify({ v: 1, ...r }), "utf8").toString("base64url");
   return [
     `require ${list([...requires])};`,
@@ -276,6 +295,64 @@ export function buildScript(
     ...body,
     "",
   ].join("\n");
+}
+
+/** The comment line before the mail rules block. */
+const RULES_MARKER = "# Mail rules, set in the webmail's Settings.";
+
+const ci = ':comparator "i;unicode-casemap"';
+
+/** One condition as a Sieve test; every value goes through `sieveString` (`:contains` has no wildcards). */
+function conditionTest(c: MailRule["conditions"][number], requires: Set<string>): string {
+  switch (c.field) {
+    case "from":
+    case "toCc": {
+      const headers = c.field === "from" ? '"from"' : '["to", "cc"]';
+      return c.op === "is"
+        ? `address :all ${ci} :is ${headers} ${sieveString(c.value.toLowerCase())}`
+        : `header :contains ${ci} ${headers} ${sieveString(c.value)}`;
+    }
+    case "subject":
+      return `header :contains ${ci} "subject" ${sieveString(c.value)}`;
+    case "listId":
+      return `header :contains ${ci} "list-id" ${sieveString(c.value)}`;
+    case "attachment":
+      requires.add("mime");
+      return 'header :mime :anychild :contains "Content-Disposition" "attachment"';
+    case "size":
+      return `size :${c.op} ${String(Math.trunc(c.kb) * 1024)}`;
+  }
+}
+
+/**
+ * One rule as an `if` block. Flags first (they apply to wherever the message is then filed), then a forwarded copy
+ * (only to `forwardTo`, inside the same suppression and DMARC guard as Forwarding — the redirect sits on its own
+ * line right after the guard, exactly as the reconciler checks it), then the move, then `stop`.
+ */
+function compileRule(
+  rule: MailRule,
+  ctx: { forwardTo: string | null; guard: string | null; requires: Set<string> },
+): string {
+  const tests = rule.conditions.map((c) => conditionTest(c, ctx.requires));
+  const test = rule.match === "all" ? allof(tests) : anyof(tests);
+  const lines: string[] = [];
+  const a = rule.actions;
+  if (a.markRead || a.flag) ctx.requires.add("imap4flags");
+  if (a.markRead) lines.push('  addflag "\\\\Seen";');
+  if (a.flag) lines.push('  addflag "\\\\Flagged";');
+  if (a.forward && ctx.forwardTo !== null) {
+    ctx.requires.add("envelope");
+    ctx.requires.add("copy");
+    if (ctx.guard?.includes(":index") === true) for (const ext of GUARD_EXTENSIONS) ctx.requires.add(ext);
+    const redirect = `redirect :copy ${sieveString(ctx.forwardTo)};`;
+    lines.push(`  if not ${SUPPRESS} {`);
+    lines.push(ctx.guard === null ? `    ${redirect}` : `  if not ${ctx.guard} {\n    ${redirect}\n  }`);
+    lines.push("  }");
+  }
+  if (a.move?.kind === "folder") lines.push(`  fileinto ${sieveString(a.move.path)};`);
+  if (a.move?.kind === "trash") lines.push('  fileinto :specialuse "\\\\Trash" "Trash";');
+  if (a.move !== null || a.stop) lines.push("  stop;");
+  return `if ${test} {\n${lines.join("\n")}\n}`;
 }
 
 /** The comment line right before the account Safe senders branch (ADR-0032 §1). Never change it: scripts carry it. */
