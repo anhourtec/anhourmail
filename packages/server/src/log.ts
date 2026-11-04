@@ -134,6 +134,14 @@ export const REDACT_KEYS: readonly string[] = [
   "onbehalfkey",
   "onbehalftag",
   "xanhourmailonbehalf",
+  // Mail import (ADR-0030 §2): the sealed and opened source and destination secrets, the IMAP library's auth field,
+  // the source sign-in name, and folder paths (personal). `accessToken` (OAuth sources, later) is a token key above.
+  "sourcesecret",
+  "destinationsecret",
+  "pass",
+  "sourceusername",
+  "sourcepath",
+  "sourcehost",
   // AnhourMail: mail content never reaches logs
   "subject",
   "body",

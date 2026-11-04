@@ -88,6 +88,27 @@ describe("logger", () => {
     expect(redact(new Date(Number.NaN))).toBeNull();
     expect((redact("x".repeat(3000)) as string).length).toBeLessThan(2100);
   });
+
+  it("redacts a mail import's secrets, sign-in name and folder paths (ADR-0030 §2)", () => {
+    const out = redact({
+      sourceSecret: "v1.k1.a",
+      destination_secret: "v1.k1.b",
+      auth: { user: "someone@example.org", pass: "app-pw", accessToken: "t" },
+      sourceUsername: "someone@example.org",
+      sourcePath: "Archive/Trips",
+      sourceHost: "mail.someones-home.example",
+      importId: "i-1",
+    }) as Record<string, unknown>;
+    expect(out).toEqual({
+      sourceSecret: "[redacted]",
+      destination_secret: "[redacted]",
+      auth: { user: "s***@example.org", pass: "[redacted]", accessToken: "[redacted]" },
+      sourceUsername: "[redacted]",
+      sourcePath: "[redacted]",
+      sourceHost: "[redacted]",
+      importId: "i-1",
+    });
+  });
 });
 
 describe("request context", () => {
