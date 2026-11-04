@@ -1,6 +1,6 @@
 # 06 — Pricing and billing
 
-Last updated: 2026-10-30. Research: `research/market-and-legal.md` (not legal or tax advice; confirm with an accountant).
+Last updated: 2026-11-04 (billing designed in ADR-0029). Research: `research/market-and-legal.md` (not legal or tax advice; confirm with an accountant).
 
 ## Plans
 
@@ -52,6 +52,11 @@ $10 is roughly break-even after card fees (bundle it with the renewal to avoid a
 their own storage and the worst case is bounded rather than absorbed.
 
 ## Stripe design
+
+**Update (2026-11-04): designed in ADR-0029** (`adr/0029-billing.md`): Stripe behind a `BillingProvider` port over
+plain `fetch`, webhooks as signed triggers with the worker fetching subscription state, the account billing states,
+holds instead of deletion on a downgrade, ceilings, invite codes, data model and slice plan. Where the two differ, the
+ADR wins; its lifecycle replaces the "Account lifecycle" diagram below (no data is deleted for non-payment).
 
 - **Products:**
   - `Plus`: one yearly Price with USD default plus CAD `currency_options`, `tax_behavior=exclusive`.

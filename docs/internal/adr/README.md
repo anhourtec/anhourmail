@@ -32,3 +32,4 @@ One decision per file, numbered, never rewritten. A later ADR supersedes an earl
 | [0026](0026-mailbox-delegation-and-shared-mailboxes.md)      | Mailbox delegation and shared mailboxes through BFF-held mailbox tokens        | Accepted                                          |
 | [0027](0027-image-senders-list.md)                           | Safe senders load images; own Sent mail loads images                           | Accepted (built 2026-10-31)                       |
 | [0028](0028-password-first-sign-in-and-password-step-up.md)  | Password-first console sign-in; passkeys a second factor; step-up by password  | Accepted                                          |
+| [0029](0029-billing.md)                                      | Billing: Stripe behind a port, state fetched on events, holds not deletion     | Accepted                                          |
