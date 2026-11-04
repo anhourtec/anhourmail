@@ -75,7 +75,8 @@
   "overrides": {
     "@esbuild-kit/core-utils": {
       "esbuild": "0.28.2"
-    }
+    },
+    "minimatch": "11.0.1"
   },
   "lint-staged": {
     "*.{js,mjs,ts,tsx}": [
