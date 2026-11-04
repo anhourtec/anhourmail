@@ -125,4 +125,9 @@ Where things live and what to change for a task. Update in the same change as an
 | `apps/web/src/server/webmail/original.ts`              | Loads the source for the signed-in mailbox; parses only our own `Authentication-Results` (`MAIL_AUTHSERV_ID`) |
 | `apps/web/src/components/webmail/original-actions.tsx` | Download original / copy to clipboard                                                                         |
 | `apps/web/src/components/webmail/conversation.ts`      | Conversation view helpers: default-expanded messages, "to me" labels, quote folding                           |
-| `apps/web/src/components/webmail/sync.ts`              | Automatic refresh (30 s, on focus/online, backoff), new mail and chime, coalesced folder-count reload         |
+| `apps/web/src/components/webmail/sync.ts`              | Check timing (on push, 5-min safety, 30 s without push, focus/online, backoff), chime, folder-count reload    |
+| `apps/web/src/components/webmail/push.ts`              | Push in the browser: leader tab (Web Lock), `BroadcastChannel` to the others, stream reconnect and backoff    |
+| `apps/web/src/server/webmail/push-hub.ts`              | Push fan-out: one upstream channel per session and mailbox, session checks, token reopen, caps                |
+| `apps/web/src/server/webmail/push-target.ts`           | The hub's session lookup: always unpinned, the BFF's errors read as signedout / moved / unavailable           |
+| `apps/web/src/server/webmail/push-stream.ts`           | The `GET /api/webmail/push` event stream: events, heartbeat, lifetime; process hub `webmailPush()`            |
+| `packages/jmap-client/src/push.ts`                     | Upstream JMAP WebSocket: `WebSocketPushEnable`, `StateChange` parsing, keep-alive (int: `webmail-push`)       |

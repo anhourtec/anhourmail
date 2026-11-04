@@ -1,6 +1,6 @@
 # 01 — Architecture
 
-Last updated: 2026-11-04 (billing port, processor and fake adapters, billing tables, ADR-0029 slices 1–4; Safe senders load images, own Sent mail loads by itself, ADR-0027 built; console sign-in password first, passkeys only a second step, ADR-0028; webmail first load streamed inside the page (one request otherwise), the IndexedDB first-view copy, `Server-Timing` and shared session reads; ADR-0027 proposed: Safe senders load images, own Sent mail loads images; names as one source: sender name in the control plane, mirrored to Stalwart; webmail: no "Shared with you" list or in-place switch, shared mailboxes open only in their own tab, maintainer decision; mailbox delegation, ADR-0026: writing from a shared mailbox's view through an own-mailbox pin; the webmail UI and tabs pinned to a shared mailbox per request, slice 14; sending as and on behalf of a delegated mailbox from the webmail BFF, slice 13; the webmail BFF opens delegated mailboxes behind the delegation gate; grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
+Last updated: 2026-11-04 (webmail push: one upstream JMAP WebSocket per session and mailbox in a process-wide hub, our own event stream to the browser, tabs sharing one stream; billing webhook, `billing.sync`/`billing.resolve` jobs and nightly reconcile, per-dispute tracking, send-blocked mailboxes on Stalwart, mailbox/people/address ceilings, ADR-0029 slices 5–7; billing port, processor and fake adapters, billing tables, ADR-0029 slices 1–4; Safe senders load images, own Sent mail loads by itself, ADR-0027 built; console sign-in password first, passkeys only a second step, ADR-0028; webmail first load streamed inside the page (one request otherwise), the IndexedDB first-view copy, `Server-Timing` and shared session reads; ADR-0027 proposed: Safe senders load images, own Sent mail loads images; names as one source: sender name in the control plane, mirrored to Stalwart; webmail: no "Shared with you" list or in-place switch, shared mailboxes open only in their own tab, maintainer decision; mailbox delegation, ADR-0026: writing from a shared mailbox's view through an own-mailbox pin; the webmail UI and tabs pinned to a shared mailbox per request, slice 14; sending as and on behalf of a delegated mailbox from the webmail BFF, slice 13; the webmail BFF opens delegated mailboxes behind the delegation gate; grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
 
 ## Overview
 
@@ -43,7 +43,7 @@ browser ──HTTPS──► NGINX ─┬─► apps/site  (anhourmail.com: mark
                                  │  BFF: our session ─► Stalwart token (server-side only)
                                  ├─► Postgres (control plane, never mail content)
                                  ├─► Redis
-                                 └─► Stalwart /jmap  (internal network only; operations key: app passwords, managed Sieve)
+                                 └─► Stalwart /jmap, /jmap/ws push  (internal network only; operations key: app passwords, managed Sieve)
 apps/worker ─► Postgres, Redis, Stalwart management (provisioning key: provisioning jobs, DNS checks, reconciler,
                imports; the scheduler also a read-only audit key for the managed-script check — ADR-0020)
 mail clients ─► Stalwart 465/587/993/995 (TLS by Stalwart itself)    MX traffic ─► Stalwart 25
@@ -288,6 +288,15 @@ Built in Phase 4 slice 1 (2026-10-22; ADR-0018):
    endpoints validate a small input and build JSContact cards in the mailbox's own Stalwart address books, and the
    send path saves new recipients to "Other contacts" (05-webmail.md "Contacts"). Contacts are mail data: nothing
    about them is stored in Postgres. Phones and desktop apps sync them over CardDAV on the client host.
+   **Push** (05-webmail.md "Push", built 2026-11-04): the BFF holds one JMAP WebSocket (`/jmap/ws`,
+   `WebSocketPushEnable`) per signed-in session and mailbox, with that mailbox's token, in a process-wide hub on
+   `globalThis` (`server/webmail/push-hub.ts`, `webmailPush()`), and fans `StateChange` type and state names out over
+   our own server-sent event stream `GET /api/webmail/push`. One tab per mailbox holds the stream (a Web Lock) and
+   passes events to the others over a `BroadcastChannel`; a tab then asks only for the changes of the types that moved.
+   The hub checks the session every minute and reopens the upstream when the token it used expires (Stalwart keeps an
+   open socket after a password change); caps per process fail open to the 30-second check, which is also what tabs
+   of a mailbox shared with the person use. The app needs nothing new on the network: the socket goes to Stalwart's
+   HTTP listener on the internal network, and NGINX must pass the stream unbuffered (08-operations.md).
 5. **Suspension is enforced by the BFF too.** Stalwart refuses a suspended account's existing access tokens (403) but
    still honours its refresh grant and accepts the old token again after resume (`research/stalwart.md`). So every
    sign-in and every use of a session asks the control plane (`MailboxAccessGate` in `packages/core/src/webmail`,
