@@ -404,3 +404,30 @@ describe("self-service refund", () => {
     expect(w.audit("billing.refunded").at(-1)?.meta).toMatchObject({ resumed: true });
   });
 });
+
+describe("capacity already paid for this period", () => {
+  it("adding back up to what was paid this period is free; adding beyond it after a decrease is refused until restored", async () => {
+    const w = await subscribed({ storageBlocks: 2 });
+    await changeBilling(w.d, w.ctx, owner, ACCOUNT_A, { storageBlocks: 0 }, req);
+    await w.sync();
+    expect([(await w.row()).storageBlocks, (await w.row()).periodPaidStorageBlocks]).toEqual([0, 2]);
+    // Back to 2: nothing charged now (paid for already), no confirmation needed.
+    expect(await previewBillingChange(w.d, w.ctx, owner, ACCOUNT_A, { storageBlocks: 2 })).toMatchObject({
+      amountDueNowMinor: 0,
+      billed: "renewal",
+    });
+    // Straight to 3 would be prorated from 0: refused, restore first.
+    await expect(changeBilling(w.d, w.ctx, owner, ACCOUNT_A, { storageBlocks: 3 }, req)).rejects.toThrow(
+      "Go back to 2 storage blocks first",
+    );
+    expect(await changeBilling(w.d, w.ctx, owner, ACCOUNT_A, { storageBlocks: 2 }, req)).toMatchObject({
+      amountDueNowMinor: 0,
+    });
+    expect((await w.sub()).storageBlocks).toBe(2);
+    expect((await w.sub()).latestInvoice?.billingReason).toBe("subscription_create"); // no new invoice
+    await w.sync();
+    // Above the paid quantity is charged as usual.
+    const { amountDueNowMinor } = await previewBillingChange(w.d, w.ctx, owner, ACCOUNT_A, { storageBlocks: 3 });
+    expect(amountDueNowMinor).toBeGreaterThan(0);
+  });
+});

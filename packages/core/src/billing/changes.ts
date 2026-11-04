@@ -116,6 +116,37 @@ function changeAction(b: AccountBilling, c: ChangeRequest): AuditAction {
   return "billing.addons_changed";
 }
 
+const ADDONS = ["storageBlocks", "extraMailboxes"] as const;
+const ADDON_NAMES = { storageBlocks: "storage blocks", extraMailboxes: "extra mailboxes" } as const;
+
+/**
+ * How a change is billed, with the capacity already paid for this period taken into account: a decrease renews lower
+ * without a credit, so adding back up to what was paid for this period costs nothing now (never a second charge for the
+ * same capacity); only quantities above it are charged, prorated. A single request that would both restore and add
+ * beyond the paid quantity is refused (restore first, then add): the provider prorates from the current quantity, so the
+ * charge would include the part already paid for.
+ */
+export function prorationFor(b: AccountBilling, c: ChangeRequest): SubscriptionChange["proration"] {
+  const base = changeProration(b, c);
+  if (base !== "charge_now") return base;
+  const paid = { storageBlocks: b.periodPaidStorageBlocks, extraMailboxes: b.periodPaidExtraMailboxes };
+  let charged = false;
+  for (const k of ADDONS) {
+    const target = c[k];
+    if (target === undefined || target <= b[k]) continue;
+    const covered = Math.max(b[k], paid[k]);
+    if (target <= covered) continue;
+    if (b[k] < paid[k]) {
+      throw new BillingError(
+        "invalid_change",
+        `Go back to ${String(paid[k])} ${ADDON_NAMES[k]} first (already paid for this period, no charge), then add more.`,
+      );
+    }
+    charged = true;
+  }
+  return charged ? "charge_now" : "none";
+}
+
 type Planned = {
   change: SubscriptionChange;
   next: { storageBlocks: number; extraMailboxes: number };
@@ -131,7 +162,7 @@ function plan(b: AccountBilling, c: ChangeRequest, usage: AddonUsage): Planned {
   if (!hasLiveSubscription(b) || b.paidPlan === null || b.providerSubscriptionId === null) {
     throw new BillingError("not_subscribed", "This account has no paid subscription to change.");
   }
-  const proration = changeProration(b, c);
+  const proration = prorationFor(b, c);
   if (proration === "charge_now" && b.state === "restricted") {
     throw new BillingError(
       "billing_restricted",
