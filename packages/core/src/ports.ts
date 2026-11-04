@@ -11,6 +11,7 @@ import type { BillingRepository, InviteCodeRepository } from "./billing/reposito
 import type { DataLifecycleRepository } from "./data/repository";
 import type { DelegationRepository } from "./delegation/repository";
 import type { CatchAllRepository, DomainRepository } from "./domains/repository";
+import type { MailImportRepository } from "./imports/repository";
 import type { MailboxPasswordRepository, MailboxRepository, PlatformAddressRepository } from "./mailboxes/repository";
 import type { MailboxStorageRepository } from "./mailboxes/storage";
 import type { InviteRepository, PeopleRepository } from "./people/repository";
@@ -52,6 +53,7 @@ export type Repositories = {
   delegation: DelegationRepository;
   billing: BillingRepository;
   inviteCodes: InviteCodeRepository;
+  imports: MailImportRepository;
 };
 
 /**

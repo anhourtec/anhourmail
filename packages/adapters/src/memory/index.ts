@@ -57,6 +57,7 @@ import type { AccountRole, PlatformRole } from "@anhourmail/shared/rbac";
 import { memoryActAs, type MemoryActAsRow } from "./act-as";
 import type { AccountDeletion } from "@anhourmail/core/data";
 import type { DelegationGrant } from "@anhourmail/core/delegation";
+import type { MailImport, MailImportBatch, MailImportFolder } from "@anhourmail/core/imports";
 import {
   type AccountBilling,
   type BillingDispute,
@@ -68,6 +69,7 @@ import {
 import { memoryBilling, memoryInviteCodes } from "./billing";
 import { memoryDataLifecycle, type MemoryExportRow } from "./data-lifecycle";
 import { memoryDelegation } from "./delegation";
+import { memoryMailImports } from "./mail-imports";
 
 /**
  * In-memory adapter for unit tests (ADR-0008). Same contract as Postgres (src/contract): `run` is atomic —
@@ -165,6 +167,10 @@ export type MemoryState = {
   billingDisputes: BillingDispute[];
   planHolds: PlanHold[];
   inviteCodes: InviteCode[];
+  /** Mail imports, their folders and admins' batches (Postgres: `mail_import*`, ADR-0030 §12). */
+  mailImports: MailImport[];
+  mailImportFolders: (MailImportFolder & { createdAt: Date })[];
+  mailImportBatches: MailImportBatch[];
 };
 
 export const emptyState = (): MemoryState => ({
@@ -218,6 +224,9 @@ export const emptyState = (): MemoryState => ({
   billingDisputes: [],
   planHolds: [],
   inviteCodes: [],
+  mailImports: [],
+  mailImportFolders: [],
+  mailImportBatches: [],
 });
 
 const EPOCH = new Date(0);
@@ -1250,6 +1259,7 @@ function repositories(s: MemoryState): Repositories {
     delegation: memoryDelegation(s),
     billing: memoryBilling(s),
     inviteCodes: memoryInviteCodes(s),
+    imports: memoryMailImports(s),
     suspensions,
     webmailSettings,
     appPasswords,

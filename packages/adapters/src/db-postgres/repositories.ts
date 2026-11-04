@@ -61,6 +61,7 @@ import { PgActAsRepository } from "./act-as";
 import { PgDataLifecycleRepository } from "./data-lifecycle";
 import { PgBillingRepository, PgInviteCodeRepository } from "./billing";
 import { PgDelegationRepository } from "./delegation";
+import { PgMailImportRepository } from "./mail-imports";
 import { isUniqueViolation } from "./errors";
 import {
   accountBilling,
@@ -1665,6 +1666,7 @@ const repositories = (x: Executor): Repositories => ({
   webmailSettings: new PgWebmailSettingsRepository(x),
   appPasswords: new PgAppPasswordRepository(x),
   catchAll: new PgCatchAllRepository(x),
+  imports: new PgMailImportRepository(x),
 });
 
 /** One Postgres transaction per `run` (CLAUDE.md rule 46: the audit row commits with the change). */

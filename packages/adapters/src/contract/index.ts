@@ -13,6 +13,7 @@ import { type ClaimedJob, STALE_RUNNING_MS } from "@anhourmail/core/provisioning
 import type { DelegationRight } from "@anhourmail/shared/delegation";
 
 import { describeBillingContract } from "./billing";
+import { describeMailImportContract } from "./mail-imports";
 
 /** `createUser` makes a console user the adapter can reference (memberships need one in Postgres). */
 export type AdapterFactory = () => Promise<{
@@ -2507,4 +2508,5 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
     });
   });
   describeBillingContract(name, factory);
+  describeMailImportContract(name, factory);
 }
