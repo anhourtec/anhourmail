@@ -60,7 +60,7 @@ describe("left navigation sections", () => {
 
   it("groups an owner's account pages under Mail and People, then Billing and the audit log", () => {
     expect(sections(actor([], [{ accountId: "a", role: "owner" }]), "a")).toEqual([
-      ["Mail", ["Mailboxes", "Aliases", "App passwords", "Domains"]],
+      ["Mail", ["Mailboxes", "Aliases", "App passwords", "Safe senders", "Domains"]],
       ["People", ["People and roles"]],
       ["Billing", ["Billing"]],
       ["Audit log", ["Audit log"]],

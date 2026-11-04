@@ -68,6 +68,16 @@ export const NAV: readonly NavItem[] = [
     href: (accountId) => `/accounts/${accountId}/app-passwords`,
   },
   {
+    // ADR-0032 §1: the account-wide Safe senders list.
+    label: "Safe senders",
+    icon: "shield",
+    permission: "safe_sender.read",
+    scope: "account",
+    section: "mail",
+    phase: 4,
+    href: (accountId) => `/accounts/${accountId}/safe-senders`,
+  },
+  {
     label: "Domains",
     icon: "globe",
     permission: "domain.read",
