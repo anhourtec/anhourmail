@@ -35,6 +35,10 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 | #    | Migration                            | Commit    | Date       | Change                                                                                                            | Rollback        |
 | ---- | ------------------------------------ | --------- | ---------- | ----------------------------------------------------------------------------------------------------------------- | --------------- |
+| 0036 | `0036_invite_code`                   | —         | 2026-11-04 | `invite_code` table: staff-made sign-up and comp codes, sha256 only, single use (ADR-0029 §8)                     | Safe            |
+| 0035 | `0035_plan_hold`                     | —         | 2026-11-04 | `plan_hold` table: mailboxes, domains and aliases held after a downgrade to Free, never deleted (ADR-0029 §6)     | Safe            |
+| 0034 | `0034_account_billing_backfill`      | —         | 2026-11-04 | One `account_billing` row per existing account: `free`, or an `active` staff grant on Plus/Supporter              | Safe            |
+| 0033 | `0033_account_billing`               | —         | 2026-11-04 | `account_billing` (billing state per account) and `billing_event` (received provider events, no payload)          | Safe            |
 | 0032 | `0032_mailbox_file_storage_lockdown` | —         | 2026-10-31 | Queue `mailbox.ensure` once per mailbox on the mail server, so it gets the file storage denials                   | Safe            |
 | 0031 | `0031_mailbox_sender_name_backfill`  | —         | 2026-10-31 | Queue `mailbox.ensure` once per mailbox on the mail server, so its description is the sender name                 | Safe            |
 | 0030 | `0030_mailbox_name_follows_person`   | —         | 2026-10-31 | `mailbox.display_name` equal to its person's name → null (the mailbox follows the person; rule 61)                | Caution         |
@@ -96,6 +100,63 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0036_invite_code · — · 2026-11-04 · Safe
+
+- Added: `invite_code` (id, code_hash unique (sha256 of the canonical code; the code is shown once), label (≤ 200),
+  grants_signup, comp_plan (`plus`/`supporter`, null), comp_days (1–365, set exactly when comp_plan is), email (optional
+  binding, stored lower-cased; `CHECK email = lower(email)` instead of citext, which the schema doesn't use), created_by
+  / redeemed_by / revoked_by (→ `auth_user`, set null), created_at, expires_at (`CHECK > created_at`), redeemed_at,
+  redeemed_account_id (→ `customer_account`, set null), revoked_at); `CHECK grants_signup or comp_plan is not null`;
+  index on created_at. ADR-0029 §8.
+- Changed: —
+- Removed: —
+- Data: none.
+- Rollback: drop the table (no code before this reads it).
+
+### 0035_plan_hold · — · 2026-11-04 · Safe
+
+- Added: `plan_hold` (id, account_id → `customer_account` cascade, subject_type `mailbox`/`domain`/`alias`, subject_id
+  uuid (no foreign key: it points at one of three tables; the account's holds are rewritten as a whole), held_at,
+  receive_until (mailboxes only, `CHECK`)); unique (subject_type, subject_id); index on account_id. ADR-0029 §6.
+- Changed: —
+- Removed: —
+- Data: none (holds are written by the billing sync, slice 10).
+- Rollback: drop the table.
+
+### 0034_account_billing_backfill · — · 2026-11-04 · Safe
+
+- Added: —
+- Changed: —
+- Removed: —
+- Data: one `account_billing` row per `customer_account` that has none: `free` / plan source `none`, or, for accounts
+  already on `plus` / `supporter` (seeded, or set by staff before billing existed), `active` / plan source `staff` with
+  that paid plan and no end. `ON CONFLICT DO NOTHING`, so it is idempotent and never overwrites a row the app wrote.
+  Accounts created afterwards get their row in the create's own transaction (`AccountRepository.create`); readers also
+  treat a missing row as `defaultBilling` (core), so rows inserted outside the repository (the demo seed's direct
+  inserts) read the same. No audit row (SQL migration; accepted exception in `audit.md`). Dev database on 2026-11-04:
+  129 accounts → 17 `free`, 112 `active`/`staff`.
+- Rollback: nothing to undo (the rows are ignored by older code; dropping `account_billing` in 0033's rollback removes
+  them).
+
+### 0033_account_billing · — · 2026-11-04 · Safe
+
+- Added: `account_billing` (account_id pk → `customer_account` cascade; state `free`/`active`/`past_due`/`restricted`/
+  `lapsed` (`CHECK`); state_since; plan_source `none`/`stripe`/`comp`/`staff`; paid_plan; provider_customer_id and
+  provider_subscription_id (unique, null); currency `USD`/`CAD`; plan_amount_minor (≥ 0); storage_blocks,
+  extra_mailboxes, period_paid_storage_blocks, period_paid_extra_mailboxes (≥ 0, default 0); current_period_end,
+  cancel_at, restricted_at, disputed_at, lapsed_at, comp_until; last_invoice_id, last_invoice_status;
+  checkout_pending_until; address_ceiling_override (> 0, null); last_synced_at; updated_at), indexes on
+  (state, state_since) and on last_synced_at where a provider customer exists; `billing_event` (id, provider_event_id
+  unique, type, account_id → `customer_account` cascade (null for orphans), object_id, provider_created_at, status
+  `queued`/`processed`/`orphan`/`dismissed`, error (a name), received_at, processed_at; `CHECK` account_id is null
+  exactly for orphans and dismissed orphans), partial index on (account_id, provider_created_at) where queued, index
+  on (status, received_at). No payload, card data, addresses or tax ids. ADR-0029 §11.
+- Changed: —
+- Removed: —
+- Data: none (0034 backfills).
+- Rollback: drop both tables. Code from this change writes `account_billing` when an account is created, so roll the
+  code back first.
 
 ### 0032_mailbox_file_storage_lockdown · — · 2026-10-31 · Safe
 
