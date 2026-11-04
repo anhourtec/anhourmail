@@ -158,3 +158,40 @@ export async function mutation<T>(
     throw err;
   }
 }
+
+/** One entry for `recordSystemChanges`. */
+export type SystemChange = {
+  action: AuditAction;
+  /** The account the change belongs to; null for the platform log. */
+  accountId: string | null;
+  target: { type: string; id?: string | null; label?: string | null };
+  meta: Record<string, unknown>;
+};
+
+/**
+ * For system work that decides only inside its own unit of work what it changed (the billing sync derives an account's
+ * state under the account lock, ADR-0029 §4): appends one `success` entry per change, in that same unit of work (so a
+ * failed audit write rolls the change back), with the same actor, request and redaction rules as `mutation()`. Only a
+ * system actor: a person's request always goes through `mutation()`, which authorizes it. Nothing to record, nothing
+ * written.
+ */
+export async function recordSystemChanges(
+  deps: Deps,
+  repos: Repositories,
+  actor: Extract<Actor, { kind: "system" }>,
+  req: RequestMeta,
+  changes: readonly SystemChange[],
+): Promise<void> {
+  for (const c of changes) {
+    const spec: MutationSpec = {
+      action: c.action,
+      permission: "self.profile.read",
+      accountId: c.accountId,
+      target: c.target,
+    };
+    await repos.audit.append(
+      { ...auditBase(actor, req, spec, "success", null, scopeOf(spec)), meta: redactMeta(c.meta) },
+      deps.clock.now(),
+    );
+  }
+}
