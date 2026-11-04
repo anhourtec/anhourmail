@@ -47,6 +47,9 @@ export const LIMITS = {
   export: { limit: 5, windowSec: 3600, by: "caller", failMode: "closed" },
   sending: { limit: 60, windowSec: 3600, by: "caller", failMode: "closed" },
   webhook: { limit: 120, windowSec: 60, by: "ip", failMode: "open" },
+  // Billing calls that reach the payment provider (checkout, portal, preview, plan and add-on changes; ADR-0029 §9).
+  // Each one is a provider request and checkout is a card-testing surface: fail closed.
+  billingProvider: { limit: 30, windowSec: 600, by: "caller", failMode: "closed" },
   // Webmail (docs/internal/05-webmail.md): sign-in guesses a mailbox password, so it fails closed; the JMAP proxy
   // carries every list, open and flag of an active session.
   webmailSignIn: { limit: 10, windowSec: 300, by: "ip", failMode: "closed" },
