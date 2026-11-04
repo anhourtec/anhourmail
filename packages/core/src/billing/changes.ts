@@ -34,6 +34,7 @@ import {
   BillingError,
   type ChangeRequest,
   changeProration,
+  paidForPeriod,
   type RefundRefusal,
   refundEligibility,
   supporterAmountProblem,
@@ -50,7 +51,13 @@ import {
   requireStepUp,
   unavailable,
 } from "./guards";
-import type { ProviderInvoice, SubscriptionChange } from "./ports";
+import {
+  type BillingProvider,
+  isLiveSubStatus,
+  type ProviderInvoice,
+  type ProviderSubscription,
+  type SubscriptionChange,
+} from "./ports";
 
 export type ChangeInput = {
   plan?: unknown;
@@ -101,6 +108,10 @@ export function parseChange(input: ChangeInput, b: Pick<AccountBilling, "paidPla
   return out;
 }
 
+/** The account's subscription as the provider has it now (null without a customer or a live subscription). */
+const freshSubscription = (provider: BillingProvider, b: AccountBilling): Promise<ProviderSubscription | null> =>
+  b.providerCustomerId === null ? Promise.resolve(null) : provider.getSubscription(b.providerCustomerId);
+
 /** What the account uses now: every mailbox (held, suspended and deleting ones still hold their mail). */
 async function usageOf(r: Repositories, accountId: string): Promise<AddonUsage> {
   const mailboxes = await r.mailboxes.listByAccount(accountId);
@@ -125,11 +136,19 @@ const ADDON_NAMES = { storageBlocks: "storage blocks", extraMailboxes: "extra ma
  * same capacity); only quantities above it are charged, prorated. A single request that would both restore and add
  * beyond the paid quantity is refused (restore first, then add): the provider prorates from the current quantity, so the
  * charge would include the part already paid for.
+ *
+ * The paid quantities count only for the period they were paid for: `periodEnd` is the provider's current period end,
+ * read fresh by the caller. After a renewal (its invoice not paid yet, or paid at lower quantities) what was paid for
+ * the previous period says nothing, so raising quantities again is charged (security review run-62 F1).
  */
-export function prorationFor(b: AccountBilling, c: ChangeRequest): SubscriptionChange["proration"] {
+export function prorationFor(
+  b: AccountBilling,
+  c: ChangeRequest,
+  periodEnd: Date | null = b.currentPeriodEnd,
+): SubscriptionChange["proration"] {
   const base = changeProration(b, c);
   if (base !== "charge_now") return base;
-  const paid = { storageBlocks: b.periodPaidStorageBlocks, extraMailboxes: b.periodPaidExtraMailboxes };
+  const paid = paidForPeriod(b, periodEnd);
   let charged = false;
   for (const k of ADDONS) {
     const target = c[k];
@@ -158,11 +177,27 @@ type Planned = {
  * or a mix of directions (400 `invalid_change`), an increase while restricted (403 `billing_restricted`: the open payment
  * comes first), a decrease that doesn't fit at renewal (409 `addon_in_use`).
  */
-function plan(b: AccountBilling, c: ChangeRequest, usage: AddonUsage): Planned {
-  if (!hasLiveSubscription(b) || b.paidPlan === null || b.providerSubscriptionId === null) {
+function plan(row: AccountBilling, c: ChangeRequest, usage: AddonUsage, fresh: ProviderSubscription | null): Planned {
+  if (
+    !hasLiveSubscription(row) ||
+    row.paidPlan === null ||
+    row.providerSubscriptionId === null ||
+    fresh?.subscriptionId !== row.providerSubscriptionId ||
+    !isLiveSubStatus(fresh.status) ||
+    fresh.status === "incomplete"
+  ) {
     throw new BillingError("not_subscribed", "This account has no paid subscription to change.");
   }
-  const proration = prorationFor(b, c);
+  // The provider's subscription, read fresh, is what the change applies to: its quantities, plan and period (our row
+  // can lag behind a webhook).
+  const b: AccountBilling = {
+    ...row,
+    paidPlan: fresh.plan,
+    planAmountMinor: fresh.planAmountMinor,
+    storageBlocks: fresh.storageBlocks,
+    extraMailboxes: fresh.extraMailboxes,
+  };
+  const proration = prorationFor(b, c, fresh.currentPeriodEnd);
   if (proration === "charge_now" && b.state === "restricted") {
     throw new BillingError(
       "billing_restricted",
@@ -173,11 +208,11 @@ function plan(b: AccountBilling, c: ChangeRequest, usage: AddonUsage): Planned {
     storageBlocks: c.storageBlocks ?? b.storageBlocks,
     extraMailboxes: c.extraMailboxes ?? b.extraMailboxes,
   };
-  const target = c.plan ?? b.paidPlan;
+  const target = c.plan ?? fresh.plan;
   if (proration === "none") assertDecreaseFits(target, next, usage);
   return {
     change: {
-      subscriptionId: b.providerSubscriptionId,
+      subscriptionId: fresh.subscriptionId,
       intentId: randomUUID(),
       ...(c.plan === undefined ? {} : { plan: c.plan }),
       ...(c.supporterAmountMinor === undefined ? {} : { supporterAmountMinor: c.supporterAmountMinor }),
@@ -212,10 +247,11 @@ export async function previewBillingChange(
     usage: await usageOf(r, accountId),
   }));
   if (!b) throw new NotFoundError();
-  const p = plan(b, parseChange(input, b), usage);
-  const currency = b.currency ?? "USD";
-  if (p.change.proration === "none") return { amountDueNowMinor: 0, currency, billed: "renewal" };
+  const c = parseChange(input, b);
   try {
+    const p = plan(b, c, usage, await freshSubscription(provider, b));
+    const currency = b.currency ?? "USD";
+    if (p.change.proration === "none") return { amountDueNowMinor: 0, currency, billed: "renewal" };
     const out = await provider.previewChange(p.change);
     return { amountDueNowMinor: out.amountDueNowMinor, currency: out.currency, billed: "now" };
   } catch (err) {
@@ -255,9 +291,10 @@ export async function changeBilling(
   if (!b) throw new NotFoundError();
   const c = parseChange(input, b);
   const spec: MutationSpec = { ...base, action: changeAction(b, c) };
+  const fresh = await callProvider(deps, actor, req, spec, () => freshSubscription(provider, b));
   let p: Planned;
   try {
-    p = plan(b, c, usage);
+    p = plan(b, c, usage, fresh);
   } catch (err) {
     if (err instanceof BillingError) return refuse(deps, actor, req, spec, err.code, err);
     throw err;

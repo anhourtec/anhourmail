@@ -26,7 +26,7 @@ import {
   refundSubscription,
   undoCancelSubscription,
 } from "./changes";
-import { startCheckout } from "./checkout";
+import { billingOverview, startCheckout } from "./checkout";
 import type { BillingContext } from "./guards";
 import { defaultBilling } from "./lifecycle";
 import { syncAccountBilling } from "./sync";
@@ -429,5 +429,49 @@ describe("capacity already paid for this period", () => {
     // Above the paid quantity is charged as usual.
     const { amountDueNowMinor } = await previewBillingChange(w.d, w.ctx, owner, ACCOUNT_A, { storageBlocks: 3 });
     expect(amountDueNowMinor).toBeGreaterThan(0);
+  });
+});
+
+describe("paid capacity belongs to its period (security review run-62 F1)", () => {
+  it.each([
+    ["storageBlocks", 3],
+    ["extraMailboxes", 2],
+  ] as const)(
+    "%s: decrease → renewal → re-increase is charged, before and after the renewal invoice is synced",
+    async (kind, n) => {
+      const w = await subscribed({ storageBlocks: 0, extraMailboxes: 0, [kind]: n });
+      await changeBilling(w.d, w.ctx, owner, ACCOUNT_A, { [kind]: 0 }, req);
+      await w.sync();
+      // The renewal bills 0 and is paid; our row hasn't synced it yet (webhook latency).
+      await w.fake.advanceClock(366);
+      const before = await w.row();
+      expect(before.periodPaidFor?.getTime()).toBe(before.currentPeriodEnd?.getTime()); // still the old period
+      const stale = await previewBillingChange(w.d, w.ctx, owner, ACCOUNT_A, { [kind]: n });
+      expect(stale.billed).toBe("now");
+      expect(stale.amountDueNowMinor).toBeGreaterThan(0);
+      await expect(changeBilling(w.d, w.ctx, owner, ACCOUNT_A, { [kind]: n }, req)).rejects.toMatchObject({
+        code: "confirmation_required",
+      });
+      // After the sync: the paid 0-quantity renewal invoice sets the period's paid quantity to 0, for the new period.
+      await w.sync();
+      const after = await w.row();
+      expect(kind === "storageBlocks" ? after.periodPaidStorageBlocks : after.periodPaidExtraMailboxes).toBe(0);
+      expect(after.periodPaidFor?.getTime()).toBe((await w.sub()).currentPeriodEnd.getTime());
+      expect((await previewBillingChange(w.d, w.ctx, owner, ACCOUNT_A, { [kind]: n })).billed).toBe("now");
+    },
+  );
+
+  it("an unpaid renewal (card failing) doesn't make the old period's capacity free again", async () => {
+    const w = await subscribed({ storageBlocks: 3 });
+    await changeBilling(w.d, w.ctx, owner, ACCOUNT_A, { storageBlocks: 0 }, req);
+    await w.sync();
+    await w.fake.setCardFails(w.customerId, true);
+    await w.fake.advanceClock(366);
+    await w.sync();
+    expect((await w.row()).state).toBe("past_due");
+    expect((await w.row()).periodPaidStorageBlocks).toBe(3); // tagged with the old period
+    const { entitled } = await billingOverview(w.d, w.ctx, owner, ACCOUNT_A);
+    expect(entitled.storageBlocks).toBe(0);
+    expect((await previewBillingChange(w.d, w.ctx, owner, ACCOUNT_A, { storageBlocks: 3 })).billed).toBe("now");
   });
 });
