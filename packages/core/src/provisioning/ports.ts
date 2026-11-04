@@ -106,6 +106,11 @@ export type MailServer = {
      * mail is refused; everything the mailbox holds, its credentials included, is kept. False restores access.
      */
     suspended: boolean;
+    /**
+     * What billing allows while not suspended (ADR-0029 §5–6): `send_blocked` keeps sign-in, reading and delivery but
+     * refuses SMTP submission and JMAP sending; `receive_blocked` also stops delivery. Omitted = `active`.
+     */
+    access?: "active" | "send_blocked" | "receive_blocked";
     aliases: { address: string; enabled: boolean; description: string | null }[];
     /** The account's description: the mailbox's display name (Stalwart seeds the sending identity's name from it). */
     description?: string | null;
