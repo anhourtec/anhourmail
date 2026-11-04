@@ -8,4 +8,5 @@ export * from "./invite-codes";
 export * from "./lifecycle";
 export * from "./ports";
 export type * from "./repository";
+export * from "./service";
 export * from "./sync";
