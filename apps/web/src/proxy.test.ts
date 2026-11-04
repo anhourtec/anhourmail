@@ -30,3 +30,20 @@ describe("webmail pages are never cached", () => {
     expect(res.headers.get("cache-control")).toBeNull();
   });
 });
+
+describe("dev-only paths (ADR-0029 §3, guard layer 3)", () => {
+  it("answers 404 for the fake billing pages and the simulate route on production builds, before routing", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    for (const path of ["/dev/billing/checkout/cs_1", "/api/dev/billing/simulate", "/%64ev/billing/portal/cus_1"]) {
+      const res = get(`https://app.anhourmail.com${path}`, { host: "app.anhourmail.com" });
+      expect(res.status).toBe(404);
+      expect(res.headers.get("x-middleware-rewrite")).toBeNull();
+    }
+  });
+
+  it("lets them through in development (the pages check billing themselves)", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const res = get("http://localhost:43200/dev/billing/checkout/cs_1", { host: "localhost:43200" });
+    expect(res.status).toBe(200);
+  });
+});

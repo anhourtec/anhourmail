@@ -29,7 +29,26 @@ export function hostKind(host: string, webmailDevPort?: string): "mail" | "app" 
   return "bare";
 }
 
+/**
+ * Development-only pages and routes (the fake billing checkout, portal and simulate route; ADR-0029 §3). Production
+ * builds answer 404 for them before routing, whatever the host (the third of three layers; the ops proxy blocks them
+ * too).
+ */
+const DEV_ONLY = /^\/(?:api\/)?dev(?:\/|$)/i;
+
+/** True for a dev-only path, also when percent-encoded or with doubled slashes (`/%64ev/…`, `//dev/…`). */
+export function devOnlyPath(pathname: string): boolean {
+  let decoded = pathname;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    // Malformed escapes: test the raw path.
+  }
+  return [pathname, decoded].some((p) => DEV_ONLY.test(p.replace(/\/{2,}/g, "/")));
+}
+
 export function routeHost(host: string, pathname: string, production: boolean, webmailDevPort?: string): HostDecision {
+  if (production && devOnlyPath(pathname)) return { action: "not_found" };
   if (ANY_HOST.some((re) => re.test(pathname))) return { action: "next" };
   const kind = hostKind(host, production ? undefined : webmailDevPort);
   const isWebmailPath = pathname === "/webmail" || pathname.startsWith("/webmail/");
