@@ -54,6 +54,9 @@ const STATUS: Record<string, number> = {
   handoff_refused: 409,
   // The mail server was busy with a mailbox (a delegated open's credential slot, ADR-0026): try again.
   unavailable: 503,
+  // Billing (ADR-0029): a webhook body over the cap; the account's address ceiling (§7).
+  payload_too_large: 413,
+  address_ceiling: 409,
 };
 
 export type RouteOptions = {
@@ -78,6 +81,12 @@ export type RouteOptions = {
    * answer.
    */
   onSharedRefusal?: (ctx: RouteContext) => Promise<void>;
+  /**
+   * `"signed"`: a server-to-server request another service signs (the billing provider's webhook, ADR-0029 §4). It
+   * carries no browser `Origin`, so the same-origin write check is skipped; the handler must verify the request's
+   * signature before acting on it. Never for a route that uses cookies.
+   */
+  origin?: "signed";
   /**
    * The handler's own `Cache-Control` is kept (profile photos, cached privately under a versioned URL). Every other
    * response is `no-store`.
@@ -191,7 +200,7 @@ export function route(handler: Handler, opts: RouteOptions = {}) {
           errorCode = "rate_limited";
           res = errorBody("rate_limited", "Too many requests. Wait a moment and try again.", 429);
           for (const [k, v] of Object.entries(rl.headers)) res.headers.set(k, v);
-        } else if (!originAllowed(req)) {
+        } else if (opts.origin !== "signed" && !originAllowed(req)) {
           errorCode = "forbidden";
           res = errorBody("forbidden", "Cross-origin request blocked.", 403);
         } else {
