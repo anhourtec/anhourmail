@@ -363,3 +363,10 @@ After the coordinator's review and security-audit run-55 (0 confirmed), still be
   whenever any of its folders is the open mailbox's Sent, including Sent copies saved there by other mail apps and
   mail a full-access delegate moves into a shared mailbox's Sent folder. Either way the person (or someone with full
   access) put it there, and the fetch still goes through the proxy.
+
+## Update (2026-11-05): the account-wide list
+
+Section 10's account-wide safe-senders list is decided and built in ADR-0032 §1: stored in Postgres per account, set
+in the console by Owners and User Administrators, matched after the mailbox's own list (the match carries
+`source: "account"`) and never over the mailbox's own Blocked senders, verified From only for images, and written into
+each mailbox's managed script for the trusted-only Junk rule.

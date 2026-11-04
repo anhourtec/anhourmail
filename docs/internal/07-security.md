@@ -811,6 +811,35 @@ only stops forwarding of the sender's own message. The web app's start-up upgrad
 only to the confirmed target, with a compare-and-swap on the Sieve state, and audits counts. In production the web app
 refuses to start without a usable authserv-id (`MAIL_AUTHSERV_ID` entries must be hostnames).
 
+## Mail rules (ADR-0032 §2)
+
+People never write Sieve (ManageSieve isn't published, customer mailboxes hold no Sieve permissions: an arbitrary
+`redirect` would be an open relay). Mail rules are data validated by one zod schema (`@anhourmail/shared/mail-rules`,
+`.strict()` objects, a closed list of fields and actions) and compiled by our server into the one managed script:
+
+- **Injection.** Every value reaches the script only through `sieveString` (backslash and quote escaped, control
+  characters dropped; values are one line anyway); `:contains` / `:is` have no wildcards; sizes are integers; the
+  script never requires `variables` or `encoded-character`. A folder is a JMAP id (`[A-Za-z0-9_-]`) resolved to its
+  path by the server with the person's own session at save time; the stored path is escaped like any value. Unit tests
+  blank every string and assert no `redirect`/`discard` command appears from user input.
+- **Forwarding.** A rule holds no address. Its "forward" compiles to `redirect :copy` to the mailbox's
+  control-plane-confirmed forwarding target only (`saveMailRules` reads it on every write), inside the same `SUPPRESS`
+  block (spam, list/bulk, automated mail, bounces) and `forwardingGuard` (DMARC) as Forwarding, with the redirect on
+  the line right after the guard so the hourly reconciler's checks (redirect targets equal the confirmed one, every
+  redirect inside the expected guard) apply unchanged. No confirmed target, or sending paused (restricted tier): the
+  save is refused (400), and an existing rule compiles to no redirect. Removing or replacing the target rewrites the
+  script without it (`dropForwardTarget`). Stalwart deduplicates the same redirect target.
+- **Delete is never permanent:** `fileinto :specialuse "\\Trash"`; no `discard`. Rules run after the junk rules and
+  never for mail with our own `X-Spam-Status: Yes`, so a rule can't pull spam out of Junk.
+- **Size and concurrency:** limits in `MAIL_RULES` (50 rules, 5 conditions, 200-character values) plus the script's
+  95,000-byte budget; writes are compare-and-swap on the version read (409).
+- **Privacy:** rules live in the mailbox's own script on the mail server; audit `sieve.changed` holds counts only.
+
+The account-wide Safe senders branch (ADR-0032 §1) is rewritten without the person's session by replacing exactly one
+line after a fixed marker; `applyAccountSafeSenders` refuses a script it can't read exactly (not ours, a marker inside
+a string or more than once, `text:` strings, bracketed comments), so a person's automatic-reply text can never be
+turned into code by the rewrite (unit-tested with a reply containing the marker).
+
 ## Image proxy (SSRF)
 
 Built 2026-10-29. "Load images" in the webmail fetches remote images on the reader's behalf

@@ -267,7 +267,7 @@ Opened from **Settings** in the sidebar footer or `,`; a large dialog on wide sc
 **Structure (maintainer decision, 2026-10-22).** The brief listed capabilities by category (Account, General, Mail
 with nine sub-sections, Calendar, People). We ship **eight flat groups** instead of two levels of tabs, because a
 person looking for a setting thinks in tasks, not in a product's category tree: **Appearance**, **Reading**,
-**Writing**, **Automatic replies**, **Forwarding**, **Junk and blocked senders**, **Account**, **Region and
+**Writing**, **Rules** (added 2026-11-05, ADR-0032), **Automatic replies**, **Forwarding**, **Junk and blocked senders**, **Account**, **Region and
 shortcuts**. Calendar (nothing to configure yet) and People (contacts' only setting already sits in Contacts) are
 not listed: an empty group doesn't earn its place. **Search settings** matches a group's label or any of its
 keywords (`settings/sections.ts`), so "vacation", "spam" or "24-hour" still find the right group.
@@ -306,6 +306,9 @@ keywords (`settings/sections.ts`), so "vacation", "spam" or "24-hour" still find
 | Signatures (named, several) and the two defaults                                                                        | `webmail_signature` (control plane, per mailbox); the default for new messages is copied to every `Identity`                                               | composer (default per kind of message, Signature picker); other JMAP mail apps (identity copy, about 2 KB)                                                                                      |
 | Automatic replies, forwarding on/off + keep a copy, blocked/safe senders, trusted-only                                  | Stalwart: one managed Sieve script per mailbox (`anhourmail`)                                                                                              | delivery                                                                                                                                                                                        |
 | Forwarding target + confirmation                                                                                        | `forwarding_target` (control plane)                                                                                                                        | the BFF writes a redirect only to a confirmed target                                                                                                                                            |
+| Mail rules (filters), ordered, on/off                                                                                   | Stalwart: the same managed Sieve script (`MailRules.filters` in its settings line), compiled by `buildScript`                                              | Delivery (every mail app), after the junk rules (ADR-0032 §2)                                                                                                                                   |
+| Templates (canned replies)                                                                                              | `webmail_template` (per mailbox, text only)                                                                                                                | The composer's Templates menu (ADR-0032 §3)                                                                                                                                                     |
+| Account safe senders (read-only here)                                                                                   | `account_safe_sender` (per account, set in the console)                                                                                                    | Images (verified From) and the trusted-only Junk rule (ADR-0032 §1)                                                                                                                             |
 
 **Customers can't change mail flow themselves (security reviews run-20/21, verified on v0.16.27, 2026-10-22).**
 With a mailbox password a person could otherwise install a Sieve `redirect`/`enotify` over ManageSieve (port 4190)
@@ -447,6 +450,54 @@ Audit entries are written in the mailbox's own account (its admins see them) as 
 mailbox address; meta never holds message text, signatures or list entries — target addresses are masked. The
 JMAP proxy still refuses every `SieveScript/*`, `VacationResponse/*`, `Identity/set` and `Quota/*` call
 (`settings.test.ts`), so the confirmation and audit can't be skipped from the browser.
+
+### Settings part 2 (2026-11-05, ADR-0032)
+
+**Account-wide Safe senders.** Console **Mail → Safe senders** (`safe_sender.read` / `.manage`: Owner, User
+Administrator; Read-only reads). Postgres `account_safe_sender` (≤ `ACCOUNT_SAFE_SENDERS` 300 entries / 12,000
+characters, `senderEntry` form), core `webmail/account-safe-senders.ts`, audited `junk_rules.account_safe_added` /
+`_removed` (counts and kinds only). Two effects, as a mailbox's own list:
+
+- **Images:** `safe-senders.ts` matches the mailbox's own list first, then — unless the From is on the mailbox's
+  Blocked senders — the account's list (read from Postgres by mailbox address, 60 s in-process cache, dropped by the
+  writing process); the match carries `source: "account"`, the reader never offers "Stop loading" for it and says
+  "Your organisation added <entry> to Safe senders". Verified From only, unchanged.
+- **Trusted-only Junk:** with "Only trust my contacts and safe senders" on, `buildScript` writes the account list as
+  its own `elsif` branch after the person's Blocked senders and before the catch-all, on one line after the fixed
+  `ACCOUNT_SAFE_MARKER` comment (`false` when empty; comments between `}` and `elsif` verified on v0.16.27). Every
+  `saveMailRules` writes the current list (`accountSafeSenders` dep). For mailboxes nobody saves, the web app (only it
+  may write Sieve, ADR-0020) replaces just that line (`applyAccountSafeSenders`, which refuses a marker inside a
+  string or anything `buildScript` doesn't write) with a compare-and-swap per mailbox: in the background after each
+  console change (`account-safe-apply.ts`, up to 3 passes, counts logged) and once after start-up for accounts with
+  entries (Redis done flag over all lists). Inactive scripts, scripts without the marker and scripts over budget are
+  skipped and counted.
+- People see the list read-only in Junk and blocked senders ("Added by your organisation"; `accountSafe` on the
+  settings overview).
+
+**Mail rules.** Settings → **Rules** (`settings/rules-panel.tsx`): an ordered list (on/off, up/down, edit, delete)
+and an editor (name; all/any of up to 5 conditions — From / To or Cc contains or is, Subject contains, List-Id
+contains, has an attachment, size over/under KB; actions — move to a folder or Trash, mark read, flag, forward a copy,
+stop). Model and limits in `@anhourmail/shared/mail-rules` (zod, shared with the browser; 50 rules, 64-character
+names, 200-character values). Stored in the managed script's settings line (`MailRules.filters`), never in Postgres.
+`GET`/`PUT /api/webmail/settings/rules` (`{ rules, version }`; a different version is 409 "Your rules changed in
+another window"; the write is `ifInState` on the read). The server gives new rules ids, resolves each move's folder
+path from its id with the session's token (`WebmailService.folderPaths`; `fileinto :mailboxid` is refused by the
+pinned server), and refuses a forward without a confirmed forwarding address or while sending is paused. Compiled after
+the automatic-reply / forwarding block inside `if not header :contains "X-Spam-Status" "Yes"`: `header :contains`
+(i;unicode-casemap) or `address :all :is`; `header :mime :anychild :contains "Content-Disposition" "attachment"`;
+`size :over/:under`; `addflag "\\Seen"` / `"\\Flagged"` (imap4flags); `fileinto "<path>"` or
+`fileinto :specialuse "\\Trash" "Trash"`; `stop` after a move. A forward is `redirect :copy` to the confirmed target
+only (resolved by `saveMailRules`; the rule holds no address), inside `SUPPRESS` and the `forwardingGuard`, and is
+dropped while Forwarding itself is on (every message is forwarded already) and when the target is removed or replaced
+(`dropForwardTarget`). Audit `sieve.changed` (counts). The editor's **Check Inbox** runs the equivalent JMAP filter
+(`previewFilter`) through the proxy on the person's own Inbox (10 results), labelled as a close check.
+
+**Templates.** Settings → Writing → **Templates** (`settings/templates-panel.tsx`) and the composer's **Templates**
+menu (inserted at the last caret position in rich mode, at the cursor in plain mode). Postgres `webmail_template`,
+core `webmail/templates-service.ts` (50 per mailbox, 64-character names unique ignoring case, 64 KB of HTML), BFF
+`template-html.ts` (`cleanTemplate`: the outgoing sanitiser with embedded images only, then every image removed),
+routes `GET·POST /api/webmail/settings/templates`, `PATCH·DELETE …/:templateId`, audit `webmail.template_*` (ids and
+sizes).
 
 ### Profile photos (2026-10-29, ADR-0022)
 
@@ -1300,6 +1351,6 @@ Budgets are checked by Playwright performance tests with seeded mailboxes (Phase
 - Folder sharing: "Share folder…" on a folder opens a dialog with people from the same account only (no directory search across accounts), presets (read, read + organise, full), optional expiry; applies per folder ("include subfolders" applies to each child).
 - Lists: sending to a list the actor can't post to shows an inline error before send.
 
-| v1 (Phase 4)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | v1.1                                                                                                                                                                                                                                                                                                                                           | v2                                                                                                                                   |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Shared mailboxes and folder sharing in the sidebar, send as from shared mailboxes, auto-reply; folders, threads, read/compose/reply/forward (rich text with a formatting toolbar; plain text mode), attachments upload/download, drafts, undo send, search (server FTS), flags, move/archive/junk with training, remote-image proxy, shortcuts, light/dark, mobile layout, identities/aliases as From, masked-alias quick create from composer, settings basics (named signatures with defaults for new mail and replies, vacation responder), nested folders with favourites, archive, Archive created at provisioning, empty Trash/Junk | Admin signature templates, account disclaimer, search folders, folder colours, archive by year, folder rules, Send on behalf, personal send-as delegation, mail flow rules UI (admins), filters on shared mailboxes, Sieve filter editor, snooze/send later, contacts autocomplete from CardDAV, multiple mailboxes switcher, PWA offline read | Calendar/contacts UI with delegation, resource mailboxes (rooms/equipment) booking, PGP, encrypted-at-rest settings, rules templates |
+| v1 (Phase 4)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | v1.1                                                                                                                                                                                                                                                                                                        | v2                                                                                                                                   |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Shared mailboxes and folder sharing in the sidebar, send as from shared mailboxes, auto-reply; folders, threads, read/compose/reply/forward (rich text with a formatting toolbar; plain text mode), attachments upload/download, drafts, undo send, search (server FTS), flags, move/archive/junk with training, remote-image proxy, shortcuts, light/dark, mobile layout, identities/aliases as From, masked-alias quick create from composer, settings basics (named signatures with defaults for new mail and replies, vacation responder), mail rules, templates and account safe senders (ADR-0032), nested folders with favourites, archive, Archive created at provisioning, empty Trash/Junk | Admin signature templates, account disclaimer, search folders, folder colours, archive by year, Send on behalf, personal send-as delegation, mail flow rules UI (admins), filters on shared mailboxes, snooze/send later, contacts autocomplete from CardDAV, multiple mailboxes switcher, PWA offline read | Calendar/contacts UI with delegation, resource mailboxes (rooms/equipment) booking, PGP, encrypted-at-rest settings, rules templates |

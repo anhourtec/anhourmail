@@ -631,6 +631,18 @@ Probed with throwaway `dev.test` accounts; the webmail settings (05-webmail.md "
   refused in `notUpdated` with `invalidProperties`, "Field could not be set."). Signatures with embedded images don't
   fit; the webmail copies a shortened version (05-webmail.md "Signatures").
 
+#### Sieve extensions for mail rules (ADR-0032, checked on v0.16.27, 2026-11-05)
+
+- `SieveScript/set` refuses `fileinto :mailboxid` (`invalidScript`): mail rules name folders by path, resolved from the
+  JMAP id at save time. A nested path joined with "/" ("Reading/News") files into the nested folder (integration test).
+- Accepted: `imap4flags` (`addflag "\\Seen"`, `"\\Flagged"`), `mime` (`header :mime :anychild`), `size :over`,
+  `copy` with the same `redirect :copy` target twice, and a comment line between `}` and `elsif` (the account Safe
+  senders marker; the rewritten branch was delivered against in the integration test).
+- Shared folders (security review run-63, SA-63-02): not probed live whether `fileinto` could resolve a path under the
+  shared-folders namespace ("Shared Folders/…") into another account. Customer mailboxes can't share folders
+  (`CUSTOMER_PERMISSIONS`), and the BFF refuses any rule path under that prefix or not made of the person's own
+  folders level by level (`ownFolderPath`). Probe it if folder sharing is ever enabled.
+
 #### User Sieve is an open-relay vector; we block it (security review run-20, 2026-10-22)
 - **Reproduced:** a mailbox token can upload `require ["variables"]; if header :matches "X-T" "*" { redirect
   "${1}"; }` and `SieveScript/set`-activate it; a message with an `X-T` header then relays to the attacker's

@@ -83,7 +83,12 @@ mail clients ─► Stalwart 465/587/993/995 (TLS by Stalwart itself)    MX traf
   are control-plane data per mailbox (`webmail_signature`), sanitised on save; the default for new messages is copied
   to the mailbox's identities (within the mail server's 2 KB limit) for other JMAP apps. Only the forwarding
   target's confirmation lives in the control plane (`forwarding_target`), and the BFF writes a redirect only to a
-  confirmed target. Mail-flow changes are audited.
+  confirmed target. Mail-flow changes are audited. Mail rules (filters, ADR-0032 §2) are data in the same managed
+  script, compiled by the BFF (a forward goes only to the confirmed target); templates are control-plane data per
+  mailbox (`webmail_template`); the account-wide Safe senders list is control-plane data per account
+  (`account_safe_sender`, console, Owners and User Administrators), matched for images from Postgres and written into
+  each mailbox's script by the web app (one marked line, compare-and-swap; after each change and at start-up), never by
+  the worker (no key of its may write Sieve).
 - **Billing (ADR-0029; slices 1–7 built 2026-11-04):** the payment processor is the source of truth for payments and
   subscriptions, reached only through the `BillingProvider` port (`packages/core/src/billing/ports.ts`; adapters in
   `packages/adapters/src/billing-stripe/` over plain `fetch`, no SDK, with a pinned API version, and a fake in
