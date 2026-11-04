@@ -659,3 +659,79 @@ mail-server effect or console yet (slices 5+). Choices made while building, with
 - **Signature vector:** the processor publishes the header format (`t=…,v1=…,v0=…`, parsed in the tests exactly as
   published) but no secret/body/signature triple; the HMAC is pinned against an independent OpenSSL computation. The
   live suite checks real deliveries.
+
+## Update (2026-11-04): slices 5–7 built
+
+Webhook ingestion and `billing.sync` (slice 5), the mail server's send-blocked access (slice 6) and the ceilings
+(slice 7) are built and tested, including on the compose stack with the production provisioning key
+(`packages/adapters/src/stalwart/billing-access.int.test.ts`). Checkout, portal and the dev simulate pages are next
+(slice 8). Choices made while building, within this decision:
+
+- **Disputes are tracked per dispute id** (migration 0037, `billing_dispute`; the residual above is fixed). `open` and
+  `lost` restrict; `won`, `warning_closed` and `cleared` (a staff clear, slice 12) don't. A close whose outcome can't be
+  read keeps the dispute `open`. Every sync re-reads the tracked open disputes with `getDispute`, so a lost
+  dispute-closed event heals on the next sync. A created event never reopens a closed dispute (it can arrive after the
+  close), and provider reads never undo a staff clear. The account-level stickiness stays for a dispute the provider
+  reports on the latest payment before its event is resolved: `disputed_at` holds until a dispute is won in a batch.
+  A lost dispute still restricts after a lapse and a resubscribe until staff clear it (safer than letting a chargeback
+  be undone by paying again; staff decide).
+- **Dispute orphans resolve at once:** ingestion queues a `billing.resolve` job (a second new job kind, subject = the
+  `billing_event` id) for a dispute event without a customer, so a dispute restricts within seconds instead of at the
+  nightly reconcile; the reconcile retries the ones still unresolved.
+- **The sync writes its audit entries with `recordSystemChanges`** (`mutation.ts`): the account's changes are known
+  only after deriving under the lock, so the entries are appended in that same transaction by a system-actor helper
+  beside `mutation()`; a sync that changes nothing writes no entry. `billing.state_changed` meta uses `fromState` /
+  `toState` (`to` is a redacted key), `billing.plan_changed` `fromPlan` / `toPlan`.
+- **Holds are applied and lifted by the sync now** (`computeHolds` on a lapse, `clearHolds` on an upgrade), because the
+  next sync reads the hold count to keep a lapsed account lapsed. Timers, "Choose what stays on", invite revocation and
+  held mailboxes leaving the pool arithmetic stay in slice 10.
+- **One nightly scheduler job** `billing-reconcile` does the reconcile, the orphan retries and the 35-day prune (the
+  ADR's separate `billing.events-prune` folded in). With billing off, sync jobs complete without deriving anything, so
+  switching billing off never ends anyone's plan.
+- **The fake signs deliveries at delivery time** on the real clock (as the processor does), so events made after
+  "advance clock" still pass the ±300 s check.
+- **Send-blocked needs two denials on v0.16.27:** `emailSend` stops SMTP AUTH on 465 and 587, but JMAP
+  `EmailSubmission/set` still sent; `jmapEmailSubmissionCreate` closes it. `stalwart-client` gains `access` (`active` /
+  `send_blocked` / `receive_blocked` / `suspended`) beside `suspended` (which wins), `SEND_BLOCKED_PERMISSIONS`,
+  `RECEIVE_BLOCKED_PERMISSIONS` and `accessOf` for listings.
+- **Receive-blocked is built in the client but not applied:** `emailReceive` accepts at RCPT and then bounces to the
+  envelope sender (backscatter for mail from outside, rule 62), not the RCPT refusal §6 assumed. Until held recipients
+  are refused during the SMTP conversation (a RCPT-stage system Sieve script over a list the provisioning job keeps is
+  the candidate), `mailbox.ensure` applies a held mailbox past its window as send-blocked, so it keeps receiving. This
+  must be decided before slice 10 turns receive windows on. Held aliases are taken off the mail server like disabled
+  ones (refused at RCPT); a held domain loses only its catch-all.
+- **The webmail's own send refusal (`403 billing_restricted`) is not in these slices:** the webmail BFF was being
+  changed in parallel; the mail server already refuses every sending protocol. It comes with the Billing page work.
+- **Ceilings:** `mailboxCeiling` replaces `MAX_MAILBOXES` in the create paths and the platform allowance, keeping
+  `403 plan_limit` and its message; `peopleCeiling` replaces `MAX_PEOPLE`; the pool and `job:quota-cap` use the storage
+  blocks in force (so purchased storage is never taken back). The address ceiling is `ACCOUNT_ADDRESS_CEILING` (web
+  env, required in production, 1–1,000,000; unset elsewhere = `DEV_ADDRESS_CEILING` 5000), checked in mailbox, "Add a
+  user", staff platform-address and alias creation under the account lock, `409 address_ceiling` audited `denied`
+  (`DomainError.auditDenied`, so a refusal thrown inside a mutation is audited as denied rather than failed). The
+  message and the account's audit entries never carry the number. Staff set or reset the override with
+  `PUT /api/platform/accounts/:accountId/billing/address-ceiling` (`platform.billing.manage` ★, step-up, tier
+  `sensitive`).
+- **Nothing new on what a downgrade held** (pre-commit review run-60, SA60-01): a held custom domain stays `active`
+  (holds live in `plan_hold`), so creation paths now refuse a custom domain when the effective plan has none
+  (`PLANS[plan].customDomains`), a held domain, and a held mailbox (`billing/held.ts`): new mailboxes ("Add a user"
+  included, through `newMailboxAddress`), chosen aliases, and masked aliases (on a held mailbox, or on a custom-domain
+  mailbox). `403 plan_limit` (the house code for what the plan doesn't include), audited `denied`.
+- **App passwords are refused too** (SA60-02, verified in the integration test): with `SEND_BLOCKED_PERMISSIONS` an app
+  password with the SMTP and JMAP scopes gets `550 5.7.1` on 465 and 587 and `forbidden` for JMAP submission, and still
+  reads over IMAP. No change needed.
+- **Forwarding and automatic replies keep running while send-blocked** (SA60-03, decision): verified that Stalwart
+  still runs a send-blocked account's Sieve `redirect` (to an outside address) and `vacation`. Turning them off would
+  mean rewriting the managed script, which only the web app's operations key may do (ADR-0020 "Credential split"):
+  giving the worker owner access to every mailbox for this widens the provisioning key more than the gain is worth.
+  What still goes out is mail the account receives (still allowed when restricted), sent on only to a target the
+  person confirmed under the forwarding guard, and at most one automatic reply per sender a day; the person can't
+  write new mail. Abuse goes through staff suspension, which stops delivery (and so the script). If the maintainer
+  wants them off, the route is a web-app step that writes the managed script without the redirect and vacation while
+  restricted (settings kept, restored on lift). Pinned in the integration test.
+- **Not yet:** reconciler drift for billing access (it compares suspension and the customer lock only), and the
+  webmail BFF's control-plane send check.
+- **Slice 14 checklist adds (SA60-04):** a client may ask the server to hold a message (`FUTURERELEASE`, advertised
+  after AUTH with a maximum of 604,800 s, i.e. 7 days; JMAP `HOLDUNTIL`). Verified on dev: a message held before the
+  restriction **is released after it** (release doesn't re-check permissions), so a card-testing or disputed account
+  can schedule up to a week of mail before it is restricted. Decide before launch: lower the server's maximum hold,
+  and/or cancel the account's pending submissions when it is restricted (needs owner access: the same web-app step).
