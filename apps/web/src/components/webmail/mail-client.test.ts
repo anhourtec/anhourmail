@@ -312,6 +312,22 @@ describe("telling the app about changes", () => {
     expect(seen).not.toHaveBeenCalled();
   });
 
+  it("undoes a send from a shared mailbox naming it and the send's ticket", async () => {
+    const server = jmapServer(setOk, () => Response.json({ data: { draftId: "d1" } }));
+    vi.stubGlobal("fetch", server.fetchFn);
+    const client = createMailClient(ORIGIN);
+    await expect(client.undoSend("s2", { mailbox: "desk@dev.test", ticket: "sealed" })).resolves.toEqual({
+      draftId: "d1",
+    });
+    const posts = server.fetchFn.mock.calls.filter(([u]) =>
+      (typeof u === "string" ? u : u instanceof URL ? u.href : u.url).endsWith("/api/webmail/send/undo"),
+    );
+    expect(posts.map(([, init]) => init?.body)).toEqual([
+      JSON.stringify({ submissionId: "s2", mailbox: "desk@dev.test", ticket: "sealed" }),
+    ]);
+    expect(new Headers(posts[0]?.[1]?.headers).get("X-Webmail-Account")).toBe("acc1");
+  });
+
   it("keeps the change even when a listener throws", async () => {
     vi.stubGlobal("fetch", jmapServer(setOk).fetchFn);
     const client = createMailClient(ORIGIN);

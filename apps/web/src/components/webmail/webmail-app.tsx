@@ -1506,7 +1506,12 @@ function Mailroom({
               if (check !== undefined) window.clearTimeout(check);
               deliveryChecks.current.delete(submissionId);
               void writer
-                .undoSend(submissionId, from)
+                .undoSend(
+                  submissionId,
+                  from === undefined || reportTicket === undefined
+                    ? undefined
+                    : { mailbox: from, ticket: reportTicket },
+                )
                 .then(({ draftId }) => {
                   refresh();
                   void openDraft(draftId, { undone: true, ...(from === undefined ? {} : { from }) });

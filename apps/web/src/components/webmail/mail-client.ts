@@ -844,13 +844,14 @@ export function createMailClient(
         }),
       );
     },
-    undoSend: async (submissionId: string, mailbox?: string) => {
+    /** With `shared` (the mailbox and the send's `reportTicket`) for a send from a mailbox shared with the person. */
+    undoSend: async (submissionId: string, shared?: { mailbox: string; ticket: string }) => {
       const headers = { [ACCOUNT]: await accountId() };
       return mutating(() =>
         bff<{ draftId: string }>(`${origin}/api/webmail/send/undo`, {
           method: "POST",
           headers,
-          body: JSON.stringify({ submissionId, ...(mailbox === undefined ? {} : { mailbox }) }),
+          body: JSON.stringify({ submissionId, ...(shared ?? {}) }),
         }),
       );
     },
