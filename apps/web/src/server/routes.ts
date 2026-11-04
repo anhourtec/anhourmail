@@ -518,6 +518,14 @@ export const ROUTES: readonly RouteSpec[] = [
     // The harness sends no token: everyone gets a validation error.
     probeStatus: 400,
   },
+  // Sign-up proof-of-work challenge (ADR-0031): public, nothing stored, 404 while sign-up is closed (open in dev).
+  {
+    method: "POST",
+    path: "/api/sign-up/challenge",
+    file: "app/api/sign-up/challenge/route.ts",
+    guard: "public",
+    probeStatus: 200,
+  },
   // The billing provider's webhook (ADR-0029 §4): signed, outside any session. The harness sends no signature: 400
   // `bad_signature` for everyone (404 when billing is off). Not audited: the sync it queues audits every change.
   {
