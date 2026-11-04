@@ -15,13 +15,19 @@ import {
 import { memoryMailer } from "@anhourmail/adapters/mail";
 import { memoryBreachedPasswords, MemoryUnitOfWork } from "@anhourmail/adapters/memory";
 import { type Actor, ANONYMOUS, systemClock } from "@anhourmail/core";
+import { syncAccountBilling } from "@anhourmail/core/billing";
 import { setLogSinkForTests } from "@anhourmail/server/log";
 import { type Counter, memoryCounter } from "@anhourmail/server/rate-limit";
 import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 
 import { GET as overviewRoute } from "@/app/api/accounts/[accountId]/billing/route";
 import { POST as checkoutRoute } from "@/app/api/accounts/[accountId]/billing/checkout/route";
+import { POST as cancelRoute } from "@/app/api/accounts/[accountId]/billing/cancel/route";
+import { POST as changeRoute } from "@/app/api/accounts/[accountId]/billing/change/route";
 import { POST as portalRoute } from "@/app/api/accounts/[accountId]/billing/portal/route";
+import { POST as previewRoute } from "@/app/api/accounts/[accountId]/billing/preview/route";
+import { POST as refundRoute } from "@/app/api/accounts/[accountId]/billing/refund/route";
+import { POST as undoRoute } from "@/app/api/accounts/[accountId]/billing/undo-cancel/route";
 import { POST as simulateRoute } from "@/app/api/dev/billing/simulate/route";
 
 import { type Container, setContainerForTests } from "./container";
@@ -258,5 +264,68 @@ describe("dev billing simulation (ADR-0029 §3)", () => {
     expect(devOnlyPath("/developers")).toBe(false);
     expect(devOnlyPath("/api/devices")).toBe(false);
     expect(routeHost("localhost:43200", "/dev/billing/checkout/cs_1", false, "43300")).toEqual({ action: "next" });
+  });
+});
+
+describe("plan and add-on changes, cancel and refund routes (ADR-0029 §9)", () => {
+  async function subscribe() {
+    const url = String((await json(await checkout({ plan: "plus", currency: "USD", storageBlocks: 1 }))).data?.url);
+    await simulateRoute(post("/api/dev/billing/simulate", { action: "pay", sessionId: url.split("/").pop() }), {
+      params: Promise.resolve({}),
+    });
+    await syncAccountBilling({ uow, clock: systemClock, platform: PUBLIC_PLATFORM }, fake, ACCOUNT);
+  }
+  const call = (path: string, body: unknown = {}) =>
+    (
+      ({
+        preview: previewRoute,
+        change: changeRoute,
+        cancel: cancelRoute,
+        "undo-cancel": undoRoute,
+        refund: refundRoute,
+      }) as const
+    )[path as "preview"](post(`/api/accounts/${ACCOUNT}/billing/${path}`, body), params());
+
+  it("preview, then the change with the confirmed amount; 409 without it; 402 for a declined card", async () => {
+    await subscribe();
+    const preview = await call("preview", { storageBlocks: 2 });
+    expect(preview.status).toBe(200);
+    const { amountDueNowMinor } = (await json(preview)).data as { amountDueNowMinor: number };
+    expect(amountDueNowMinor).toBeGreaterThan(0);
+    const unconfirmed = await call("change", { storageBlocks: 2 });
+    expect(unconfirmed.status).toBe(409);
+    expect((await json(unconfirmed)).error?.code).toBe("confirmation_required");
+    const customerId = uow.state.billing.find((b) => b.accountId === ACCOUNT)?.providerCustomerId ?? "";
+    await fake.setCardFails(customerId, true);
+    expect((await call("change", { storageBlocks: 2, confirmAmountMinor: amountDueNowMinor })).status).toBe(402);
+    await fake.setCardFails(customerId, false);
+    const done = await call("change", { storageBlocks: 2, confirmAmountMinor: amountDueNowMinor });
+    expect(done.status).toBe(200);
+    expect((await json(done)).data).toMatchObject({ billed: "now", amountDueNowMinor });
+  });
+
+  it("cancel and refund need a fresh step-up (403 step_up_required); 409 without a subscription", async () => {
+    expect((await call("cancel")).status).toBe(409);
+    expect((await call("refund")).status).toBe(409);
+    expect((await call("preview", { storageBlocks: 1 })).status).toBe(409);
+    await subscribe();
+    const cancel = await call("cancel");
+    expect(cancel.status).toBe(403);
+    expect((await json(cancel)).error?.code).toBe("step_up_required");
+    uow.state.stepUps.push({ userId: "owner-1", sessionId: SESSION, expiresAt: new Date("2099-01-01") });
+    expect((await call("cancel")).status).toBe(200);
+    await syncAccountBilling({ uow, clock: systemClock, platform: PUBLIC_PLATFORM }, fake, ACCOUNT);
+    expect((await call("undo-cancel")).status).toBe(200);
+    expect((await call("refund")).status).toBe(200);
+    actor = member;
+    expect((await call("refund")).status).toBe(403);
+  });
+
+  it("400 invalid_change for a mixed change; 400 for a bad body", async () => {
+    await subscribe();
+    const mixed = await call("change", { storageBlocks: 0, extraMailboxes: 2 });
+    expect(mixed.status).toBe(400);
+    expect((await json(mixed)).error?.code).toBe("invalid_change");
+    expect((await call("change", { plan: 5 })).status).toBe(400);
   });
 });
