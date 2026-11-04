@@ -1,6 +1,6 @@
 ---
 title: Webmail
-description: Read and write mail in the browser — signing in, several mailboxes, mailboxes shared with you, writing and undoing a send, organising, searching, shortcuts, and how remote images stay blocked until you load them. Contacts have their own guide.
+description: Read and write mail in the browser — signing in, several mailboxes, mailboxes shared with you, writing and undoing a send, addresses that can't get your mail, organising, searching, shortcuts, and how remote images stay blocked until you load them. Contacts have their own guide.
 ---
 
 The webmail is AnhourMail in your browser, at <Value of="webmailHost" />. It's a separate address from the console
@@ -150,6 +150,20 @@ You don't need its password or a second sign-in: your own sign-in is enough. Cha
   drafts and nothing is delivered.
 - You can send to up to <Value of="recipientsPerMessage" /> people per message, and each person counts toward your
   [sending limits](/docs/sending-limits).
+
+### If an address can't get your message
+
+If an address you sent to doesn't exist, the webmail tells you right after you send, with a notice such as "Not
+delivered to sam@<Value of="productDomain" />" and why: "No mailbox with this address exists. (5.1.2)". The short code at the end helps
+if you ask us about it. The notice stays until you close it.
+
+- Addresses at <Value of="productDomain" /> and on domains that use AnhourMail are checked as you send. The webmail
+  checks once more when the undo time is over.
+- Everyone else on the message still gets it, and your copy stays in **Sent**. Fix the address and send it again
+  to that person.
+- If none of the addresses could get it, nothing was held, so **Undo** isn't offered.
+- An address at another provider is checked by that provider's mail server, which usually sends you a returned-mail
+  message in your Inbox instead. That can take a while.
 
 ### Sending as or on behalf of a mailbox
 
