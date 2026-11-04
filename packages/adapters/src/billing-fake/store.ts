@@ -35,6 +35,10 @@ export type FakeInvoice = {
   paidAt: number | null;
   billingReason: ProviderInvoice["billingReason"];
   refundedMinor: number;
+  /** The add-on quantities and period end the invoice billed (absent on states saved before they were recorded). */
+  storageBlocks?: number;
+  extraMailboxes?: number;
+  periodEnd?: number;
   /** The payment behind the invoice: disputes and refunds refer to it, like the processor's objects do. */
   paymentIntentId: string;
   chargeId: string;

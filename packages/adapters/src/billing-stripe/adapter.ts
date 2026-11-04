@@ -68,8 +68,28 @@ const itemSchema = z.object({
   price: priceSchema,
 });
 
+/**
+ * An invoice line, just what we read: its quantity, the period it bills, its price (`pricing.price_details.price` at the
+ * pinned version, `price` on older ones) and whether it is a proration. To confirm in the live suite (slice 14).
+ */
+const lineSchema = z.object({
+  quantity: z.number().int().nonnegative().nullable().optional(),
+  period: z.object({ start: z.number().int(), end: z.number().int() }).optional(),
+  pricing: z
+    .object({ price_details: z.object({ price: ref }).nullable().optional() })
+    .nullable()
+    .optional(),
+  price: z.object({ id }).nullable().optional(),
+  proration: z.boolean().optional(),
+  parent: z
+    .object({ subscription_item_details: z.object({ proration: z.boolean() }).nullable().optional() })
+    .nullable()
+    .optional(),
+});
+
 const invoiceSchema = z.object({
   id,
+  lines: z.object({ data: z.array(lineSchema), has_more: z.boolean().optional() }).optional(),
   status: z.string().nullable(),
   total: z.number().int(),
   amount_paid: z.number().int(),
@@ -155,6 +175,30 @@ export function createStripeBillingProvider(config: StripeConfig, opts: StripeAd
     return amount ?? drift(`price ${price.id} has no ${currency} amount`);
   }
 
+  /**
+   * The add-on quantities and the period an invoice billed, from its lines (prorations left out). Null when the lines
+   * aren't there or don't all fit in one page: the sync then falls back to the subscription's quantities.
+   */
+  function invoiceLines(
+    inv: z.infer<typeof invoiceSchema>,
+  ): Pick<ProviderInvoice, "storageBlocks" | "extraMailboxes" | "periodEnd"> {
+    if (!inv.lines || inv.lines.has_more === true)
+      return { storageBlocks: null, extraMailboxes: null, periodEnd: null };
+    let storageBlocks = 0;
+    let extraMailboxes = 0;
+    let end: number | null = null;
+    for (const line of inv.lines.data) {
+      if (line.proration === true || line.parent?.subscription_item_details?.proration === true) continue;
+      const detail = line.pricing?.price_details?.price;
+      const priceId = detail ? refId(detail) : (line.price?.id ?? null);
+      const qty = line.quantity ?? 1;
+      if (priceId !== null && config.prices.storageBlock.includes(priceId)) storageBlocks += qty;
+      else if (priceId !== null && config.prices.extraMailbox.includes(priceId)) extraMailboxes += qty;
+      if (line.period) end = Math.max(end ?? 0, line.period.end);
+    }
+    return { storageBlocks, extraMailboxes, periodEnd: end === null ? null : at(end) };
+  }
+
   async function invoiceFacts(
     inv: z.infer<typeof invoiceSchema>,
   ): Promise<{ refundedMinor: number; disputed: boolean; disputeLost: boolean }> {
@@ -218,6 +262,7 @@ export function createStripeBillingProvider(config: StripeConfig, opts: StripeAd
         paidAt: inv.status_transitions.paid_at === null ? null : at(inv.status_transitions.paid_at),
         billingReason: billingReason(inv.billing_reason),
         refundedMinor: facts.refundedMinor,
+        ...invoiceLines(inv),
       };
     }
     const periodEnd = at(plan.item.current_period_end);

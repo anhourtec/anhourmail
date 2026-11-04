@@ -128,6 +128,9 @@ export function describeBillingProviderContract(name: string, factory: () => Pro
           refundedMinor: 0,
         });
         expect(sub.latestInvoice?.paidAt).toBeInstanceOf(Date);
+        // What the invoice billed, read from its lines (run-62 F1): the add-on quantities and the period.
+        expect(sub.latestInvoice).toMatchObject({ storageBlocks: 2, extraMailboxes: 0 });
+        expect(sub.latestInvoice?.periodEnd?.getTime()).toBe(sub.currentPeriodEnd.getTime());
       }));
 
     it("a Supporter checkout carries the chosen amount", () =>

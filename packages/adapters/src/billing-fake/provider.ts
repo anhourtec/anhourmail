@@ -197,6 +197,9 @@ export function createFakeBillingProvider(opts: FakeBillingOptions): FakeBilling
             paidAt: inv.paidAt === null ? null : new Date(inv.paidAt),
             billingReason: inv.billingReason,
             refundedMinor: inv.refundedMinor,
+            storageBlocks: inv.storageBlocks ?? null,
+            extraMailboxes: inv.extraMailboxes ?? null,
+            periodEnd: inv.periodEnd === undefined ? null : new Date(inv.periodEnd),
           }
         : null,
       disputed: inv?.dispute?.status === "open",
@@ -222,6 +225,10 @@ export function createFakeBillingProvider(opts: FakeBillingOptions): FakeBilling
       paidAt: cardFails ? null : nowOf(s),
       billingReason,
       refundedMinor: 0,
+      // What this invoice billed, frozen now: later changes to the subscription don't rewrite it.
+      storageBlocks: sub.storageBlocks,
+      extraMailboxes: sub.extraMailboxes,
+      periodEnd: sub.periodEnd,
       paymentIntentId: nextId(s, "pi"),
       chargeId: nextId(s, "ch"),
       dispute: null,

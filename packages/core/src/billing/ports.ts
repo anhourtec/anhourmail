@@ -31,6 +31,15 @@ export type ProviderInvoice = {
   /** First invoice, a renewal, or anything else (add-on proration, manual). */
   billingReason: "subscription_create" | "subscription_cycle" | "other";
   refundedMinor: number;
+  /**
+   * The add-on quantities the invoice billed (its storage-block and extra-mailbox lines), or null when they can't be
+   * read: a paid first or renewal invoice sets the capacity paid for the period from these, never from the live
+   * subscription (which may have changed since it was billed).
+   */
+  storageBlocks: number | null;
+  extraMailboxes: number | null;
+  /** The end of the period the invoice's lines bill, or null when it can't be read. */
+  periodEnd: Date | null;
 };
 
 /** The provider's view of an account's subscription, read fresh on every sync (never trusted from a webhook). */

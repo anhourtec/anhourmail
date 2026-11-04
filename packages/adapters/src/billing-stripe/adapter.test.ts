@@ -119,6 +119,10 @@ describe("processor adapter: reading a subscription", () => {
         paidAt: NOW,
         billingReason: "subscription_create",
         refundedMinor: 500,
+        // No lines on this invoice: the sync falls back to the subscription's quantities.
+        storageBlocks: null,
+        extraMailboxes: null,
+        periodEnd: null,
       },
       disputed: true,
       disputeLost: false,
@@ -127,6 +131,49 @@ describe("processor adapter: reading a subscription", () => {
     expect(list?.query.get("customer")).toBe("cus_1");
     expect(list?.query.get("status")).toBe("all");
     expect(list?.query.getAll("expand[]")).toEqual(["data.latest_invoice"]);
+  });
+
+  it("reads what the latest invoice billed from its lines, prorations left out (run-62 F1)", async () => {
+    const line = (priceId: string, quantity: number, extra: Record<string, unknown> = {}) => ({
+      quantity,
+      period: { start: NOW_S, end: NOW_S + YEAR_S },
+      pricing: { price_details: { price: priceId } },
+      ...extra,
+    });
+    const { p } = provider({
+      "GET /subscriptions": {
+        json: {
+          data: [
+            subscription({
+              latest_invoice: {
+                ...paidInvoice,
+                billing_reason: "subscription_cycle",
+                lines: {
+                  data: [
+                    line("price_plus", 1),
+                    line("price_storage", 0),
+                    line("price_extra", 2),
+                    // A proration line (new shape) and one priced the old way.
+                    line("price_storage", 5, { parent: { subscription_item_details: { proration: true } } }),
+                    { quantity: 1, price: { id: "price_extra" }, period: { start: NOW_S, end: NOW_S + YEAR_S } },
+                  ],
+                  has_more: false,
+                },
+              },
+            }),
+          ],
+          has_more: false,
+        },
+      },
+      ...paymentRoutes(),
+    });
+    const inv = (await p.getSubscription("cus_1"))?.latestInvoice;
+    expect(inv).toMatchObject({
+      billingReason: "subscription_cycle",
+      storageBlocks: 0,
+      extraMailboxes: 3,
+      periodEnd: new Date((NOW_S + YEAR_S) * 1000),
+    });
   });
 
   it.each([

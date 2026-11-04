@@ -58,6 +58,10 @@ const sub = (over: Partial<ProviderSubscription> = {}): ProviderSubscription => 
     paidAt: T0,
     billingReason: "subscription_create",
     refundedMinor: 0,
+    // Unreadable lines by default: the sync falls back to the subscription's quantities and period.
+    storageBlocks: null,
+    extraMailboxes: null,
+    periodEnd: null,
   },
   disputed: false,
   disputeLost: false,
