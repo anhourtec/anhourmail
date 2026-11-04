@@ -4,11 +4,15 @@
 import { useRouter } from "next/navigation";
 import { type SyntheticEvent, useState } from "react";
 
+import { POW_HEADERS, SIGN_UP_REFUSAL } from "@anhourmail/shared/proof-of-work";
 import { BREACHED_PASSWORD } from "@anhourmail/shared/security";
 
 import { useHydrated } from "@/components/use-hydrated";
 
 import { PasswordInput } from "@/components/password-input";
+
+import { ProofStatus } from "./proof-status";
+import { useSignUpProof } from "./use-sign-up-proof";
 
 const inputClass =
   "h-10 w-full rounded-lg border bg-background px-3 text-[15px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring";
@@ -18,7 +22,8 @@ const MIN_PASSWORD = 12;
 /**
  * Sign-up: first name (required), last name (optional), display name (pre-filled from first + last and kept in
  * sync until edited; clearing it goes back to automatic). Posts to the auth endpoint; the SDK stays server-side
- * (ADR-0008) and the server re-validates and applies the same display-name default.
+ * (ADR-0008) and the server re-validates and applies the same display-name default. A proof-of-work runs in the
+ * background as the page opens and goes with the request (ADR-0031); a refused proof is solved again and sent once more.
  */
 export function SignUpForm() {
   const router = useRouter();
@@ -29,6 +34,7 @@ export function SignUpForm() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const hydrated = useHydrated();
+  const pow = useSignUpProof(hydrated);
 
   const autoDisplay = [firstName.trim(), lastName.trim()].filter(Boolean).join(" ");
   const shownDisplay = displayEdited ? displayName : autoDisplay;
@@ -49,32 +55,61 @@ export function SignUpForm() {
     setPending(true);
     setError(null);
     try {
-      const res = await fetch("/api/auth/sign-up/email", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          firstName: firstName.trim(),
-          lastName: lastName.trim(),
-          name: shownDisplay.trim(),
-          email,
-          password,
-        }),
-      });
-      if (res.ok) {
-        router.replace("/");
-        router.refresh();
+      // A refused proof (expired, or the network changed while solving) gets one fresh solve and one more try.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const proof = await pow.take();
+        // The check's own status line says what went wrong.
+        if (!proof) return;
+        const res = await fetch("/api/auth/sign-up/email", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            [POW_HEADERS.challenge]: proof.challenge,
+            [POW_HEADERS.proof]: proof.proof,
+          },
+          body: JSON.stringify({
+            firstName: firstName.trim(),
+            lastName: lastName.trim(),
+            name: shownDisplay.trim(),
+            email,
+            password,
+          }),
+        });
+        if (res.ok) {
+          router.replace("/");
+          router.refresh();
+          return;
+        }
+        // The identity layer answers `{ code, message }`; the sign-up gate and the route `{ error: { code, message } }`.
+        const json = (await res.json().catch(() => null)) as {
+          code?: string;
+          message?: string;
+          error?: { code?: string };
+        } | null;
+        const gate = json?.error?.code;
+        if (gate === SIGN_UP_REFUSAL.proofOfWork && attempt === 0) {
+          pow.restart();
+          continue;
+        }
+        pow.restart();
+        if (gate === SIGN_UP_REFUSAL.proofOfWork) setError("The automatic check didn't go through. Try again.");
+        else if (gate === SIGN_UP_REFUSAL.attempts) {
+          setError("Too many sign-up attempts from your network. Try again later.");
+        } else if (gate === SIGN_UP_REFUSAL.limited) {
+          setError("Too many accounts were created from your network recently. Try again later.");
+        } else if (res.status === 429) setError("Too many attempts. Wait a minute and try again.");
+        else if (res.status === 503) setError("Sign-up is unavailable for a moment. Try again shortly.");
+        else if (res.status === 403) setError("Sign-up isn't available right now.");
+        else if (json?.code === BREACHED_PASSWORD.authCode) setError(BREACHED_PASSWORD.message);
+        // The shared name rules' own sentence (no control characters, @ or web addresses in names).
+        else if (json?.code === "INVALID_NAME" && json.message) setError(json.message);
+        else if (res.status === 422 || res.status === 400) {
+          setError("We couldn't create that account. Check your details, or sign in if you already have one.");
+        } else setError("Something went wrong. Try again in a moment.");
         return;
       }
-      const json = (await res.json().catch(() => null)) as { code?: string; message?: string } | null;
-      if (res.status === 429) setError("Too many attempts. Wait a minute and try again.");
-      else if (res.status === 403) setError("Sign-up isn't available right now.");
-      else if (json?.code === BREACHED_PASSWORD.authCode) setError(BREACHED_PASSWORD.message);
-      // The shared name rules' own sentence (no control characters, @ or web addresses in names).
-      else if (json?.code === "INVALID_NAME" && json.message) setError(json.message);
-      else if (res.status === 422 || res.status === 400) {
-        setError("We couldn't create that account. Check your details, or sign in if you already have one.");
-      } else setError("Something went wrong. Try again in a moment.");
     } catch {
+      pow.restart();
       setError("Couldn't reach the server. Check your connection and try again.");
     } finally {
       setPending(false);
@@ -173,6 +208,7 @@ export function SignUpForm() {
           At least {MIN_PASSWORD} characters. A passphrase works well.
         </span>
       </div>
+      <ProofStatus state={pow.state} onRetry={pow.restart} />
       {error && (
         <p role="alert" className="am-small text-destructive">
           {error}
@@ -183,7 +219,11 @@ export function SignUpForm() {
         disabled={pending || !hydrated}
         className="h-10 rounded-lg bg-primary font-medium text-[15px] text-primary-foreground transition-opacity disabled:opacity-60"
       >
-        {pending ? "Creating your account…" : "Create account"}
+        {pending
+          ? pow.state.status === "solving"
+            ? "Finishing the check…"
+            : "Creating your account…"
+          : "Create account"}
       </button>
     </form>
   );
