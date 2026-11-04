@@ -28,8 +28,23 @@ const row = defaultBilling("00000000-0000-4000-8000-000000000001", "plus", NOW);
 
 describe("entitlements (ADR-0029 §7)", () => {
   it("the larger of the current and the period-paid quantity, in paid states only", () => {
-    const b = { ...row, storageBlocks: 1, periodPaidStorageBlocks: 3, extraMailboxes: 4, periodPaidExtraMailboxes: 2 };
+    const end = new Date("2027-11-01T00:00:00Z");
+    const b = {
+      ...row,
+      storageBlocks: 1,
+      periodPaidStorageBlocks: 3,
+      extraMailboxes: 4,
+      periodPaidExtraMailboxes: 2,
+      currentPeriodEnd: end,
+      periodPaidFor: end,
+    };
     expect(entitledAddons(b)).toEqual({ storageBlocks: 3, extraMailboxes: 4 });
+    // Paid for an earlier period (a renewal not paid yet): only the current quantities count (run-62 F1).
+    expect(entitledAddons({ ...b, periodPaidFor: new Date("2026-11-01T00:00:00Z") })).toEqual({
+      storageBlocks: 1,
+      extraMailboxes: 4,
+    });
+    expect(entitledAddons({ ...b, periodPaidFor: null })).toEqual({ storageBlocks: 1, extraMailboxes: 4 });
     expect(entitledAddons({ ...b, state: "past_due" })).toEqual({ storageBlocks: 3, extraMailboxes: 4 });
     expect(entitledAddons({ ...b, state: "lapsed" })).toEqual({ storageBlocks: 0, extraMailboxes: 0 });
     expect(entitledAddons({ ...b, storageBlocks: 99 }).storageBlocks).toBe(10);

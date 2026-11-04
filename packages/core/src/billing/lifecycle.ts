@@ -330,20 +330,23 @@ export function deriveBilling(
 
   if (live) {
     const paidNow = newlyPaid(previous, live);
+    // A newly paid first or renewal invoice sets the capacity paid for its period from what the invoice billed (never
+    // from the live subscription, which may have been raised since without a charge), tagged with that period.
+    const inv = live.latestInvoice;
+    const planInvoice = paidNow && inv !== null && inv.billingReason !== "other";
     Object.assign(next, {
       providerSubscriptionId: live.subscriptionId,
       currency: live.currency,
       planAmountMinor: live.planAmountMinor,
       storageBlocks: live.storageBlocks,
       extraMailboxes: live.extraMailboxes,
-      periodPaidStorageBlocks:
-        paidNow && live.latestInvoice?.billingReason !== "other"
-          ? live.storageBlocks
-          : previous.periodPaidStorageBlocks,
-      periodPaidExtraMailboxes:
-        paidNow && live.latestInvoice?.billingReason !== "other"
-          ? live.extraMailboxes
-          : previous.periodPaidExtraMailboxes,
+      periodPaidStorageBlocks: planInvoice
+        ? (inv.storageBlocks ?? live.storageBlocks)
+        : previous.periodPaidStorageBlocks,
+      periodPaidExtraMailboxes: planInvoice
+        ? (inv.extraMailboxes ?? live.extraMailboxes)
+        : previous.periodPaidExtraMailboxes,
+      periodPaidFor: planInvoice ? (inv.periodEnd ?? live.currentPeriodEnd) : previous.periodPaidFor,
       currentPeriodEnd: live.currentPeriodEnd,
       cancelAt: live.cancelAt,
       compUntil: null,
@@ -361,6 +364,7 @@ export function deriveBilling(
       extraMailboxes: 0,
       periodPaidStorageBlocks: 0,
       periodPaidExtraMailboxes: 0,
+      periodPaidFor: null,
       currentPeriodEnd: target.source === "comp" ? previous.compUntil : null,
       cancelAt: null,
       compUntil: target.source === "comp" ? previous.compUntil : null,

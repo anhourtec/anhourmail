@@ -307,6 +307,7 @@ describe("billingOverview", () => {
       planAmountMinor: 4000,
       storageBlocks: 1,
       periodPaidStorageBlocks: 2,
+      periodPaidFor: periodEnd,
       currentPeriodEnd: periodEnd,
       lastInvoiceStatus: "paid",
     });

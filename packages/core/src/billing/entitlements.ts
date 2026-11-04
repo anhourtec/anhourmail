@@ -62,19 +62,44 @@ export type Entitlements = {
 };
 
 /**
+ * The quantities paid for the current period, or none: they count only while the period they were paid for is the
+ * subscription's current one (after a renewal they say nothing until the renewal invoice is paid). `periodEnd` is the
+ * current period end to compare with (our row's by default; the change services pass the provider's, read fresh).
+ */
+export function paidForPeriod(
+  b: Pick<
+    AccountBilling,
+    "periodPaidStorageBlocks" | "periodPaidExtraMailboxes" | "periodPaidFor" | "currentPeriodEnd"
+  >,
+  periodEnd: Date | null = b.currentPeriodEnd,
+): { storageBlocks: number; extraMailboxes: number } {
+  const current = b.periodPaidFor !== null && periodEnd !== null && b.periodPaidFor.getTime() === periodEnd.getTime();
+  return current
+    ? { storageBlocks: b.periodPaidStorageBlocks, extraMailboxes: b.periodPaidExtraMailboxes }
+    : { storageBlocks: 0, extraMailboxes: 0 };
+}
+
+/**
  * Add-ons in force: the larger of the current quantity and the one paid for this period, so a decrease (which renews
  * lower) keeps the capacity already paid for until period end. None outside the paid states.
  */
 export function entitledAddons(
   b: Pick<
     AccountBilling,
-    "state" | "storageBlocks" | "extraMailboxes" | "periodPaidStorageBlocks" | "periodPaidExtraMailboxes"
+    | "state"
+    | "storageBlocks"
+    | "extraMailboxes"
+    | "periodPaidStorageBlocks"
+    | "periodPaidExtraMailboxes"
+    | "periodPaidFor"
+    | "currentPeriodEnd"
   >,
 ): { storageBlocks: number; extraMailboxes: number } {
   if (!isPaidState(b.state)) return { storageBlocks: 0, extraMailboxes: 0 };
+  const paid = paidForPeriod(b);
   return {
-    storageBlocks: Math.min(MAX_STORAGE_BLOCKS, Math.max(b.storageBlocks, b.periodPaidStorageBlocks)),
-    extraMailboxes: Math.min(MAX_EXTRA_MAILBOXES, Math.max(b.extraMailboxes, b.periodPaidExtraMailboxes)),
+    storageBlocks: Math.min(MAX_STORAGE_BLOCKS, Math.max(b.storageBlocks, paid.storageBlocks)),
+    extraMailboxes: Math.min(MAX_EXTRA_MAILBOXES, Math.max(b.extraMailboxes, paid.extraMailboxes)),
   };
 }
 

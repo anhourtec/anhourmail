@@ -489,6 +489,40 @@ describe("deriveBilling: transitions", () => {
     expect(deriveBilling(raised.next, renewal, [], ctx()).next.periodPaidStorageBlocks).toBe(1);
   });
 
+  it("the period paid for comes from what the paid invoice billed, never the live subscription (run-62 F1)", () => {
+    const start = paid({
+      storageBlocks: 10,
+      extraMailboxes: 5,
+      periodPaidStorageBlocks: 10,
+      periodPaidExtraMailboxes: 5,
+    });
+    const nextEnd = new Date("2028-11-01T00:00:00Z");
+    // Raised back to 10 and 5 after the renewal was billed at 0, then the 0-quantity renewal invoice is paid.
+    const renewal = sub({
+      storageBlocks: 10,
+      extraMailboxes: 5,
+      currentPeriodEnd: nextEnd,
+      latestInvoice: {
+        ...sub().latestInvoice!,
+        id: "in_cycle",
+        billingReason: "subscription_cycle",
+        storageBlocks: 0,
+        extraMailboxes: 0,
+        periodEnd: nextEnd,
+      },
+    });
+    const d = deriveBilling(start, renewal, [], ctx()).next;
+    expect(d).toMatchObject({ periodPaidStorageBlocks: 0, periodPaidExtraMailboxes: 0, periodPaidFor: nextEnd });
+    // An unpaid renewal (draft or open) changes nothing: the old period's quantities stay tagged with the old period.
+    const open = sub({
+      currentPeriodEnd: nextEnd,
+      latestInvoice: { ...renewal.latestInvoice!, id: "in_open", status: "open", paidAt: null },
+    });
+    const stale = deriveBilling(start, open, [], ctx()).next;
+    expect(stale.periodPaidStorageBlocks).toBe(10);
+    expect(stale.periodPaidFor?.getTime()).not.toBe(nextEnd.getTime());
+  });
+
   it("a dashboard refund is reported with the refunded amount when known", () => {
     const refunded = sub({ latestInvoice: { ...sub().latestInvoice!, refundedMinor: 900 } });
     expect(deriveBilling(paid(), refunded, [ev("charge.refunded")], ctx()).changes).toEqual([
