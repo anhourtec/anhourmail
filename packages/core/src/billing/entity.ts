@@ -42,6 +42,11 @@ export type AccountBilling = {
   /** Quantities on the last paid first or renewal invoice: capacity paid for stays until period end (§7). */
   periodPaidStorageBlocks: number;
   periodPaidExtraMailboxes: number;
+  /**
+   * The end of the period the `periodPaid*` quantities were paid for (from the paid invoice). They count only while it
+   * is the subscription's current period end: after a renewal they say nothing until the renewal invoice is paid.
+   */
+  periodPaidFor: Date | null;
   currentPeriodEnd: Date | null;
   /** Set while a cancellation at period end is scheduled. */
   cancelAt: Date | null;
@@ -54,6 +59,8 @@ export type AccountBilling = {
   lastInvoiceStatus: InvoiceStatus | null;
   /** A checkout was started: no second one until then (`409 checkout_pending`). */
   checkoutPendingUntil: Date | null;
+  /** When the account took its one self-service refund (ADR-0029 §9); later refunds are staff's. */
+  selfServiceRefundAt: Date | null;
   /** Staff override of the account address ceiling (ADR-0029 §7); null = the configured ceiling. */
   addressCeilingOverride: number | null;
   lastSyncedAt: Date | null;

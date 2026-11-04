@@ -821,6 +821,8 @@ export const accountBilling = pgTable(
     extraMailboxes: integer("extra_mailboxes").notNull().default(0),
     periodPaidStorageBlocks: integer("period_paid_storage_blocks").notNull().default(0),
     periodPaidExtraMailboxes: integer("period_paid_extra_mailboxes").notNull().default(0),
+    /** The period end the period-paid quantities belong to (they count only while it is the current one). */
+    periodPaidFor: timestamp("period_paid_for", { withTimezone: true }),
     currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
     cancelAt: timestamp("cancel_at", { withTimezone: true }),
     restrictedAt: timestamp("restricted_at", { withTimezone: true }),
@@ -830,6 +832,8 @@ export const accountBilling = pgTable(
     lastInvoiceId: text("last_invoice_id"),
     lastInvoiceStatus: text("last_invoice_status"),
     checkoutPendingUntil: timestamp("checkout_pending_until", { withTimezone: true }),
+    /** The account's one self-service refund (ADR-0029 §9); later refunds are staff's. */
+    selfServiceRefundAt: timestamp("self_service_refund_at", { withTimezone: true }),
     /** Staff override of the account address ceiling (`billing.ceiling_changed`); null = the configured ceiling. */
     addressCeilingOverride: integer("address_ceiling_override"),
     lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),

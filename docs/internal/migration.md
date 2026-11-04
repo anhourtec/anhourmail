@@ -35,6 +35,7 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 | #    | Migration                            | Commit    | Date       | Change                                                                                                            | Rollback        |
 | ---- | ------------------------------------ | --------- | ---------- | ----------------------------------------------------------------------------------------------------------------- | --------------- |
+| 0038 | `0038_billing_period_refund`         | —         | 2026-11-05 | `account_billing`: `period_paid_for`, `self_service_refund_at` (ADR-0029, run-62 F1/F2)                           | Safe            |
 | 0037 | `0037_billing_dispute`               | —         | 2026-11-04 | `billing_dispute` table: disputes tracked one by one, so a won one never clears another lost one (ADR-0029 §5)    | Safe            |
 | 0036 | `0036_invite_code`                   | —         | 2026-11-04 | `invite_code` table: staff-made sign-up and comp codes, sha256 only, single use (ADR-0029 §8)                     | Safe            |
 | 0035 | `0035_plan_hold`                     | —         | 2026-11-04 | `plan_hold` table: mailboxes, domains and aliases held after a downgrade to Free, never deleted (ADR-0029 §6)     | Safe            |
@@ -101,6 +102,18 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0038_billing_period_refund · — · 2026-11-05 · Safe
+
+- Added: `account_billing.period_paid_for` (timestamptz, null) — the period end the `period_paid_*` quantities were
+  paid for; they count only while it is the subscription's current period end (security review run-62 F1);
+  `account_billing.self_service_refund_at` (timestamptz, null) — the account's one self-service refund (run-62 F2).
+- Changed: —
+- Removed: —
+- Data: none. Existing rows read `period_paid_for` null, so their period-paid quantities stop counting until the next
+  paid first or renewal invoice (billing isn't open: no customer is affected).
+- Rollback: drop both columns. Older code ignores them (it then honours period-paid quantities without a period, as
+  before).
 
 ### 0037_billing_dispute · — · 2026-11-04 · Safe
 
