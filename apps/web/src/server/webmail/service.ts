@@ -1144,7 +1144,10 @@ export class WebmailService {
    * A usable session (refreshed when close to expiry), or null when signed out. Every use re-checks the control
    * plane: a suspended or deleted mailbox ends the session (`WebmailBlockedError`).
    */
-  async session(sessionId: string, opts: { forceRefresh?: boolean } = {}): Promise<WebmailSession | null> {
+  async session(
+    sessionId: string,
+    opts: { forceRefresh?: boolean; noRefresh?: boolean } = {},
+  ): Promise<WebmailSession | null> {
     const s = await this.#d.store.read(sessionId);
     if (!s) return null;
     if (await this.consoleEnded(s)) {
@@ -1165,7 +1168,8 @@ export class WebmailService {
       await this.#dropDelegated(sessionId, new Set([s.username]));
       throw new WebmailDelegationRefusedError("not granted");
     }
-    if (!opts.forceRefresh && s.expiresAt - this.#d.now() > this.#d.refreshSkewMs) return s;
+    // `noRefresh`: only whether the session goes on (the push channel's check, which holds no token to use).
+    if (opts.noRefresh || (!opts.forceRefresh && s.expiresAt - this.#d.now() > this.#d.refreshSkewMs)) return s;
     // One refresh per session, entry and shared pin: a request pinned to a shared mailbox refreshes that delegated
     // entry under its own key. An own entry has one key whatever the pin (none, or an own pin: a mailbox-scoped tab's
     // compose requests), the same one `#proveOwn` uses, so its refresh token is never used twice at once; whoever
@@ -1180,6 +1184,27 @@ export class WebmailService {
     });
     this.#refreshing.set(key, p);
     return p;
+  }
+
+  /**
+   * The session's active mailbox for a push channel (05-webmail.md "Push"): its address, JMAP account and token. Null
+   * when signed out; `WebmailOwnMailboxOnlyError` when the active mailbox is one shared with the person (those tabs
+   * keep polling). `connect`: the token is about to open the upstream channel, so it is refreshed when close to expiry;
+   * otherwise nothing is refreshed (a check that the session, its mailbox and its console session still go on).
+   */
+  async pushTarget(
+    sessionId: string,
+    opts: { connect: boolean },
+  ): Promise<{ username: string; accountId: string; accessToken: string; expiresAt: number } | null> {
+    const s = await this.session(sessionId, opts.connect ? {} : { noRefresh: true });
+    if (!s) return null;
+    if (s.delegated) throw new WebmailOwnMailboxOnlyError("own mailbox only");
+    return { username: s.username, accountId: s.accountId, accessToken: s.accessToken, expiresAt: s.expiresAt };
+  }
+
+  /** The upstream push channel URL (`/jmap/ws` on the mail server's internal address, `ws:` or `wss:`). */
+  get pushUrl(): string {
+    return `${this.#base.replace(/^http/, "ws")}/jmap/ws`;
   }
 
   /** Forgets the session's refreshes in flight (signed out or ended). */

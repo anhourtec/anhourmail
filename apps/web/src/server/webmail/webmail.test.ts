@@ -471,6 +471,40 @@ describe("WebmailService", () => {
     expect([...t.kv.raw().values()].join("")).not.toContain("right");
   });
 
+  it("gives a push channel the active mailbox's token, refreshing only when it is about to connect", async () => {
+    const t = setup();
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    expect(t.svc.pushUrl).toBe("ws://stalwart:8080/jmap/ws");
+    expect(await t.svc.pushTarget(sessionId, { connect: false })).toMatchObject({
+      username: "a@x.test",
+      accountId: "acc1",
+      accessToken: "at-a@x.test",
+    });
+    // Close to expiry: the session check leaves the token alone, connecting refreshes it.
+    t.advance(3_600_000 - 30_000);
+    expect((await t.svc.pushTarget(sessionId, { connect: false }))?.accessToken).toBe("at-a@x.test");
+    expect(t.refreshes()).toBe(0);
+    expect((await t.svc.pushTarget(sessionId, { connect: true }))?.accessToken).toBe("at-r1");
+    // Signed out: null.
+    await t.svc.signOut(sessionId);
+    expect(await t.svc.pushTarget(sessionId, { connect: false })).toBeNull();
+    // A blocked mailbox ends the session (the push channel ends with it).
+    let ok = true;
+    const b = setup({ allowed: () => ok });
+    const signed = await b.svc.signIn("a@x.test", "right");
+    ok = false;
+    await expect(b.svc.pushTarget(signed.sessionId, { connect: false })).rejects.toBeInstanceOf(WebmailBlockedError);
+  });
+
+  it("refuses a push channel for a mailbox shared with the person", async () => {
+    const t = setup();
+    const id = await t.store.create({
+      ...session(),
+      delegated: { mailboxId: "m1", granteeUserId: "u1", via: "me@x.test", opened: "full_access" },
+    });
+    await expect(t.svc.pushTarget(id, { connect: false })).rejects.toThrow();
+  });
+
   it("ends a handoff-born session with its console session (checked at most every 30 s; a failed check ends it)", async () => {
     let alive = true;
     let checks = 0;
