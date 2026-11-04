@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import { deps as makeDeps, fixedClock } from "../__tests__/helpers";
+import { defaultBilling } from "../billing/lifecycle";
 import type { MailServer } from "./ports";
 import { enqueueProvisioning, reconcile, requeueActiveMailboxes, runClaimedJob, runNextJob } from "./service";
 import { backoffMs, MAX_ATTEMPTS, STALE_RUNNING_MS } from "./types";
@@ -1485,5 +1486,90 @@ describe("a worker that stalled past the stale limit never pushes what it read b
     t.clock.set(new Date(t.clock.now().getTime() + STALE_RUNNING_MS - 1_000));
     expect((await runClaimedJob(t.d, t.mail, a)).lockLost).toBe(false);
     expect(t.d.uow.state.jobs.find((j) => j.id === a.id)).toMatchObject({ status: "succeeded", attempts: 1 });
+  });
+});
+
+describe("billing access on the mail server (ADR-0029 §5–6)", () => {
+  /** The fake mail server, recording the access each ensure asked for. */
+  function recording() {
+    const mail = fakeMailServer();
+    const access: (string | undefined)[] = [];
+    const aliases: { address: string; enabled: boolean }[][] = [];
+    const ensure = mail.ensureMailbox.bind(mail);
+    mail.ensureMailbox = async (input) => {
+      access.push(input.access);
+      aliases.push(input.aliases.map((a) => ({ address: a.address, enabled: a.enabled })));
+      return ensure(input);
+    };
+    return { mail, access, aliases };
+  }
+  const billingRow = (d: ReturnType<typeof setup>["d"], state: "active" | "restricted" | "lapsed", at: Date) => {
+    d.uow.state.accounts.push({ id: "a1", name: "Acme", plan: "plus" });
+    d.uow.state.billing.push({
+      ...defaultBilling("a1", "plus", at),
+      state,
+      planSource: state === "lapsed" ? "none" : "stripe",
+      paidPlan: state === "lapsed" ? null : "plus",
+    });
+  };
+
+  it("a restricted account's mailbox is send-blocked; an active one isn't", async () => {
+    const { d, clock } = setup();
+    billingRow(d, "restricted", clock.now());
+    const { mail, access } = recording();
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(access).toEqual(["send_blocked"]);
+    const b = d.uow.state.billing[0];
+    if (b) b.state = "active";
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(access).toEqual(["send_blocked", "active"]);
+  });
+
+  it("a held mailbox can't send, keeps receiving past its window (no backscatter), and its held aliases go off", async () => {
+    const { d, clock } = setup();
+    billingRow(d, "lapsed", clock.now());
+    d.uow.state.planHolds.push(
+      {
+        id: "h1",
+        accountId: "a1",
+        subjectType: "mailbox",
+        subjectId: "m1",
+        heldAt: clock.now(),
+        receiveUntil: new Date(clock.now().getTime() - 1000),
+      },
+      { id: "h2", accountId: "a1", subjectType: "alias", subjectId: "al1", heldAt: clock.now(), receiveUntil: null },
+    );
+    const { mail, access, aliases } = recording();
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    await runNextJob(d, mail);
+    expect(access).toEqual(["send_blocked"]);
+    expect(aliases).toEqual([[{ address: "hello@example.test", enabled: false }]]);
+    // Nothing is deleted: the alias row stays.
+    expect(d.uow.state.aliases.map((a) => a.id)).toEqual(["al1"]);
+  });
+
+  it("a held domain loses its catch-all, nothing else", async () => {
+    const { d, clock } = setup();
+    billingRow(d, "lapsed", clock.now());
+    for (const m of d.uow.state.mailboxes) m.status = "active";
+    d.uow.state.catchAll.push({ domainId: "d1", mailboxId: "m1" });
+    const { mail } = recording();
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await runNextJob(d, mail);
+    expect(mail.catchAll.get("example.test")).toBe("owner@example.test");
+    d.uow.state.planHolds.push({
+      id: "h3",
+      accountId: "a1",
+      subjectType: "domain",
+      subjectId: "d1",
+      heldAt: clock.now(),
+      receiveUntil: null,
+    });
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await runNextJob(d, mail);
+    expect(mail.catchAll.get("example.test")).toBeNull();
+    expect(mail.domains).toEqual(["example.test"]);
   });
 });

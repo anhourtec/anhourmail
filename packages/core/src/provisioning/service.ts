@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { isSystemLocalPart } from "@anhourmail/shared/addresses";
 
+import { billingMailboxAccess } from "../billing/lifecycle";
 import type { BillingProvider } from "../billing/ports";
 import { resolveOrphanEvent, syncAccountBilling } from "../billing/sync";
 import { turnOffCatchAllFor } from "../domains/catch-all";
@@ -139,7 +140,12 @@ async function apply(deps: Deps, mail: MailServer, job: ClaimedJob, handlers: Jo
     }
     // The catch-all as it is now (only while its mailbox is active; turned off otherwise; never while pending), read
     // under a confirmed claim right before the call.
-    const catchAll = await held(async (r) => (pending ? null : r.catchAll.targetAddress(domain.id)));
+    // A domain held after a downgrade to Free keeps everything but its catch-all (ADR-0029 §6).
+    const catchAll = await held(async (r) => {
+      if (pending) return null;
+      if ((await r.billing.heldIds(domain.accountId, "domain", [domain.id])).length > 0) return null;
+      return r.catchAll.targetAddress(domain.id);
+    });
     const { externalId } = await mail.ensureDomain(domain.name, catchAll);
     // Deleted (still pending) while we were adding it: take it off again unless someone else holds the name now.
     const offAgainUnlessHeld = async () => {
@@ -196,7 +202,10 @@ async function apply(deps: Deps, mail: MailServer, job: ClaimedJob, handlers: Jo
     // The sender name as it stands: the custom display name, else the mailbox person's name (people/names.ts).
     const row = await r.mailboxes.get(state.accountId, state.id);
     const sender = row ? (await mailboxNameOf(r, row)).name : state.displayName;
-    return { ...state, senderName: sender };
+    // Billing as it stands (ADR-0029 §5–6): the account's state and the plan holds on this mailbox and its aliases.
+    const billingState = (await r.billing.get(state.accountId))?.state ?? "free";
+    const holds = await r.billing.holds(state.accountId);
+    return { ...state, senderName: sender, billingState, holds };
   });
   if (!mailbox) throw new Error("mailbox not found");
   const deleting = mailbox.status === "deleting";
@@ -215,6 +224,9 @@ async function apply(deps: Deps, mail: MailServer, job: ClaimedJob, handlers: Jo
   ) {
     throw new Error("waiting for a new password to reach the mail server");
   }
+  const mailboxHold = mailbox.holds.find((h) => h.subjectType === "mailbox" && h.subjectId === mailbox.id) ?? null;
+  const heldAliases = new Set(mailbox.holds.filter((h) => h.subjectType === "alias").map((h) => h.subjectId));
+  const billingAccess = billingMailboxAccess(mailbox.billingState, mailboxHold, deps.clock.now());
   const ensured = await mail.ensureMailbox({
     externalId: mailbox.stalwartId,
     // A new account gets the password chosen at creation; an existing one keeps its own (a reset has its own job).
@@ -223,13 +235,23 @@ async function apply(deps: Deps, mail: MailServer, job: ClaimedJob, handlers: Jo
     quotaBytes: mailbox.quotaBytes,
     // Suspended and deleting mailboxes keep their mail but nobody can sign in, and their mail is refused.
     suspended: mailbox.status === "suspended" || deleting,
+    // A restricted account or a held mailbox can't send (sign-in, reading and delivery stay). Receiving stays on past a
+    // held mailbox's window for now: the pinned mail server accepts mail for a receive-blocked account and then bounces
+    // it to the envelope sender, which for mail from outside is backscatter (rule 62; research/stalwart.md "Billing
+    // access states"). It is applied once held recipients are refused during the SMTP conversation.
+    access: billingAccess === "receive_blocked" ? "send_blocked" : billingAccess,
     // Stalwart names the identities it creates (first sign-in, a new alias) after it; existing ones are renamed by the
     // webmail on its next request (people/names.ts, ADR-0014 update 2026-10-31).
     description: mailbox.senderName,
     // A deleting mailbox's aliases go with it: off the mail server, still reserved in the control plane.
     aliases: deleting
       ? []
-      : mailbox.aliases.map((a) => ({ address: a.address, enabled: a.enabled, description: a.description })),
+      : mailbox.aliases.map((a) => ({
+          address: a.address,
+          // A held alias is taken off the mail server like a disabled one (refused at RCPT), never deleted.
+          enabled: a.enabled && !heldAliases.has(a.id),
+          description: a.description,
+        })),
   });
   await held(async (r) => {
     const current = await r.directory.getMailbox(mailbox.id);
