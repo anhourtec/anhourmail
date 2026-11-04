@@ -118,6 +118,8 @@ export const AUDIT_ACTIONS = [
   "billing.customer_created",
   "billing.checkout_started",
   "billing.portal_opened",
+  "billing.holds_changed",
+  "billing.subscription_ended",
   // trust and safety
   "trust.tier_changed",
   "trust.limits_changed",

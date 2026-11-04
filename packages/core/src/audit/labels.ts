@@ -155,6 +155,8 @@ const EXPLICIT: Partial<Record<AuditAction, string>> = {
   "billing.customer_created": "Payment customer created",
   "billing.checkout_started": "Checkout started",
   "billing.portal_opened": "Payment portal opened",
+  "billing.holds_changed": "Items kept on Free changed",
+  "billing.subscription_ended": "Subscription ended",
   "trust.tier_changed": "Trust tier changed",
   "trust.limits_changed": "Sending limits changed",
   "trust.restricted": "Account restricted",
