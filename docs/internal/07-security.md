@@ -1019,6 +1019,11 @@ customer's account without the customer knowing.
   the provider's session (idempotency) and a later checkout after a subscription ended never gets the old, completed
   one. Provider errors become `503 billing_unavailable` (outage) or `402 card_declined`; the provider's message is never
   passed on or audited. Tier `billingProvider` (fail closed: card-testing surface).
+- **Run-62 fixes.** Capacity paid for counts only for the period it was paid for (`period_paid_for`, from the paid
+  invoice's lines; the change services read the subscription fresh before deciding), so a decrease before a renewal
+  can't be undone for free afterwards. One self-service refund per account (`self_service_refund_at`). A checkout is
+  claimed under the account lock before any provider call (no second session), and released when the provider call
+  fails. A provider URL from an unexpected origin is a `503 billing_unavailable`, audited `failed`.
 - **The dev fake can't reach production (three layers, each unit-tested).** (1) `BILLING_PROVIDER=fake` with
   `NODE_ENV=production` fails boot and the fake refuses to be built; (2) the `/dev/billing/*` pages and
   `POST /api/dev/billing/simulate` answer 404 per request unless the process isn't production and billing is the fake;
