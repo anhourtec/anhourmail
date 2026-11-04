@@ -57,6 +57,17 @@ const STATUS: Record<string, number> = {
   // Billing (ADR-0029): a webhook body over the cap; the account's address ceiling (§7).
   payload_too_large: 413,
   address_ceiling: 409,
+  // Billing services (ADR-0029 §9): what the account's billing state allows, the provider being down, a declined card.
+  already_subscribed: 409,
+  checkout_pending: 409,
+  not_subscribed: 409,
+  addon_in_use: 409,
+  refund_not_eligible: 409,
+  confirmation_required: 409,
+  invalid_change: 400,
+  billing_restricted: 403,
+  billing_unavailable: 503,
+  card_declined: 402,
 };
 
 export type RouteOptions = {
