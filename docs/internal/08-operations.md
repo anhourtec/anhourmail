@@ -1,6 +1,6 @@
 # 08 — Operations
 
-Last updated: 2026-10-31 (file storage lockdown deploy step); 2026-10-30 (data export and account deletion jobs, ADR-0025).
+Last updated: 2026-11-04 (webmail push through NGINX: buffering off, read timeout, caps); 2026-10-31 (file storage lockdown deploy step); 2026-10-30 (data export and account deletion jobs, ADR-0025).
 
 ## Environments
 
@@ -167,6 +167,25 @@ See `runbooks/README.md` for the list. Each runbook covers: symptoms, impact, fi
 4. Deploy (from the private ops repo): bump the image tag there → pull → `docker compose up -d` → migrations run on app start → wait for health → smoke checks (sign-in, send/receive between two prod test mailboxes, `/api/health/ready`).
 5. Record the release in `handoff.md` and the public changelog (user-facing changes, rule 31).
 6. Roll back by redeploying the previous tag. Additive migrations stay. For destructive migrations, restore the backup.
+
+## Webmail push through NGINX
+
+The webmail's push stream (`GET /api/webmail/push` on the webmail host, server-sent events; 05-webmail.md "Push") is a
+long-lived response. The production NGINX config lives in the private ops repository (rule 44); for this path it needs:
+
+- **No response buffering:** `proxy_buffering off;` (the app also sends `X-Accel-Buffering: no`, which NGINX honours by
+  default) and `proxy_cache off;`. No `gzip` on it (the app sends `Cache-Control: no-store, no-transform`).
+- **A read timeout above the 25-second heartbeat:** the default `proxy_read_timeout 60s` is enough; never below 30 s.
+  Streams end by themselves after about 30 minutes and the browser reconnects.
+- **HTTP/1.1 to the app with keep-alive:** `proxy_http_version 1.1;` and `proxy_set_header Connection "";`
+  (HTTP/2 to browsers is fine and lets tabs share the connection).
+- The usual `X-Forwarded-For` / `X-Real-IP` headers, as for the rest of the webmail API (rate limits count per session).
+
+Nothing new is published: the BFF's upstream push socket goes to Stalwart's HTTP listener (`/jmap/ws`) on the internal
+Docker network, like the JMAP proxy. Each process holds at most 2,000 upstream sockets and 8,000 streams
+(`PUSH_LIMITS`); over that the webmail falls back to its 30-second check, so a full process degrades, it doesn't fail.
+Check after a deploy: open the webmail, send yourself a message from another mailbox, and it appears within a couple
+of seconds (in the browser's network panel, `push` stays pending with `ready` and `state` events).
 
 ## Stalwart upgrade process (rule 22)
 

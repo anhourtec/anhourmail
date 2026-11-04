@@ -1,6 +1,6 @@
 # 07 — Security
 
-Last updated: 2026-10-31 ("Image proxy": Safe senders and own Sent mail load without asking, checked on the server for a verified From, ADR-0027; "Webmail first view on the device and server timing"; "Sign-in factors": password first, passkeys only the second step, step-up by password, ADR-0028; "App passwords": no file storage on customer mailboxes; "Forwarding guard"; "Authentication results in the webmail": the internal-mail marker; "Delegation": sending as and on behalf of a delegated mailbox, the tag never stored and its five-minute expiry, slice 13; opening delegated mailboxes in the webmail and the gate; delegation grants and Convert to shared mailbox, ADR-0026; leavers lose mailbox sign-in; data export and account deletion; staff support access; profile photos).
+Last updated: 2026-11-04 ("Billing webhook, sync and access states", ADR-0029 slices 5–7; "Webmail push": the push stream and upstream sockets); 2026-10-31 ("Image proxy": Safe senders and own Sent mail load without asking, checked on the server for a verified From, ADR-0027; "Webmail first view on the device and server timing"; "Sign-in factors": password first, passkeys only the second step, step-up by password, ADR-0028; "App passwords": no file storage on customer mailboxes; "Forwarding guard"; "Authentication results in the webmail": the internal-mail marker; "Delegation": sending as and on behalf of a delegated mailbox, the tag never stored and its five-minute expiry, slice 13; opening delegated mailboxes in the webmail and the gate; delegation grants and Convert to shared mailbox, ADR-0026; leavers lose mailbox sign-in; data export and account deletion; staff support access; profile photos).
 
 ## Threat model
 
@@ -685,6 +685,36 @@ outgoing sanitiser (`cleanSignature` in `apps/web/src/server/webmail/signature-h
   record was written in this process since, for at most 2 s, never after the response. With several app processes, a
   request already running could keep using a session another process ended for up to those 2 s (single process in
   v1).
+
+## Webmail push (2026-11-04)
+
+New surface: one endpoint, `GET /api/webmail/push` (server-sent events, 05-webmail.md "Push"), and long-lived
+WebSockets from the app to Stalwart's JMAP listener on the internal network.
+
+- **What the browser learns:** only `ready` / `down` / `end` and, for its own mailbox's JMAP account, the new state
+  names of `Email` and `Mailbox` — the same opaque strings a `*/changes` answer gives it anyway. No ids, addresses,
+  subjects or counts; other accounts and types are dropped in the hub, and state names are checked against a short
+  character set at both ends. The upstream token stays in the BFF (in the WebSocket upgrade request only, not kept by the
+  hub); the hub holds the session id in process memory to check the session, keys its maps by its hash, and never logs
+  either.
+- **Who may open it:** a webmail session cookie (401 otherwise), the mailbox access block of `route()` (suspended,
+  deleting, gone), and `account` must be the session's active **own** mailbox's account; with a mailbox shared with
+  the person active the answer is 204 and nothing is opened (those tabs poll through the proxy and its delegation
+  gate). It is a GET with no side effect on mail; another origin's page can make the browser send it but can't read
+  an event-stream response (no CORS), and an `account` it guesses only gets a 204.
+- **Pins:** a request carrying a mailbox pin gets no stream (204, or `route()`'s 404 for a shared pin that names
+  nothing open), and the hub reads the session unpinned on every check and reopen (`pushTargetFrom`): its timers keep
+  the opening request's async context, so a pin would otherwise follow the channel (security-audit run-59,
+  SA-59-01). A pin naming a mailbox that has left the session ends the channel.
+- **After the session ends:** sign-out closes the streams in that process at once; every channel checks its session
+  each minute (record, console session, mailbox access) and ends its streams; each upstream lives at most until its
+  token's expiry and reopens only with a fresh token, so a password change (Stalwart keeps an open socket) stops it at
+  the latest then — in practice within minutes, when the browser's next check meets the revoked token.
+- **Resource bounds:** at most one upstream per (session, mailbox) and one mailbox per session; per process 2,000
+  upstreams, 8,000 streams, 8 per channel (`PUSH_LIMITS`, 503 over a cap: the webmail polls); the `webmailPush` rate
+  tier (30 stream opens / 5 min per session, fail open); streams end after about 30 minutes and channels 30 s after
+  their last stream; upstream messages over 64 KB are dropped unread, and the browser drops a stream that sends 64 KB
+  without an event boundary.
 
 ## Authentication results in the webmail
 
