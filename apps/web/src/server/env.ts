@@ -68,6 +68,12 @@ const schema = z.object({
   // 07-security.md "Breached-password check"): on | off | fake (dev/CI: a fixed list, no network). Unset = on, except
   // under NODE_ENV=test (off). Production refuses `fake`.
   BREACHED_PASSWORD_CHECK: z.enum(["on", "off", "fake"]).optional(),
+  // Mailboxes + aliases + masked aliases one account may hold (ADR-0029 §7): an abuse ceiling, never published (rule 33;
+  // the production value lives in the private ops repo). Required in production; unset elsewhere = the dev default.
+  ACCOUNT_ADDRESS_CEILING: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.coerce.number().int().min(1).max(1_000_000).optional(),
+  ),
 });
 
 /** Values from .env.example that must never reach production. */
@@ -123,6 +129,13 @@ const checked = schema.superRefine((e, ctx) => {
       code: "custom",
       path: ["SENDER_DELEGATION_KEY"],
       message: "Set SENDER_DELEGATION_KEY in production (the same value as the mail server's sender-identity script)",
+    });
+  }
+  if (e.ACCOUNT_ADDRESS_CEILING === undefined) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["ACCOUNT_ADDRESS_CEILING"],
+      message: "Set ACCOUNT_ADDRESS_CEILING in production (the account address ceiling; value in the ops repo)",
     });
   }
   if (e.BREACHED_PASSWORD_CHECK === "fake") {

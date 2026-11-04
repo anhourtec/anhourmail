@@ -34,6 +34,7 @@ function production(overrides: Record<string, string | undefined> = {}) {
     BILLING_PROVIDER: undefined,
     STRIPE_SECRET_KEY: undefined,
     BILLING_ALLOW_TEST_KEYS: undefined,
+    ACCOUNT_ADDRESS_CEILING: "2500",
     ...overrides,
   };
   for (const [k, v] of Object.entries(base)) vi.stubEnv(k, v);
@@ -212,5 +213,23 @@ describe("BILLING_PROVIDER (ADR-0029 §3)", () => {
     expect(() => env()).toThrow(/test key in production/);
     expect(() => env()).toThrow(/Set STRIPE_WEBHOOK_SECRET/);
     expect(() => env()).not.toThrow(/sk_test_abc123/);
+  });
+});
+
+describe("ACCOUNT_ADDRESS_CEILING (ADR-0029 §7)", () => {
+  it("is required in production, a whole number in range; never echoed", () => {
+    production({ PLATFORM_DOMAIN: "anhourmail.com", ACCOUNT_ADDRESS_CEILING: undefined });
+    expect(() => env()).toThrow(/Set ACCOUNT_ADDRESS_CEILING in production/);
+    production({ PLATFORM_DOMAIN: "anhourmail.com", ACCOUNT_ADDRESS_CEILING: "0" });
+    expect(() => env()).toThrow(/ACCOUNT_ADDRESS_CEILING/);
+    production({ PLATFORM_DOMAIN: "anhourmail.com", ACCOUNT_ADDRESS_CEILING: "12.5" });
+    expect(() => env()).toThrow(/ACCOUNT_ADDRESS_CEILING/);
+    production({ PLATFORM_DOMAIN: "anhourmail.com", ACCOUNT_ADDRESS_CEILING: "2500" });
+    expect(env().ACCOUNT_ADDRESS_CEILING).toBe(2500);
+  });
+
+  it("is optional outside production; empty counts as unset", () => {
+    production({ NODE_ENV: "development", PLATFORM_DOMAIN: "anhourmail.com", ACCOUNT_ADDRESS_CEILING: "" });
+    expect(env().ACCOUNT_ADDRESS_CEILING).toBeUndefined();
   });
 });

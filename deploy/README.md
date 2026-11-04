@@ -140,6 +140,11 @@ version. CI builds all three on every push (`.cicd/build.sh`).
   script; the web app needs the same value or every send on behalf is refused. The worker and scheduler refuse to
   start with it. Rotate by re-running the bootstrap with the new value and redeploying the web app.
 
+- **`ACCOUNT_ADDRESS_CEILING`** — **web app**: the most mailboxes, aliases and masked aliases one account may hold
+  (a whole number, 1–1,000,000). An abuse ceiling, not published: choose your own value and keep it out of the
+  repository. The web app refuses to start in production without it; support raises it per account from the platform
+  API (`platform.billing.manage`).
+
 - **The public JMAP/CardDAV host (`imap.`) must not expose Stalwart's `/api/*`, `/auth/*`, `/admin`,
   `/.well-known/oauth-authorization-server` or `/.well-known/openid-configuration`.** `/api/auth` turns an app password
   into an account-wide OAuth token (ADR-0020); only the paths mail, contact and calendar apps use (`/jmap`,

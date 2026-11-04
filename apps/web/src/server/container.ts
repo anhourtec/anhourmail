@@ -6,7 +6,7 @@ import { createMailer, type Mailer } from "@anhourmail/adapters/mail";
 import { devResolver, systemResolver } from "@anhourmail/adapters/dns";
 import { db, devDomainClaims, PgUnitOfWork } from "@anhourmail/adapters/postgres";
 import { type Deps, systemClock } from "@anhourmail/core";
-import type { BillingProvider } from "@anhourmail/core/billing";
+import { type BillingProvider, DEV_ADDRESS_CEILING } from "@anhourmail/core/billing";
 import type { DnsResolver } from "@anhourmail/core/domains";
 import type { PasswordHasher } from "@anhourmail/core/mailboxes";
 import type { BreachedPasswords } from "@anhourmail/core/security";
@@ -45,7 +45,12 @@ export function container(): Container {
   if (real) return real;
   const breaches = breachedPasswords(breachedPasswordMode(env()));
   real = {
-    deps: { uow: new PgUnitOfWork(db()), clock: systemClock, platform: platform() },
+    deps: {
+      uow: new PgUnitOfWork(db()),
+      clock: systemClock,
+      platform: platform(),
+      limits: { addressCeiling: env().ACCOUNT_ADDRESS_CEILING ?? DEV_ADDRESS_CEILING },
+    },
     counter: redisCounter(redis()),
     mailer: createMailer({ url: env().MAIL_TRANSPORT_URL, from: env().MAIL_FROM }),
     // Development answers for `.test` names (devResolver); production always asks real DNS.

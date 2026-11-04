@@ -192,6 +192,7 @@ describe("security hardening (audit 2026-10-21)", () => {
     vi.stubEnv("MAILBOX_PASSWORD_GRANT_KEY", "g".repeat(48));
     vi.stubEnv("SENDER_DELEGATION_KEY", "d".repeat(64));
     vi.stubEnv("STALWART_OPERATIONS_KEY", "operations-key");
+    vi.stubEnv("ACCOUNT_ADDRESS_CEILING", "2500");
     resetEnvForTests();
     const res = await route(async () => ok(true), { limit: "publicForm" })(
       post("https://app.example.test/api/example", {}, { origin: "https://app.example.test" }),
