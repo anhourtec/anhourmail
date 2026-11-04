@@ -203,6 +203,12 @@ export const PERMISSIONS = {
   },
   "mail_rule.read": { scope: "account", description: "See account-wide mail flow rules" },
   "mail_rule.manage": { scope: "account", description: "Create, change and delete account-wide mail flow rules" },
+  // ADR-0032 §1: the account-wide Safe senders list (images from a verified From load; skips "trusted only" Junk).
+  "safe_sender.read": { scope: "account", description: "See the account-wide Safe senders list" },
+  "safe_sender.manage": {
+    scope: "account",
+    description: "Add and remove account-wide Safe senders (every mailbox in the account)",
+  },
   "message_trace.read": { scope: "account", description: "Trace delivery of messages (metadata only, no content)" },
   "resource_mailbox.manage": { scope: "account", description: "Create and manage room and equipment mailboxes" },
 
@@ -320,6 +326,8 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
     "forwarding.manage.any",
     "mail_rule.read",
     "mail_rule.manage",
+    "safe_sender.read",
+    "safe_sender.manage",
     "message_trace.read",
     "resource_mailbox.manage",
     "folder.manage.own",
@@ -375,6 +383,8 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
     "delegation.manage.any",
     "forwarding.manage.own",
     "mail_rule.read",
+    "safe_sender.read",
+    "safe_sender.manage",
     "message_trace.read",
     "resource_mailbox.manage",
     "folder.manage.own",
@@ -419,6 +429,7 @@ export const ACCOUNT_GRANTS: Readonly<Record<AccountRole, readonly AccountPermis
     "distribution_list.read",
     "delegation.read",
     "mail_rule.read",
+    "safe_sender.read",
     "message_trace.read",
     "folder_policy.read",
     "signature_template.read",
