@@ -535,6 +535,34 @@ export const ROUTES: readonly RouteSpec[] = [
     guard: "public",
     probeStatus: 400,
   },
+  // An account's billing (ADR-0029 §9). The overview is our own row only; checkout and the portal call the provider
+  // (tier `billingProvider`, fail closed). Staff acting as someone hold no `billing.manage` (403). The harness's empty
+  // body is a 400 for checkout; its accounts have no provider customer, so the portal is a 409 `not_subscribed`.
+  {
+    method: "GET",
+    path: "/api/accounts/:accountId/billing",
+    file: "app/api/accounts/[accountId]/billing/route.ts",
+    guard: "billing.read",
+    accountParam: "accountId",
+  },
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/billing/checkout",
+    file: "app/api/accounts/[accountId]/billing/checkout/route.ts",
+    guard: "billing.manage",
+    accountParam: "accountId",
+    audits: "billing.checkout_started",
+    probeStatus: 400,
+  },
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/billing/portal",
+    file: "app/api/accounts/[accountId]/billing/portal/route.ts",
+    guard: "billing.manage",
+    accountParam: "accountId",
+    audits: "billing.portal_opened",
+    probeStatus: 409,
+  },
   // Staff: customer accounts (metadata only; opening one is audited in that account's log).
   {
     method: "GET",
