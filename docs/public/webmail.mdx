@@ -95,6 +95,7 @@ You don't need its password or a second sign-in: your own sign-in is enough. Cha
   write them from a shared mailbox.
 - **When access ends.** If your access is taken away, an open tab of the mailbox says you don't have access any
   more.
+- A shared mailbox's tab checks for new mail every half minute rather than straight away.
 - Mailboxes shared with you open in the webmail only, not in mail apps. You can have up to
   <Value of="delegatedMailboxesPerPerson" /> of them open at once.
 
@@ -111,10 +112,15 @@ You don't need its password or a second sign-in: your own sign-in is enough. Cha
   **Expand all** / **Collapse all**. Choose the recipients under the sender's name (with the small arrow) to see the
   message's details, including who sent and signed it (**mailed-by** and **signed-by**) when our mail server checked
   it.
-- The list checks for new mail every half minute while the webmail is open. When a reply arrives in the conversation
-  you're reading, it appears there too, without closing it; **Refresh** above the list updates both straight away.
+- New mail appears in the list as soon as it arrives, usually within a second or two, while the webmail is open: our
+  mail server tells the webmail the moment something changes, and the webmail then fetches just what changed. If that
+  connection is interrupted (a network change, an update on our side), the webmail checks every half minute until
+  it's back. When a reply arrives in the conversation you're reading, it appears there too, without closing it;
+  **Refresh** above the list updates both straight away.
 - The counts beside your folders (unread mail, and the number of drafts) update as you read, move, delete, send or
-  discard mail, and within half a minute when you do it in another app or on another device.
+  discard mail, and within a few seconds when you do it in another tab, another app or on another device.
+- Several tabs of the same mailbox share one connection for these updates, so reading a message in one tab shows it
+  read in the others. A tab in the background catches up when you come back to it.
 - Plain-text messages keep their line breaks, and links and addresses in them work. Earlier messages quoted in a
   reply are folded away behind **…** — choose it to show them; signatures are shown lighter.
 - Attachments are listed under the sender, with their size. Pictures show a small preview; choose one to see it
