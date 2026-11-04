@@ -35,6 +35,10 @@ export function memoryDataLifecycle(s: MemoryState): DataLifecycleRepository {
     s.accountDeletions = s.accountDeletions.filter((d) => d.accountId !== accountId);
     s.actAsSessions = s.actAsSessions.filter((a) => a.accountId !== accountId);
     s.accountSuspensions = without(s.accountSuspensions, accountId);
+    s.billing = s.billing.filter((b) => b.accountId !== accountId);
+    s.billingEvents = s.billingEvents.filter((e) => e.accountId !== accountId);
+    s.planHolds = s.planHolds.filter((h) => h.accountId !== accountId);
+    for (const c of s.inviteCodes) if (c.redeemedAccountId === accountId) c.redeemedAccountId = null; // set null
   };
 
   return {
@@ -188,6 +192,12 @@ export function memoryDataLifecycle(s: MemoryState): DataLifecycleRepository {
       s.suspended = s.suspended.filter((x) => x !== userId);
       s.unverifiedEmails = s.unverifiedEmails.filter((x) => x !== userId);
       s.mustChangePassword = s.mustChangePassword.filter((x) => x !== userId);
+      for (const c of s.inviteCodes) {
+        // Invite codes keep their history; the people on them are set null, like the foreign keys.
+        if (c.createdBy === userId) c.createdBy = null;
+        if (c.redeemedBy === userId) c.redeemedBy = null;
+        if (c.revokedBy === userId) c.revokedBy = null;
+      }
       s.avatars = s.avatars.filter((a) => !(a.owner.kind === "person" && a.owner.id === userId));
       s.dataExports = s.dataExports.filter((e) => e.requestedBy !== userId);
       for (const m of s.mailboxes) if (m.userId === userId) m.userId = null; // ON DELETE SET NULL

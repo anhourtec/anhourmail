@@ -46,6 +46,7 @@ import {
   GENESIS_HASH,
   hashEntry,
 } from "@anhourmail/core/audit";
+import { defaultBilling } from "@anhourmail/core/billing";
 import type { DkimKey } from "@anhourmail/shared/dns";
 import { isSuspensionReason } from "@anhourmail/shared/platform";
 import { ALIAS_YEAR_DAYS, PLAN_ORDER, type PlanId } from "@anhourmail/shared/plans";
@@ -58,9 +59,11 @@ import { PgWebmailSettingsRepository } from "./webmail-settings";
 import { PgAvatarRepository } from "./avatars";
 import { PgActAsRepository } from "./act-as";
 import { PgDataLifecycleRepository } from "./data-lifecycle";
+import { PgBillingRepository, PgInviteCodeRepository } from "./billing";
 import { PgDelegationRepository } from "./delegation";
 import { isUniqueViolation } from "./errors";
 import {
+  accountBilling,
   accountMembership,
   aliasCreationDay,
   auditLog,
@@ -281,6 +284,13 @@ class PgAccountRepository implements AccountRepository {
       .values({ name: input.name, plan: input.plan })
       .returning({ id: customerAccount.id });
     if (!row) throw new Error("account not created");
+    // Its billing row, in the same transaction (ADR-0029 §11; the backfill migration covers older accounts).
+    const plan = (PLAN_ORDER as readonly string[]).includes(input.plan) ? (input.plan as PlanId) : "free";
+    const b = defaultBilling(row.id, plan, new Date());
+    await this.x
+      .insert(accountBilling)
+      .values({ accountId: row.id, state: b.state, planSource: b.planSource, paidPlan: b.paidPlan })
+      .onConflictDoNothing();
     return row;
   }
 
@@ -1623,6 +1633,8 @@ class PgSuspensionRepository implements SuspensionRepository {
 }
 
 const repositories = (x: Executor): Repositories => ({
+  billing: new PgBillingRepository(x),
+  inviteCodes: new PgInviteCodeRepository(x),
   avatars: new PgAvatarRepository(x),
   actAs: new PgActAsRepository(x),
   dataLifecycle: new PgDataLifecycleRepository(x),

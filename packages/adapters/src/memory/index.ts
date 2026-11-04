@@ -51,6 +51,14 @@ import type { AccountRole, PlatformRole } from "@anhourmail/shared/rbac";
 import { memoryActAs, type MemoryActAsRow } from "./act-as";
 import type { AccountDeletion } from "@anhourmail/core/data";
 import type { DelegationGrant } from "@anhourmail/core/delegation";
+import {
+  type AccountBilling,
+  type BillingEvent,
+  defaultBilling,
+  type InviteCode,
+  type PlanHold,
+} from "@anhourmail/core/billing";
+import { memoryBilling, memoryInviteCodes } from "./billing";
 import { memoryDataLifecycle, type MemoryExportRow } from "./data-lifecycle";
 import { memoryDelegation } from "./delegation";
 
@@ -140,6 +148,11 @@ export type MemoryState = {
   accountDeletions: AccountDeletion[];
   /** Mailbox delegation grants (Postgres: `mailbox_delegation`, ADR-0026). */
   delegations: DelegationGrant[];
+  /** Billing rows, received provider events, plan holds and invite codes (Postgres: ADR-0029 §11 tables). */
+  billing: AccountBilling[];
+  billingEvents: BillingEvent[];
+  planHolds: PlanHold[];
+  inviteCodes: InviteCode[];
 };
 
 export const emptyState = (): MemoryState => ({
@@ -186,6 +199,10 @@ export const emptyState = (): MemoryState => ({
   dataExports: [],
   accountDeletions: [],
   delegations: [],
+  billing: [],
+  billingEvents: [],
+  planHolds: [],
+  inviteCodes: [],
 });
 
 const EPOCH = new Date(0);
@@ -255,7 +272,9 @@ function repositories(s: MemoryState): Repositories {
   const accounts: AccountRepository = {
     create: async ({ name, plan }) => {
       const id = randomUUID();
-      s.accounts.push({ id, name, plan, createdAt: new Date() });
+      const at = new Date();
+      s.accounts.push({ id, name, plan, createdAt: at });
+      s.billing.push(defaultBilling(id, plan, at)); // the account's billing row, in the same unit of work
       return { id };
     },
     addMember: async ({ accountId, userId, role }) => {
@@ -1154,6 +1173,8 @@ function repositories(s: MemoryState): Repositories {
     actAs: memoryActAs(s),
     dataLifecycle: memoryDataLifecycle(s),
     delegation: memoryDelegation(s),
+    billing: memoryBilling(s),
+    inviteCodes: memoryInviteCodes(s),
     suspensions,
     webmailSettings,
     appPasswords,

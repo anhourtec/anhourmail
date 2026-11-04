@@ -7,6 +7,7 @@ import type { AliasRepository } from "./aliases/repository";
 import type { AppPasswordRepository } from "./app-passwords/repository";
 import type { AuditRepository } from "./audit/repository";
 import type { AvatarRepository } from "./avatars/repository";
+import type { BillingRepository, InviteCodeRepository } from "./billing/repository";
 import type { DataLifecycleRepository } from "./data/repository";
 import type { DelegationRepository } from "./delegation/repository";
 import type { CatchAllRepository, DomainRepository } from "./domains/repository";
@@ -49,6 +50,8 @@ export type Repositories = {
   actAs: ActAsRepository;
   dataLifecycle: DataLifecycleRepository;
   delegation: DelegationRepository;
+  billing: BillingRepository;
+  inviteCodes: InviteCodeRepository;
 };
 
 /**
