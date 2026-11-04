@@ -146,6 +146,27 @@ export function assertRedirect(ctx: BillingContext, url: string): string {
   return url;
 }
 
+/**
+ * `assertRedirect` for a person's request: a URL from an unexpected origin is treated like a provider failure (security
+ * review run-62 F4) — audited `failed` and answered 503 `billing_unavailable`, never a bare server error.
+ */
+export async function checkedRedirect(
+  deps: Deps,
+  actor: Actor,
+  req: RequestMeta,
+  spec: MutationSpec,
+  ctx: BillingContext,
+  url: string,
+): Promise<string> {
+  try {
+    return assertRedirect(ctx, url);
+  } catch {
+    return callProvider(deps, actor, req, spec, () =>
+      Promise.reject(new BillingProviderError("unavailable", "the provider returned a URL we don't redirect to")),
+    );
+  }
+}
+
 /** The console's billing page for an account (checkout and portal return there). */
 export const billingPageUrl = (ctx: BillingContext, accountId: string, query = ""): string =>
   `${ctx.appUrl.replace(/\/+$/, "")}/accounts/${encodeURIComponent(accountId)}/billing${query}`;

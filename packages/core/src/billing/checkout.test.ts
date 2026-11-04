@@ -208,20 +208,60 @@ describe("startCheckout", () => {
     await expect(startCheckout(d, { ...ctx, provider: down }, owner, ACCOUNT_A, plus, req)).rejects.toMatchObject({
       code: "billing_unavailable",
     });
-    expect(audit("billing.checkout_started")[0]).toMatchObject({ result: "failed", errorCode: "billing_unavailable" });
+    // The claim, the provider failure, then the claim released: the person can try again at once.
+    expect(audit("billing.checkout_started").map((e) => [e.result, e.errorCode, e.meta.released ?? null])).toEqual([
+      ["success", null, null],
+      ["failed", "billing_unavailable", null],
+      ["success", null, true],
+    ]);
     expect(d.uow.state.billing.find((b) => b.accountId === ACCOUNT_A)?.checkoutPendingUntil ?? null).toBeNull();
+    await expect(startCheckout(d, ctx, owner, ACCOUNT_A, plus, req)).resolves.toHaveProperty("url");
   });
 
   it("refuses a provider URL from an unexpected origin (no open redirect) and marks nothing pending", async () => {
-    const { d, ctx, fake } = world();
+    const { d, ctx, fake, audit } = world();
     const evil: BillingProvider = {
       ...fake,
       createCheckout: async () => ({ url: "https://evil.example/pay" }),
     };
-    await expect(startCheckout(d, { ...ctx, provider: evil }, owner, ACCOUNT_A, plus, req)).rejects.toThrow(
-      "unexpected URL origin",
-    );
+    // Answered like a provider failure (security review run-62 F4): 503, audited failed, never a bare 500.
+    await expect(startCheckout(d, { ...ctx, provider: evil }, owner, ACCOUNT_A, plus, req)).rejects.toMatchObject({
+      code: "billing_unavailable",
+    });
+    expect(
+      audit("billing.checkout_started").some((e) => e.result === "failed" && e.errorCode === "billing_unavailable"),
+    ).toBe(true);
     expect(d.uow.state.billing.find((b) => b.accountId === ACCOUNT_A)?.checkoutPendingUntil ?? null).toBeNull();
+  });
+
+  it("the portal refuses a URL from an unexpected origin the same way", async () => {
+    const { d, ctx, fake, audit } = world();
+    await startCheckout(d, ctx, owner, ACCOUNT_A, plus, req);
+    const evil: BillingProvider = { ...fake, createPortalSession: async () => ({ url: "https://evil.example/p" }) };
+    await expect(openBillingPortal(d, { ...ctx, provider: evil }, owner, ACCOUNT_A, req)).rejects.toMatchObject({
+      code: "billing_unavailable",
+    });
+    expect(audit("billing.portal_opened").at(-1)).toMatchObject({ result: "failed", errorCode: "billing_unavailable" });
+  });
+
+  it("two concurrent checkouts open one session: the second is 409 checkout_pending (security review run-62 F3)", async () => {
+    const { d, ctx, fake } = world();
+    let sessions = 0;
+    const counting: BillingProvider = {
+      ...fake,
+      createCheckout: async (i) => {
+        sessions++;
+        return fake.createCheckout(i);
+      },
+    };
+    const both = await Promise.allSettled([
+      startCheckout(d, { ...ctx, provider: counting }, owner, ACCOUNT_A, plus, req),
+      startCheckout(d, { ...ctx, provider: counting }, billingAdmin, ACCOUNT_A, { ...plus, storageBlocks: 1 }, req),
+    ]);
+    expect(both.map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
+    const refused = both.find((r) => r.status === "rejected");
+    expect(refused?.status === "rejected" ? (refused.reason as { code: string }).code : null).toBe("checkout_pending");
+    expect(sessions).toBe(1);
   });
 
   it("passes the success and cancel URLs of the account's billing page and a Supporter amount", async () => {

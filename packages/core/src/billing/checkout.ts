@@ -11,7 +11,7 @@ import { BILLING, type Currency, isPaidPlan, PLANS, type PaidPlanId, type PlanId
 
 import { type Actor, authorize } from "../actor";
 import { EmailUnverifiedError, NotFoundError, ValidationError } from "../errors";
-import { authorizeAudited, mutation, type MutationSpec } from "../mutation";
+import { authorizeAudited, mutation, type MutationOutcome, type MutationSpec } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 
 import { addressCeilingOf } from "./ceilings";
@@ -24,7 +24,7 @@ import {
   supporterAmountProblem,
 } from "./entitlements";
 import {
-  assertRedirect,
+  checkedRedirect,
   type BillingContext,
   billingPageUrl,
   billingTarget,
@@ -331,70 +331,89 @@ export async function startCheckout(
   if (!pre.account || !pre.billing) throw new NotFoundError();
   if (!pre.verified) await refuse(deps, actor, req, spec, "email_unverified", new EmailUnverifiedError());
   const blocked = checkoutBlock(pre.billing, now);
-  if (blocked === "already_subscribed") {
-    await refuse(
-      deps,
-      actor,
-      req,
-      spec,
-      blocked,
-      new BillingError(blocked, "This account already has a paid plan: change it on the Billing page."),
-    );
-  }
-  if (blocked === "checkout_pending") {
-    await refuse(
-      deps,
-      actor,
-      req,
-      spec,
-      blocked,
-      new BillingError(blocked, "A checkout was started in the last hour. Finish it, or try again later."),
-    );
-  }
+  if (blocked) return refuse(deps, actor, req, spec, blocked, checkoutBlockError(blocked));
   if (pre.billing.currency !== null && pre.billing.currency !== c.currency) {
     throw new ValidationError(`This account pays in ${pre.billing.currency}.`);
   }
 
-  const stateSince = pre.billing.stateSince;
-  const withProvider = { ...ctx, provider };
-  const customerId = await customerFor(deps, withProvider, actor, accountId, pre.billing, pre.account.name, req, spec);
-  const { url } = await callProvider(deps, actor, req, spec, () =>
-    provider.createCheckout({
-      accountId,
-      customerId,
-      currency: c.currency,
-      plan: c.plan,
-      ...(c.supporterAmountMinor === undefined ? {} : { supporterAmountMinor: c.supporterAmountMinor }),
-      storageBlocks: c.storageBlocks,
-      extraMailboxes: c.extraMailboxes,
-      successUrl: billingPageUrl(ctx, accountId, "?checkout=done"),
-      cancelUrl: billingPageUrl(ctx, accountId, "?checkout=cancelled"),
-      intentId: checkoutIntentId(accountId, c, now, stateSince),
-    }),
+  // Claim the checkout under the account lock before any provider call (security review run-62 F3): two concurrent
+  // requests can't both open a session; the second gets 409 `checkout_pending`. The claim is the audited start.
+  const meta = {
+    plan: c.plan,
+    currency: c.currency,
+    amountMinor: c.amountMinor,
+    storageBlocks: c.storageBlocks,
+    extraMailboxes: c.extraMailboxes,
+  };
+  const claim = await mutation(
+    deps,
+    actor,
+    req,
+    spec,
+    async (r): Promise<MutationOutcome<{ refused: CheckoutBlock } | { until: Date; billing: AccountBilling }>> => {
+      await r.accounts.lock(accountId);
+      const at = deps.clock.now();
+      const current = await billingOf(r, accountId, at);
+      if (!current) throw new NotFoundError();
+      const now2 = checkoutBlock(current, at);
+      if (now2) return { result: { refused: now2 }, denied: { code: now2 } };
+      const until = new Date(at.getTime() + CHECKOUT_PENDING_MS);
+      await r.billing.save({ ...current, checkoutPendingUntil: until, updatedAt: at });
+      return { result: { until, billing: current }, meta };
+    },
   );
-  const safe = assertRedirect(ctx, url);
-  return mutation(deps, actor, req, spec, async (r) => {
-    await r.accounts.lock(accountId);
-    const at = deps.clock.now();
-    const current = await billingOf(r, accountId, at);
-    if (!current) throw new NotFoundError();
-    await r.billing.save({
-      ...current,
-      checkoutPendingUntil: new Date(at.getTime() + CHECKOUT_PENDING_MS),
-      updatedAt: at,
-    });
-    return {
-      result: { url: safe },
-      meta: {
-        plan: c.plan,
+  if ("refused" in claim) throw checkoutBlockError(claim.refused);
+
+  try {
+    const customerId = await customerFor(
+      deps,
+      { ...ctx, provider },
+      actor,
+      accountId,
+      claim.billing,
+      pre.account.name,
+      req,
+      spec,
+    );
+    const { url } = await callProvider(deps, actor, req, spec, () =>
+      provider.createCheckout({
+        accountId,
+        customerId,
         currency: c.currency,
-        amountMinor: c.amountMinor,
+        plan: c.plan,
+        ...(c.supporterAmountMinor === undefined ? {} : { supporterAmountMinor: c.supporterAmountMinor }),
         storageBlocks: c.storageBlocks,
         extraMailboxes: c.extraMailboxes,
-      },
-    };
-  });
+        successUrl: billingPageUrl(ctx, accountId, "?checkout=done"),
+        cancelUrl: billingPageUrl(ctx, accountId, "?checkout=cancelled"),
+        intentId: checkoutIntentId(accountId, c, now, claim.billing.stateSince),
+      }),
+    );
+    return { url: await checkedRedirect(deps, actor, req, spec, ctx, url) };
+  } catch (err) {
+    // Nothing was opened: the claim is released so the person can try again at once (its own audited write).
+    await mutation(deps, actor, req, spec, async (r) => {
+      await r.accounts.lock(accountId);
+      const at = deps.clock.now();
+      const current = await billingOf(r, accountId, at);
+      if (current?.checkoutPendingUntil?.getTime() === claim.until.getTime()) {
+        await r.billing.save({ ...current, checkoutPendingUntil: null, updatedAt: at });
+      }
+      return { result: undefined, meta: { released: true } };
+    }).catch(() => undefined);
+    throw err;
+  }
 }
+
+type CheckoutBlock = "already_subscribed" | "checkout_pending";
+
+const checkoutBlockError = (code: CheckoutBlock): BillingError =>
+  new BillingError(
+    code,
+    code === "already_subscribed"
+      ? "This account already has a paid plan: change it on the Billing page."
+      : "A checkout was started in the last hour. Finish it, or try again later.",
+  );
 
 /**
  * `POST /api/accounts/:id/billing/portal` (`billing.manage` ★): the provider's customer portal (payment method,
@@ -434,7 +453,7 @@ export async function openBillingPortal(
   const { url } = await callProvider(deps, actor, req, spec, () =>
     provider.createPortalSession({ customerId, returnUrl: billingPageUrl(ctx, accountId) }),
   );
-  const safe = assertRedirect(ctx, url);
+  const safe = await checkedRedirect(deps, actor, req, spec, ctx, url);
   return mutation(deps, actor, req, spec, async () => ({
     result: { url: safe },
     meta: { state: b.state },
