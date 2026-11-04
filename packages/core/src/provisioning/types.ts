@@ -4,8 +4,18 @@
 /**
  * `app_password.revoke`: subject is a mailbox; takes its `revoking` app passwords off the mail server.
  * `mailbox.password`: subject is a mailbox; sets the password waiting for it (an argon2id hash, never the password).
+ * `billing.sync`: subject is an account; reads its subscription from the billing provider and reconciles (ADR-0029 §4).
+ * `billing.resolve`: subject is a `billing_event` orphan (a dispute, which names no customer); finds its account with the
+ * provider and queues that account's sync.
  */
-export type JobKind = "domain.ensure" | "domain.remove" | "mailbox.ensure" | "mailbox.password" | "app_password.revoke";
+export type JobKind =
+  | "domain.ensure"
+  | "domain.remove"
+  | "mailbox.ensure"
+  | "mailbox.password"
+  | "app_password.revoke"
+  | "billing.sync"
+  | "billing.resolve";
 export type JobStatus = "queued" | "running" | "succeeded" | "failed";
 
 export type ProvisioningJob = {
