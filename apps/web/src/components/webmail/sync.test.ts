@@ -7,13 +7,38 @@ import {
   coalescer,
   MAX_POLL_MS,
   newMailToAnnounce,
+  nextCheckDelay,
   notificationHelp,
   POLL_MS,
   pollDelay,
+  pushedTypes,
   raceFirstPaint,
+  SAFETY_MS,
   shouldPoll,
   tabTitle,
 } from "./sync";
+
+describe("push", () => {
+  it("checks every 5 minutes while push is up, every 30 s while it is down, backing off after failures", () => {
+    expect(nextCheckDelay(true, 0)).toBe(SAFETY_MS);
+    expect(SAFETY_MS).toBe(300_000);
+    expect(nextCheckDelay(false, 0)).toBe(POLL_MS);
+    expect(nextCheckDelay(true, 1)).toBe(60_000);
+    expect(nextCheckDelay(false, 2)).toBe(120_000);
+  });
+
+  it("asks only for the types whose state moved", () => {
+    const state = { email: "e1", mailbox: "m1" };
+    expect(pushedTypes({ Email: "e2" }, state)).toEqual({ email: true, mailbox: false });
+    expect(pushedTypes({ Mailbox: "m2", Email: "e1" }, state)).toEqual({ email: false, mailbox: true });
+    expect(pushedTypes({ Email: "e2", Mailbox: "m2" }, state)).toEqual({ email: true, mailbox: true });
+    // Already there (this tab's own change was seen by a check first).
+    expect(pushedTypes({ Email: "e1", Mailbox: "m1" }, state)).toBeNull();
+    expect(pushedTypes({}, state)).toBeNull();
+    // No states yet: whatever was pushed.
+    expect(pushedTypes({ Mailbox: "m1" }, null)).toEqual({ email: false, mailbox: true });
+  });
+});
 
 describe("polling", () => {
   it("checks every 30 seconds and backs off after failures, up to 5 minutes", () => {

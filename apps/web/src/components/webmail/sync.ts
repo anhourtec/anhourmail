@@ -17,6 +17,31 @@ export function pollDelay(failures: number, base = POLL_MS, max = MAX_POLL_MS): 
   return Math.min(max, base * 2 ** Math.min(failures, 10));
 }
 
+/** While push is up, the safety check that catches anything a push missed (05-webmail.md "Push"). */
+export const SAFETY_MS = 5 * 60_000;
+/** The first catch-up after push comes up: after the first paint's own requests. */
+export const PUSH_CATCH_UP_MS = 2_000;
+/** How long after a push the check runs: the mail server's events for one change (mail, then folders) share it. */
+export const PUSH_SETTLE_MS = 120;
+
+/** The wait before the next check: the safety interval while push is up and checks succeed, else the poll's. */
+export function nextCheckDelay(pushUp: boolean, failures: number): number {
+  return pushUp && failures === 0 ? SAFETY_MS : pollDelay(failures);
+}
+
+/**
+ * Which types a push says changed against the states the app has (`state` null: not known yet, so both). Null when
+ * nothing new (the app is already at those states).
+ */
+export function pushedTypes(
+  changed: { Email?: string; Mailbox?: string },
+  state: { email: string; mailbox: string } | null,
+): { email: boolean; mailbox: boolean } | null {
+  const email = changed.Email !== undefined && changed.Email !== state?.email;
+  const mailbox = changed.Mailbox !== undefined && changed.Mailbox !== state?.mailbox;
+  return email || mailbox ? { email, mailbox } : null;
+}
+
 /** Whether to check now: only while the tab is visible and the browser is online. */
 export function shouldPoll(visibility: DocumentVisibilityState, online: boolean): boolean {
   return visibility === "visible" && online;
