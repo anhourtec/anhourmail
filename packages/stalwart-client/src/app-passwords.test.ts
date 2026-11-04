@@ -3,11 +3,17 @@ import { describe, expect, it } from "vitest";
 
 import {
   appPasswordPermissions,
+  CUSTOMER_APP_PASSWORD_QUOTA,
   HANDOFF_CREDENTIAL_DESCRIPTION,
   HANDOFF_CREDENTIAL_MAX_LIFETIME_MS,
   handoffCredentialPermissions,
+  IMPORT_CREDENTIAL_ALLOW,
+  IMPORT_CREDENTIAL_DESCRIPTION,
+  IMPORT_CREDENTIAL_MAX_LIFETIME_MS,
+  importCredentialPermissions,
   isAppPasswordSecret,
   isHandoffCredential,
+  isImportCredential,
   KNOWN_PERMISSIONS,
   PRINCIPAL_READ_PERMISSIONS,
   SCOPE_ALLOW,
@@ -360,5 +366,141 @@ describe("handoff credential (ADR-0024)", () => {
     const empty = management({ "x:AppPassword/get": () => ({ list: [] }) });
     expect(await empty.mgmt.clearExpiredHandoffCredentials("km", at)).toBe(0);
     expect(empty.seen).toHaveLength(1);
+  });
+});
+
+describe("import credential (ADR-0030)", () => {
+  const at = new Date("2026-11-05T12:00:00Z");
+  const credential = (over: Record<string, unknown> = {}) => ({
+    description: IMPORT_CREDENTIAL_DESCRIPTION,
+    permissions: importCredentialPermissions(),
+    createdAt: at,
+    expiresAt: new Date(at.getTime() + 7 * 86_400_000),
+    ...over,
+  });
+  const on = () => {
+    const off = new Set(Object.keys(importCredentialPermissions().permissions));
+    return KNOWN_PERMISSIONS.filter((p) => !off.has(p));
+  };
+
+  it("keeps exactly the IMAP commands copying needs and turns everything else off", () => {
+    expect(on().sort()).toEqual([...IMPORT_CREDENTIAL_ALLOW].sort());
+    // Every allowed name is one the server knows (a typo would silently leave it off).
+    for (const p of IMPORT_CREDENTIAL_ALLOW) expect(KNOWN_PERMISSIONS).toContain(p);
+    for (const p of [
+      "imapStore",
+      "imapCopy",
+      "imapMove",
+      "imapExpunge",
+      "imapDelete",
+      "imapRename",
+      "imapAclSet",
+      "imapIdle",
+      "pop3Authenticate",
+      "emailSend",
+      "sieveAuthenticate",
+      "jmapEmailGet",
+      "jmapEmailImport",
+      "jmapMailboxCreate",
+      "davCardGet",
+      "impersonate",
+      "fetchAnyBlob",
+      ...PRINCIPAL_READ_PERMISSIONS,
+    ]) {
+      expect(on()).not.toContain(p);
+    }
+    const off = Object.keys(importCredentialPermissions().permissions);
+    for (const p of SELF_SERVICE_PERMISSIONS) expect(off).toContain(p);
+    // Never mistaken for an app password someone holds, nor for a handoff credential.
+    expect(scopesOf(importCredentialPermissions())).toBeNull();
+    expect(isHandoffCredential(credential({ description: HANDOFF_CREDENTIAL_DESCRIPTION }))).toBe(false);
+  });
+
+  it("is recognised only with our description, exactly its permissions and at most the sync window's lifetime", () => {
+    expect(isImportCredential(credential())).toBe(true);
+    expect(
+      isImportCredential(credential({ expiresAt: new Date(at.getTime() + IMPORT_CREDENTIAL_MAX_LIFETIME_MS) })),
+    ).toBe(true);
+    expect(isImportCredential(credential({ expiresAt: new Date(at.getTime() + 15 * 86_400_000) }))).toBe(false);
+    expect(isImportCredential(credential({ description: "Phone" }))).toBe(false);
+    expect(isImportCredential(credential({ permissions: appPasswordPermissions(["imap"]) }))).toBe(false);
+    expect(isImportCredential(credential({ permissions: handoffCredentialPermissions() }))).toBe(false);
+    expect(isImportCredential(credential({ permissions: { "@type": "Inherit" } }))).toBe(false);
+    expect(isImportCredential(credential({ expiresAt: null }))).toBe(false);
+    expect(isImportCredential(credential({ createdAt: null }))).toBe(false);
+    expect(isImportCredential(credential({ expiresAt: at }))).toBe(false);
+  });
+
+  it("leaves customer accounts room for five app passwords, a handoff and an import", () => {
+    expect(CUSTOMER_APP_PASSWORD_QUOTA).toBe(7);
+  });
+
+  it("mints one on the given account expiring in whole seconds, and reads back its creation time", async () => {
+    const { mgmt, seen } = management({
+      "x:AppPassword/set": () => ({ created: { i: { id: "g", secret: "app_secret" } } }),
+      "x:AppPassword/get": () => ({
+        list: [{ id: "g", description: IMPORT_CREDENTIAL_DESCRIPTION, createdAt: "2026-11-05T12:00:01Z" }],
+      }),
+    });
+    const made = await mgmt.createImportCredential(
+      "km",
+      new Date("2026-11-12T12:00:00.750Z"),
+      new Date("2026-11-05T12:00:00Z"),
+    );
+    expect(made).toEqual({
+      id: "g",
+      secret: "app_secret",
+      createdAt: new Date("2026-11-05T12:00:01Z"),
+      expiresAt: new Date("2026-11-12T12:00:00Z"),
+    });
+    expect(seen[0]).toEqual({
+      name: "x:AppPassword/set",
+      args: {
+        accountId: "km",
+        create: {
+          i: {
+            description: IMPORT_CREDENTIAL_DESCRIPTION,
+            expiresAt: "2026-11-12T12:00:00Z",
+            permissions: importCredentialPermissions(),
+          },
+        },
+      },
+    });
+    expect(seen[1]).toEqual({
+      name: "x:AppPassword/get",
+      args: { ids: ["g"], properties: ["description", "createdAt"], accountId: "km" },
+    });
+  });
+
+  it("fails loudly without a secret, when the credential vanished, or without a real expiry", async () => {
+    const none = management({ "x:AppPassword/set": () => ({ created: { i: { id: "g" } } }) });
+    await expect(none.mgmt.createImportCredential("km", new Date(Date.now() + 60_000))).rejects.toBeInstanceOf(
+      StalwartError,
+    );
+    const gone = management({
+      "x:AppPassword/set": () => ({ created: { i: { id: "g", secret: "app_secret" } } }),
+      "x:AppPassword/get": () => ({ list: [] }),
+    });
+    await expect(gone.mgmt.createImportCredential("km", new Date(Date.now() + 60_000))).rejects.toThrow(/vanished/);
+    const bad = management({});
+    await expect(bad.mgmt.createImportCredential("km", new Date(Number.NaN))).rejects.toBeInstanceOf(StalwartError);
+    expect(bad.seen).toHaveLength(0);
+  });
+
+  it("refuses an expiry in the past or beyond the longest import lifetime, before calling the server", async () => {
+    const now = new Date("2026-11-05T12:00:00Z");
+    const { mgmt, seen } = management({
+      "x:AppPassword/set": () => ({ created: { i: { id: "g", secret: "app_secret" } } }),
+      "x:AppPassword/get": () => ({ list: [{ id: "g", createdAt: now.toISOString() }] }),
+    });
+    for (const ms of [-1000, 0, IMPORT_CREDENTIAL_MAX_LIFETIME_MS + 1000, 365 * 86_400_000]) {
+      await expect(mgmt.createImportCredential("km", new Date(now.getTime() + ms), now)).rejects.toThrow(
+        /outside its allowed lifetime/,
+      );
+    }
+    expect(seen).toHaveLength(0);
+    // The longest allowed: the sync window (14 days) and its minute of slack.
+    await mgmt.createImportCredential("km", new Date(now.getTime() + IMPORT_CREDENTIAL_MAX_LIFETIME_MS), now);
+    expect(seen[0]?.name).toBe("x:AppPassword/set");
   });
 });

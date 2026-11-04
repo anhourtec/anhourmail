@@ -234,6 +234,8 @@ describe("delegated mailboxes on Stalwart", () => {
     for (let i = 0; i < 5; i++) {
       made.push((await ops.createAppPassword(deskExternal, { description: `p${String(i)}`, scopes: ["imap"] })).id);
     }
+    // A running mail import holds its own slot (ADR-0030), so the handoff slot is the only one left.
+    made.push((await ops.createImportCredential(deskExternal, new Date(Date.now() + 3_600_000))).id);
     const both = await Promise.all([open(), open()]);
     expect(both.map((b) => b.value.username)).toEqual([deskAddress, deskAddress]);
     expect(await handoffCredentialsOn(deskExternal)).toEqual([]);

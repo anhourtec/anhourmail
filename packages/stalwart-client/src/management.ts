@@ -7,6 +7,9 @@ import {
   CUSTOMER_APP_PASSWORD_QUOTA,
   HANDOFF_CREDENTIAL_DESCRIPTION,
   handoffCredentialPermissions,
+  IMPORT_CREDENTIAL_DESCRIPTION,
+  IMPORT_CREDENTIAL_MAX_LIFETIME_MS,
+  importCredentialPermissions,
   isHandoffCredential,
   PRINCIPAL_READ_PERMISSIONS,
   SELF_SERVICE_PERMISSIONS,
@@ -374,7 +377,8 @@ export class StalwartManagement {
       return d.id;
     };
     const fields = {
-      // One app-password slot more than we offer: the console → webmail handoff credential (ADR-0024).
+      // Two app-password slots more than we offer: the console → webmail handoff credential (ADR-0024) and a mail
+      // import's credential (ADR-0030).
       quotas: { maxDiskQuota: input.quotaBytes, maxAppPasswords: CUSTOMER_APP_PASSWORD_QUOTA },
       // A customer mailbox never gets to write its own Sieve (CUSTOMER_PERMISSIONS); a suspended one is turned off
       // entirely (SUSPENDED_PERMISSIONS). `undefined` leaves permissions as they are.
@@ -669,6 +673,47 @@ export class StalwartManagement {
       throw new StalwartError("Handoff credential was not returned", "set");
     }
     return { id, secret };
+  }
+
+  /**
+   * Mints a mail import's destination credential on `accountId` (ADR-0030 §1): IMAP only, exactly
+   * `importCredentialPermissions()`, refused by Stalwart after `expiresAt` (whole seconds, rounded down so it never
+   * outlives what the caller asked for). An expiry in the past or more than `IMPORT_CREDENTIAL_MAX_LIFETIME_MS` ahead of
+   * `now` is refused before anything is sent (a long-lived read credential is never minted by mistake). Needs the
+   * operations key (owner access through `impersonate` +
+   * `sysAppPasswordCreate`; no mail access of its own). Returns the creation time Stalwart recorded (revocation
+   * matches id and time, ids are reused). The caller seals the secret at once and never logs, audits or returns it;
+   * if recording the import fails it destroys the credential again (`destroyAppPassword`).
+   */
+  async createImportCredential(
+    accountId: string,
+    expiresAt: Date,
+    now: Date = new Date(),
+  ): Promise<{ id: string; createdAt: Date; expiresAt: Date; secret: string }> {
+    const until = new Date(Math.floor(expiresAt.getTime() / 1000) * 1000);
+    if (!Number.isFinite(until.getTime())) throw new StalwartError("Import credential needs an expiry", "set");
+    const life = until.getTime() - now.getTime();
+    if (life <= 0 || life > IMPORT_CREDENTIAL_MAX_LIFETIME_MS) {
+      throw new StalwartError("Import credential expiry is outside its allowed lifetime", "set");
+    }
+    const { created } = await this.transport.set("x:AppPassword", {
+      accountId,
+      create: {
+        i: {
+          description: IMPORT_CREDENTIAL_DESCRIPTION,
+          expiresAt: until.toISOString().replace(".000Z", "Z"),
+          permissions: importCredentialPermissions(),
+        },
+      },
+    });
+    const id = created.i?.id;
+    const secret = created.i?.secret;
+    if (typeof id !== "string" || typeof secret !== "string") {
+      throw new StalwartError("Import credential was not returned", "set");
+    }
+    const record = await this.appPassword(accountId, id);
+    if (!record) throw new StalwartError("Import credential vanished after creation", "set");
+    return { id, createdAt: record.createdAt, expiresAt: until, secret };
   }
 
   /**

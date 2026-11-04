@@ -222,9 +222,10 @@ export const HANDOFF_CREDENTIAL_MAX_LIFETIME_MS = 120_000;
 /**
  * Stalwart's `maxAppPasswords` on customer accounts: our per-mailbox limit (5, `APP_PASSWORDS_PER_MAILBOX`) plus the
  * one slot a handoff credential takes for a moment, so a mailbox with all its app passwords can still be opened from
- * the console. Set by `upsertUser`.
+ * the console, plus one for a mail import's credential (ADR-0030 §1.3; one running import per mailbox). Set by
+ * `upsertUser`, so existing mailboxes pick it up on their next `mailbox.ensure`.
  */
-export const CUSTOMER_APP_PASSWORD_QUOTA = 6;
+export const CUSTOMER_APP_PASSWORD_QUOTA = 7;
 
 /** `Disable` of every known and self-service permission except `authenticate`. */
 export function handoffCredentialPermissions(): { "@type": "Disable"; permissions: Record<string, true> } {
@@ -248,4 +249,53 @@ export function isHandoffCredential(c: {
   if (!c.createdAt || !c.expiresAt) return false;
   const life = c.expiresAt.getTime() - c.createdAt.getTime();
   return Number.isFinite(life) && life > 0 && life <= HANDOFF_CREDENTIAL_MAX_LIFETIME_MS;
+}
+
+/**
+ * The mail import's destination credential (ADR-0030 §1): an app password the web app's operations key mints when an
+ * import starts or resumes, sealed for the importer and destroyed when the import ends (revoked with the provisioning
+ * key; `expiresAt` is the backstop). It signs in over IMAP only and can do just what copying needs: list, create and
+ * subscribe folders, append, and read header fields for de-duplication (Stalwart can't search Message-IDs, verified
+ * on v0.16.27). No STORE, COPY, MOVE, EXPUNGE, DELETE, RENAME, ACL, IDLE, POP3, SMTP, JMAP or DAV.
+ *
+ * A refused IMAP command gets no tagged reply on the pinned server (the connection hangs or closes; verified), so the
+ * importer must never send one: this list is the whole of what it may use.
+ */
+export const IMPORT_CREDENTIAL_DESCRIPTION = "AnhourMail import";
+
+/** What an import credential keeps on (everything else known and every self-service permission is turned off). */
+export const IMPORT_CREDENTIAL_ALLOW: readonly string[] = words(`
+  authenticate imapAuthenticate imapCapability imapId imapEnable imapNamespace imapList imapLsub imapStatus
+  imapSelect imapExamine imapCreate imapSubscribe imapAppend imapFetch imapSearch
+`);
+
+/**
+ * The longest an import credential may be meant to live (ms): the cut-over sync window (`IMPORT.syncWindowDays`, 14
+ * days, in `@anhourmail/shared/import`) plus a minute for clocks. Longer is not ours.
+ */
+export const IMPORT_CREDENTIAL_MAX_LIFETIME_MS = 14 * 86_400_000 + 60_000;
+
+/** `Disable` of every known and self-service permission except `IMPORT_CREDENTIAL_ALLOW`. */
+export function importCredentialPermissions(): { "@type": "Disable"; permissions: Record<string, true> } {
+  const allowed = new Set(IMPORT_CREDENTIAL_ALLOW);
+  const off = new Set<string>([...SELF_SERVICE_PERMISSIONS, ...KNOWN_PERMISSIONS.filter((p) => !allowed.has(p))]);
+  return { "@type": "Disable", permissions: Object.fromEntries([...off].sort().map((p) => [p, true] as const)) };
+}
+
+/**
+ * True only for a credential that is exactly an import credential: our description, exactly the import permissions,
+ * and an expiry no later than `IMPORT_CREDENTIAL_MAX_LIFETIME_MS` after creation. The reconciler additionally needs a
+ * running import that recorded this credential (id and creation time) before it treats it as one (ADR-0030 §16).
+ */
+export function isImportCredential(c: {
+  description?: unknown;
+  permissions?: unknown;
+  createdAt?: Date | null;
+  expiresAt?: Date | null;
+}): boolean {
+  if (c.description !== IMPORT_CREDENTIAL_DESCRIPTION) return false;
+  if (fingerprint(c.permissions) !== fingerprint(importCredentialPermissions())) return false;
+  if (!c.createdAt || !c.expiresAt) return false;
+  const life = c.expiresAt.getTime() - c.createdAt.getTime();
+  return Number.isFinite(life) && life > 0 && life <= IMPORT_CREDENTIAL_MAX_LIFETIME_MS;
 }
