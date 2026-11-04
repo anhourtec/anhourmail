@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 export * from "./ceilings";
+export * from "./checkout";
 export * from "./entitlements";
 export * from "./entity";
+export * from "./guards";
 export * from "./held";
 export * from "./holds";
 export * from "./ingest";
