@@ -583,6 +583,33 @@ export const ROUTES: readonly RouteSpec[] = [
     audits: "billing.addons_changed",
     probeStatus: 409,
   },
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/billing/cancel",
+    file: "app/api/accounts/[accountId]/billing/cancel/route.ts",
+    guard: "billing.manage",
+    accountParam: "accountId",
+    audits: "billing.cancel_scheduled",
+    probeStatus: 409,
+  },
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/billing/undo-cancel",
+    file: "app/api/accounts/[accountId]/billing/undo-cancel/route.ts",
+    guard: "billing.manage",
+    accountParam: "accountId",
+    audits: "billing.cancel_undone",
+    probeStatus: 409,
+  },
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/billing/refund",
+    file: "app/api/accounts/[accountId]/billing/refund/route.ts",
+    guard: "billing.manage",
+    accountParam: "accountId",
+    audits: "billing.refunded",
+    probeStatus: 409,
+  },
   // Dev only (ADR-0029 §3): drives the fake billing provider; 404 unless billing is the fake outside production, and
   // never routed on production builds (proxy.ts). The body is checked first, so the harness's empty body is a 400 for
   // everyone; a real call needs `billing.manage` on the fake object's account. It changes only the fake: the events it
