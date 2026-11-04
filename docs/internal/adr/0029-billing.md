@@ -735,3 +735,81 @@ Webhook ingestion and `billing.sync` (slice 5), the mail server's send-blocked a
   restriction **is released after it** (release doesn't re-check permissions), so a card-testing or disputed account
   can schedule up to a week of mail before it is restricted. Decide before launch: lower the server's maximum hold,
   and/or cancel the account's pending submissions when it is restricted (needs owner access: the same web-app step).
+
+## Update (2026-11-05): slices 8–10 built
+
+Checkout, the portal and the dev simulation (slice 8), plan and add-on changes, cancelling and the self-service refund
+(slice 9), and lapse, holds and timers (slice 10) are built and tested, in the services
+`packages/core/src/billing/checkout.ts`, `changes.ts` and `lapse.ts` behind `/api/accounts/:accountId/billing/*`, with
+the dev fake's pages and `POST /api/dev/billing/simulate`, and the hourly `job:billing-timers`. No console page yet
+(slice 11). Choices made while building, within this decision:
+
+- **The overview route comes with slice 8** (`GET …/billing`, `billing.read`, our row only): the e2e journey and the
+  Billing page read it. Its refund hint (`mayBeEligible`) is from our row (period start, paid invoice); the refund
+  itself re-reads the provider's invoice.
+- **The provider customer is created once and stored at once**, in its own audited write (`billing.customer_created`,
+  a new action) before the checkout session is made, so a failed checkout never loses it (the processor's idempotency
+  key lasts only a day). A concurrent request that stored one first wins.
+- **Checkout's intent id** is the request (plan, currency, amount, quantities) plus the hour plus the billing state's
+  start: a double click gets the same provider session; a checkout after a subscription ended (a refund, a lapse) is a
+  new intent, never the completed one. `checkout_pending` stays an hour as decided; the Billing page (slice 11) should
+  decide whether returning on the cancel URL clears it.
+- **Redirect origins are given by the composition root** (`billingRedirectOrigins`: the processor's checkout and portal
+  hosts, the console's own origin for the fake) and checked in core as well as in the adapter. In dev, "Pay" on the
+  fake checkout lands on the fake portal (`?checkout=done`) until the Billing page exists.
+- **`billingProvider` is per caller and per route** like every route tier (not one bucket across the billing routes):
+  a per-account bucket would let an outsider exhaust another account's limit before the service refuses them.
+- **Increases need the confirmed amount:** `confirmAmountMinor` must equal a fresh preview made just before the charge
+  (`409 confirmation_required` with the amount otherwise). The slice 14 live suite should check whether the processor's
+  per-second proration can differ between that preview and the update and, if so, pass a fixed proration time.
+  Previews of decreases and switches make no provider call (0 now). No increase while `restricted`; decreases and
+  switches still work there. **Adding back capacity already paid for this period is free** (a decrease renews lower
+  without a credit, so the increase back up to `periodPaid*` is a no-charge change); going beyond it right after a
+  decrease is refused until the paid quantity is restored, because the provider would prorate from the lower quantity
+  and charge again for the part already paid (found in the pre-handback review).
+- **A request and its recorded effect are two audit entries:** the person's (`billing.addons_changed`,
+  `billing.cancel_scheduled`, `billing.refunded`, …) and then the sync's under the system actor when the provider
+  reports it. Same for a console refund (the sync's entry says `source: provider`).
+- **Cancel, undo and refund check the subscription before the step-up**, then the step-up, then call the provider. The
+  refund is refused while any dispute is open (the payer already asked the card issuer), uses the invoice id as its
+  idempotency intent (never two refunds), and a press after a refund that went through without its cancellation
+  finishes the cancellation (`resumed`). Staff refunds outside the window come with Platform billing (slice 12).
+- **Holds after a lapse:** pending invites are revoked in the sync's transaction (`account.invite_revoked`, reason
+  `plan_lapsed`). "Choose what stays on" (`PUT …/billing/holds`, `billing.manage`) keeps windows already running and
+  caps a newly held mailbox's window at the lapse's, so swapping can't keep two mailboxes receiving past it. Held
+  mailboxes leave the storage pool arithmetic (`poolOf`, `rebalanceStoragePools`): their quota is pinned to their
+  mail (`mailbox.quota_changed`, reason `plan_hold`) by `job:billing-timers` for lapsed accounts only, and can't be
+  changed while held (`403 plan_limit`).
+- **`billing.timers`** (hourly): ends a subscription restricted past `restrictedDays` (`billing.subscription_ended`, a
+  new action, reason `restricted_timeout`; dispute-only restrictions excluded; a provider failure is counted and retried
+  next hour), syncs ended comps (new `BillingRepository.compsEnded`), and drops holds on mailboxes, domains or aliases
+  the Owner since deleted (`billing.holds_changed`, reason `removed`; none left → `free` on the sync). Receive windows
+  that passed are only counted: **receive-blocked is still not applied** (held mailboxes past their window stay
+  send-blocked and keep receiving) until held recipients can be refused during the SMTP conversation — the
+  backscatter decision stays with the maintainer.
+- **Not built in these slices:** the account-deletion hook (cancel at period end when deletion is asked, cancel now
+  when removal starts) and `billing.json` in the data export; refusing checkouts and changes on catalogue drift (no
+  drift state is stored until `billing.catalogue` runs); the webmail's own `403 billing_restricted`. All are needed
+  before `BILLING.status` opens.
+- **Pre-commit review run-62, all fixed before commit:**
+  - **F1 (high), paid capacity belongs to its period.** `periodPaid*` came from the live subscription when a paid
+    invoice was seen, and `prorationFor` trusted it in any period: decrease before renewal, re-increase after the
+    cycle but before the 0-quantity renewal was paid or synced, and the increase was free; then the paid renewal set
+    the period-paid quantity from the raised subscription, free for a year. Now (a) `account_billing.period_paid_for`
+    (migration 0038) tags the quantities with the period they were paid for; they count, in entitlements and in
+    `prorationFor`, only while it equals the current period end, and the change services read the subscription fresh
+    from the provider (quantities, plan, period) before deciding; (b) the sync sets them from what the paid first or
+    renewal invoice billed (`ProviderInvoice.storageBlocks`, `extraMailboxes`, `periodEnd`, read from the invoice's
+    lines, prorations left out), falling back to the subscription's quantities only when the lines can't be read.
+  - **F2 (medium, policy default), one self-service refund per account** (`account_billing.self_service_refund_at`):
+    checkout → refund → checkout would otherwise give unlimited 14-day paid periods. Later refunds answer
+    `409 refund_not_eligible` with copy pointing to staff.
+  - **F3 (low), one checkout at a time:** the checkout is claimed (`checkout_pending_until`) under the account lock
+    before any provider call (that claim is the `billing.checkout_started` entry); a concurrent second request is
+    `409 checkout_pending`; a failure releases the claim (`meta.released`), so the person can retry at once.
+  - **F4 (low):** a provider URL from an unexpected origin is answered like a provider failure
+    (`503 billing_unavailable`, audited `failed`), not a bare 500.
+- **Slice 14 checklist adds (run-62 F1):** at the pinned version, that `latest_invoice` comes with its `lines`
+  (quantity, `period.end`, the price under `pricing.price_details.price`, the proration flag under
+  `parent.subscription_item_details.proration`), and that a renewal invoice bills the quantities in force at the cycle,
+  not ones changed afterwards.
