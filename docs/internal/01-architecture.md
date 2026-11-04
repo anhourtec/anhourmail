@@ -1,6 +1,6 @@
 # 01 — Architecture
 
-Last updated: 2026-10-31 (Safe senders load images, own Sent mail loads by itself, ADR-0027 built; console sign-in password first, passkeys only a second step, ADR-0028; webmail first load streamed inside the page (one request otherwise), the IndexedDB first-view copy, `Server-Timing` and shared session reads; ADR-0027 proposed: Safe senders load images, own Sent mail loads images; names as one source: sender name in the control plane, mirrored to Stalwart; webmail: no "Shared with you" list or in-place switch, shared mailboxes open only in their own tab, maintainer decision; mailbox delegation, ADR-0026: writing from a shared mailbox's view through an own-mailbox pin; the webmail UI and tabs pinned to a shared mailbox per request, slice 14; sending as and on behalf of a delegated mailbox from the webmail BFF, slice 13; the webmail BFF opens delegated mailboxes behind the delegation gate; grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
+Last updated: 2026-11-04 (billing port, processor and fake adapters, billing tables, ADR-0029 slices 1–4; Safe senders load images, own Sent mail loads by itself, ADR-0027 built; console sign-in password first, passkeys only a second step, ADR-0028; webmail first load streamed inside the page (one request otherwise), the IndexedDB first-view copy, `Server-Timing` and shared session reads; ADR-0027 proposed: Safe senders load images, own Sent mail loads images; names as one source: sender name in the control plane, mirrored to Stalwart; webmail: no "Shared with you" list or in-place switch, shared mailboxes open only in their own tab, maintainer decision; mailbox delegation, ADR-0026: writing from a shared mailbox's view through an own-mailbox pin; the webmail UI and tabs pinned to a shared mailbox per request, slice 14; sending as and on behalf of a delegated mailbox from the webmail BFF, slice 13; the webmail BFF opens delegated mailboxes behind the delegation gate; grants, cascades and conversion built in core and adapters, console API routes; removing someone turns their mailbox sign-in off; data export and account deletion, ADR-0025; profile photos). Decisions: `adr/`. Code map: `codemap.md`.
 
 ## Overview
 
@@ -84,6 +84,16 @@ mail clients ─► Stalwart 465/587/993/995 (TLS by Stalwart itself)    MX traf
   to the mailbox's identities (within the mail server's 2 KB limit) for other JMAP apps. Only the forwarding
   target's confirmation lives in the control plane (`forwarding_target`), and the BFF writes a redirect only to a
   confirmed target. Mail-flow changes are audited.
+- **Billing (ADR-0029; slices 1–4 built 2026-11-04):** the payment processor is the source of truth for payments and
+  subscriptions, reached only through the `BillingProvider` port (`packages/core/src/billing/ports.ts`; adapters in
+  `packages/adapters/src/billing-stripe/` over plain `fetch`, no SDK, with a pinned API version, and a fake in
+  `billing-fake/` whose state is in memory for tests and in Redis in dev, so the web app and the worker share it).
+  `BILLING_PROVIDER` (`off`/`fake`/`stripe`) picks one; boot refuses the fake in production and an incomplete or
+  mismatched processor configuration (web `env.ts`, worker `billing.ts`). Webhooks will be triggers only: the sync
+  reads the subscription fresh and derives the account's state with the pure `deriveBilling`
+  (`packages/core/src/billing/lifecycle.ts`) into `account_billing`; `customer_account.plan` stays the effective plan
+  the rest of the code reads. Non-payment never deletes anything (plan holds, `computeHolds`). Webhook route, sync job,
+  mail-server access states and the console come in later slices.
 - Provisioning is a **job**, never an inline request (CLAUDE.md rule 26): write intent (e.g. mailbox `status = provisioning`), enqueue, the worker applies it through `stalwart-client` (idempotent upserts by natural key), then set `active` or `failed` with an error code.
 - The **reconciler** (scheduler `job:reconcile`, hourly; plus the every-minute `job:service-accounts` check of the management keys' owners) compares Postgres intent with Stalwart (`x:Domain`, `x:Account` lists). It **reports** drift (audit `platform.reconciler_drift`; the alert channel comes with monitoring) and re-queues missing non-destructive state. It **never deletes** a Stalwart account or mail automatically. Deletions are explicit jobs with a grace period.
 
