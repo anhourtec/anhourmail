@@ -3,6 +3,7 @@ import "server-only";
 
 import { db, pgMailboxStatusLookup } from "@anhourmail/adapters/postgres";
 import {
+  accountSafeSendersForMailbox,
   authorizeDelegatedSend,
   delegatedMailboxesFor,
   delegatedSendCheck,
@@ -217,6 +218,9 @@ export function webmail(): WebmailService {
         const f = await settingsService().forwarding(address);
         return f?.status === "confirmed" ? f.address : null;
       },
+      // The account-wide Safe senders every rules write compiles in (ADR-0032 §1).
+      accountSafeSenders: async (address) =>
+        (await accountSafeSendersForMailbox(container().deps, address))?.entries ?? [],
       authservIds: () => {
         const e = env();
         return trustedAuthservIds(e.MAIL_AUTHSERV_ID, platform().hosts.mx, e.NODE_ENV === "production");
@@ -285,6 +289,8 @@ export function webmailSettings(): WebmailSettings {
       const m = await webmail().ownMessageSender(sessionId, emailId);
       return m === null ? null : { from: m.from, verified: fromVerified(m.headers, m.from) };
     },
+    // Shown read-only in Junk and blocked senders ("Added by your organisation", ADR-0032 §1).
+    accountSafe: async (address) => (await accountSafeSendersForMailbox(container().deps, address))?.entries ?? [],
     webmailUrl: env().WEBMAIL_URL,
     siteHost: platform().hosts.site,
   });

@@ -353,6 +353,11 @@ export type WebmailDeps = {
    */
   confirmedForward: (address: string) => Promise<string | null>;
   /**
+   * The account-wide Safe senders that apply to a mailbox (core `accountSafeSendersForMailbox`, ADR-0032 §1), by its
+   * address. Every rules write compiles the current list; absent: none.
+   */
+  accountSafeSenders?: (address: string) => Promise<readonly string[]>;
+  /**
    * The authserv-ids of our own mail server's results headers (the reader's trusted ids), for the forwarding rule's
    * DMARC check. The app wires it (`instance.ts`); without it the rule has no ids and forwards as before.
    */
@@ -518,6 +523,7 @@ export class WebmailService {
       },
       holdSeconds: async () => UNDO_SECONDS,
       rulesWritten: async () => undefined,
+      accountSafeSenders: async () => [],
       ...deps,
     };
     this.#base = deps.stalwartUrl.replace(/\/+$/, "");
@@ -3852,7 +3858,9 @@ export class WebmailService {
     const identities = (await this.identities(sessionId)).map((i) => i.email.toLowerCase());
     const authservIds = this.#d.authservIds();
     const mailboxDomain = s.username.slice(s.username.lastIndexOf("@") + 1).toLowerCase() || null;
-    const base = buildScript(full, { identities, contacts: [], authservIds, mailboxDomain });
+    // The account's list only matters to the trusted-only rule (a person's own Blocked senders win over it).
+    const accountSafe = full.junk.trustedOnly ? await this.#d.accountSafeSenders(s.username) : [];
+    const base = buildScript(full, { identities, contacts: [], authservIds, mailboxDomain, accountSafe });
     let contacts: string[] = [];
     if (usesContacts(full)) {
       const { cards } = await this.#allCards(sessionId, ["emails"], account);
@@ -3862,7 +3870,7 @@ export class WebmailService {
       // Each contact can appear twice (trusted senders and the automatic-reply test).
       contacts = fitContacts(addresses, Math.floor((MAX_SCRIPT_BYTES - Buffer.byteLength(base)) / 2));
     }
-    const script = buildScript(full, { identities, contacts, authservIds, mailboxDomain });
+    const script = buildScript(full, { identities, contacts, authservIds, mailboxDomain, accountSafe });
     if (new TextEncoder().encode(script).length > MAX_SCRIPT_BYTES) {
       throw new WebmailRefusedError(MAILBOX_RULES_LIMIT_MESSAGE);
     }

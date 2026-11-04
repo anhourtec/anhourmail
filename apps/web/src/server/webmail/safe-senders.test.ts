@@ -225,3 +225,78 @@ describe("a mailbox's Safe senders for the image check", () => {
     expect(t.mail.reads).toBe(5);
   });
 });
+
+describe("the account's Safe senders for the image check (ADR-0032 §1)", () => {
+  function withAccount(entries: string[], opts: { blocked?: string[]; fail?: boolean } = {}) {
+    const content = buildScript(
+      { ...DEFAULT_RULES, junk: { blocked: opts.blocked ?? [], safe: ["jane@example.com"], trustedOnly: false } },
+      ctx,
+    );
+    let now = 1_000_000;
+    const calls: string[] = [];
+    const versions: RulesVersions = {
+      get: async () => "1",
+      init: async () => undefined,
+      bump: async () => "2",
+    };
+    const safe = createSafeSenders({
+      read: async () => ({ content, active: true }),
+      versions,
+      now: () => now,
+      timeoutMs: 200,
+      account: async (address) => {
+        calls.push(address);
+        if (opts.fail) throw new TypeError("connection refused");
+        return entries;
+      },
+      accountTtlMs: 60_000,
+    });
+    return {
+      safe,
+      calls,
+      advance: (ms: number) => {
+        now += ms;
+      },
+    };
+  }
+
+  it("matches the account's list after the mailbox's own, with its source", async () => {
+    const t = withAccount(["partner.example", "jane@example.com"]);
+    // The mailbox's own entry wins (no source: the mailbox's).
+    expect(await t.safe.match("acc1", ME, "jane@example.com")).toEqual({ kind: "address", value: "jane@example.com" });
+    expect(await t.safe.match("acc1", ME, "Bob@Partner.example")).toEqual({
+      kind: "domain",
+      value: "partner.example",
+      source: "account",
+    });
+    expect(await t.safe.match("acc1", ME, "bob@news.partner.example")).toBeNull();
+    expect(t.calls).toEqual([ME]);
+  });
+
+  it("never matches a sender on the mailbox's Blocked senders", async () => {
+    const t = withAccount(["partner.example"], { blocked: ["bob@partner.example"] });
+    expect(await t.safe.match("acc1", ME, "bob@partner.example")).toBeNull();
+    expect(await t.safe.match("acc1", ME, "amy@partner.example")).toMatchObject({ source: "account" });
+  });
+
+  it("keeps the account list for a minute, and drops it on this process's own change", async () => {
+    const t = withAccount(["partner.example"]);
+    await t.safe.match("acc1", ME, "bob@partner.example");
+    t.advance(30_000);
+    await t.safe.match("acc1", ME, "bob@partner.example");
+    expect(t.calls).toHaveLength(1);
+    t.advance(31_000);
+    await t.safe.match("acc1", ME, "bob@partner.example");
+    expect(t.calls).toHaveLength(2);
+    t.safe.accountChanged();
+    await t.safe.match("acc1", ME, "bob@partner.example");
+    expect(t.calls).toHaveLength(3);
+  });
+
+  it("answers no match when the account list can't be read, without logging any entry", async () => {
+    const t = withAccount(["partner.example"], { fail: true });
+    expect(await t.safe.match("acc1", ME, "bob@partner.example")).toBeNull();
+    expect(lines.join("\n")).toContain("account safe senders unavailable");
+    expect(lines.join("\n")).not.toMatch(/partner|bob@/);
+  });
+});
