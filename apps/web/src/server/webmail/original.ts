@@ -7,6 +7,7 @@
  */
 
 import { INTERNAL_MAIL_HEADER, isInternalMailTag } from "@anhourmail/core/webmail";
+import { IMPORT_MARKER_HEADER } from "@anhourmail/shared/import";
 
 export type RawHeader = { name: string; value: string };
 
@@ -119,9 +120,24 @@ export function receivedBy(value: string): string | null {
 }
 
 /**
- * The `Authentication-Results` header our mail server wrote, or null. Stalwart (verified on v0.16.27) writes it only
- * for mail arriving on port 25, directly below the `Received` header it prepends there, and writes neither for
- * authenticated submission (SMTP 465/587 or JMAP) — so a header in a locally sent message is always the sender's.
+ * Whether the message was copied in by a mail import (ADR-0030 §5, SA-64-01): the importer prepends
+ * `X-AnhourMail-Imported` to every message it appends, so it is the topmost header of an imported copy. Everything
+ * below it was written by the old provider, or by whoever controls the source mailbox — including a `Received … by
+ * <our MX>` and an `Authentication-Results: <our authserv-id>` pair or our internal-mail marker, which would otherwise
+ * read as ours (an APPEND adds no `Received` of our own above them). So such a message is never verified by us.
+ * A marker anywhere counts, look-alike spellings included: one lower down was written by a sender and only downgrades
+ * that sender's own mail.
+ */
+export function isImportedMail(headers: readonly RawHeader[]): boolean {
+  const marker = loose(IMPORT_MARKER_HEADER);
+  return headers.some((h) => loose(h.name) === marker);
+}
+
+/**
+ * The `Authentication-Results` header our mail server wrote, or null (always null for imported mail,
+ * `isImportedMail`). Stalwart (verified on v0.16.27) writes it only for mail arriving on port 25, directly below the
+ * `Received` header it prepends there, and writes neither for authenticated submission (SMTP 465/587 or JMAP) — so a
+ * header in a locally sent message is always the sender's.
  * The header is trusted only when the topmost `Received` was stamped `by` one of our hosts and is followed
  * immediately (ARC headers aside) by an `Authentication-Results` carrying our authserv-id. A header with our id
  * anywhere else was written by the sender, or by another hop, and is ignored. The submission Sieve script also strips
@@ -129,6 +145,7 @@ export function receivedBy(value: string): string | null {
  * forged `Received` plus results pair can't be planted from inside either.
  */
 export function ourAuthResultsHeader(headers: readonly RawHeader[], trustedIds: readonly string[]): string | null {
+  if (isImportedMail(headers)) return null;
   const trusted = new Set(trustedIds.map((t) => t.trim().toLowerCase()).filter(Boolean));
   const at = headers.findIndex((h) => isNamed(h, "received"));
   const received = headers[at];
@@ -204,6 +221,8 @@ export function receivedWith(value: string): string | null {
  *   submission script deletes every results header, and only port 25 gets either), and no `Received` stamped by one of
  *   `trustedIds` with anything but LMTP (a redirect adds only an LMTP one; submissions add none).
  *
+ * - it wasn't copied in by a mail import (`isImportedMail`): the source mailbox's owner controls every header of it.
+ *
  * So a redirected copy of internal mail passes and one of outside mail fails. False on any doubt, including a malformed
  * key.
  */
@@ -213,6 +232,7 @@ export function isInternalMail(
   key: string,
   trustedIds: readonly string[],
 ): boolean {
+  if (isImportedMail(headers)) return false;
   const trusted = new Set(trustedIds.map((t) => asciiLower(t.trim())).filter(Boolean));
   const one = (name: string): RawHeader | null => {
     const like = headers.filter((h) => loose(h.name) === loose(name));

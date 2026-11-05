@@ -8,6 +8,7 @@ import {
   authResults,
   delayLabel,
   deliveryDelaySeconds,
+  isImportedMail,
   isInternalMail,
   ourAuthResultsHeader,
   parseHeaderBlock,
@@ -402,5 +403,50 @@ describe("results that load images without asking (ADR-0027, security-audit run-
     }
     // DMARC for another domain than the From's doesn't count either.
     expect(senderVerified("probe@other.example", ok)).toBe(false);
+  });
+});
+
+describe("imported mail is never verified by us (ADR-0030 §5, SA-64-01)", () => {
+  // A source mailbox can hold a copy of mail our server once received (or a forgery of one): our Received with our
+  // results right below it. The importer's marker sits above it all, and an APPEND adds no Received of ours.
+  const imported = (marker = "X-AnhourMail-Imported") =>
+    parseHeaderBlock(`${marker}: 2f1d5c7e-4c1a-4a51-9b55-0b7c2d3e4f50\r\n${STAMPED}`);
+  const KEY = Array.from({ length: 64 }, (_, i) => (i % 16).toString(16)).join("");
+  const FROM = "alice@dev.test";
+  const MID = "18e3.f7@mail.dev.test";
+  const internalHeaders = (top: RawHeader[]) => [
+    ...top,
+    { name: "X-AnhourMail-Internal", value: internalMailTag(KEY, FROM, MID) ?? "" },
+    { name: "From", value: `<${FROM}>` },
+    { name: "Message-ID", value: `<${MID}>` },
+  ];
+
+  it("ignores our Received and Authentication-Results pair below the marker", () => {
+    expect(authResults(parseHeaderBlock(STAMPED), OURS)).not.toBeNull();
+    expect(isImportedMail(imported())).toBe(true);
+    expect(ourAuthResultsHeader(imported(), OURS)).toBeNull();
+    expect(authResults(imported(), OURS)).toBeNull();
+    expect(senderVerified("probe@example.org", authResults(imported(), OURS))).toBe(false);
+  });
+
+  it("ignores a forged pair whatever the marker's spelling or position", () => {
+    for (const spelling of ["x-anhourmail-imported", "X-AnhourMail_Imported", "X-ANHOURMAIL-IMPORTED"]) {
+      expect(authResults(imported(spelling), OURS)).toBeNull();
+    }
+    const below = parseHeaderBlock(STAMPED.replace("Subject: hi", "Subject: hi\r\nX-AnhourMail-Imported: x"));
+    expect(isImportedMail(below)).toBe(true);
+    expect(authResults(below, OURS)).toBeNull();
+  });
+
+  it("refuses the internal-mail marker inside an imported copy", () => {
+    expect(isInternalMail(internalHeaders([]), FROM, KEY, OURS)).toBe(true);
+    const copied = internalHeaders([{ name: "X-AnhourMail-Imported", value: "2f1d5c7e" }]);
+    expect(isInternalMail(copied, FROM, KEY, OURS)).toBe(false);
+    expect(senderVerified(FROM, null, isInternalMail(copied, FROM, KEY, OURS))).toBe(false);
+  });
+
+  it("leaves ordinary mail alone", () => {
+    expect(isImportedMail(parseHeaderBlock(STAMPED))).toBe(false);
+    expect(isImportedMail([{ name: "X-AnhourMail-Importer", value: "x" }])).toBe(false);
   });
 });
