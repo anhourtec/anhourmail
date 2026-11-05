@@ -6,7 +6,14 @@ import { describe, expect, it } from "vitest";
 import type { BreachedPasswords } from "@anhourmail/core/security";
 
 import { memoryBreachedPasswords } from "../memory/breached-passwords";
-import { breachedPasswordsOff, countInRange, PWNED_PASSWORDS_RANGE_URL, pwnedPasswords, rangeParts } from ".";
+import {
+  breachedPasswordsOff,
+  countInRange,
+  PWNED_PASSWORDS_RANGE_URL,
+  pwnedPasswords,
+  rangeParts,
+  readCapped,
+} from ".";
 
 const PASSWORD = "an example passphrase that is long";
 const HEX = createHash("sha1").update(PASSWORD).digest("hex").toUpperCase();
@@ -98,6 +105,52 @@ describe("range API adapter (k-anonymity)", () => {
       const logged = JSON.stringify(warnings);
       for (const secret of [PASSWORD, HEX, PREFIX, SUFFIX]) expect(logged).not.toContain(secret);
     }
+  });
+
+  it("stops reading a body past the cap, whatever its declared length says, and cancels the rest", async () => {
+    const chunk = new Uint8Array(64 * 1024).fill(0x41);
+    // Endless answer with no content-length (chunked) — and one that understates its length.
+    for (const headers of [{}, { "content-length": "100" }]) {
+      const seen = { pulled: 0, cancelled: false };
+      const endless = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          seen.pulled += 1;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          seen.cancelled = true;
+        },
+      });
+      const { check, warnings } = harness(() => Promise.resolve(new Response(endless, { headers })));
+      expect(await check.check(PASSWORD)).toBe("unknown");
+      expect(warnings[0]?.ctx?.reason).toBe("too_large");
+      expect(seen.cancelled).toBe(true);
+      expect(seen.pulled).toBeLessThanOrEqual(8); // 256 KiB cap / 64 KiB chunks, plus what the stream queued ahead
+    }
+  });
+
+  it("reads a body in pieces (multi-byte characters split across chunks) up to the cap exactly", async () => {
+    const bytes = new TextEncoder().encode("é".repeat(5));
+    const pieces = [bytes.slice(0, 3), bytes.slice(3)];
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const p of pieces) controller.enqueue(p);
+        controller.close();
+      },
+    });
+    expect(await readCapped(new Response(stream), bytes.byteLength)).toBe("é".repeat(5));
+    expect(await readCapped(new Response("abcd"), 3)).toBeNull();
+    expect(await readCapped(new Response(null), 3)).toBe("");
+    // A range answer split across chunks still parses.
+    const body = new TextEncoder().encode(rangeBody(9));
+    const split = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(body.slice(0, 50));
+        controller.enqueue(body.slice(50));
+        controller.close();
+      },
+    });
+    expect(await harness(() => Promise.resolve(new Response(split))).check.check(PASSWORD)).toBe("breached");
   });
 
   it("parses range bodies strictly", () => {
