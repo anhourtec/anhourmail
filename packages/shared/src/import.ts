@@ -4,6 +4,7 @@
  * the folder mapping vocabulary, and the contacts CSV column aliases. Capacity settings (throttles, global
  * concurrency, slice length) are deployment config, not facts: they live in the importer's environment.
  */
+import { toCsv } from "./csv";
 import { ACCOUNT_POLICY } from "./plans";
 
 export const IMPORT = {
@@ -127,8 +128,9 @@ export const IMPORT_MARKER_HEADER = "X-AnhourMail-Imported";
 // ---- sources --------------------------------------------------------------------------------------------------
 
 /**
- * Source choices in the console's "New import" form. Provider presets (with their own setup pages) are added with
- * the public import guides (ADR-0030 §17–18); until then every source is "Other IMAP server".
+ * Source choices in the console's "New import" form (ADR-0030 §17). Naming a provider here is setup text a person needs
+ * to recognise (rule 57's exception): each preset fills in the provider's published IMAP host and port and links the
+ * public guide for making an app password there. "Other IMAP server" lets the person type the host.
  */
 export type ImportSourcePreset = {
   id: string;
@@ -138,13 +140,177 @@ export type ImportSourcePreset = {
   port: ImportSourcePort;
   /** The public docs page explaining how to make an app password there. */
   docsSlug: string;
+  /** What the person signs in to the old mailbox with (shown as the user name hint). */
+  usernameHint: string;
   /** OAuth sign-in (ADR-0030 §11): not built, so always null for now. */
   oauth: null;
 };
 
 export const IMPORT_SOURCE_PRESETS: readonly ImportSourcePreset[] = [
-  { id: "other", name: "Other IMAP server", host: null, port: 993, docsSlug: "import/imap", oauth: null },
+  {
+    id: "gmail",
+    name: "Gmail",
+    host: "imap.gmail.com",
+    port: 993,
+    docsSlug: "import/gmail",
+    usernameHint: "Your full Gmail address",
+    oauth: null,
+  },
+  {
+    id: "yahoo",
+    name: "Yahoo Mail",
+    host: "imap.mail.yahoo.com",
+    port: 993,
+    docsSlug: "import/yahoo",
+    usernameHint: "Your full Yahoo Mail address",
+    oauth: null,
+  },
+  {
+    id: "icloud",
+    name: "iCloud Mail",
+    host: "imap.mail.me.com",
+    port: 993,
+    docsSlug: "import/icloud",
+    usernameHint: "Your iCloud Mail address",
+    oauth: null,
+  },
+  {
+    id: "aol",
+    name: "AOL Mail",
+    host: "imap.aol.com",
+    port: 993,
+    docsSlug: "import/aol",
+    usernameHint: "Your full AOL address",
+    oauth: null,
+  },
+  {
+    id: "other",
+    name: "Other IMAP server",
+    host: null,
+    port: 993,
+    docsSlug: "import/imap",
+    usernameHint: "Usually your full email address",
+    oauth: null,
+  },
 ];
+
+export const importSourcePreset = (id: string): ImportSourcePreset | undefined =>
+  IMPORT_SOURCE_PRESETS.find((p) => p.id === id);
+
+// ---- what the console, the emails and the docs say -------------------------------------------------------------
+
+/** Why an import is waiting, and what fixes it (console detail page, docs). */
+export const IMPORT_BLOCKED_TEXT: Readonly<Record<ImportBlockedReason, { title: string; fix: string }>> = {
+  quota_full: {
+    title: "The mailbox is full",
+    fix: "Raise this mailbox's storage, or leave out some folders, then resume. Resuming anyway copies what fits.",
+  },
+  source_auth: {
+    title: "The old provider refused the sign-in",
+    fix: "Make a new app password at the old provider and resume with it. We don't retry by ourselves, so the old account isn't locked.",
+  },
+  source_unreachable: {
+    title: "We couldn't reach the old server",
+    fix: "Check the host name and port. If the old provider was slowing the copy down, resume later.",
+  },
+  source_certificate: {
+    title: "The old server's certificate didn't check out",
+    fix: "Its certificate isn't valid for that host name. Check the host name, or ask the old provider for the right one.",
+  },
+  source_tls_required: {
+    title: "The old server didn't offer an encrypted connection",
+    fix: "We only connect with TLS. Use port 993, or ask the old provider to turn on STARTTLS for port 143.",
+  },
+  destination_credential: {
+    title: "The import's own sign-in to your mailbox stopped working",
+    fix: "Resume it: we make a new one.",
+  },
+  mailbox_unavailable: {
+    title: "This mailbox can't take mail right now",
+    fix: "It's suspended, being deleted or waiting for its first password change. Resume once it's active again.",
+  },
+};
+
+/** What an ended import's code means (console, the summary email). Unknown codes fall back to a generic line. */
+export const IMPORT_END_TEXT: Readonly<Record<string, string>> = {
+  message_cap: "It stopped at the most messages an import can copy into one mailbox in 30 days.",
+  expired: "It waited longer than its sign-in to your mailbox lasts, so it ended. Start a new import to carry on.",
+  secret_unreadable: "We couldn't open its saved sign-in details, so it ended. Start a new import to carry on.",
+  person: "It was cancelled.",
+  mailbox_suspended: "It was cancelled because the mailbox was suspended.",
+  mailbox_deleted: "It was cancelled because the mailbox was deleted.",
+  mailbox_handover: "It was cancelled because the mailbox was handed over to a person.",
+  mailbox_released: "It was cancelled because the mailbox's person left it.",
+};
+
+export const importEndText = (code: string | null): string | null =>
+  code === null ? null : (IMPORT_END_TEXT[code] ?? "It ended early. Start a new import to carry on.");
+
+/** Where each role's mail went, for progress lists and the summary email; null is a custom folder. */
+export const IMPORT_ROLE_LABELS: Readonly<Record<ImportFolderRole | "custom", string>> = {
+  inbox: "Inbox",
+  sent: "Sent",
+  drafts: "Drafts",
+  junk: "Junk (copied as Imported Junk)",
+  trash: "Deleted",
+  archive: "Archive",
+  all: "All mail (into Archive)",
+  custom: "Other folders",
+};
+
+// ---- admins' batch CSV ----------------------------------------------------------------------------------------
+
+/** The batch file's columns (ADR-0030 §8), in the template's order; the last two are optional. */
+export const IMPORT_BATCH_COLUMNS = [
+  "mailbox",
+  "source_host",
+  "source_port",
+  "source_username",
+  "source_password",
+  "exclude_junk_trash",
+  "sync",
+] as const;
+export type ImportBatchColumn = (typeof IMPORT_BATCH_COLUMNS)[number];
+export const IMPORT_BATCH_REQUIRED: readonly ImportBatchColumn[] = [
+  "mailbox",
+  "source_host",
+  "source_username",
+  "source_password",
+];
+
+/** The batch template the console offers for download: the header and one example row (placeholders only). */
+export const IMPORT_BATCH_TEMPLATE = toCsv([
+  [...IMPORT_BATCH_COLUMNS],
+  ["person@example.com", "imap.example.net", "993", "person@example.net", "app-password-here", "yes", "no"],
+]);
+
+/** Why a batch row wasn't started (the row's values are never echoed back). */
+export const IMPORT_BATCH_ROW_CODES = [
+  "mailbox_not_found",
+  "duplicate_mailbox",
+  "forbidden",
+  "mailbox_unavailable",
+  "import_running",
+  "invalid_host",
+  "invalid_port",
+  "invalid_username",
+  "invalid_password",
+  "invalid_option",
+] as const;
+export type ImportBatchRowCode = (typeof IMPORT_BATCH_ROW_CODES)[number];
+
+export const IMPORT_BATCH_ROW_TEXT: Readonly<Record<ImportBatchRowCode, string>> = {
+  mailbox_not_found: "No mailbox with that address in this account",
+  duplicate_mailbox: "That mailbox is on an earlier row too",
+  forbidden: "Only Owners can import into an Owner's or admin's mailbox",
+  mailbox_unavailable: "The mailbox is suspended, being deleted, not ready or waiting for its first password change",
+  import_running: "The mailbox already has an import in progress",
+  invalid_host: "The host isn't an IMAP server reachable from the internet",
+  invalid_port: "The port must be 993 or 143",
+  invalid_username: "The user name is missing or too long",
+  invalid_password: "The app password is missing or too long",
+  invalid_option: "exclude_junk_trash and sync must be yes, no, true, false, 1, 0 or empty",
+};
 
 // ---- contacts CSV ---------------------------------------------------------------------------------------------
 
