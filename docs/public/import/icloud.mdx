@@ -1,0 +1,46 @@
+---
+title: Import from iCloud Mail
+description: Make an app-specific password for your Apple Account with two-factor authentication, then copy your iCloud Mail into AnhourMail.
+---
+
+To copy your mail from iCloud Mail, you make an **app-specific password** for your Apple Account and give it to the
+import. iCloud Mail isn't changed: we only read it.
+
+## Make an app-specific password
+
+Apple only offers app-specific passwords when **two-factor authentication** is on for your Apple Account. It's on for
+most accounts already.
+
+1. Sign in to your Apple Account on the web (account.apple.com), or open your Apple Account settings on an iPhone,
+   iPad or Mac.
+2. Open **Sign-In and Security**, then **App-Specific Passwords**.
+3. Choose to make a new one, give it a name you'll recognise, like "AnhourMail import", and create it.
+4. Apple shows the password once. Copy it: you'll paste it into the import.
+
+Apple changes its menus from time to time, so the names above may differ a little.
+
+## Start the import
+
+1. In the console, open **Import mail** and choose **New import**.
+2. Under **Provider**, choose **iCloud Mail**. The server settings are filled in for you:
+
+<ImportServerTable preset="icloud" />
+
+3. Type your iCloud Mail address as the **User name**, paste the **App-specific password** into **App password**, and
+   choose **Start import**.
+
+Your folders, Sent, Drafts and Archive arrive in the matching places here. The rest is the same for every provider:
+see [Move your mail here](/docs/import).
+
+## If iCloud refuses the sign-in
+
+The import says **Needs you: the old provider refused the sign-in**. Check:
+
+- You used the app-specific password, not your Apple Account password.
+- The user name is your **iCloud Mail** address (the one ending in an iCloud domain). The email address you sign in to
+  your Apple Account with can be a different one.
+- If it still fails, Apple also accepts only the part of your iCloud Mail address before the @.
+
+Then choose **Resume** and type the app-specific password again (or a new one).
+
+When you're done, revoke the app-specific password in your Apple Account settings.

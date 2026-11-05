@@ -1,0 +1,54 @@
+---
+title: Switch a domain without losing mail
+description: Move your own domain's mail to AnhourMail step by step - copy the old mailbox, keep new mail coming while DNS changes, point MX here, then stop syncing.
+---
+
+When your domain's mail moves from another provider to AnhourMail, mail keeps arriving at the old provider until DNS
+points here. These steps make sure nothing is lost in between, and nothing arrives twice.
+
+## 1. Add the domain and its mailboxes
+
+[Add your domain](/docs/custom-domain) in the console and create a mailbox for each address (see
+[Mailboxes](/docs/mailboxes)). Don't change the domain's MX record yet: until you do, mail keeps going to the old
+provider.
+
+## 2. Start the imports with "Keep copying new mail"
+
+For each mailbox, [start an import](/docs/import#start-an-import) and turn on **Keep copying new mail until I stop
+it**. (Admins moving a team can do them all at once, with `sync` set to `yes`: see
+[Import many mailboxes](/docs/import/many-mailboxes).)
+
+After the first full copy, the import shows **Copying new mail**: every <Value of="importSyncEveryMinutes" /> minutes
+it copies whatever has arrived at the old provider since. It keeps going until you choose **Stop syncing**, for up
+to <Value of="importSyncDays" /> days from the start.
+
+## 3. Forward from the old account (optional)
+
+If the old provider can forward mail automatically, you can also turn that on, to the new address here. Forwarded mail
+arrives straight away, and the import's next pass skips it, because the same message is already in the mailbox. So
+forwarding and syncing together never give you two copies.
+
+## 4. Point the domain here
+
+Change the domain's DNS records to the ones the console shows, starting with **MX**. The steps and the records are in
+[Use your own domain](/docs/custom-domain). DNS changes can take a while to reach everyone, so for a few hours some
+mail may still go to the old provider. The import copies it here.
+
+When the console has checked your MX record, the import page says: **Your domain's mail now arrives here.**
+
+## 5. Stop syncing
+
+Wait until nothing new is arriving at the old provider, for example for a day. Then open each import and choose
+**Stop syncing**. It copies anything that's left one last time, then shows **Finished**, deletes the app password it
+held, and we email you a summary. It doesn't stop on its own when MX changes, so you decide when it's done. If you
+forget, it stops by itself <Value of="importSyncDays" /> days after the import started.
+
+## 6. Tidy up
+
+- Turn off forwarding at the old provider, if you turned it on.
+- Revoke the app passwords you made for the import.
+- Set up your mail apps with the new settings: see [Mail app settings](/docs/clients/imap-smtp-settings).
+- Bring your contacts too: see [Import contacts](/docs/import/contacts).
+
+Keep the old account for a while before you close it, in case you need something that wasn't copied, like messages
+over <Value of="importMaxMessageSize" />.

@@ -1,0 +1,58 @@
+---
+title: Import many mailboxes
+description: For Owners and User Administrators moving a team - start an import for every mailbox at once from one CSV file, follow them on one page and download a report.
+---
+
+Moving a whole team? Owners and User Administrators can start an import for many mailboxes at once from one CSV file:
+one row per mailbox, up to <Value of="maxMailboxes" /> rows. Each row becomes its own import, the same as one started
+by hand.
+
+## Before you start
+
+- **Add the mailboxes first.** Every mailbox in the file must already exist in your account (see
+  [Mailboxes](/docs/mailboxes)).
+- **Collect an app password for each old mailbox.** Each person makes one at the old provider (the
+  [provider guides](/docs/import#guides-for-each-provider) show how) and gives it to you, or an administrator of the
+  old service makes them.
+- **Check who you can import into.** User Administrators can import into Members' mailboxes and shared mailboxes. Only
+  an Owner can import into an Owner's or administrator's mailbox.
+
+## Fill in the file
+
+1. In the console, open **Import mail** and choose **Import many mailboxes (CSV)**.
+2. Choose **Download template**. It has the column names and one example row: replace the example with your own rows.
+3. Fill in one row per mailbox:
+
+<ImportBatchColumnsTable />
+
+For the yes-or-no columns you can write `yes`, `no`, `true`, `false`, `1`, `0`, or leave them empty. Save the file as
+CSV in UTF-8. It can be up to <Value of="importBatchMaxSize" />.
+
+<Callout title="The file holds passwords">
+  Keep it somewhere only you can open, and delete it once the imports have started. We read it once, keep each password
+  encrypted with its own import, and never keep the file.
+</Callout>
+
+## Upload it
+
+1. Choose the file, then **Upload and start**.
+2. Confirm it's you with your console password if the console asks.
+3. Every good row starts an import straight away. Each mailbox's person gets an email saying an import into their
+   mailbox started.
+
+Rows with a problem don't start. The console lists them by line number with the reason, without repeating what was in
+them. Fix those rows and upload a file with only them. The reasons are:
+
+<ImportBatchRowList />
+
+## Follow the batch
+
+The batch page shows every mailbox with its status and progress, the same as on the **Import mail** page. Open one to
+pause, resume or cancel it, or to type a new app password when it says **Needs you**.
+
+**Download report** gives you a CSV file with a row per mailbox: `mailbox`, `status`, `messages`, `duplicates`,
+`too_large`, `failed` and `error`. It has counts and short status codes only, never passwords or anything about the
+mail.
+
+Up to <Value of="importConcurrency" /> imports run at the same time in one account. The others wait their turn and
+start by themselves.

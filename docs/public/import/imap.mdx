@@ -1,0 +1,58 @@
+---
+title: Import from any IMAP server
+description: Copy mail from any provider or server that offers IMAP with an encrypted connection, with the settings to ask for and what to do when it refuses.
+---
+
+Any mailbox you can open in a mail app over **IMAP** can be imported, as long as the server is reachable from the
+internet and uses an encrypted connection. Your old provider's help pages usually list the settings under "IMAP",
+"mail app settings" or "manual setup".
+
+## What you need
+
+- **IMAP server:** the old provider's incoming mail server name, often something like `imap.example.com`.
+- **Port:** <Value of="importPortTls" /> (TLS, the usual one) or <Value of="importPortStartTls" /> with STARTTLS. We
+  only connect with encryption: a server that offers neither isn't supported.
+- **User name:** usually your full email address at the old provider.
+- **App password:** if the provider offers app passwords, make one for the import. If it doesn't, your usual mail
+  password may work, as long as the provider lets mail apps sign in with it.
+
+## Start the import
+
+1. In the console, open **Import mail** and choose **New import**.
+2. Under **Provider**, choose **Other IMAP server**.
+3. Type the **IMAP server** and pick the **Port**, either <Value of="importPortTls" /> (TLS) or the STARTTLS
+   one, <Value of="importPortStartTls" />.
+4. Type the **User name** and **App password**, check the options, and choose **Start import**.
+
+The import first checks the old mailbox (**Checking the old mailbox**): it signs in, lists the folders and works out
+whether everything fits. Then it starts **Copying**. See [Move your mail here](/docs/import) for the options, what's
+copied and how to follow it.
+
+## How folders are matched
+
+Most servers say which folder is Sent, Drafts, Junk, Deleted items and Archive, and we put each one in the matching
+folder here. When a server doesn't say, we recognise the common names for them in many languages. Every other folder
+keeps its name and its place in the folder list. A folder whose name contains a slash (/) gets a dash (-) instead.
+
+If the old mailbox has a very deep or very long folder list, the deepest levels are joined into their parent folder's
+name ("Parent - Child"), and folders past the most a mailbox can hold go into one folder named **Imported**.
+
+## If it doesn't start
+
+The import page says **Needs you** with the reason. The most common ones for other servers:
+
+- **The old provider refused the sign-in:** the user name or password is wrong, or the provider doesn't let mail apps
+  sign in with a password. Check the provider's help for app passwords or a setting that turns IMAP on.
+- **We couldn't reach the old server:** check the server name and port. The server must be reachable from the
+  internet: a server only on your home or office network can't be imported from.
+- **The old server's certificate didn't check out:** the name you typed isn't the one on the server's certificate. Use
+  the server name the provider publishes, not an address or another name for the same server.
+- **The old server didn't offer an encrypted connection:** use port <Value of="importPortTls" />, or ask the provider
+  to turn on STARTTLS.
+
+Every reason and its fix is listed in [When it says "Needs you"](/docs/import#when-it-says-needs-you).
+
+## Mailboxes you can't import yet
+
+Some providers only let other apps in through their own sign-in page, never with a password. We can't import from
+those yet: see [Providers we can't import from yet](/docs/import#providers-we-cant-import-from-yet).

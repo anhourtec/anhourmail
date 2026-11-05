@@ -1,0 +1,69 @@
+---
+title: Import from Gmail
+description: Make a Gmail app password with 2-Step Verification, then copy your Gmail mail, labels and read marks into AnhourMail.
+---
+
+To copy your mail from Gmail, you make an **app password** in your Google Account and give it to the import. Gmail
+isn't changed: we only read it.
+
+## Make an app password
+
+Google only offers app passwords when **2-Step Verification** is on for your account.
+
+1. Sign in to your Google Account (myaccount.google.com) and open **Security**.
+2. If **2-Step Verification** is off, turn it on first and follow the steps.
+3. Search for **App passwords** with the search box at the top of your Google Account (it's also listed under
+   2-Step Verification).
+4. Type a name you'll recognise, like "AnhourMail import", and create it.
+5. Google shows a 16-letter password once. Copy it: you'll paste it into the import. The spaces don't matter.
+
+Google changes its menus from time to time, so the names above may differ a little. If you don't see **App passwords**
+at all, see [If Gmail refuses the sign-in](#if-gmail-refuses-the-sign-in).
+
+## Start the import
+
+1. In the console, open **Import mail** and choose **New import**.
+2. Under **Provider**, choose **Gmail**. The server settings are filled in for you:
+
+<ImportServerTable preset="gmail" />
+
+3. Type your full Gmail address as the **User name**, paste the **App password**, and choose **Start import**.
+
+The rest is the same for every provider: see [Move your mail here](/docs/import).
+
+## How Gmail's labels arrive
+
+Gmail shows labels to mail apps as folders, and the import copies them that way:
+
+- Each label becomes a folder here, with labels inside labels kept as folders inside folders.
+- A message with several labels is copied into each of those folders, the way a mail app sees it.
+- **Sent Mail**, **Drafts**, **Spam** and **Trash** go into Sent, Drafts, Junk and Deleted items here. Spam and Trash
+  are left out unless you turn off **Leave out Junk and Deleted items**.
+- **All Mail** holds every message, including archived mail that has no label. It's copied last, into **Archive**, and
+  only the messages not already copied from another folder. So archived mail arrives once, and nothing else twice.
+- **Starred** and **Important** aren't copied as folders: those messages arrive in their own folders, and starred ones
+  keep their flag.
+
+If your Gmail settings limit how many messages a folder shows to mail apps (under **Forwarding and POP/IMAP**, **Folder
+size limits**), set it to no limit before you start, or older mail won't be copied.
+
+## If Gmail refuses the sign-in
+
+The import says **Needs you: the old provider refused the sign-in**. Check:
+
+- You used the app password, not your usual Google password.
+- The user name is your full Gmail address.
+- If your Gmail settings have an **IMAP access** option under **Forwarding and POP/IMAP**, it's turned on.
+- **No App passwords option?** 2-Step Verification must be on. On an account managed by your work or school, the
+  administrator may not allow app passwords or IMAP. Ask them; if they can't turn it on, we can't import from that
+  account yet (see [Providers we can't import from yet](/docs/import#providers-we-cant-import-from-yet)).
+
+Then make a new app password and choose **Resume** with it.
+
+## When you're done
+
+Revoke the app password in your Google Account (**App passwords**, then delete it). The import has already deleted its
+copy, but it's good practice.
+
+Moving your own domain away from Google too? See
+[Switch a domain without losing mail](/docs/import/switching-a-domain).

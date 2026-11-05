@@ -1,0 +1,83 @@
+---
+title: Import contacts
+description: Bring your contacts from another app or provider as a vCard or CSV file, check which column holds what, and merge them with the contacts you already have.
+---
+
+You can bring your address book from another app or provider into a mailbox's contacts in the webmail. Export it there
+as a **vCard** (`.vcf`) or **CSV** (`.csv`) file, then import that file. Your old app isn't changed, and nothing is
+deleted anywhere.
+
+## Export your contacts from the old app
+
+Choose vCard when the app offers it: it keeps more detail than CSV. Every app below can export all your contacts in
+one file.
+
+- **Google Contacts:** open contacts.google.com, choose **Export** in the menu on the left, pick the contacts (or all
+  of them) and **vCard (for iOS Contacts)**, then **Export**. **Google CSV** works too.
+- **Outlook.com:** in Outlook on the web, open **People**, choose **Manage contacts** then **Export contacts**, pick
+  **All contacts** and **Export**. You get a CSV file.
+- **Outlook for Windows:** choose **File** → **Open & Export** → **Import/Export** → **Export to a file** → **Comma
+  Separated Values**, then pick your **Contacts** folder. If the import later says the file isn't UTF-8, see
+  [If the file is refused](#if-the-file-is-refused).
+- **Apple Contacts on a Mac:** select the contacts (press Command-A for all), then choose **File** → **Export** →
+  **Export vCard**.
+- **iCloud:** on icloud.com, open **Contacts**, select the contacts, then choose **Export vCard** from the menu.
+- **Thunderbird:** open the **Address Book**, right-click the address book you want and choose **Export**, then pick
+  vCard or CSV.
+
+Other apps usually have an **Export** command in their contacts or address book menu.
+
+## Import the file
+
+1. Sign in to the [webmail](/docs/webmail) with the mailbox the contacts belong to, and open **Contacts**.
+2. Open the ⋯ menu above the contact list and choose **Import contacts**.
+3. Choose **Choose a file** and pick your `.vcf` or `.csv` file.
+4. A vCard file is imported straight away. For a CSV file, check the columns first (below), then choose **Import
+   contacts**.
+5. The window shows what happened: how many contacts were added, merged into ones you have, already there, skipped, or
+   left out because the mailbox is full.
+
+A file can be up to <Value of="contactsImportMaxSize" /> and hold up to <Value of="contactsImportMaxCards" /> contacts.
+For a bigger address book, export it in parts (for example by label or group) and import each one. The mailbox's own
+limit on contacts still applies (see [Contacts](/docs/contacts)).
+
+We read names, email addresses, phone numbers, company, notes, birthday and labels. Photos, addresses, links and
+anything else in the file are left out, and the file itself isn't kept: it's read once and only the contacts are
+saved, in your mailbox's address book.
+
+## Check which column holds what (CSV)
+
+A CSV file is a table, and every app names its columns a little differently. Before importing, the webmail lists each
+column of your file with a few example values from its first rows, and the field it will fill:
+
+- Columns we recognise already have a field picked: first name, last name, full name, email, phone, company, notes,
+  birthday or labels. Several email, phone or label columns all count.
+- Columns we don't recognise say **Don't import**. If one holds something useful, pick the field it should fill (for
+  example a column called "Team" as **Company**).
+- To leave a column out, choose **Don't import**.
+
+Birthdays are read when they're written like `1990-07-04` (or `--07-04` without a year); others are left out. Labels
+can be several in one column, separated by commas or semicolons.
+
+## How merging works
+
+Importing never creates a second card for someone you already have, and never changes what you've written yourself:
+
+- A contact whose email address is already on one of your contacts (capital letters don't matter) is **merged** into
+  it. Only empty details are filled in: more email addresses and phone numbers, a company, notes, a birthday, labels,
+  or a name if it had none. Nothing that's there is changed or removed.
+- The same goes for the same person appearing twice in one file: the second fills in what the first left empty.
+- A contact without an email address is skipped when you already have someone with the same full name and the same
+  phone number.
+- If a contact adds nothing new, it counts as **already in your contacts**.
+
+New contacts go into **My contacts**. You can import the same file again safely: it adds nothing twice.
+
+## If the file is refused
+
+- **"This file isn't saved as UTF-8":** some apps save CSV files in an older text encoding. Open the file in a
+  spreadsheet app and save it again as **CSV UTF-8** (or "Unicode text" / UTF-16), then import that copy.
+- **Too large or too many contacts:** split the file and import each part.
+- **Some entries were skipped:** an entry needs at least a name, an email address or a phone number, and email
+  addresses must be valid. Check those rows in the old app, fix them and import the file again: what's already
+  imported is merged, not doubled.

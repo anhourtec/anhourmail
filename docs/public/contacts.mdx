@@ -1,6 +1,6 @@
 ---
 title: Contacts
-description: Keep the people you write to in the webmail — add, edit and group contacts, import and export vCard files, people saved automatically when you email them, and syncing contacts to your phone and computer.
+description: Keep the people you write to in the webmail — add, edit and group contacts, import vCard and CSV files, export vCard files, people saved automatically when you email them, and syncing contacts to your phone and computer.
 ---
 
 Your contacts live with your mailbox, on our mail server, in standard address books. The webmail shows them, and your
@@ -52,10 +52,11 @@ to My contacts or Other contacts, export them, or delete them (after a confirmat
 
 ## Import and export
 
-- **Import:** in the ⋯ menu above the list, choose **Import contacts (.vcf)** and pick a vCard file exported from
-  another app or service. Files can be up to 1 MB and 1,000 contacts. We read names, email addresses, phone
-  numbers, company, birthday, labels and notes; photos and links in the file are ignored. Contacts without a name,
-  address or phone number are skipped, and the notice tells you how many.
+- **Import:** in the ⋯ menu above the list, choose **Import contacts** and pick a vCard (`.vcf`) or CSV (`.csv`) file
+  exported from another app or service. A file can be up to <Value of="contactsImportMaxSize" /> and hold up
+  to <Value of="contactsImportMaxCards" /> contacts. For a CSV file you first check which column holds what. Contacts
+  whose email address you already have are merged into them: only empty details are filled in, nothing is changed or
+  removed. See [Import contacts](/docs/import/contacts) for how to export from other apps and how merging works.
 - **Export:** choose **Export all contacts** in the same menu, or select some contacts and choose the download
   button, to get a `.vcf` file you can import anywhere.
 

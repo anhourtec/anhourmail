@@ -1,0 +1,128 @@
+---
+title: Move your mail here
+description: Copy your old mailbox's mail, folders, read and flagged marks and dates into AnhourMail with an app password. The old mailbox is only read, and nothing there changes.
+---
+
+You can copy everything from an old mailbox at another provider into a mailbox here: your mail, your folders, which
+messages are read or flagged, and their original dates. We sign in to the old mailbox with an **app password**, read
+it, and copy what we find. Nothing at the old provider is changed, moved or deleted.
+
+Contacts move separately, as a file: see [Import contacts](/docs/import/contacts).
+
+## Before you start
+
+- **An app password at the old provider.** Most providers don't let other apps sign in with your usual password. Make
+  an app password there just for the import. The guide for your provider shows how.
+- **Room in the mailbox here.** The mail needs to fit in the mailbox's storage (see
+  [Storage used](/docs/mailboxes#storage-used)). If it doesn't, the import waits and tells you.
+- **Your console password.** Starting an import asks for it if you haven't confirmed it's you in the
+  last <Value of="stepUpMinutes" /> minutes.
+
+## Start an import
+
+1. In the console, open **Import mail** (under **Mail** in the left navigation), then choose **New import**.
+2. Under **Import into**, pick the mailbox here that the mail should go into.
+3. Under **Provider**, pick your old provider. For one that isn't listed, choose **Other IMAP server** and type its
+   **IMAP server** and **Port** (see [Import from any IMAP server](/docs/import/imap)).
+4. Type the **User name** for the old mailbox (usually its full email address) and the **App password** you made
+   there.
+5. Check the options (below), then choose **Start import**.
+
+The import runs on our servers: you can close the page, sign out or turn off your computer. When it finishes, we email
+you a summary with how much was copied into each folder and how long it took.
+
+### Options
+
+- **Leave out Junk and Deleted items** (on to start with). Turn it off to copy those too. Copied Junk arrives as an
+  ordinary folder named **Imported Junk**, kept apart from your Junk folder here.
+- **Put the old folders under Imported.** Your own folders go into one folder called **Imported**, so they don't mix
+  with folders you already have. Inbox, Sent and Drafts still go to their usual places.
+- **Keep copying new mail until I stop it.** After the first copy, new mail at the old provider keeps being copied
+  here every <Value of="importSyncEveryMinutes" /> minutes, for up to <Value of="importSyncDays" /> days. Use it while
+  you switch over: see [Switch a domain without losing mail](/docs/import/switching-a-domain).
+
+## Guides for each provider
+
+- [Gmail](/docs/import/gmail)
+- [Yahoo Mail](/docs/import/yahoo)
+- [iCloud Mail](/docs/import/icloud)
+- [AOL Mail](/docs/import/aol)
+- [Any other IMAP server](/docs/import/imap)
+- [Many mailboxes at once (admins)](/docs/import/many-mailboxes)
+- [Switch a domain without losing mail](/docs/import/switching-a-domain)
+- [Contacts](/docs/import/contacts)
+
+<ImportServerTable />
+
+## What's copied
+
+- **Folders**, with their folders inside folders. The old Inbox, Sent, Drafts and Archive go into the matching folders
+  here; every other folder keeps its name.
+- **An "All mail" folder**, on providers that have one, is copied last, into **Archive**, and only the messages that
+  weren't already copied from another folder. So nothing arrives twice.
+- **Read, flagged and replied-to marks**, and labels (keywords) that mail apps set.
+- **The original dates**, so your mail sorts the way it did before.
+
+## What isn't copied
+
+- Messages over <Value of="importMaxMessageSize" />. They stay at the old provider, and the import counts them as
+  **Too large**.
+- Messages that were deleted at the old provider but not yet removed for good.
+- Folders like "Starred" or "Important" that only show mail kept in other folders.
+- The old provider's spam-filter training. Your spam filter here learns from what you do here.
+- Contacts and calendars. Contacts import as a file: see [Import contacts](/docs/import/contacts).
+
+Mail that's already in the mailbox here isn't copied twice. That makes it safe to run an import again, and safe to
+forward mail from the old account while you switch.
+
+## Follow an import
+
+The **Import mail** page lists every import with its status and progress. Open one to see more:
+
+- **Status:** **Waiting to start**, **Checking the old mailbox**, **Copying**, **Paused**, **Needs you** (with the
+  reason), **Copying new mail** (when it keeps copying new mail), **Finished**, **Finished early** (it stopped before
+  copying everything; the page says why), **Cancelled** or **Ended** (something went wrong; the page says what).
+- **Counts:** **Copied**, **Already there (skipped)**, **Too large** and **Not accepted** (messages the mail server
+  here refused, for example because they were damaged).
+- **Folders:** the folders it found, and how many messages each one holds. While it runs, only the folder names are
+  shown.
+- **Buttons:** **Pause** and **Resume**, **Stop syncing** (when it keeps copying new mail), and **Cancel import**,
+  which stops it at once. Mail that's already copied stays.
+
+Up to <Value of="importConcurrency" /> imports run at the same time in one account. Start more and they wait their
+turn. Each mailbox has one import at a time.
+
+### When it says "Needs you"
+
+An import that can't carry on waits for you, and the page says why and what to do. Fix it, then choose **Resume**. If
+the old provider refused the app password, you can type a new one when you resume.
+
+<ImportBlockedList />
+
+## Your privacy
+
+- The old mailbox is only read. We never delete, move or mark anything there, and messages you hadn't read stay unread.
+- The app password is kept encrypted while the import runs, and deleted as soon as it ends: when it finishes, or you
+  cancel it. Nobody can see it after you type it, our staff included.
+- We keep counts and folder names only while the import runs. Once it's done we keep the counts, never the folder
+  names, subjects or anything else about your mail.
+- Imports don't send mail and don't count toward your [sending limits](/docs/sending-limits).
+- An imported message keeps the sender checks the old provider made. We didn't check it ourselves when it arrived, so
+  the webmail says so in its details ("Imported; not checked by AnhourMail"), and a safe sender's images don't load in
+  it by themselves.
+
+## Who can import
+
+- **Everyone but Auditors** can import into the mailboxes that are theirs.
+- **Owners** and **User Administrators** can also import into other people's mailboxes and shared mailboxes. Only an
+  Owner can import into an Owner's or administrator's mailbox. When an admin starts an import into your mailbox, we
+  email you, and you can see it and stop it on your own **Import mail** page.
+- Admins can start imports for many mailboxes at once from a CSV file: see
+  [Import many mailboxes](/docs/import/many-mailboxes).
+
+## Providers we can't import from yet
+
+Some providers only let other apps in through their own sign-in page, not with an app password. That's the case for
+business mailboxes at some of the largest providers, where password sign-in for mail apps is turned off. We can't
+import from those mailboxes yet. If your provider offers app passwords, or lets you turn on IMAP with a password, you
+can import now.

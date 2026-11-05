@@ -1,0 +1,43 @@
+---
+title: Import from Yahoo Mail
+description: Make a Yahoo Mail app password in your account security settings, then copy your Yahoo mail and folders into AnhourMail.
+---
+
+To copy your mail from Yahoo Mail, you make an **app password** in your Yahoo account and give it to the import.
+Yahoo Mail isn't changed: we only read it.
+
+## Make an app password
+
+1. Sign in to Yahoo and open your account settings (**Account info**), then **Account security**.
+2. Choose **Generate app password** (it may be called **Manage app passwords**).
+3. Type a name you'll recognise, like "AnhourMail import", and generate it.
+4. Yahoo shows the password once. Copy it: you'll paste it into the import.
+
+Yahoo changes its menus from time to time, so the names above may differ a little. Searching Yahoo's help for "app
+password" finds the current steps.
+
+## Start the import
+
+1. In the console, open **Import mail** and choose **New import**.
+2. Under **Provider**, choose **Yahoo Mail**. The server settings are filled in for you:
+
+<ImportServerTable preset="yahoo" />
+
+3. Type your full Yahoo Mail address as the **User name**, paste the **App password**, and choose **Start import**.
+
+Your folders, Sent, Drafts and Archive arrive in the matching places here. The rest is the same for every provider:
+see [Move your mail here](/docs/import).
+
+## If Yahoo refuses the sign-in
+
+The import says **Needs you: the old provider refused the sign-in**. Check that you used the app password, not your
+usual Yahoo password, and your full Yahoo Mail address as the user name. Then make a new app password and choose
+**Resume** with it.
+
+## New mail while you switch
+
+Not every Yahoo Mail plan can forward mail to another address. If yours can't, turn on **Keep copying new mail until I
+stop it** when you start the import: new mail at Yahoo keeps being copied here until you stop it. See
+[Switch a domain without losing mail](/docs/import/switching-a-domain).
+
+When you're done, delete the app password in Yahoo's account security settings.
