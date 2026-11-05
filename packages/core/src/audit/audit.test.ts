@@ -219,11 +219,31 @@ describe("audit visibility", () => {
     for (const reader of [both, user({ account: [[ACCOUNT_A, "owner"]] })]) {
       const page = await accountAuditPage(d, reader, ACCOUNT_A);
       expect(page.entries.map((e) => [e.ip, e.userAgent])).toEqual([["198.51.100.x", null]]);
+      // The network part only, so no chain fields either (the hash would let them test full-IP guesses).
+      expect(page.entries.map((e) => [e.hash, e.prevHash])).toEqual([["", ""]]);
     }
     await expect(accountAuditPage(d, user({ platform: ["global_admin"] }), ACCOUNT_A)).rejects.toThrow(NotFoundError);
     await expect(accountAuditPage(d, user({ account: [[ACCOUNT_B, "owner"]] }), ACCOUNT_A)).rejects.toThrow(
       NotFoundError,
     );
+  });
+
+  it("a suspension's internal note: Global Administrators see it; Reports Readers read the entry without it", async () => {
+    const d = deps();
+    const entry = { ...input("platform"), meta: { reasonCategory: "spam", internalNote: "ticket 42" } };
+    await d.uow.run((r) => r.audit.append(entry, new Date()));
+    const ga = await platformAuditPage(d, user({ platform: ["global_admin"] }));
+    expect(ga.entries[0]?.meta).toEqual({ reasonCategory: "spam", internalNote: "ticket 42" });
+    const reader = await platformAuditPage(d, user({ platform: ["reports_reader"] }));
+    expect(reader.entries[0]?.meta).toEqual({ reasonCategory: "spam" });
+    expect(JSON.stringify(reader)).not.toContain("ticket 42");
+    // The hash covers the note and the full IP: only a reader who sees both gets the chain fields (no offline guessing).
+    expect(ga.entries[0]?.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(ga.entries[0]?.prevHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(reader.entries.map((e) => [e.hash, e.prevHash])).toEqual([["", ""]]);
+    // A view only: the stored entry and its hash chain are untouched.
+    expect(await verifyAuditScope(d, "platform")).toBeNull();
+    expect(JSON.stringify(d.uow.state.audit)).toContain("ticket 42");
   });
 });
 
