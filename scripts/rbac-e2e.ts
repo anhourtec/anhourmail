@@ -21,7 +21,7 @@
  */
 import { randomBytes, randomUUID } from "node:crypto";
 
-import { inArray, like } from "drizzle-orm";
+import { eq, inArray, like } from "drizzle-orm";
 
 import { hashPassword } from "@anhourmail/adapters/auth";
 import { createDb, schema } from "@anhourmail/adapters/postgres";
@@ -228,6 +228,78 @@ try {
     const anyFull = ips.some((ip) => !ip.endsWith(".x") && !ip.endsWith("/48") && ip !== "hidden");
     const okFull = shouldBeFull ? full : !anyFull;
     results.push({ route: "platform audit IPs (full_ip)", persona: p.label, expected: 1, got: okFull ? 1 : 0 });
+  }
+
+  // ---- 1b2. a suspension's internal note: `platform.suspensionNotes.read` (Global, Support, Trust & Safety) only ----
+  // The Global Administrator (a fresh step-up, as after a sign-in) suspends a throwaway person through the real route,
+  // which puts the note in the platform log; an account staff suspended carries a note too. Every staff reader then
+  // looks at the platform audit log and the Platform → account page: the note shows only with the permission.
+  {
+    const note = `${run}-internal-note`;
+    const ga = personas.find((p) => p.label === "staff global_admin");
+    if (ga?.actor.kind !== "user" || !ga.cookie) throw new Error("personas missing");
+    const gaId = ga.actor.userId;
+    const sessions = await db
+      .select({ id: schema.authSession.id })
+      .from(schema.authSession)
+      .where(eq(schema.authSession.userId, gaId));
+    const stepUps = sessions.map((x) => ({
+      id: randomUUID(),
+      identifier: `step-up-${x.id}`,
+      value: gaId,
+      expiresAt: new Date(Date.now() + 5 * 60_000),
+    }));
+    await db.insert(schema.authVerification).values(stepUps);
+    const subjectId = await createUser(`${run}-note-subject@rbac.test`, password);
+    const suspended = await fetch(`${WEB}/api/platform/people/${subjectId}/suspension`, {
+      method: "POST",
+      headers: { cookie: ga.cookie, origin: WEB, "content-type": "application/json" },
+      body: JSON.stringify({ reason: "spam", note }),
+    });
+    results.push({ route: "suspend a person with a note", persona: ga.label, expected: 200, got: suspended.status });
+    // The step-up rows added here aren't tied to the login: remove them now rather than leave them to expire.
+    await db.delete(schema.authVerification).where(
+      inArray(
+        schema.authVerification.id,
+        stepUps.map((x) => x.id),
+      ),
+    );
+    const [noted] = await db
+      .insert(schema.customerAccount)
+      .values({
+        name: `${run} account N`,
+        plan: "plus",
+        status: "suspended",
+        suspensionReason: "spam",
+        suspensionNote: note,
+        suspendedAt: new Date(),
+      })
+      .returning();
+    if (!noted) throw new Error("noted account not created");
+    for (const p of personas.filter((x) => x.actor.kind === "user" && x.actor.platformRoles.length > 0)) {
+      const shouldSee = authorizes(p.actor, "platform.suspensionNotes.read");
+      const headers = { cookie: p.cookie ?? "", origin: WEB };
+      const audit = await fetch(`${WEB}/api/platform/audit?limit=200`, { headers });
+      if (audit.status === 200) {
+        const seen = (await audit.text()).includes(note);
+        results.push({
+          route: "suspension note in the platform audit",
+          persona: p.label,
+          expected: 1,
+          got: seen === shouldSee ? 1 : 0,
+        });
+      }
+      const page = await fetch(`${WEB}/platform/accounts/${noted.id}`, { headers });
+      if (page.status === 200) {
+        const seen = (await page.text()).includes(note);
+        results.push({
+          route: "suspension note on Platform → account",
+          persona: p.label,
+          expected: 1,
+          got: seen === shouldSee ? 1 : 0,
+        });
+      }
+    }
   }
 
   // ---- 1c. an alias an administrator turned off: its own Member can't turn it on or delete it ---------------------
