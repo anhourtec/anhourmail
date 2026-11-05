@@ -68,6 +68,15 @@ export const JOBS: readonly Job[] = [
   // ADR-0029 §5, §6: restricted accounts past their grace period ended, comps that ran out, holds on deleted items
   // dropped, held mailboxes' storage pinned. Never deletes mail.
   { name: "billing-timers", script: "job:billing-timers", everyMs: 3600_000, timeoutMs: 10 * 60_000, enabled: true },
+  // ADR-0029 §2: the provider's prices against plans.ts, soon after start and daily; drift refuses new checkouts and
+  // plan changes until fixed (logged at error level every run).
+  {
+    name: "billing-catalogue",
+    script: "job:billing-catalogue",
+    everyMs: 24 * 3600_000,
+    timeoutMs: 5 * 60_000,
+    enabled: true,
+  },
   // ADR-0030 §16: mail imports — terminal rows still holding a secret wiped, waiting ones past their credential
   // failed, syncs past their window ended (database only; the worker revokes the credentials).
   { name: "import-expiry", script: "job:import-expiry", everyMs: 3600_000, timeoutMs: 5 * 60_000, enabled: true },
