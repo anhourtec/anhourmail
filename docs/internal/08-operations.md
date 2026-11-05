@@ -74,6 +74,7 @@ own process. One-off jobs run in the worker image with `npm run -w @anhourmail/w
 | `job:data-export`      | Every minute       | — (database + key ring)        | Builds waiting data exports (ADR-0025: control-plane data only), seals each with `SECRETS_KEYRING`, emails the requester, deletes archives past 7 days; audited `data.export_ready` / `data.export_expired`.                                                                      |
 | `job:account-deletion` | Every 10 minutes   | — (database only)              | Accounts past their deletion grace period (ADR-0025): one idempotent step per run — mailboxes to `deleting` (the purge removes them), domains released, then the account row; emails everyone who was in it. Never before the grace period ends; a staff-suspended account waits. |
 | `job:storage-usage`    | Every 10 minutes   | Provisioning                   | Reads each mailbox's `usedDiskQuota` (with its name, nothing else) in batches of 100 and records it on the mailbox row for the console. Logs `failedBatches` as a warning; those mailboxes keep their last good value.                                                            |
+| `job:import-expiry`    | Hourly             | — (database only)              | Mail import sweep (ADR-0030): terminal imports still holding a secret, username or folder name are wiped and their revoke queued; paused or blocked ones past their credential fail (`expired`); syncs past their window complete. Audited `data.import_*`.                       |
 | `job:quota-cap`        | Once, on deploy    | Provisioning                   | Brings each account's mailbox quotas within its pooled storage: scales them down in proportion, never below the mail held (rounded up); queues `mailbox.ensure`; audited. Logs `keptAbovePoolAccountIds`, `unmeasured` (re-run).                                                  |
 | `job:mailbox-backfill` | Once, on deploy    | —                              | Queues `mailbox.ensure` for every active mailbox (customer Sieve lock).                                                                                                                                                                                                           |
 | `job:bootstrap-admin`  | Once, first deploy | —                              | Creates the first Global Administrator and emails a set-password link (deploy/README.md "First platform administrator"); audited `platform.admin_bootstrapped`.                                                                                                                   |
@@ -146,6 +147,39 @@ next run reports no `sieveLockMismatch` (`platform.reconciler_drift` absent or w
 
 **Server access to the private ops repo:** the server pulls it with a read-only deploy key (an SSH key added under the
 repo's Deploy keys, write access off, `~/.ssh/config` host alias), not a personal token cached on the box.
+
+## Mail importer (ADR-0030)
+
+A fourth process from the worker image: `npm run --silent --workspace @anhourmail/worker importer`, its own container
+(never inside the worker or scheduler). It claims mail imports from Postgres, copies one slice of each over IMAP and
+gives it back. Heartbeat: `find /tmp/importer-heartbeat -mmin -2`.
+
+- **Deploy gate (ops repo; before the importer runs anywhere, checked by the deploy, not assumed):** its network
+  reaches **only** Postgres, Stalwart's IMAPS port (`IMPORT_DESTINATION_IMAP`, internal address) and public TCP
+  993/143. From inside the importer container a connection to Stalwart HTTP (`/api/auth`, `/jmap`, the management
+  listener), the management proxy and Redis **must fail**, and outbound to any other port must fail. The image runs
+  with `NODE_ENV=production`, so the development switches refuse to start. Dev rehearses this with the compose
+  `importer` service (profile `import`: an internal network whose only exit, `import-edge`, forwards Postgres and the
+  mail server's 993/143).
+- **Settings:** `DATABASE_URL`, `SECRETS_KEYRING` (the web app's ring: it opens what the web app sealed),
+  `IMPORT_DESTINATION_IMAP` (`host:port`, required), `IMPORT_DESTINATION_TLS_NAME` (default the public IMAP host from
+  `PLATFORM_DOMAIN`), `PLATFORM_DOMAIN`, `IMPORT_MESSAGE_CAPS` (message caps per destination mailbox over a rolling 30 days, by trust tier, e.g.
+  `new=<n>,standard=<n>,restricted=0`; required for `new`, `standard`, `restricted`; values are private, ops repo only),
+  and capacity settings `IMPORT_PROCESS_CONCURRENCY` (2), `IMPORT_GLOBAL_CONCURRENCY` (4), `IMPORT_SLICE_MINUTES` (15),
+  `IMPORT_LEASE_SECONDS` (120), `IMPORT_MAX_MESSAGES_PER_SECOND` (20), `IMPORT_MAX_BYTES_PER_SECOND` (10 MB/s). It is
+  refused any Stalwart key, `STALWART_URL`, `REDIS_URL`, `MAILBOX_PASSWORD_GRANT_KEY` and `SENDER_DELEGATION_KEY`, and
+  the dev-only `IMPORT_DEV_*` and `IMPORT_MAX_MESSAGE_BYTES`.
+- **The worker's training key** (deploy step before this release's worker starts): issue the fourth service account
+  and key, `svc-train` / `STALWART_TRAINING_KEY` (`TRAINING_KEY_PERMISSIONS`; the ops repo's Stalwart bootstrap creates it with `ensureServiceAccount` /
+  `issueServiceKey` for role `training`, like the others), give it to the **queue worker only**, and teach the management proxy to allow that key nothing but
+  `x:SpamTrainingSample/get` (properties `accountId`, `isSpam`, `expiresAt` only), `/query` and `/set { destroy }`.
+  The worker refuses to start in production without it. If `x:SpamClassifier.holdSamplesFor` isn't the default 180
+  days, set `STALWART_SPAM_SAMPLE_HOLD_MS` on the worker to the same value (a mismatch fails the clean-up jobs loudly).
+  The per-minute service-account check now expects `svc-train` too.
+- **Kill and restart are safe:** a killed importer's imports are picked up by any importer once the lease runs out
+  (≤ `IMPORT_LEASE_SECONDS`) and resume from their checkpoints; its training-sample window is covered then.
+- **Alerts:** `platform.provisioning_failed` for `mail_import.credential_revoke` (with `data.import_credentials_wiped`
+  in the account's log; the credential still expires on its own) and for `mail_import.training_cleanup`.
 
 ## Suspending an account or a person
 

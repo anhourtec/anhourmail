@@ -329,7 +329,8 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
     Administrators and Members get **403** (the add body is never read for them), other accounts and another account's
     entry id **404**, staff acting as someone **403**. Console page **Mail → Safe senders** (403 page without
     `safe_sender.read`). People see the list read-only in webmail Settings (a webmail session, not a role).
-23. **Mail import** (ADR-0030 §13; matrix and tests built, services and routes come with slice 6): new permissions
+23. **Mail import** (ADR-0030 §13; services and routes built 2026-11-05, slice 6; console pages come with slice 10):
+    new permissions
     `mailbox.import.own` (every role but the Auditor) starts, sees and controls imports into **mailboxes whose person is
     them**; `mailbox.import.any` ★ (Owner, User Administrator) does the same for any mailbox in the account — an Owner's
     or another admin's mailbox: Owners only (guard rail 8), shared and person-less mailboxes included — and runs the
@@ -338,7 +339,11 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
     neither permission), in an account waiting for deletion (403 `account_deleting`) or suspended; a mailbox that isn't
     active or owes its first password change is 409 `mailbox_unavailable`; another account's mailbox or import is
     **404**. Pause, cancel and stop-sync need the same permission, no step-up. An admin's import into someone else's
-    mailbox emails that person. Not critical for `.own`: it reaches only the person's own mail.
+    mailbox emails that person. Not critical for `.own`: it reaches only the person's own mail. Routes (all guarded by
+    `mailbox.import.own`; `.any` is checked in the service): `GET`/`POST /api/accounts/:accountId/imports`,
+    `GET …/imports/:importId`, `POST …/imports/:importId/{pause,resume,cancel,stop-sync}`; someone without `.any` sees
+    only their own mailboxes' imports and another person's import id is **404**; control actions on a finished import
+    are **409** `import_finished`. Suspending or deleting a mailbox and "Make this a user" cancel its import.
 
 ## Webmail
 

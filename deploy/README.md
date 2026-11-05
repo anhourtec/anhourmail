@@ -119,6 +119,10 @@ version. CI builds all three on every push (`.cicd/build.sh`).
   - `STALWART_OPERATIONS_KEY` (account `svc-ops`) — **web only**: app passwords and the managed Sieve script on a
     mailbox (`impersonate`); no account, domain or DKIM access.
   - `STALWART_AUDIT_KEY` (account `svc-audit`) — **scheduler only**: reads managed Sieve scripts for the hourly check.
+  - `STALWART_TRAINING_KEY` (account `svc-train`) — **queue worker only**: finds and destroys the spam-training
+    samples a mail import's APPENDs created (`impersonate` + `sysSpamTrainingSample{Get,Query,Destroy}`, nothing else;
+    ADR-0030). The management proxy should allow it only those calls. Set `STALWART_SPAM_SAMPLE_HOLD_MS` on the worker
+    if Stalwart's `holdSamplesFor` isn't the default 180 days.
 
   Each process refuses to start in production without its own key or with any other key, the dev admin
   (`STALWART_DEV_ADMIN_*`) or the old `STALWART_API_KEY`; at start (web: before first use) each key is compared with
@@ -201,3 +205,16 @@ commit;
 
 The original `platform.admin_bootstrapped` audit entry stays (audit is append-only) and the re-run writes a second
 one; note the manual removal and why in the operations log, since it bypasses the application.
+
+## Mail importer
+
+The mail import's copier (ADR-0030) is a separate container from the worker image:
+`command: ["npm", "run", "--silent", "--workspace", "@anhourmail/worker", "importer"]`, healthcheck
+`find /tmp/importer-heartbeat -mmin -2`, `NODE_ENV=production`. It holds **no Stalwart key** and is refused one at
+start, as well as `STALWART_URL`, `REDIS_URL` and the web app's grant keys. Give it `DATABASE_URL`, the web app's
+`SECRETS_KEYRING`, `PLATFORM_DOMAIN`, `IMPORT_DESTINATION_IMAP` (`host:port` of Stalwart's IMAPS listener on the
+internal network; TLS is verified against the public IMAP host, or `IMPORT_DESTINATION_TLS_NAME`) and
+`IMPORT_MESSAGE_CAPS` (message caps per mailbox over 30 days by trust tier, `new=<n>,standard=<n>,restricted=0`; your own values). Put it on a network that reaches only
+Postgres, that IMAPS port and the internet on TCP 993 and 143 — **never** Stalwart's HTTP listener (where `/api/auth`
+lives), the management proxy or Redis — and check that from inside the container after each deploy. Capacity settings
+and the full list: `docs/internal/08-operations.md` "Mail importer" (in the source repository).

@@ -1180,6 +1180,9 @@ unavailable` with the error's name only. No script or one that isn't ours = empt
     refuses it on anything showing port 25 (results or `Received-SPF` headers, our non-LMTP `Received`). A message
     with neither is not verified: a copy forwarded by a mailbox's redirect rule arrives with no results whatever its
     From says (security-audit run-32), and has no marker unless the original was internal mail (whose From is ours).
+    **Imported mail is never verified** (ADR-0030, SA-64-01; `isImportedMail` in `original.ts`): a message carrying
+    `X-AnhourMail-Imported` (the importer puts it on top of every copy) has no results of ours and no internal marker
+    whatever its other headers say — the old provider, or whoever wrote the source mailbox, controls them all.
     Otherwise the server sends no sender key and no Safe senders match, and the reader asks, so a forged From can't
     learn that the message was opened. Attached messages are never verified.
 - **Notice copy.** Blocked: "N remote images blocked · N trackers removed — Senders can't see when or where you

@@ -222,7 +222,12 @@ mailbox, resumable, with progress in the console and a summary email when done.
 
 Designed 2026-11-04 in ADR-0030 (`adr/0030-mail-and-contacts-import.md`): an importer process copies over IMAP with a
 per-import, IMAP-only credential the web app mints and the worker revokes; contacts upload stays in the webmail; OAuth
-sources deferred; 13 build slices.
+sources deferred; 13 build slices. **Slices 1–9 built (2026-11-05):** credential, net guard, facts, tables, IMAP
+adapter, start/control services and routes, the importer process (no Stalwart key) with resumable slices, wipe/revoke
+and lifecycle hooks, spam-training clean-up with the worker's training key, and the Phase 5 exit integration test
+(kill/restart, exact result, no credentials left, incremental sync). Left: console pages and emails (10), admins' CSV
+batch (11), webmail contacts and the imported note (12), public guides and ops (13); the importer runs nowhere until
+the ops deploy gate is in place.
 
 - **Mail import over IMAP from any provider:** source host, port, username and an app password; folders mapped onto
   ours (Inbox, Sent, Drafts, Junk, Trash, custom folders kept), flags and dates preserved, duplicates skipped by
