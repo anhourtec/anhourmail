@@ -110,3 +110,13 @@ service.
 - Sign-up from a dev phone over `http://<LAN IP>` can't run the check (no secure context); use `localhost` or https.
 - Phone verification in ADR-0021's consequences and `03-anti-spam-and-abuse.md` is superseded by this.
 - Phase 6 still owns sending ramps and the external-sending hold for new free mailboxes.
+
+## Update (2026-11-05): built
+
+Built as decided the same day: the signed challenge and its check in `packages/core/src/sign-up/`
+(`proof-of-work.ts`, `network.ts`, `refusal.ts`), the shared solver facts in `packages/shared/src/proof-of-work.ts`,
+the gate in `apps/web/src/server/auth/sign-up-gate.ts` with `POST /api/sign-up/challenge`, the Web Worker solver on the
+sign-up page, the sign-up tiers in `../rate-limits.md` and `auth.sign_up_refused` in `../audit.md`; e2e
+`tests/e2e/sign-up-proof.spec.ts` (solve, replay and forged proofs refused). Invite-code sign-up (ADR-0029 §8) claims
+its code after the proof-of-work, before anyone is created; while sign-up is closed, the challenge (step 2's 404) is
+still issued to a page that carries an invite code. The open IPv6 fact above is still open.

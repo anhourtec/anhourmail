@@ -21,18 +21,18 @@ One decision per file, numbered, never rewritten. A later ADR supersedes an earl
 | [0015](0015-bulk-sending-add-on.md)                          | Newsletters and bulk sending as a separate paid add-on                         | Accepted                                          |
 | [0016](0016-encryption-at-rest-and-security-baseline.md)     | Encryption at rest (opt-in zero-access) and security baseline                  | Accepted                                          |
 | [0017](0017-dkim-rotation-and-management-api-key.md)         | DKIM fixed selectors rotated by the worker; scoped management API key          | Accepted (updated 2026-10-28)                     |
-| [0018](0018-webmail-session-push-and-transport-hardening.md) | Webmail OAuth sessions, push sizing, submission transport hardening            | Accepted                                          |
+| [0018](0018-webmail-session-push-and-transport-hardening.md) | Webmail OAuth sessions, push sizing, submission transport hardening            | Accepted (updated 2026-11-04)                     |
 | [0019](0019-sender-identity-enforcement.md)                  | Sender identity enforcement for authenticated mail                             | Accepted (updated 2026-10-30)                     |
-| [0020](0020-app-passwords-issued-by-the-control-plane.md)    | App passwords issued by the control plane, limited per credential              | Accepted (amended 2026-10-23, updated 2026-10-28) |
+| [0020](0020-app-passwords-issued-by-the-control-plane.md)    | App passwords issued by the control plane, limited per credential              | Accepted (amended 2026-10-23, updated 2026-11-05) |
 | [0021](0021-free-platform-domain-addresses.md)               | Free addresses on the platform domain: rules, allowance, no reuse              | Accepted (updated 2026-11-05)                     |
 | [0022](0022-profile-photos.md)                               | Profile photos stored once, re-encoded by us, served same-origin               | Accepted (updated 2026-10-29)                     |
 | [0023](0023-staff-support-access-act-as.md)                  | Staff support access ("act as"): read-only, time-boxed, normal checks          | Accepted (updated 2026-10-31)                     |
 | [0024](0024-console-to-webmail-session-handoff.md)           | Console → webmail handoff: browser-bound code, throwaway mail credential       | Accepted (updated 2026-10-31)                     |
-| [0025](0025-data-export-and-account-deletion.md)             | Data export (sealed control-plane archive; mail streamed) and account deletion | Accepted                                          |
-| [0026](0026-mailbox-delegation-and-shared-mailboxes.md)      | Mailbox delegation and shared mailboxes through BFF-held mailbox tokens        | Accepted                                          |
-| [0027](0027-image-senders-list.md)                           | Safe senders load images; own Sent mail loads images                           | Accepted (built 2026-10-31)                       |
+| [0025](0025-data-export-and-account-deletion.md)             | Data export (sealed control-plane archive; mail streamed) and account deletion | Accepted (updated 2026-11-05)                     |
+| [0026](0026-mailbox-delegation-and-shared-mailboxes.md)      | Mailbox delegation and shared mailboxes through BFF-held mailbox tokens        | Accepted (updated 2026-11-04)                     |
+| [0027](0027-image-senders-list.md)                           | Safe senders load images; own Sent mail loads images                           | Accepted (built 2026-10-31, updated 2026-11-05)   |
 | [0028](0028-password-first-sign-in-and-password-step-up.md)  | Password-first console sign-in; passkeys a second factor; step-up by password  | Accepted                                          |
-| [0029](0029-billing.md)                                      | Billing: Stripe behind a port, state fetched on events, holds not deletion     | Accepted                                          |
-| [0030](0030-mail-and-contacts-import.md)                     | Mail and contacts import: IMAP-only import credential, importer process        | Accepted                                          |
-| [0031](0031-sign-up-proof-of-work.md)                        | Sign-up proof-of-work and sign-up limits instead of SMS                        | Accepted                                          |
-| [0032](0032-webmail-settings-part-2.md)                      | Webmail settings part 2: account-wide safe senders, mail rules, templates      | Accepted                                          |
+| [0029](0029-billing.md)                                      | Billing: Stripe behind a port, state fetched on events, holds not deletion     | Accepted (built 2026-11-05; not open yet)         |
+| [0030](0030-mail-and-contacts-import.md)                     | Mail and contacts import: IMAP-only import credential, importer process        | Accepted (built 2026-11-05)                       |
+| [0031](0031-sign-up-proof-of-work.md)                        | Sign-up proof-of-work and sign-up limits instead of SMS                        | Accepted (built 2026-11-05)                       |
+| [0032](0032-webmail-settings-part-2.md)                      | Webmail settings part 2: account-wide safe senders, mail rules, templates      | Accepted (built 2026-11-05)                       |

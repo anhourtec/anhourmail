@@ -1,6 +1,6 @@
 # ADR-0030: Mail and contacts import
 
-**Status:** Accepted 2026-11-04 with the defaults below (design, not built). The questions for the maintainer are at the end with the default
+**Status:** Accepted 2026-11-04 with the defaults below (designed then; all 13 slices built 2026-11-05, see the dated updates). The questions for the maintainer are at the end with the default
 this ADR builds if nobody answers.
 
 - Related: ADR-0001 (Stalwart through its management API), ADR-0002 (tenancy in the control plane), ADR-0008
@@ -814,6 +814,13 @@ listed with one query whose total is checked — that, not id reuse, was why the
 twice. The fault affects every object (accounts and domains too), so the client's generic list uses the same checked
 query (`StalwartTransport.queryAll`). The samples from before this change are removed with `npm run ops:training-orphans`
 (08-operations.md "Orphaned spam-training samples").
+
+**Update (2026-11-05): status at the end of the build.** All 13 slices are built and committed; the "uncommitted at
+the time of writing" notes on the slices 6–9 and 10–13 updates describe the moment they were written. The importer
+runs nowhere outside dev until the ops deploy gate (`../08-operations.md` "Mail importer") is in place, and the
+production Stalwart bootstrap must apply and reload the marker-stripping Sieve scripts (run-66 update). The four
+questions below are still open; the code builds their defaults. Not built, by this decision: OAuth sources, CardDAV
+contacts and calendar import.
 
 ## Questions for the maintainer (defaults this ADR builds)
 

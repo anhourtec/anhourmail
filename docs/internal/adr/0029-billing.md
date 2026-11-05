@@ -2,7 +2,8 @@
 
 **Status:** Accepted 2026-11-04 (designed under the maintainer's standing decisions: annual only, no trial, Free is the
 trial, 14-day refunds, tax-exclusive prices, extras never auto-charged, the public repo holds only code and public plan
-facts; prices stay the maintainer's call, open item 3).
+facts; prices stay the maintainer's call, open item 3); built for local dev 2026-11-04 – 2026-11-05, see the dated
+updates (`BILLING.status` stays `planned`; the live suite has not run).
 
 - Related: ADR-0002 (tenancy and plan limits in the control plane), ADR-0008 (ports and adapters), ADR-0010 (audit),
   ADR-0016 (key ring), ADR-0021 (free platform addresses), ADR-0023 (act-as is read-only), ADR-0025 (account

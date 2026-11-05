@@ -176,3 +176,10 @@ name, enabled, match: "all" | "any", conditions, actions }`.
 - **SA-63-05 (checked):** the account Safe senders validation message quotes up to 60 characters of the typed entry
   to the person who typed it; the route wrapper doesn't log a `DomainError`'s message and the audit stores the error
   code only.
+
+## Update (2026-11-05): built
+
+All three parts are built as decided: account-wide Safe senders (migration 0039, console Mail → Safe senders,
+`tests/e2e/safe-senders.spec.ts`), mail rules compiled into the managed script (`tests/e2e/webmail-rules.spec.ts`) and
+templates (migration 0040, `tests/e2e/webmail-templates.spec.ts`), with the run-63 fixes above. Public guides:
+`docs/public/safe-senders.mdx`, `docs/public/webmail-settings.mdx`.
