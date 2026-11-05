@@ -11,7 +11,7 @@ import { container } from "@/server/container";
 import { ok, readJson, route } from "@/server/http/route";
 import { sendMailboxPasswordResetNotice } from "@/server/mail/mailbox-password-email";
 import { badRequest, handleWebmail, shownAccount, unauthorized } from "@/server/webmail/http";
-import { webmail, webmailCookie, webmailFailures, webmailSessionId } from "@/server/webmail/instance";
+import { webmail, webmailCookie, webmailFailures, webmailPush, webmailSessionId } from "@/server/webmail/instance";
 import { changeWebmailPassword } from "@/server/webmail/password";
 
 const Change = z.object({
@@ -56,6 +56,10 @@ export const POST = route(
               ),
             record: (address) =>
               recordFailure(webmailFailures(), "webmailSignInAddress", LIMITS.webmailSignInAddress, subject(address)),
+          },
+          // This process's push streams of the old id end now (other processes notice within a minute).
+          renewed: (old) => {
+            webmailPush().closeSession(old, "renewed");
           },
         },
         id,
