@@ -14,9 +14,10 @@ import { platform } from "@/server/platform";
 import { passwordChangeGate, webmail, webmailCookieName } from "@/server/webmail/instance";
 import {
   authLabel,
-  authResults,
   delayLabel,
   deliveryDelaySeconds,
+  IMPORTED_RESULTS_NOTE,
+  originalChecks,
   parseHeaderBlock,
   trustedAuthservIds,
 } from "@/server/webmail/original";
@@ -128,7 +129,8 @@ async function renderOriginal(emailId: string, pin: string | null) {
     });
   if (!original) notFound();
 
-  const auth = authResults(
+  // Ours for ordinary mail; for an imported copy the old provider's, labelled as such (ADR-0030 §5).
+  const { auth, imported } = originalChecks(
     parseHeaderBlock(original.text),
     trustedAuthservIds(env().MAIL_AUTHSERV_ID, platform().hosts.mx, production),
   );
@@ -156,6 +158,7 @@ async function renderOriginal(emailId: string, pin: string | null) {
         <Row label="To">{who(original.to) || "None"}</Row>
         {original.cc.length > 0 && <Row label="Cc">{who(original.cc)}</Row>}
         <Row label="Subject">{original.subject || "(no subject)"}</Row>
+        {imported && <Row label="Imported">{IMPORTED_RESULTS_NOTE}</Row>}
         <Row label="SPF" mono>
           {auth ? authLabel(auth.spf) : notChecked}
         </Row>

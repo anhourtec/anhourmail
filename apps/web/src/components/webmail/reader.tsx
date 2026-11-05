@@ -37,7 +37,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { SafeSenderMatch } from "@anhourmail/shared/senders";
 import { Bone, ReaderSkeleton } from "@anhourmail/ui/skeletons";
 
-import { authResults, senderChecks } from "@/server/webmail/original";
+import { IMPORTED_READER_NOTE, readerChecks } from "@/server/webmail/original";
 import type { Address, MessageView } from "@/server/webmail/view";
 
 import { Tooltip } from "@/components/tooltip";
@@ -104,7 +104,10 @@ function BodySkeleton() {
   );
 }
 
-/** "mailed-by" and "signed-by", from our mail server's own Authentication-Results (fetched when details open). */
+/**
+ * "mailed-by" and "signed-by", from our mail server's own Authentication-Results (fetched when details open); for
+ * imported mail (ADR-0030 §5) a line saying we didn't check it instead.
+ */
 function SenderChecks({
   client,
   emailId,
@@ -114,17 +117,19 @@ function SenderChecks({
   emailId: string;
   authservIds: readonly string[];
 }) {
-  const [checks, setChecks] = useState<{ mailedBy: string | null; signedBy: string | null } | null>(null);
+  const [checks, setChecks] = useState<{ mailedBy: string | null; signedBy: string | null; imported: boolean } | null>(
+    null,
+  );
   useEffect(() => {
     let live = true;
     client
       .traceHeaders(emailId)
       .then((headers) => {
         if (!live) return;
-        setChecks(senderChecks(authResults(headers, authservIds)));
+        setChecks(readerChecks(headers, authservIds));
       })
       .catch(() => {
-        if (live) setChecks({ mailedBy: null, signedBy: null });
+        if (live) setChecks({ mailedBy: null, signedBy: null, imported: false });
       });
     return () => {
       live = false;
@@ -142,6 +147,12 @@ function SenderChecks({
   }
   return (
     <>
+      {checks.imported && (
+        <>
+          <dt>checks</dt>
+          <dd>{IMPORTED_READER_NOTE}</dd>
+        </>
+      )}
       {checks.mailedBy && (
         <>
           <dt>mailed-by</dt>
