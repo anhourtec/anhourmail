@@ -731,6 +731,17 @@ export const ROUTES: readonly RouteSpec[] = [
     audits: "billing.holds_changed",
     probeStatus: 400,
   },
+  // Redeem a comp code on the Billing page (ADR-0029 §8). The harness's empty body is no code: allowed callers get the
+  // one answer for any wrong code, 404 `invite_code_invalid`.
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/billing/redeem",
+    file: "app/api/accounts/[accountId]/billing/redeem/route.ts",
+    guard: "billing.manage",
+    accountParam: "accountId",
+    audits: "billing.comp_redeemed",
+    probeStatus: 404,
+  },
   // Dev only (ADR-0029 §3): drives the fake billing provider; 404 unless billing is the fake outside production, and
   // never routed on production builds (proxy.ts). The body is checked first, so the harness's empty body is a 400 for
   // everyone; a real call needs `billing.manage` on the fake object's account. It changes only the fake: the events it
@@ -924,6 +935,51 @@ export const ROUTES: readonly RouteSpec[] = [
     file: "app/api/platform/accounts/[accountId]/billing/address-ceiling/route.ts",
     guard: "platform.billing.manage",
     audits: "billing.ceiling_changed",
+    probeStatus: 404,
+  },
+  // Staff grants, ending them, and the staff refund (ADR-0029 §9; `platform.billing.manage` ★, step-up, tier
+  // `sensitive`). The harness probes random account ids: allowed callers get 404.
+  {
+    method: "PUT",
+    path: "/api/platform/accounts/:accountId/billing/grant",
+    file: "app/api/platform/accounts/[accountId]/billing/grant/route.ts",
+    guard: "platform.billing.manage",
+    audits: "billing.staff_plan_granted",
+    probeStatus: 404,
+  },
+  {
+    method: "DELETE",
+    path: "/api/platform/accounts/:accountId/billing/grant",
+    file: "app/api/platform/accounts/[accountId]/billing/grant/route.ts",
+    guard: "platform.billing.manage",
+    audits: "billing.staff_plan_revoked",
+    probeStatus: 404,
+  },
+  {
+    method: "POST",
+    path: "/api/platform/accounts/:accountId/billing/refund",
+    file: "app/api/platform/accounts/[accountId]/billing/refund/route.ts",
+    guard: "platform.billing.manage",
+    audits: "billing.refunded",
+    probeStatus: 404,
+  },
+  // Invite codes (ADR-0029 §8). Every staff role passes this gate (`platform.accounts.read`); the service then needs
+  // `platform.invites.manage` for a sign-up-only code or `platform.billing.manage` for a comp code. The harness's empty
+  // body has no expiry (400); revoking a random id is a 404.
+  {
+    method: "POST",
+    path: "/api/platform/invite-codes",
+    file: "app/api/platform/invite-codes/route.ts",
+    guard: "platform.accounts.read",
+    audits: "platform.invite_code_created",
+    probeStatus: 400,
+  },
+  {
+    method: "DELETE",
+    path: "/api/platform/invite-codes/:codeId",
+    file: "app/api/platform/invite-codes/[codeId]/route.ts",
+    guard: "platform.accounts.read",
+    audits: "platform.invite_code_revoked",
     probeStatus: 404,
   },
   // Webmail BFF (ADR-0003, ADR-0018): served on the webmail origin only (host-routing.ts).
