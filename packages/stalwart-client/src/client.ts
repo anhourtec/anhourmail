@@ -46,6 +46,8 @@ export function isOverQuotaError(err: unknown): boolean {
 
 /** The pinned server's `maxObjectsInGet` (JMAP session `urn:ietf:params:jmap:core`). */
 const MAX_OBJECTS_IN_GET = 500;
+/** Largest list `queryAll` reads in its one query. */
+const QUERY_ALL_LIMIT = 100_000;
 
 export class StalwartTransport {
   readonly #baseUrl: string;
@@ -203,15 +205,32 @@ export class StalwartTransport {
     // in pages.
     const first = await get(null);
     if (first.length < MAX_OBJECTS_IN_GET) return first;
-    const all: string[] = [];
-    for (let position = 0; ; position += MAX_OBJECTS_IN_GET) {
-      const q = (await this.call([[`${object}/query`, { position, limit: MAX_OBJECTS_IN_GET, ...scope }, "q"]])).get(
-        "q",
-      );
-      const page = (q?.ids ?? []) as string[];
-      all.push(...page);
-      if (page.length < MAX_OBJECTS_IN_GET) break;
+    return this.getAll<T>(object, properties, await this.queryAll(object, {}, accountId), accountId);
+  }
+
+  /**
+   * Every id `x:<Object>/query` matches, in **one** query: on v0.16.27 `position` paging repeats the first page
+   * (verified 2026-11-05: 127 accounts in pages of 10 gave 117 distinct ids; samples and domains alike), so paging
+   * would miss objects. Asks for the total and refuses an answer that doesn't add up — fewer ids than the total, or a
+   * server that capped the limit — rather than act on part of a list. Ids are de-duplicated.
+   */
+  async queryAll(object: string, filter: Record<string, unknown> = {}, accountId?: string): Promise<string[]> {
+    const scope = accountId === undefined ? {} : { accountId };
+    const q =
+      (
+        await this.call([[`${object}/query`, { filter, limit: QUERY_ALL_LIMIT, calculateTotal: true, ...scope }, "q"]])
+      ).get("q") ?? {};
+    const listed = Array.isArray(q.ids) ? (q.ids as unknown[]).filter((x): x is string => typeof x === "string") : [];
+    const ids = [...new Set(listed)];
+    if (typeof q.limit === "number" && q.limit < QUERY_ALL_LIMIT) {
+      throw new StalwartError(`${object}/query capped the list at ${String(q.limit)}`, "method", q.limit);
     }
-    return this.getAll<T>(object, properties, all, accountId);
+    if (typeof q.total !== "number" || q.total !== ids.length) {
+      throw new StalwartError(`${object}/query listed ${String(ids.length)} of ${String(q.total)}`, "method", {
+        listed: ids.length,
+        total: q.total,
+      });
+    }
+    return ids;
   }
 }
