@@ -35,7 +35,7 @@ export const GET = route(
       if (!view) return notFound();
       // Only a verified From may load images without asking: read our own Authentication-Results, or our server's
       // internal-mail marker (mail submitted here, which has no results of ours), when it matters.
-      let evidence: ReturnType<typeof senderEvidence> = { auth: undefined, internal: false };
+      let evidence: ReturnType<typeof senderEvidence> = { auth: undefined, internal: false, imported: false };
       if (view.loadableImages > 0) {
         const headers = await webmail()
           .headers(id, emailId)
@@ -43,8 +43,14 @@ export const GET = route(
         evidence = senderEvidence(headers, view.from[0]?.email);
       }
       return ok(
-        await withImageSender(view, secret, s.username, evidence.auth, evidence.internal, (from) =>
-          safeSenders().match(s.accountId, s.username, from),
+        // An imported copy never counts as the person's own Sent mail either (ADR-0027 update, SA-65-06).
+        await withImageSender(
+          { ...view, imported: evidence.imported },
+          secret,
+          s.username,
+          evidence.auth,
+          evidence.internal,
+          (from) => safeSenders().match(s.accountId, s.username, from),
         ),
       );
     });

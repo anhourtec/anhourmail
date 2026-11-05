@@ -4,7 +4,7 @@ import "server-only";
 import { env, senderDelegationKey } from "../env";
 import { platform } from "../platform";
 import { senderVerified } from "./image-proxy";
-import { type AuthSummary, authResults, isInternalMail, trustedAuthservIds } from "./original";
+import { type AuthSummary, authResults, isImportedMail, isInternalMail, trustedAuthservIds } from "./original";
 
 /**
  * Whether a message's From is verified for loading images without asking (`senderVerified` in `image-proxy.ts`): our
@@ -27,13 +27,14 @@ function internalMarkerValid(headers: Headers, from: string, trusted: readonly s
 export function senderEvidence(
   headers: Headers | undefined,
   from: string | undefined,
-): { auth: AuthSummary | null | undefined; internal: boolean } {
-  if (!headers) return { auth: undefined, internal: false };
+): { auth: AuthSummary | null | undefined; internal: boolean; imported: boolean } {
+  if (!headers) return { auth: undefined, internal: false, imported: false };
   const e = env();
   const trusted = trustedAuthservIds(e.MAIL_AUTHSERV_ID, platform().hosts.mx, e.NODE_ENV === "production");
   return {
     auth: authResults(headers, trusted),
     internal: from !== undefined && internalMarkerValid(headers, from, trusted),
+    imported: isImportedMail(headers),
   };
 }
 

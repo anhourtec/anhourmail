@@ -59,7 +59,7 @@ import { iconButtonClass, Menu, type MenuEntry } from "./menu";
 import { type ImageOptions, MessageContent } from "./message-body";
 import { SenderAvatar } from "./message-list";
 import { pagesBase } from "./tab-paths";
-import type { ImagePolicy } from "./remote-images";
+import { type ImagePolicy, ownSentMail } from "./remote-images";
 
 export type ReaderAction =
   | { kind: "archive" }
@@ -1075,7 +1075,7 @@ export function Reader({
                     images={images}
                     canAnswer={canAnswer}
                     canReply={canReply}
-                    inSent={sentId !== undefined && e.mailboxIds[sentId] === true}
+                    inSent={ownSentMail(sentId !== undefined && e.mailboxIds[sentId] === true, views[e.id])}
                     collapsible={thread.length > 1}
                     onCollapse={() => {
                       setExpanded((s) => {

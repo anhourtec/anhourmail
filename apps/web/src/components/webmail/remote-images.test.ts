@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { sanitizeOutgoingHtml } from "@/server/webmail/outgoing-html";
 
-import { parkRemoteImages, PLACEHOLDER_SRC, unparkRemoteImages } from "./remote-images";
+import { ownSentMail, parkRemoteImages, PLACEHOLDER_SRC, unparkRemoteImages } from "./remote-images";
 
 const clean = (html: string) => sanitizeOutgoingHtml(html).html;
 
@@ -55,5 +55,15 @@ describe("remote images while writing", () => {
   it("keeps addresses with $ patterns literal", () => {
     const html = clean('<img src="https://cdn.example/a$&amp;b$1.png">');
     expect(unparkRemoteImages(parkRemoteImages(html))).toBe(html);
+  });
+});
+
+describe("own Sent mail and imported copies (ADR-0027 update 2026-11-05, SA-65-06)", () => {
+  it("counts a message in Sent as own unless a mail import copied it in", () => {
+    expect(ownSentMail(true, { imported: false })).toBe(true);
+    expect(ownSentMail(true, undefined)).toBe(true);
+    expect(ownSentMail(true, "missing")).toBe(true);
+    expect(ownSentMail(true, { imported: true })).toBe(false);
+    expect(ownSentMail(false, { imported: false })).toBe(false);
   });
 });

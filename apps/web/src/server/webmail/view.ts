@@ -122,6 +122,12 @@ export type MessageView = {
    * never reaches the browser.
    */
   safeSender: SafeSenderMatch | null;
+  /**
+   * Copied in by a mail import (`isImportedMail`; ADR-0030): never verified, and never the person's own Sent mail for
+   * loading images (ADR-0027 update 2026-11-05) — the old provider wrote it, wherever it sits now. Read with the
+   * headers, so only known when the message has images to load.
+   */
+  imported: boolean;
   attachments: AttachmentView[];
 };
 
@@ -307,6 +313,7 @@ export function buildMessageView(
     loadableImages,
     senderKey: null,
     senderVerified: false,
+    imported: false,
     safeSender: null,
     attachments,
   };

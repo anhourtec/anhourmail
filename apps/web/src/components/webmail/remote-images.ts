@@ -121,6 +121,15 @@ export type ImageSender = {
 };
 
 /**
+ * Whether a message counts as the person's own Sent mail for images (ADR-0027 §5): it sits in the open mailbox's Sent
+ * folder and wasn't copied in by a mail import (ADR-0027 update 2026-11-05: the old provider, or whoever wrote the
+ * source mailbox, chose an imported copy's images; `imported` comes with the message view).
+ */
+export function ownSentMail(inSentFolder: boolean, view: { imported: boolean } | "missing" | undefined): boolean {
+  return inSentFolder && !(typeof view === "object" && view.imported);
+}
+
+/**
  * Whether a message's images load without asking (ADR-0027 §5, §6): the person's own Sent mail (`own`, decided by its
  * folder, never by the From) and Safe senders with a verified From in every mode; every message with "always";
  * a legacy remembered sender; and with "contacts", a verified From on a contact card.
