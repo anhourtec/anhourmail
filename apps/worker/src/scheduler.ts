@@ -71,6 +71,8 @@ export const JOBS: readonly Job[] = [
   // ADR-0030 §16: mail imports — terminal rows still holding a secret wiped, waiting ones past their credential
   // failed, syncs past their window ended (database only; the worker revokes the credentials).
   { name: "import-expiry", script: "job:import-expiry", everyMs: 3600_000, timeoutMs: 5 * 60_000, enabled: true },
+  // ADR-0030 §16: the summary email for each import that ended (counts per folder role; claimed before sending).
+  { name: "import-notify", script: "job:import-notify", everyMs: 60_000, timeoutMs: 2 * 60_000, enabled: true },
   // Storage used per mailbox for the console (sizes only, read with the provisioning key; keeps the last good value).
   { name: "storage-usage", script: "job:storage-usage", everyMs: 10 * 60_000, timeoutMs: 5 * 60_000, enabled: true },
 ];
