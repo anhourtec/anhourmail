@@ -29,6 +29,9 @@ export const metadata: Metadata = pageMetadata({
 });
 
 type RowValue = string | boolean;
+
+/** Shown after extras while paid plans aren't open (`BILLING.status`, rule 32). */
+const SOON = BILLING.status === "planned" ? " (coming with billing)" : "";
 const ROWS: readonly { label: string; value: (p: Plan) => RowValue }[] = [
   {
     label: "Price",
@@ -46,13 +49,13 @@ const ROWS: readonly { label: string; value: (p: Plan) => RowValue }[] = [
     value: (p) =>
       p.storageBlockGb === null || p.storageBlockPrice === null
         ? false
-        : `+${String(p.storageBlockGb)} GB for ${formatPrice(p.storageBlockPrice.USD, "USD")}/${BILLING.interval} (coming with billing)`,
+        : `+${String(p.storageBlockGb)} GB for ${formatPrice(p.storageBlockPrice.USD, "USD")}/${BILLING.interval}${SOON}`,
   },
   {
     label: "Mailboxes included",
     value: (p) =>
       p.extraMailboxPrice
-        ? `${String(p.includedMailboxes)}, then ${formatPrice(p.extraMailboxPrice.USD, "USD")}/${BILLING.interval} each (coming with billing)`
+        ? `${String(p.includedMailboxes)}, then ${formatPrice(p.extraMailboxPrice.USD, "USD")}/${BILLING.interval} each${SOON}`
         : String(p.includedMailboxes),
   },
   // Free: its own allowance; paid plans: as many as their mailboxes (ADR-0021).
@@ -83,7 +86,7 @@ const FAQ = [
   },
   {
     q: "Can I get a refund?",
-    a: `Yes — ask within ${String(BILLING.refundWindowDays)} days of a payment and we refund it in full.`,
+    a: `Yes. Within ${String(BILLING.refundWindowDays)} days of your first payment or a renewal you can refund it in full yourself, once per account, from the Billing page; the plan then ends and the account moves to the free plan. For anything else, ask support.`,
   },
   {
     q: "Is there a free trial?",
@@ -100,7 +103,7 @@ const FAQ = [
   },
   {
     q: "What happens if a payment fails?",
-    a: "We retry and let you know. If it still fails, the account moves to the free plan’s limits. Your mail is never deleted because a payment failed.",
+    a: `The card is retried and you’re told, with nothing changing meanwhile. If it still fails, sending is paused (receiving, reading and export keep working) until it’s paid; after ${String(BILLING.restrictedDays)} days unpaid the account moves to the free plan, and anything that doesn’t fit is held, not deleted. Your mail is never deleted because a payment failed.`,
   },
   {
     q: `What is ${ADDONS.bulk.name}?`,

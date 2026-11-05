@@ -21,6 +21,8 @@ import {
   CLIENT_USERNAME_HINT,
   customerDomainRecords,
   formatPrice,
+  MAX_EXTRA_MAILBOXES,
+  MAX_STORAGE_BLOCKS,
   HOSTS,
   INVITE_EMAILS_PER_DAY,
   INVITE_TTL_DAYS,
@@ -84,6 +86,11 @@ const VALUES = {
   mxHost: HOSTS.mx[0],
   usernameHint: CLIENT_USERNAME_HINT,
   refundWindowDays: String(BILLING.refundWindowDays),
+  // Billing lifecycle (plans.ts BILLING; ADR-0029 §5, §6): customer policy, published.
+  restrictedDays: String(BILLING.restrictedDays),
+  heldReceiveDays: String(BILLING.heldReceiveDays),
+  maxStorageBlocks: String(MAX_STORAGE_BLOCKS),
+  maxExtraMailboxes: String(MAX_EXTRA_MAILBOXES),
   mailboxDeleteGraceDays: String(MAILBOX_DELETE_GRACE_DAYS),
   // Data export and account deletion (packages/shared/src/data-lifecycle.ts, ADR-0025).
   accountDeletionGraceDays: String(ACCOUNT_DELETION_GRACE_DAYS),
@@ -293,6 +300,20 @@ export function DnsRecordTable({ domain = "example.com" }: { domain?: string }) 
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/**
+ * While paid plans aren't open (`BILLING.status` planned, ADR-0029 §3) the billing guide says so at the top; the launch
+ * change that opens them removes the note with no edit to the docs.
+ */
+export function BillingStatusNote() {
+  if (BILLING.status !== "planned") return null;
+  return (
+    <div role="note" className="my-4 rounded-lg border px-4 py-3 text-[14px]">
+      Paid plans aren&apos;t open yet. Until they are, every account stays on the plan it has now and nothing can be
+      bought; this page describes how billing works once it opens.
     </div>
   );
 }
