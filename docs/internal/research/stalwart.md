@@ -228,7 +228,19 @@ mailbox in our control plane also has its aliases removed from the account, so m
 unknown recipients. DAV (`PROPFIND /dav/card/…`) returns 403 while suspended. **Limitation:** an IMAP session that
 was already logged in when the suspension landed keeps working (`SELECT` and `FETCH` still succeed, also after
 `x:Action InvalidateCaches`); it ends only when the client disconnects or the session times out. New mail can't reach
-it (delivery is refused). A credential change doesn't end them either: on v0.16.27 an IMAP session signed in with the
+it (delivery is refused). Re-checked 2026-11-05 and pinned in `packages/adapters/src/stalwart/suspension.int.test.ts`
+(an IMAP session opened before a person suspension still answers `STATUS`; the webmail token from before is refused
+with 403, and the token a refresh mints is too). **Submission too** (checked 2026-11-05, pinned in the same test): a
+session on 465 signed in with the password before the suspension still gets `MAIL FROM`, `RCPT TO` and `DATA`
+accepted after it (`250 2.0.0 Message queued`), so a client that stays connected can keep sending. Mitigations we
+use: a spam, abuse or phishing suspension revokes the mailbox's app passwords (sessions signed in with one end; a
+password session doesn't); a Stalwart restart ends every open session (the emergency option). `x:Imap` on v0.16.27:
+`timeoutAuthenticated` 1,800,000 ms (30 min), `timeoutIdle` 1,800,000 ms, `timeoutAnonymous` 60,000 ms,
+`maxConcurrent` 16 (not changed; an active client keeps its session past them). **The queue:** `x:QueuedMessage`
+(`get`/`query`/`set`; properties `returnPath`, `recipients`, `createdAt`, `nextRetry`, `size`, `blobId`, `flags`, …;
+list filters `returnPath`, `to`, `text`, `due`, `queueName`; destroy is "cancel delivery"), permission prefix
+`sysQueuedMessage`. None of our four keys holds a `sysQueuedMessage*` permission, so cancelling a suspended sender's
+queued mail needs a new, narrowly scoped key (not built; decision pending). A credential change doesn't end them either: on v0.16.27 an IMAP session signed in with the
 account password keeps working after the password is replaced, and even after the Password credential is removed and
 re-added (verified on the dev stack 2026-10-28, pinned in `packages/adapters/src/stalwart/int-imap.ts`). Only revoking
 an app password cuts off a session that signed in with it. `x:Account/set { destroy }` removes the account
@@ -850,6 +862,19 @@ For ADR-0030, with a throwaway domain and customer account and the real service 
   `Blob/get` on any account. Samples have no creation time: `expiresAt` = creation + `holdSamplesFor` (default
   15,552,000,000 ms = 180 days), whole seconds; the sample exists within a second or two of the APPEND.
   `x:SpamClassifier` defaults: `trainFrequency` 12 h, `reservoirCapacity` 1024, `minHamSamples`/`minSpamSamples` 100.
+- **Samples outlive their account; ids aren't reused; query paging repeats** (checked 2026-11-05 on the dev server):
+  `x:Account/set { destroy }` leaves the account's samples (1,133 of 1,134 dev samples belonged to 248 destroyed
+  accounts; none to an account created after its sample). Account ids after a destroy: a new account got `hoa`, it was
+  destroyed, the next got `hob`, then `hoc`, `hod` — the id isn't handed out again. `x:SpamTrainingSample/query` with
+  `position: 500, limit: 500` answers the first page again (1,132 samples in pages of 500: 632 distinct ids; the
+  same query with `limit: 5000` and no `position` listed all 1,132), so samples are read in one query
+  (`packages/stalwart-client/src/training.ts`). **Every object pages this way** (re-checked 2026-11-05 with small pages
+  on the dev server): 127 `x:Account`s in pages of 10 gave 117 distinct ids (of 50: 77), 65 `x:Domain`s 55 (50), 1,252
+  samples 1,242 (1,202) — the page at `position = limit` repeats the first one. One query with `limit: 100000` and
+  `calculateTotal: true` answers every id and `total` (no `limit` in the answer: not capped). So the client lists with
+  one query and refuses an answer whose de-duplicated ids don't match `total`, or a capped `limit`
+  (`StalwartTransport.queryAll`, used by `getAll` past 500 objects and by the sample reads). `FileNode/query` in
+  `file-storage.ts` still pages by `position` (not re-checked).
 - **Refusals:** with the credential, `STORE`, `EXPUNGE`, `DELETE` and `RENAME` get no tagged reply (the server closes
   the connection or stays silent; the folder is unchanged); submission on 465 doesn't accept `MAIL FROM`; POP3 doesn't
   open the maildrop; JMAP methods are `forbidden`.
