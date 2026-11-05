@@ -874,3 +874,88 @@ stays `planned`. Choices made while building, within this decision:
 - **Not built in these slices:** clearing a lost dispute and re-sync from Platform billing, dismissing orphans, the
   account-deletion hook, `billing.json` in the export, catalogue-drift refusals, the webmail's
   `403 billing_restricted`, and demo billing states in the seed.
+
+## Update (2026-11-05): the rest of slices 10, 12 and 14
+
+What the earlier updates left out is built and tested: the account-deletion hook, `billing.json` in the data export,
+the catalogue-drift refusal, the webmail's own `403 billing_restricted`, the remaining Platform billing actions, demo
+billing states in the seed, and the slice 14 live suite (written and skipping cleanly; not run: no test keys here).
+Choices made while building, within this decision:
+
+- **Account deletion.** Asking to delete the account sets a live subscription to end at the period's end, after the
+  deletion is recorded (a provider failure never undoes the request); the hourly `billing.timers` sets it for any
+  account still waiting whose subscription renews (the request's call failed, or billing came back on). When the grace
+  period ends, `job:account-deletion` ends the subscription **now** before removal starts, and removal **waits** while
+  the provider can't end it (or billing is off while our row says the account pays): `data.deletion_started` denied
+  `billing_pending`, at most once a day. A deleted account is never left paying, and a deletion is never lost to an
+  outage; staff see a waiting deletion on the deletions list. No refund is made. Cancelling the deletion does not undo
+  the cancellation: the Owner presses Undo on the Billing page (the public guide says so). The account's billing rows
+  go with the account row (cascade); the provider keeps its customer and invoices; the audit log stays.
+- **`billing.json`** (account export): effective plan, state and since, source, paid plan, currency, yearly amount,
+  renewal or cancellation date, comp end, add-ons at renewal and in force, when sending was paused, whether a payment
+  is disputed, the lapse date, the last invoice's status, when the one self-service refund was used, and held items
+  (kind, address or name, since, receiving until). Never card details, addresses or tax ids (the processor holds them),
+  never provider ids or keys, and not the address ceiling or its override (rule 33). Invoices and receipts are the
+  processor's: the README points to "Manage payment and invoices". There is no invoice list: the port reads only the
+  live subscription, and the export is built from our database.
+- **Catalogue drift.** One row, `billing_catalogue` (migration 0042: last check, the drift as `{ item, problem }`
+  pairs, since when), written by the new daily scheduler job `job:billing-catalogue` (it also runs soon after the
+  scheduler starts). While drift is recorded, checkout, change previews and plan or add-on changes answer 503
+  `billing_unavailable` (audited denied `catalogue_drift`; the preview writes nothing); the portal, cancel, undo,
+  refunds, staff grants, comps and every sync keep working. Never checked yet counts as in sync (the worker checks at
+  start) and an outage during a check keeps the last result. Ops visibility: the job logs the drift at `error` on every
+  run while it lasts; it is audited (`billing.catalogue_drift`, `billing.catalogue_restored`, platform log) only when
+  it appears, changes or is fixed; Platform billing shows a banner with the items and problems.
+- **Webmail `403 billing_restricted`.** The webmail BFF asks core `billingSendBlock` before every send (own and
+  delegated): an account in `restricted` and a mailbox held after a lapse can't send. A failed check refuses the send
+  (fail closed, rule 27). A delegated send is checked after the grant is confirmed (a mailbox the person can't use stays
+  the same 404) and before its send is audited, for both the mailbox sent from and the person's own. The composer shows
+  the message (why, and who can fix it); reading and receiving are untouched. The mail server's own refusal
+  (`SEND_BLOCKED_PERMISSIONS`) stays the second line.
+- **Platform billing actions** (`platform.billing.manage` ★, tier `sensitive`, never while acting as someone, 404
+  before the step-up for unknown ids): **clear disputes** (`POST …/accounts/:accountId/billing/disputes/clear`, fresh
+  step-up) marks every open or lost tracked dispute, and any open or lost one the provider reports on the latest
+  payment that we don't track yet, as `cleared`, resets `disputed_at` and queues the sync; **re-sync now**
+  (`POST …/accounts/:accountId/billing/resync`, no step-up: it only asks the provider for the truth) queues
+  `billing.sync`; **dismiss** an unmatched event (`POST /api/platform/billing/orphans/:eventId/dismiss`, fresh step-up)
+  marks an orphan dismissed (pruned with processed events). Account actions are audited as staff in the account's own
+  log and the platform log (rule 49); a dismissal only in the platform log (the event has no account).
+- **A staff clear holds against the provider's view.** `ProviderSubscription` gains `latestDisputes` (the latest
+  payment's disputes by id with their outcome; both adapters fill it): `deriveBilling` ignores a provider-reported
+  dispute staff cleared, so a lost dispute that the processor keeps reporting on the latest payment doesn't restrict
+  again after a clear; a new dispute still does. Without the ids (an older answer) the two flags decide, as before.
+- **Demo seed** (`scripts/seed/billing.ts`, `--demo`, fake provider only): Billing Plus (paying), Billing Past due (a
+  failed renewal, card still failing) and Billing Lapsed (two platform mailboxes, one held), driven through the fake's
+  checkout, its signed events and `billing.sync`, so the provider agrees with every state; listed in `credentials.md`.
+  The fake gains `renewNow` (one subscription renews now without moving the clock every fake customer shares).
+- **Live suite** (`npm run test:billing-live`, `tests/billing-live/`, `vitest.billing-live.config.ts`): skips without
+  `STRIPE_SECRET_KEY`; aborts on a live key; fails naming the settings when a test key is set without the rest. Cases:
+  the catalogue check; first payment (invoice lines at the pinned version); failed renewal → `past_due` → retries
+  exhausted → `restricted` (asserting the dashboard marks unpaid, not cancels) → paid → `active`; the restricted
+  timeout through `billing.timers` → `lapsed` with holds; cancel at period end → Free; the self-service refund;
+  disputes won, lost (then a staff clear) and an inquiry closed (`warning_closed`), with the dispute object's missing
+  customer and the dispute read naming ours; 3-D Secure abandoned (`incomplete` grants nothing); an increase whose
+  confirming preview must equal the charge (per-second proration); a decrease billed at the renewal's quantity;
+  Supporter with an inline yearly price. Comp end and staff grants need no processor (unit tests). The mail-server
+  items of the checklist (`FUTURERELEASE`) are the compose stack's, not this suite's.
+- **Review run-69 (coordinator decisions, fixed before commit):**
+  - **N1:** the request's period-end cancellation keeps the deletion as its idempotency intent; the hourly retry has
+    its own intent per hour, so the processor's cached answer to the request (kept about a day) can't stand in for a
+    retry after the cancellation was undone outside our console. Every call is followed by a fresh read, and
+    `billing.cancel_scheduled` (or `billing.subscription_ended`) is audited only when that read shows it; otherwise the
+    attempt counts as failed and is tried again. The fake now replays cancel and undo keys like the processor.
+  - **N2:** clearing disputes takes the dispute ids the panel showed (`{ disputeIds }`); when the open or lost set
+    differs at confirm time (a dispute arrived or closed since), nothing is cleared: `409 changed`, audited denied.
+    So that staff see every dispute they clear, the sync now also tracks the open or lost disputes the provider reports
+    on the latest payment (`latestDisputes`), not only those it had events for.
+  - **N3:** ending a subscription at removal voids its open invoices first (port `cancel` gains `voidOpenInvoices`,
+    both adapters), so a past-due renewal can't be collected after the account is gone. Void first, then delete: a
+    retry after a failure in between still finds the subscription live.
+  - **N4 (unchanged, recorded):** Sieve forwarding and automatic replies keep running for a send-blocked mailbox, by
+    the maintainer's decision recorded in the slices 5–7 update (SA60-03); nothing here changes it.
+- **Slice 14 checklist adds (run-69 N3):** whether the processor keeps retrying the open invoice of a subscription
+  deleted while past due (the live suite prints what it sees after ten days), and that our voided invoice is `void`
+  with no further attempt.
+- **Still open before `BILLING.status` opens:** run the live suite with test keys and record it in the handoff; the
+  backscatter decision for receive-blocked holds; `FUTURERELEASE` held submissions after a restriction (slice 6
+  checklist); the reconciler's drift report for billing access.
