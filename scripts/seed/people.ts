@@ -15,13 +15,21 @@ export type SeedPerson = {
   mailbox: boolean;
 };
 
-export type AccountKey = "family" | "group" | "free" | "supporter";
+export type AccountKey = "family" | "group" | "free" | "supporter" | "suspended";
 
 export const ACCOUNTS: Record<AccountKey, { name: string; plan: PlanId; domain: string; ownDomain: boolean }> = {
   family: { name: "Demo Family", plan: "plus", domain: "demo-family.test", ownDomain: true },
   group: { name: "Demo Group", plan: "plus", domain: "demo-group.test", ownDomain: true },
   free: { name: "Free user", plan: "free", domain: "anhourmail.test", ownDomain: false },
   supporter: { name: "Supporter", plan: "supporter", domain: "anhourmail.test", ownDomain: false },
+  suspended: { name: "Suspended account", plan: "plus", domain: "anhourmail.test", ownDomain: false },
+};
+
+/** The account staff suspended (no mailbox, so nothing changes on the mail server): reason and staff-only note. */
+export const SUSPENDED_ACCOUNT = {
+  key: "suspended" as const,
+  reason: "payment" as const,
+  note: "Demo: chargeback on the last invoice (internal note, staff only)",
 };
 
 export const STAFF_DOMAIN = "anhourtec.test";
@@ -113,6 +121,15 @@ export function demoPeople(platformAdminEmail: string): SeedPerson[] {
       account: { key: "group", role: "member" },
       tryThis: "Can't sign in: the console and the webmail refuse it with the suspension notice and the appeal address",
       mailbox: true,
+    },
+    {
+      email: `suspended-owner@${FREE_DOMAIN}`,
+      name: "Suspended Account Owner",
+      state: "paid",
+      account: { key: SUSPENDED_ACCOUNT.key, role: "owner" },
+      tryThis:
+        "Owner of an account staff suspended: signs in to the suspension notice (403 account_suspended on account pages; own profile and Security work). Staff: Platform → account shows it (the internal note to Global and Support Administrators only)",
+      mailbox: false,
     },
   ];
 }
