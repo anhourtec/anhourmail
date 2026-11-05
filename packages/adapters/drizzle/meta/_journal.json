@@ -295,6 +295,13 @@
       "when": 1793827917774,
       "tag": "0041_mail_import",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1793854243189,
+      "tag": "0042_billing_catalogue",
+      "breakpoints": true
     }
   ]
 }

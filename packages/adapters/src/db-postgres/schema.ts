@@ -16,6 +16,7 @@ import {
   jsonb,
   pgTable,
   primaryKey,
+  smallint,
   text,
   timestamp,
   unique,
@@ -960,6 +961,23 @@ export const billingDispute = pgTable(
     index("billing_dispute_account_idx").on(t.accountId, t.openedAt),
     check("billing_dispute_status", sql`${t.status} in ('open', 'won', 'lost', 'warning_closed', 'cleared')`),
   ],
+);
+
+/**
+ * The last check of the payment provider's catalogue against the plan facts (ADR-0029 §2): one row (`id` 1). While
+ * `drift` isn't empty, new checkouts and plan or add-on changes are refused. `drift` lists `{ item, problem }` pairs
+ * (which catalogue item, and how it disagrees); never a key or a secret.
+ */
+export const billingCatalogue = pgTable(
+  "billing_catalogue",
+  {
+    id: smallint("id").primaryKey().default(1),
+    checkedAt: timestamp("checked_at", { withTimezone: true }).notNull(),
+    drift: jsonb("drift").$type<{ item: string; problem: string }[]>().notNull().default([]),
+    driftSince: timestamp("drift_since", { withTimezone: true }),
+    updatedAt: updatedAt(),
+  },
+  (t) => [check("billing_catalogue_one_row", sql`${t.id} = 1`)],
 );
 
 /**
