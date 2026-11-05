@@ -126,6 +126,11 @@ describe("processor adapter: reading a subscription", () => {
       },
       disputed: true,
       disputeLost: false,
+      // By id, so the sync can honour a staff clear of one of them.
+      latestDisputes: [
+        { id: "dp_0", status: "won" },
+        { id: "dp_1", status: "open" },
+      ],
     });
     const list = call(calls, "GET", "/subscriptions");
     expect(list?.query.get("customer")).toBe("cus_1");
@@ -565,6 +570,25 @@ describe("processor adapter: writes", () => {
       ["POST", "/subscriptions/sub_1", "false"],
       ["DELETE", "/subscriptions/sub_1", null],
     ]);
+  });
+
+  it("ending now for a deletion voids the open invoices first, each with its own idempotency key", async () => {
+    const { p, calls } = provider({
+      "GET /invoices": { json: { data: [{ id: "in_open1" }, { id: "in_open2" }], has_more: false } },
+      "POST /invoices/in_open1/void": { json: { id: "in_open1" } },
+      "POST /invoices/in_open2/void": { json: { id: "in_open2" } },
+      "DELETE /subscriptions/sub_1": { json: { id: "sub_1" } },
+    });
+    await p.cancel({ subscriptionId: "sub_1", when: "now", intentId: "del", voidOpenInvoices: true });
+    expect(calls.map((c) => [c.method, c.path])).toEqual([
+      ["GET", "/invoices"],
+      ["POST", "/invoices/in_open1/void"],
+      ["POST", "/invoices/in_open2/void"],
+      ["DELETE", "/subscriptions/sub_1"],
+    ]);
+    expect(calls[0]?.query.get("subscription")).toBe("sub_1");
+    expect(calls[0]?.query.get("status")).toBe("open");
+    expect(calls[1]?.headers.get("idempotency-key")).toBe(idempotencyKey("in_open1", "void", "del"));
   });
 
   it("refunds an invoice's payment in full; an invoice without a payment is not_found", async () => {

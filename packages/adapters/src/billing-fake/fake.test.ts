@@ -165,6 +165,50 @@ describe("fake billing provider", () => {
     expect(await sync(2)).toBe("lapsed");
   });
 
+  it("renews one subscription now without moving the shared clock: a failing card leaves it past due", async () => {
+    const p = make(() => T0);
+    const c = await customer(p);
+    await p.completeCheckout(c.session, "pay");
+    await p.setCardFails(c.customerId, true);
+    const before = await p.now();
+    const events = await p.renewNow(c.customerId);
+    expect(events.map((e) => e.type)).toEqual(["invoice.payment_failed", "customer.subscription.updated"]);
+    expect(await p.now()).toEqual(before);
+    const sub = await p.getSubscription(c.customerId);
+    expect(sub).toMatchObject({
+      status: "past_due",
+      latestInvoice: { status: "open", billingReason: "subscription_cycle" },
+    });
+    // Only an active subscription renews.
+    await expect(p.renewNow(c.customerId)).rejects.toThrow(/only an active subscription/);
+    await p.setCardFails(c.customerId, false);
+    await p.payOpenInvoice(c.customerId);
+    await p.cancel({ subscriptionId: sub?.subscriptionId ?? "", when: "period_end", intentId: "i2" });
+    await expect(p.renewNow(c.customerId)).rejects.toThrow(/ends at the period's end/);
+  });
+
+  it("replays a period-end cancel or undo key without change; ending now can void the open invoices", async () => {
+    const p = make(() => T0);
+    const c = await customer(p);
+    await p.completeCheckout(c.session, "pay");
+    const subscriptionId = (await p.getSubscription(c.customerId))?.subscriptionId ?? "";
+    await p.cancel({ subscriptionId, when: "period_end", intentId: "k1" });
+    await p.undoCancel({ subscriptionId, intentId: "u1" });
+    await p.cancel({ subscriptionId, when: "period_end", intentId: "k1" }); // a replay: still undone
+    expect((await p.getSubscription(c.customerId))?.cancelAt).toBeNull();
+    await p.cancel({ subscriptionId, when: "period_end", intentId: "k2" });
+    expect((await p.getSubscription(c.customerId))?.cancelAt).not.toBeNull();
+    await p.undoCancel({ subscriptionId, intentId: "u1" }); // a replay: still cancelled
+    expect((await p.getSubscription(c.customerId))?.cancelAt).not.toBeNull();
+    await p.undoCancel({ subscriptionId, intentId: "u2" });
+    await p.setCardFails(c.customerId, true);
+    await p.renewNow(c.customerId);
+    await p.cancel({ subscriptionId, when: "now", intentId: "end", voidOpenInvoices: true });
+    expect(await p.describe("customer", c.customerId)).toMatchObject({
+      subscription: { status: "canceled", latestInvoice: { status: "void" } },
+    });
+  });
+
   it("disputes, pauses and dashboard refunds", async () => {
     const p = make();
     const c = await customer(p);

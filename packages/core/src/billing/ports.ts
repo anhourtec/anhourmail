@@ -63,6 +63,12 @@ export type ProviderSubscription = {
   disputed: boolean;
   /** A dispute on the latest invoice's payment was lost (the payer got the money back): stays restricted (§5). */
   disputeLost: boolean;
+  /**
+   * The disputes on the latest invoice's payment, by id, with their outcome (what `disputed` and `disputeLost` sum up).
+   * The sync uses the ids to honour a staff clear: a dispute staff cleared doesn't restrict again just because the
+   * provider still reports it on the latest payment. Absent (older fixtures): the two flags alone decide.
+   */
+  latestDisputes?: readonly { id: string; status: DisputeOutcome }[];
 };
 
 /**
@@ -124,6 +130,13 @@ export type ProviderEvent = {
 
 export type CatalogueItem = "plus" | "storage_block" | "extra_mailbox" | "supporter_product";
 
+export const CATALOGUE_ITEMS: readonly CatalogueItem[] = [
+  "plus",
+  "storage_block",
+  "extra_mailbox",
+  "supporter_product",
+];
+
 /** One way the provider's catalogue disagrees with `plans.ts` (the facts are the source; the provider must match). */
 export type CatalogueDrift = { item: CatalogueItem; problem: string };
 
@@ -181,7 +194,16 @@ export type BillingProvider = {
   getSubscription(customerId: string): Promise<ProviderSubscription | null>;
   previewChange(c: SubscriptionChange): Promise<{ amountDueNowMinor: number; currency: Currency }>;
   changeSubscription(c: SubscriptionChange): Promise<ProviderSubscription>;
-  cancel(i: { subscriptionId: string; when: "period_end" | "now"; intentId: string }): Promise<void>;
+  /**
+   * Ends the subscription at the period's end, or now. With `voidOpenInvoices` (only with `now`: an account being
+   * deleted), its open invoices are voided first, so a failed renewal can never be collected after it ended.
+   */
+  cancel(i: {
+    subscriptionId: string;
+    when: "period_end" | "now";
+    intentId: string;
+    voidOpenInvoices?: boolean;
+  }): Promise<void>;
   undoCancel(i: { subscriptionId: string; intentId: string }): Promise<void>;
   refundInvoice(i: { invoiceId: string; intentId: string }): Promise<{ amountMinor: number; currency: Currency }>;
   /** Verifies the raw body against the signature header at `now`; throws `WebhookRejected`. */

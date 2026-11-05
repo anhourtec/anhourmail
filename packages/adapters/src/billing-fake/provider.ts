@@ -82,6 +82,11 @@ export type FakeBillingControls = {
   setCardFails(customerId: string, fails: boolean): Promise<void>;
   /** Moves the fake clock on; renewals and period-end cancellations fall due. */
   advanceClock(days: number): Promise<FakeEvent[]>;
+  /**
+   * Renews one active subscription now, without moving the clock every fake customer shares (the demo seed's failed
+   * renewal): its period starts now and the renewal is charged to its card, so a failing card leaves it past due.
+   */
+  renewNow(customerId: string): Promise<FakeEvent[]>;
   /** Smart Retries gave up: a past-due subscription becomes unpaid. */
   exhaustRetries(customerId: string): Promise<FakeEvent[]>;
   /** The open invoice is paid (a new card): the subscription is active again. */
@@ -204,6 +209,7 @@ export function createFakeBillingProvider(opts: FakeBillingOptions): FakeBilling
         : null,
       disputed: inv?.dispute?.status === "open",
       disputeLost: inv?.dispute?.status === "lost",
+      latestDisputes: inv?.dispute ? [{ id: inv.dispute.id, status: inv.dispute.status }] : [],
     };
   };
 
@@ -354,23 +360,38 @@ export function createFakeBillingProvider(opts: FakeBillingOptions): FakeBilling
         return toProvider(s, sub);
       }),
 
-    cancel: ({ subscriptionId, when }) =>
+    cancel: ({ subscriptionId, when, intentId, voidOpenInvoices }) =>
       store.update((s) => {
         const sub = subById(s, subscriptionId);
         if (!isLiveSubStatus(sub.status)) return;
         if (when === "now") {
+          if (voidOpenInvoices === true) {
+            for (const inv of Object.values(s.invoices)) {
+              if (inv.subscriptionId === sub.id && inv.status === "open") inv.status = "void";
+            }
+          }
           sub.status = "canceled";
           emit(s, "customer.subscription.deleted", "subscription", sub.id, sub.customerId);
-        } else if (!sub.cancelAtPeriodEnd) {
+          return;
+        }
+        // Like the processor's idempotency keys: a replayed key answers as before and changes nothing, even when the
+        // subscription was changed since (e.g. the cancellation undone in the portal).
+        const key = `cancel:${intentId}`;
+        if (s.applied[key]) return;
+        s.applied[key] = sub.id;
+        if (!sub.cancelAtPeriodEnd) {
           sub.cancelAtPeriodEnd = true;
           emit(s, "customer.subscription.updated", "subscription", sub.id, sub.customerId);
         }
       }),
 
-    undoCancel: ({ subscriptionId }) =>
+    undoCancel: ({ subscriptionId, intentId }) =>
       store.update((s) => {
         const sub = subById(s, subscriptionId);
         if (!isLiveSubStatus(sub.status)) fail("invalid_request", "the subscription has ended");
+        const key = `undo-cancel:${intentId}`;
+        if (s.applied[key]) return;
+        s.applied[key] = sub.id;
         if (sub.cancelAtPeriodEnd) {
           sub.cancelAtPeriodEnd = false;
           emit(s, "customer.subscription.updated", "subscription", sub.id, sub.customerId);
@@ -517,6 +538,20 @@ export function createFakeBillingProvider(opts: FakeBillingOptions): FakeBilling
             emit(s, "customer.subscription.updated", "subscription", sub.id, sub.customerId);
           }
         }
+        return s.outbox.slice(before);
+      }),
+
+    renewNow: (customerId) =>
+      store.update((s) => {
+        const sub = liveSub(s, customerId);
+        if (sub.status !== "active") fail("invalid_request", "only an active subscription renews");
+        if (sub.cancelAtPeriodEnd) fail("invalid_request", "the subscription ends at the period's end");
+        const before = s.outbox.length;
+        sub.periodStart = nowOf(s);
+        sub.periodEnd = sub.periodStart + PERIOD_MS;
+        const inv = invoice(s, sub, yearAmount(sub), "subscription_cycle");
+        if (inv.status !== "paid") sub.status = "past_due";
+        emit(s, "customer.subscription.updated", "subscription", sub.id, sub.customerId);
         return s.outbox.slice(before);
       }),
 

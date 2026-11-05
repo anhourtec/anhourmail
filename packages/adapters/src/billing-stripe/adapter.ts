@@ -199,10 +199,13 @@ export function createStripeBillingProvider(config: StripeConfig, opts: StripeAd
     return { storageBlocks, extraMailboxes, periodEnd: end === null ? null : at(end) };
   }
 
-  async function invoiceFacts(
-    inv: z.infer<typeof invoiceSchema>,
-  ): Promise<{ refundedMinor: number; disputed: boolean; disputeLost: boolean }> {
-    if (inv.status !== "paid") return { refundedMinor: 0, disputed: false, disputeLost: false };
+  async function invoiceFacts(inv: z.infer<typeof invoiceSchema>): Promise<{
+    refundedMinor: number;
+    disputed: boolean;
+    disputeLost: boolean;
+    disputes: { id: string; status: DisputeOutcome }[];
+  }> {
+    if (inv.status !== "paid") return { refundedMinor: 0, disputed: false, disputeLost: false, disputes: [] };
     const payments = await http.get(
       "/invoice_payments",
       { invoice: inv.id, status: "paid", limit: 10 },
@@ -211,6 +214,7 @@ export function createStripeBillingProvider(config: StripeConfig, opts: StripeAd
     let refundedMinor = 0;
     let disputed = false;
     let disputeLost = false;
+    const found: { id: string; status: DisputeOutcome }[] = [];
     for (const p of payments.data) {
       const pi = p.payment.payment_intent;
       if (p.payment.type !== "payment_intent" || !pi) continue;
@@ -224,11 +228,12 @@ export function createStripeBillingProvider(config: StripeConfig, opts: StripeAd
       const disputes = await http.get("/disputes", { payment_intent: intent.id, limit: 10 }, list(disputeSchema));
       for (const d of disputes.data) {
         const outcome = disputeOutcome(d.status);
+        found.push({ id: d.id, status: outcome });
         if (outcome === "open") disputed = true;
         else if (outcome === "lost") disputeLost = true;
       }
     }
-    return { refundedMinor, disputed, disputeLost };
+    return { refundedMinor, disputed, disputeLost, disputes: found };
   }
 
   async function toProvider(sub: StripeSubscription): Promise<ProviderSubscription> {
@@ -248,12 +253,14 @@ export function createStripeBillingProvider(config: StripeConfig, opts: StripeAd
     let latestInvoice: ProviderInvoice | null = null;
     let disputed = false;
     let disputeLost = false;
+    let latestDisputes: { id: string; status: DisputeOutcome }[] = [];
     let inv = sub.latest_invoice;
     if (typeof inv === "string") inv = await http.get(path("invoices", inv), {}, invoiceSchema);
     if (inv !== null) {
       const facts = await invoiceFacts(inv);
       disputed = facts.disputed;
       disputeLost = facts.disputeLost;
+      latestDisputes = facts.disputes;
       const status = invoiceStatus(inv.status);
       latestInvoice = {
         id: inv.id,
@@ -281,6 +288,7 @@ export function createStripeBillingProvider(config: StripeConfig, opts: StripeAd
       latestInvoice,
       disputed,
       disputeLost,
+      latestDisputes,
     };
   }
 
@@ -478,8 +486,25 @@ export function createStripeBillingProvider(config: StripeConfig, opts: StripeAd
       return toProvider(updated);
     },
 
-    cancel: async ({ subscriptionId, when, intentId }) => {
+    cancel: async ({ subscriptionId, when, intentId, voidOpenInvoices }) => {
       if (when === "now") {
+        // Void first, then end it: a retry after a failure in between still finds the subscription live and voids
+        // what is left, so a past-due renewal can't be collected after the account is gone (review run-69 N3).
+        if (voidOpenInvoices === true) {
+          const open = await http.get(
+            "/invoices",
+            { subscription: subscriptionId, status: "open", limit: 100 },
+            list(z.object({ id })),
+          );
+          for (const inv of open.data) {
+            await http.post(
+              path("invoices", inv.id, "void"),
+              {},
+              idempotencyKey(inv.id, "void", intentId),
+              z.object({ id }),
+            );
+          }
+        }
         await http.del(path("subscriptions", subscriptionId), z.object({ id }));
         return;
       }
