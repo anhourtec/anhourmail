@@ -188,6 +188,17 @@ export class WebmailSendUnconfirmedError extends Error {
   override readonly name = "WebmailSendUnconfirmedError";
 }
 
+/**
+ * Billing stops this mailbox sending (ADR-0029 §5): its account's payment needs attention (`restricted`), or the mailbox
+ * is held since the account's paid plan ended (`held`). Reading and receiving go on. → 403 `billing_restricted`
+ */
+export class WebmailBillingRestrictedError extends Error {
+  override readonly name = "WebmailBillingRestrictedError";
+  constructor(readonly reason: "restricted" | "held") {
+    super(`sending blocked by billing: ${reason}`);
+  }
+}
+
 /** No such thing for this session (a delivery report of a submission it didn't make). → 404 `not_found` */
 export class WebmailNotFoundError extends Error {
   override readonly name = "WebmailNotFoundError";
@@ -339,6 +350,12 @@ export type WebmailDeps = {
   access: { state(address: string): Promise<WebmailAccess> };
   /** Sliding send quotas (Redis in the app). Failures refuse sending (fail closed). */
   quota: SlidingQuotaStore;
+  /**
+   * Billing's sending check for a mailbox, by its address (core `billingSendBlock`, ADR-0029 §5): its account is
+   * restricted, or it is held after a lapse. Asked before every send; a failure refuses the send (fail closed, rule
+   * 27). Absent: nothing is refused here (the mail server still refuses).
+   */
+  billingSendBlock?: (address: string) => Promise<"restricted" | "held" | null>;
   fetch?: typeof fetch;
   queue?: UserQueue;
   now?: () => number;
@@ -542,6 +559,7 @@ export class WebmailService {
       holdSeconds: async () => UNDO_SECONDS,
       rulesWritten: async () => undefined,
       accountSafeSenders: async () => [],
+      billingSendBlock: async () => null,
       ...deps,
     };
     this.#base = deps.stalwartUrl.replace(/\/+$/, "");
@@ -2354,6 +2372,10 @@ export class WebmailService {
     const entry = await this.#delegatedFor(sessionId, via, want, "send", req, beforeOpen);
     const d = entry.delegated;
     if (!d) throw new WebmailDelegationRefusedError("not granted");
+    // The grant is confirmed (a mailbox they can't use is a 404 above, never this): billing may stop the mailbox sent
+    // from, or the person's own (the Sender), before anything is made or audited as sent.
+    await this.#billingAllowsSend(want);
+    await this.#billingAllowsSend(via);
     const who = { mailboxId: d.mailboxId, granteeUserId: d.granteeUserId, via: d.via };
     const refused = async (): Promise<never> => {
       await this.#dropDelegated(sessionId, new Set([entry.username]));
@@ -3049,6 +3071,18 @@ export class WebmailService {
     return ((r.get("g")?.list ?? []) as StoredDraft[])[0] ?? null;
   }
 
+  /** Refuses (403 `billing_restricted`) when billing stops this mailbox sending; a failed check refuses too. */
+  async #billingAllowsSend(address: string): Promise<void> {
+    let block: "restricted" | "held" | null;
+    try {
+      block = await this.#d.billingSendBlock(address);
+    } catch (err) {
+      log.warn("webmail billing send check unavailable", { component: "webmail", err });
+      throw new WebmailUnavailableError("sending is unavailable right now");
+    }
+    if (block) throw new WebmailBillingRestrictedError(block);
+  }
+
   /**
    * Sends a saved draft as one of the person's identities. The submission is held for `UNDO_SECONDS`
    * (FUTURERELEASE) so `undoSend` can cancel it; on success Stalwart moves it to Sent.
@@ -3079,6 +3113,7 @@ export class WebmailService {
     // refuses if the active mailbox changes meanwhile.
     const s = await this.#pin(sessionId, shown);
     const account = s.accountId;
+    await this.#billingAllowsSend(s.username);
     const limits = sendingLimits(s.username);
     const chosen = await this.#d.holdSeconds(s.username).catch(() => UNDO_SECONDS);
     // Within what the server's hold supports and the app offers; anything else falls back to the default.

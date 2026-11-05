@@ -11,6 +11,7 @@ import { SUPPORT_EMAIL } from "@anhourmail/shared/platform";
 import { webmailCookie } from "./instance";
 import { PinnedMailboxMissingError, REFUSED_HEADER } from "./pin";
 import {
+  WebmailBillingRestrictedError,
   WebmailBlockedError,
   WebmailBusyError,
   WebmailConflictError,
@@ -76,6 +77,16 @@ export function blockedNoticeForLink(secret: string, value: string | undefined, 
   return reason === "unavailable" ? null : blockedNoticeFor(reason);
 }
 
+/**
+ * Why billing stops a mailbox sending, and who can fix it (ADR-0029 §5). Shown in the composer; reading and receiving go
+ * on in both cases.
+ */
+export const BILLING_SEND_NOTICES: Record<"restricted" | "held", string> = {
+  restricted:
+    "Sending is paused for this account because of a payment problem. You can still read and receive mail. An Owner or Billing Administrator can fix it on the console's Billing page.",
+  held: "This mailbox is on hold since the account's paid plan ended, so it can't send. You can still read and export its mail. An Owner can choose what stays on, or subscribe again, on the console's Billing page.",
+};
+
 /** The refusal for a delegated mailbox (the same words as core's `DelegatedMailboxRefusedError`). */
 export const DELEGATION_REFUSED = "You don't have access to this mailbox.";
 /** What a mailbox shared with the person can't do in their webmail (ADR-0026 §6 "What each right allows"). */
@@ -107,6 +118,9 @@ export function webmailErrorResponse(err: unknown): Response | null {
     return res;
   }
   if (err instanceof WebmailOwnMailboxOnlyError) return body("own_mailbox_only", OWN_MAILBOX_ONLY, 403);
+  if (err instanceof WebmailBillingRestrictedError) {
+    return body("billing_restricted", BILLING_SEND_NOTICES[err.reason], 403);
+  }
   if (err instanceof WebmailNotFoundError) return body("not_found", "Nothing to show for this message.", 404);
   if (err instanceof WebmailQuotaError) return body("rate_limited", err.message, 429);
   if (err instanceof WebmailSendUnconfirmedError) {

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { MemoryUnitOfWork } from "@anhourmail/adapters/memory";
 import { DelegatedMailboxRefusedError, type Deps } from "@anhourmail/core";
+import { billingSendBlock, defaultBilling } from "@anhourmail/core/billing";
 import type { DelegationRight } from "@anhourmail/core/delegation";
 import type { Mailbox } from "@anhourmail/core/mailboxes";
 import {
@@ -413,6 +414,7 @@ function setup(opts: { key?: string | null; rotate?: boolean } = {}) {
       stalwartUrl: "http://stalwart:8080",
       access,
       quota,
+      billingSendBlock: (address) => billingSendBlock(deps, address),
       sieve: { read: async () => null, write: async () => true },
       confirmedForward: async () => null,
       fetch: server.fetchImpl,
@@ -499,6 +501,37 @@ describe("sending from a mailbox shared with the person (ADR-0026 §6, §8; slic
     });
     // Listing mints nothing.
     expect(t.minted).toEqual([]);
+  });
+
+  it("billing stops a send from a shared mailbox (account restricted, or the mailbox held): 403, nothing submitted", async () => {
+    const t = setup();
+    t.grant(DESK, "send_as");
+    const { sessionId } = await t.svc.signIn("kim@family.test", "right");
+    const draftId = await t.draft(sessionId);
+    t.s.billing = t.s.billing.filter((b) => b.accountId !== ACCOUNT_A);
+    t.s.billing.push({ ...defaultBilling(ACCOUNT_A, "plus", new Date()), state: "restricted" });
+    const send = () => t.svc.send(sessionId, draftId, KIM_ID, "acc-kim@family.test", { from: "desk@family.test", req });
+    const refused = await send().catch((e: unknown) => e);
+    expect(refused).toMatchObject({ name: "WebmailBillingRestrictedError", reason: "restricted" });
+    const res = webmailErrorResponse(refused);
+    expect(res?.status).toBe(403);
+    expect(((await res?.json()) as { error: { code: string; message: string } }).error).toMatchObject({
+      code: "billing_restricted",
+      message: expect.stringContaining("payment problem") as unknown,
+    });
+    // Held after a lapse (the account no longer restricted): the shared mailbox can't send either.
+    t.s.billing = t.s.billing.map((b) => (b.accountId === ACCOUNT_A ? { ...b, state: "lapsed" as const } : b));
+    t.s.planHolds.push({
+      id: "hold-desk",
+      accountId: ACCOUNT_A,
+      subjectType: "mailbox",
+      subjectId: DESK,
+      heldAt: new Date(),
+      receiveUntil: null,
+    });
+    await expect(send()).rejects.toMatchObject({ reason: "held" });
+    expect(t.server.box("desk@family.test").submissions).toEqual([]);
+    expect(t.sendAudits()).toEqual([]);
   });
 
   it("sends as the mailbox: from its own identity and envelope, Sent copy there, audited before the submission", async () => {

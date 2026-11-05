@@ -30,6 +30,7 @@ import {
   WebmailNotFoundError,
   WebmailQuotaError,
   WebmailRefusedError,
+  WebmailBillingRestrictedError,
   WebmailService,
   WebmailSignInError,
   WebmailUnavailableError,
@@ -462,6 +463,7 @@ function setup(
   quota: SlidingQuotaStore = memorySlidingQuota(),
   holdSeconds?: (address: string) => Promise<number>,
   senderName?: (address: string) => Promise<{ name: string | null; masked?: readonly string[] } | null>,
+  billingSendBlock?: (address: string) => Promise<"restricted" | "held" | null>,
 ) {
   const fake = fakeStalwart();
   const deferred: { fn: () => void; ms: number }[] = [];
@@ -504,6 +506,7 @@ function setup(
     },
     ...(holdSeconds ? { holdSeconds } : {}),
     ...(senderName ? { senderName } : {}),
+    ...(billingSendBlock ? { billingSendBlock } : {}),
   });
   return { svc, deferred, afterHold, sleeps, ...fake };
 }
@@ -570,6 +573,34 @@ describe("compose and send through the BFF", () => {
       const d2 = await t.svc.saveDraft(s.sessionId, draft());
       expect((await t.svc.send(s.sessionId, d2.id, "i1")).holdSeconds).toBe(UNDO_SECONDS);
     }
+  });
+
+  it("refuses a send billing stops (restricted account or held mailbox) before anything is submitted or charged", async () => {
+    let block: "restricted" | "held" | null | Error = "restricted";
+    const asked: string[] = [];
+    const quota = memorySlidingQuota();
+    const t = setup(undefined, quota, undefined, undefined, async (address) => {
+      asked.push(address);
+      if (block instanceof Error) throw block;
+      return block;
+    });
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const d = await t.svc.saveDraft(sessionId, draft());
+    await expect(t.svc.send(sessionId, d.id, "i1")).rejects.toMatchObject({
+      name: "WebmailBillingRestrictedError",
+      reason: "restricted",
+    });
+    block = "held";
+    await expect(t.svc.send(sessionId, d.id, "i1")).rejects.toBeInstanceOf(WebmailBillingRestrictedError);
+    // The check can't be made: refused too (fail closed, rule 27).
+    block = new Error("db down");
+    await expect(t.svc.send(sessionId, d.id, "i1")).rejects.toBeInstanceOf(WebmailUnavailableError);
+    expect(t.state.calls.some((c) => c.startsWith("submit "))).toBe(false);
+    expect(asked).toEqual(["a@x.test", "a@x.test", "a@x.test"]);
+    // Paid again: the same draft goes.
+    block = null;
+    await t.svc.send(sessionId, d.id, "i1");
+    expect(t.state.calls.some((c) => c.startsWith("submit "))).toBe(true);
   });
 
   it("refuses someone else's identity, non-drafts, and drafts it can't replace", async () => {
