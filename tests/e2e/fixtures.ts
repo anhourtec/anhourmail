@@ -32,6 +32,21 @@ export type E2eUsers = {
   /** Per browser project: the billing journey's Free account (ADR-0029, the dev fake provider) and its Owner. */
   billing: Record<string, { accountId: string; owner: string }>;
   /**
+   * Per browser project: the mail import journeys' account (ADR-0030) — a Member with their own mailbox, a User Admin,
+   * two person-less mailboxes for the CSV batch, and a filled source mailbox on the dev mail server (its password).
+   */
+  imports: Record<
+    string,
+    {
+      accountId: string;
+      member: string;
+      userAdmin: string;
+      mailbox: string;
+      batch: string[];
+      source: { address: string; password: string };
+    }
+  >;
+  /**
    * Per browser project: the delegation journey's account (ADR-0026) — its Owner, the person given access, a colleague
    * whose mailbox is converted to shared, a leaver who is removed, the verified domain and a shared mailbox on it.
    */

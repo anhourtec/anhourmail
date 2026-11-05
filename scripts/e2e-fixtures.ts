@@ -13,6 +13,8 @@ import { createDb, schema } from "@anhourmail/adapters/postgres";
 import { ALIAS_CREATIONS_PER_YEAR } from "@anhourmail/shared/plans";
 import { stalwartDevAdmin } from "@anhourmail/stalwart-client";
 
+import { seedImportSource } from "./seed/import-source";
+
 const FILE = "test-results/e2e-users.json";
 const url = process.env.DATABASE_URL;
 if (!url) throw new Error("DATABASE_URL is not set");
@@ -80,6 +82,17 @@ if (mode === "create") {
   const names: Record<string, { person: string; mailbox: string; mailboxPassword: string }> = {};
   const aliasLimits: Record<string, { owner: string; mailbox: string; day: string }> = {};
   const billing: Record<string, { accountId: string; owner: string }> = {};
+  const imports: Record<
+    string,
+    {
+      accountId: string;
+      member: string;
+      userAdmin: string;
+      mailbox: string;
+      batch: string[];
+      source: { address: string; password: string };
+    }
+  > = {};
   const actAs: Record<string, { accountName: string; accountId: string; owner: string; member: string }> = {};
   const data: Record<string, { accountName: string; owner: string; member: string; leaver: string }> = {};
   const delegationWebmail: Record<
@@ -447,6 +460,68 @@ if (mode === "create") {
     const blOwner = await addLogin(`bl-${project}-owner`);
     await db.insert(schema.accountMembership).values({ accountId: blAccount.id, userId: blOwner.id, role: "owner" });
     billing[project] = { accountId: blAccount.id, owner: blOwner.email };
+    // Mail import journeys (ADR-0030): an account with a Member whose own mailbox imports from a source mailbox on the
+    // dev mail server (outside production imports can only read from it), and a User Admin who runs a two-row CSV
+    // batch into two more of the account's mailboxes. The source is on the mail server only (it stands in for "another
+    // provider") and filled once over IMAPS; `delete` removes it with the rest of the run's domains.
+    const [imAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} Import ${project}`, plan: "plus" })
+      .returning();
+    if (!imAccount) throw new Error("import account not created");
+    const imMember = await addLogin(`im-${project}-member`);
+    const imAdmin = await addLogin(`im-${project}-uadmin`);
+    await db.insert(schema.accountMembership).values([
+      { accountId: imAccount.id, userId: imMember.id, role: "member" },
+      { accountId: imAccount.id, userId: imAdmin.id, role: "user_admin" },
+    ]);
+    const imDomain = `${run}-im-${project}.test`;
+    await db.insert(schema.customerDomain).values({
+      accountId: imAccount.id,
+      name: imDomain,
+      status: "active",
+      verifyToken: `${run}-im-${project}`,
+      stalwartId: await mgmt.upsertDomain({ name: imDomain }),
+    });
+    for (const [name, userId] of [
+      ["me", imMember.id],
+      ["ana", null],
+      ["ben", null],
+    ] as const) {
+      const stalwartId = await mgmt.upsertUser({
+        name,
+        domain: imDomain,
+        password: await hashPassword(`${randomBytes(12).toString("base64url")}-E2e`),
+        quotaBytes: 50 * 1024 * 1024,
+        suspended: false,
+      });
+      await db.insert(schema.mailbox).values({
+        accountId: imAccount.id,
+        userId,
+        address: `${name}@${imDomain}`,
+        stalwartId,
+        passwordCredentialId: await mgmt.passwordCredentialId(stalwartId),
+        status: "active",
+        quotaBytes: 50 * 1024 * 1024,
+      });
+    }
+    const source = { address: `src@${imDomain}`, password: `${randomBytes(12).toString("base64url")}-E2e` };
+    await mgmt.upsertUser({
+      name: "src",
+      domain: imDomain,
+      password: await hashPassword(source.password),
+      quotaBytes: 50 * 1024 * 1024,
+      suspended: false,
+    });
+    await seedImportSource(source.address, source.password, Number(process.env.STALWART_IMAPS_PORT ?? "993"));
+    imports[project] = {
+      accountId: imAccount.id,
+      member: imMember.email,
+      userAdmin: imAdmin.email,
+      mailbox: `me@${imDomain}`,
+      batch: [`ana@${imDomain}`, `ben@${imDomain}`],
+      source,
+    };
     security[project] = {
       totp: logins.totp.email,
       passkey: logins.passkey.email,
@@ -507,6 +582,7 @@ if (mode === "create") {
         data,
         aliasLimits,
         billing,
+        imports,
         delegation,
         delegationWebmail,
       },
