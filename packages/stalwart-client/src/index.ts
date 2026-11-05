@@ -108,10 +108,15 @@ export {
   webmailRedirectUri,
 } from "./oauth";
 export {
+  accountsThatExist,
   accountTrainingSamples,
+  allTrainingSamples,
   destroyTrainingSamples,
   holdMismatch,
   importSamples,
+  orphanCleanup,
+  orphanedSamples,
+  samplesMadeBefore,
   SPAM_SAMPLE_HOLD_DEFAULT_MS,
   TRAINING_SAMPLE_PROPERTIES,
   type TrainingSample,
