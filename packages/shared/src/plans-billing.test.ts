@@ -9,6 +9,7 @@ import {
   mailboxCeiling,
   PAID_PLANS,
   peopleCeiling,
+  planHighlights,
   PLANS,
   storageText,
 } from "./plans";
@@ -59,5 +60,23 @@ describe("billing facts (ADR-0029)", () => {
       extraMailbox: "Extra mailboxes: $1/year each",
     });
     expect(storageText(PLANS.plus).block).toMatch(/\(coming with billing\)$/);
+  });
+
+  it("plan highlights: Free's own lines, the paid plans' shared ones, and Supporter adds only its badge", () => {
+    expect(planHighlights(PLANS.free)).toEqual([
+      "1 GB storage",
+      "1 mailbox",
+      "An @anhourmail.com address",
+      "10 aliases",
+      "10 masked aliases",
+    ]);
+    const plus = planHighlights(PLANS.plus);
+    expect(plus).toContain("10 GB shared by the whole account");
+    expect(plus).toContain("Bring your own domains");
+    expect(plus).toContain("Catch-all addresses");
+    expect(plus).not.toContain("Supporter badge and early features");
+    expect(planHighlights(PLANS.supporter).filter((l) => !plus.includes(l))).toEqual([
+      "Supporter badge and early features",
+    ]);
   });
 });

@@ -5,6 +5,8 @@
  * Changing a value here is a user-facing change: update docs/public and the changelog (CLAUDE.md rule 31).
  */
 
+import { PRODUCT_DOMAIN } from "./platform";
+
 export type Currency = "USD" | "CAD";
 export type PlanId = "free" | "plus" | "supporter";
 
@@ -380,6 +382,26 @@ export function storageText(
         ? null
         : `Extra mailboxes: ${formatPrice(plan.extraMailboxPrice[currency], currency)}/${BILLING.interval} each${soon}`,
   };
+}
+
+/**
+ * A plan's headline features as short lines, for the pricing cards on the site and the console's Billing page (one
+ * list, rule 32): storage, mailboxes, domains, aliases, masked aliases, then catch-all and the supporter badge.
+ */
+export function planHighlights(plan: Plan): string[] {
+  return [
+    plan.includedMailboxes === 1 ? `${String(plan.storagePoolGb)} GB storage` : storageText(plan).pool,
+    plan.includedMailboxes === 1 ? "1 mailbox" : `${String(plan.includedMailboxes)} mailboxes included`,
+    plan.customDomains ? "Bring your own domains" : `An @${PRODUCT_DOMAIN} address`,
+    plan.aliases === null
+      ? `Up to ${String(ALIASES_PER_MAILBOX)} aliases per mailbox`
+      : `${String(plan.aliases)} aliases`,
+    plan.maskedAliases === null
+      ? "Masked aliases within the same allowance"
+      : `${String(plan.maskedAliases)} masked aliases`,
+    ...(plan.catchAll ? ["Catch-all addresses"] : []),
+    ...(plan.supporterBadge ? ["Supporter badge and early features"] : []),
+  ];
 }
 
 /**
