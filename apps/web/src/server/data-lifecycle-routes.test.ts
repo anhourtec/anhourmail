@@ -75,6 +75,17 @@ beforeEach(() => {
   s.userEmails.owner = "owner@example.test";
   s.userEmails.member = "member@example.test";
   s.stepUps.push({ userId: "owner", sessionId: SESSION, expiresAt: new Date(Date.now() + 300_000) });
+  // The console session the requests run in (deleting one's own login refuses once it has ended).
+  const now = new Date();
+  s.sessions.push({
+    id: SESSION,
+    userId: "owner",
+    createdAt: now,
+    lastActiveAt: now,
+    expiresAt: new Date(Date.now() + 3_600_000),
+    ip: null,
+    userAgent: null,
+  });
   const mailer = memoryMailer();
   sent = mailer.sent;
   setContainerForTests({
