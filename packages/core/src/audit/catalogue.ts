@@ -127,6 +127,10 @@ export const AUDIT_ACTIONS = [
   "billing.portal_opened",
   "billing.holds_changed",
   "billing.subscription_ended",
+  // staff grants and comps (ADR-0029 §8, §9, slice 12): written in the account's log (rule 49)
+  "billing.staff_plan_granted",
+  "billing.staff_plan_revoked",
+  "billing.comp_redeemed",
   // trust and safety
   "trust.tier_changed",
   "trust.limits_changed",
@@ -174,6 +178,11 @@ export const AUDIT_ACTIONS = [
   "platform.mail_rules_upgraded",
   "platform.mailbox_purged",
   "platform.audit_chain_broken",
+  // invite codes (ADR-0029 §8): the code itself is never recorded
+  "platform.invite_code_created",
+  "platform.invite_code_revoked",
+  "platform.invite_code_redeemed",
+  "platform.invite_code_released",
   "audit.exported",
   // collaboration (docs/internal/10-collaboration.md)
   "shared_mailbox.created",

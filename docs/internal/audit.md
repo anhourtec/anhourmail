@@ -29,12 +29,12 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `junk_rules` | `junk_rules.changed`, `junk_rules.account_safe_added`, `junk_rules.account_safe_removed` |
 | `identity` | `identity.changed` |
 | `webmail` | `webmail.preferences_changed`, `webmail.signature_added`, `webmail.signature_changed`, `webmail.signature_removed`, `webmail.signature_defaults_changed`, `webmail.template_added`, `webmail.template_changed`, `webmail.template_removed`, `webmail.handoff_started`, `webmail.handoff_redeemed` |
-| `billing` | `billing.plan_changed`, `billing.payment_succeeded`, `billing.payment_failed`, `billing.refunded`, `billing.suspended`, `billing.reactivated`, `billing.state_changed`, `billing.addons_changed`, `billing.supporter_amount_changed`, `billing.cancel_scheduled`, `billing.cancel_undone`, `billing.dispute_opened`, `billing.dispute_closed`, `billing.holds_applied`, `billing.holds_lifted`, `billing.ceiling_changed`, `billing.sync_failed`, `billing.customer_created`, `billing.checkout_started`, `billing.portal_opened`, `billing.holds_changed`, `billing.subscription_ended` |
+| `billing` | `billing.plan_changed`, `billing.payment_succeeded`, `billing.payment_failed`, `billing.refunded`, `billing.suspended`, `billing.reactivated`, `billing.state_changed`, `billing.addons_changed`, `billing.supporter_amount_changed`, `billing.cancel_scheduled`, `billing.cancel_undone`, `billing.dispute_opened`, `billing.dispute_closed`, `billing.holds_applied`, `billing.holds_lifted`, `billing.ceiling_changed`, `billing.sync_failed`, `billing.customer_created`, `billing.checkout_started`, `billing.portal_opened`, `billing.holds_changed`, `billing.subscription_ended`, `billing.staff_plan_granted`, `billing.staff_plan_revoked`, `billing.comp_redeemed` |
 | `trust` | `trust.tier_changed`, `trust.limits_changed`, `trust.restricted`, `trust.suspended`, `trust.unsuspended` |
 | `abuse` | `abuse.report_received`, `abuse.report_resolved` |
 | `staff` | `staff.role_granted`, `staff.role_revoked`, `staff.act_as_started`, `staff.act_as_renewed`, `staff.act_as_ended`, `staff.account_viewed`, `staff.credentials_reset` |
 | `data` | `data.export_requested`, `data.export_ready`, `data.export_downloaded`, `data.export_expired`, `data.mail_exported`, `data.import_started`, `data.import_paused`, `data.import_resumed`, `data.import_cancelled`, `data.import_blocked`, `data.import_sync_stopped`, `data.import_finished`, `data.import_credentials_wiped`, `data.import_batch_created`, `data.contacts_imported`, `data.deletion_requested`, `data.deletion_cancelled`, `data.deletion_started`, `data.deleted` |
-| `platform` | `platform.settings_changed`, `platform.admin_bootstrapped`, `platform.secret_changed`, `platform.stalwart_upgraded`, `platform.provisioning_failed`, `platform.reconciler_drift`, `platform.mailboxes_requeued`, `platform.mail_rules_upgraded`, `platform.mailbox_purged`, `platform.audit_chain_broken` |
+| `platform` | `platform.settings_changed`, `platform.admin_bootstrapped`, `platform.secret_changed`, `platform.stalwart_upgraded`, `platform.provisioning_failed`, `platform.reconciler_drift`, `platform.mailboxes_requeued`, `platform.mail_rules_upgraded`, `platform.mailbox_purged`, `platform.audit_chain_broken`, `platform.invite_code_created`, `platform.invite_code_revoked`, `platform.invite_code_redeemed`, `platform.invite_code_released` |
 | `audit` | `audit.exported` |
 | `shared_mailbox` | `shared_mailbox.created`, `shared_mailbox.deleted`, `shared_mailbox.member_added`, `shared_mailbox.member_removed` |
 | `distribution_list` | `distribution_list.created`, `distribution_list.deleted`, `distribution_list.member_added`, `distribution_list.member_removed`, `distribution_list.senders_changed` |
@@ -147,6 +147,24 @@ restricted_timeout`, `restrictedDays`, `subscriptionId`); `account.invite_revoke
 mailbox's storage is pinned to its mail. A provider failure on a person's request is `failed` with the house code
 (`billing_unavailable`, `card_declined`), never the provider's message. Preview and the overview are reads (not
 audited). The dev simulate route changes only the fake provider; what it leads to is audited by the sync.
+
+Staff billing and invite codes (ADR-0029 §8, §9, slice 12; `packages/core/src/billing/grants.ts`,
+`invite-service.ts`): `billing.staff_plan_granted` (`plan`, `days` or null, `until`) and `billing.staff_plan_revoked`
+(`fromPlan`, `source`, `toState`) are written by staff **in the account's own log** (rule 49) with a platform copy
+carrying `accountId`, followed in the same unit of work by the derived `billing.state_changed`,
+`billing.plan_changed`, `billing.holds_applied` / `billing.holds_lifted` and `account.invite_revoked` entries (same
+actor); denied `already_subscribed`, `not_subscribed`, `step_up_required`, `act_as`, and `not_found` in the platform
+log for an unknown account. The staff refund writes `billing.refunded` with `staff: true`, `withinWindow`, `ended`
+(account log and platform copy; denied `refund_not_eligible`). `platform.invite_code_created` (platform log: what it
+grants, `compPlan`, `compDays`, `expiresAt`, `bound` — **never the code or the bound address**) and
+`platform.invite_code_revoked` (denied `already_used`, `not_found`). Redeeming on the Billing page writes
+`billing.comp_redeemed` (`codeId`, `plan`, `days`, `until`; denied `invite_code_invalid`, `already_subscribed`,
+`email_unverified`, `act_as`) in the account's log plus `platform.invite_code_redeemed` in the platform log; a
+redemption at sign-up is `platform.invite_code_redeemed` by the system (`sign-up`, `at: sign-up`) twice: `stage:
+claimed` before the identity layer runs (denied `invite_code_invalid`: wrong code, a bound code with a plan, or one
+already claimed) and `stage: attached` once the person exists, with `billing.comp_redeemed` in the new account's log;
+`platform.invite_code_released` when that sign-up created no one and the code was given back. Checkout and changes
+refused while paid plans aren't open are denied `not_open`.
 
 Mailbox lifecycle: `mailbox.suspended` and `mailbox.unsuspended` (resume), `mailbox.deletion_scheduled` (meta: the
 status it came from, `purgeAfter`, alias count) and `mailbox.restored` are written by the person in the console;
