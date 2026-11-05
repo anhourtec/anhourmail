@@ -4,6 +4,7 @@ export * from "./changes";
 export * from "./checkout";
 export * from "./entitlements";
 export * from "./entity";
+export * from "./grants";
 export * from "./guards";
 export * from "./held";
 export * from "./holds";
