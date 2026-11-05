@@ -2,7 +2,14 @@
 import { describe, expect, it } from "vitest";
 
 import { ACCOUNT_A, ACCOUNT_B, anonymous, deps, req, user } from "./__tests__/helpers";
-import { ForbiddenError, NotFoundError, UnauthenticatedError, ValidationError } from "./errors";
+import {
+  ConflictError,
+  DeadlockError,
+  ForbiddenError,
+  NotFoundError,
+  UnauthenticatedError,
+  ValidationError,
+} from "./errors";
 import { mutation } from "./mutation";
 
 const spec = (accountId: string | null) =>
@@ -86,6 +93,17 @@ describe("mutation()", () => {
     ).rejects.toThrow("db down");
     const [entry] = await d.uow.run((r) => r.audit.chain(`account:${ACCOUNT_A}`));
     expect(entry?.errorCode).toBe("server_error");
+  });
+
+  it("a broken deadlock is a failed entry with its own code (still a conflict, 409)", async () => {
+    const d = deps();
+    const thrown = mutation(d, user({ account: [[ACCOUNT_A, "owner"]] }), req, spec(ACCOUNT_A), async () => {
+      throw new DeadlockError();
+    });
+    await expect(thrown).rejects.toBeInstanceOf(ConflictError);
+    await expect(thrown).rejects.toMatchObject({ code: "deadlock" });
+    const [entry] = await d.uow.run((r) => r.audit.chain(`account:${ACCOUNT_A}`));
+    expect(entry).toMatchObject({ result: "failed", errorCode: "deadlock" });
   });
 
   it("business refusals are audited as denied but return the result", async () => {
