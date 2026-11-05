@@ -176,10 +176,12 @@ async function api<T>(path: string, init: RequestInit = {}, go: typeof fetch = p
       (body?.error?.code === "password_change_pending" ||
         body?.error?.code === "settings_changed" ||
         body?.error?.code === "sender_blocked");
-    // Not available in a mailbox shared with the person (its own-mailbox-only routes), and a send whose outcome the
-    // server couldn't confirm: both say what to do in their message.
+    // Not available in a mailbox shared with the person (its own-mailbox-only routes), sending stopped by billing, and a
+    // send whose outcome the server couldn't confirm: each says what to do in its message.
     const explained =
       (res.status === 403 && body?.error?.code === "own_mailbox_only") ||
+      // Billing stops this mailbox sending: the message says why and who can fix it (ADR-0029 §5).
+      (res.status === 403 && body?.error?.code === "billing_restricted") ||
       (res.status === 503 && body?.error?.code === "send_unconfirmed");
     if (res.status === 400 || res.status === 413 || res.status === 429 || pending || explained) {
       throw new RefusedError(body?.error?.message ?? "That didn't work. Try again.");
