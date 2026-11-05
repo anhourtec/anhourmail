@@ -836,6 +836,20 @@ For ADR-0030, with a throwaway domain and customer account and the real service 
   account's id (observed), so they train that account's component **and** the shared weights; one user's samples
   influence everyone's classification "to a lesser degree". Samples also store the message's From and Subject
   (`serverSet`) and a blob, held 180 days by default (`holdSamplesFor`).
+- **Who can see and remove samples** (probed 2026-11-05 with throwaway service accounts and keys; pinned in
+  `packages/adapters/src/stalwart/training-samples.int.test.ts`): the provisioning key holds
+  `sysSpamTrainingSample{Get,Query,Update,Destroy}` (customers keep them) but `x:SpamTrainingSample/get` and `/query`
+  answer `forbidden` for it, with or without `accountId`; the operations key likewise. A customer signed in with their
+  own password gets `forbidden` too. A key with only `authenticate` + `sysSpamTrainingSample{Get,Query,Destroy}` sees
+  its own account's samples (none), `accountId` on another account is `forbidden` and `query { filter: { accountId } }`
+  is `unsupportedFilter`. **With `impersonate` added, samples are one server-wide list**: `get` (with or without
+  `accountId`) answers every account's samples with `from`, `subject`, `blobId`, `isSpam`, `expiresAt`,
+  `deleteAfterUse`; `query { filter: { accountId } }` answers that account's ids; `set { destroy }` removes any
+  account's sample (a gone one is `notDestroyed: notFound`); `set` create and update stay `forbidden`, and so do
+  `x:Account`, `x:Domain`, `x:AppPassword`, `x:SpamClassifier`, `Email/query`, `Mailbox/get`, `SieveScript/get` and
+  `Blob/get` on any account. Samples have no creation time: `expiresAt` = creation + `holdSamplesFor` (default
+  15,552,000,000 ms = 180 days), whole seconds; the sample exists within a second or two of the APPEND.
+  `x:SpamClassifier` defaults: `trainFrequency` 12 h, `reservoirCapacity` 1024, `minHamSamples`/`minSpamSamples` 100.
 - **Refusals:** with the credential, `STORE`, `EXPUNGE`, `DELETE` and `RENAME` get no tagged reply (the server closes
   the connection or stays silent; the folder is unchanged); submission on 465 doesn't accept `MAIL FROM`; POP3 doesn't
   open the maildrop; JMAP methods are `forbidden`.

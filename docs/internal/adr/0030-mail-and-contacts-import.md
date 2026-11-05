@@ -635,6 +635,103 @@ same change, and three items become conditions for later slices.
   marker inside an imported message, since the old provider (or whoever wrote the source mailbox) controls every
   header below ours. Built and tested before the runner appends anything.
 
+**Update (2026-11-05): the slice-7 prerequisites and slices 6–9 built** (uncommitted at the time of writing). Where the
+build went beyond or differs from the text above:
+
+- **SA-64-01 done:** `isImportedMail` in `apps/web/src/server/webmail/original.ts`: a message carrying our marker is
+  never verified — `ourAuthResultsHeader`/`authResults` answer null and `isInternalMail` false, so `senderEvidence`,
+  `fromVerified` and the image proxy's `senderVerified` see nothing of ours in it. A marker **anywhere** counts
+  (look-alike spellings too), not only the topmost: one lower down was written by a sender and only downgrades that
+  sender's own mail. Int-tested on the dev server (`apps/web/src/server/adapters/imported-marker.int.test.ts`): a
+  forged `Received … by mail.dev.test` + `Authentication-Results: mail.dev.test … dmarc=pass` pair and an internal
+  marker appended below ours over IMAP read back unverified; the same headers without our line would have passed; an
+  APPEND adds nothing of the server's own above our marker. (The "Original message" note is slice 12.)
+- **Spam training done (all three parts):** (1) never into Junk — `planFolders` (`packages/core/src/imports/folders.ts`)
+  skips the source's Junk by default and otherwise maps it to the ordinary folder `Imported Junk`; a custom folder that
+  would land on (or under) the destination's Junk goes under `Imported/`; the runner checks `isJunkDestination` once
+  more before each folder. (2) **A fourth, training key** (`STALWART_TRAINING_KEY`, `svc-train`, `authenticate
+impersonate sysSpamTrainingSample{Get,Query,Destroy}`; ADR-0020 update) held by the **queue worker**, not the
+  importer: each importer slice that appended anything queues `mail_import.training_cleanup` (subject `<import id>:<from
+ms>:<to ms>`, due a minute after the slice) in the transaction that gives the import back; the worker destroys that
+  account's **ham** samples created in the window (± 2 min; `expiresAt − holdSamplesFor`, `STALWART_SPAM_SAMPLE_HOLD_MS`,
+  default 180 days; a sample expiring later than the setting allows fails the job loudly). A runner that dies mid-slice
+  queues nothing, so the next claim of that import (`claim()` now reports the abandoned lease) queues a backstop window
+  `[lease end − lease − slice, lease end]`. Verified on the dev server with the real key: it finds and destroys exactly
+  that account's ham samples of the window and can do nothing else. Trade-offs: the person's own ham samples created in
+  a window (their own mail app's APPENDs, auto-learn on delivery) go too; spam samples never do. A model training run
+  (`trainFrequency`, 12 h by default) that falls between an APPEND and its clean-up has already learnt from it (≤ about
+  16 minutes per slice). (3) **Message caps by trust tier** of the person who started it
+  (`IMPORT_MESSAGE_CAPS`, e.g. `new=<n>,standard=<n>,restricted=0`; per destination mailbox over a rolling 30 days
+  since the run-65 review, SA-65-05, summed over its imports so restarting one can't reset it; required in production for `new`, `standard` and
+  `restricted`; a tier not listed has no cap): at the cap the import ends `completed` with `error_code` `message_cap`.
+  Trust tiers aren't assigned yet (everyone is `new`), so the `new` cap is the one that applies today.
+- **Start and control (slice 6):** `packages/core/src/imports/service.ts` — `startImport`, `resumeImport`,
+  `pauseImport`, `cancelImport`, `stopImportSync`, `listImports`, `getImport`; checks in the order act-as (403) →
+  mailbox in scope (404) → own / `.any` (an Owner's or admin's mailbox: Owners only; 403 for people who see mailboxes,
+  else 404) → source (`importSource`: 400) → fresh step-up (403) → account and credential locks with the role and
+  mailbox read again → mailbox importable (409 `mailbox_unavailable`) → one live import (409 `import_running`) → mint →
+  seal → insert; a failure after the mint destroys the credential. Outside production only the development allow-list
+  (`IMPORT_DEV_ALLOW_SOURCES`, default the dev mail server: `127.0.0.1`/`localhost`/`import-edge` on 993/143) is
+  accepted, at the web app and again at the importer, so dev and CI never reach a real provider. Resume renews the
+  credential when less than a day is left (or it was refused) and queues the old one's revoke; it may take a new source
+  password. Pause stops a running import at the next checkpoint; stop-sync moves the window to now (one last pass);
+  cancel ends and wipes at once. Routes under `/api/accounts/:accountId/imports` (`GET`, `POST`, `GET /:importId`,
+  `POST /:importId/{pause,resume,cancel,stop-sync}`); tiers `importStart` (10 / h per caller), `importStartAccount`
+  (30 / day per account, counted only for callers who hold `mailbox.import.own` there) and `importBatch` (3 / h, for
+  slice 11), all fail closed; HTTP 409 for `mailbox_unavailable`, `import_running`, `import_finished`. The admin-started
+  notice email (`apps/web/src/server/imports.ts`) goes to the mailbox's person. **Audit metadata carries the source's
+  registrable domain (`sourceDomain`), not the full host** (§14 said host): `sourceHost` is a redacted key, and the
+  domain is what finished history keeps anyway.
+- **Runner and importer (slice 7):** `runImportSlice` / `runNextImportSlice` (`packages/core/src/imports/runner.ts`) as
+  §5–§6 and §19 describe; checkpoints after every message are batched (20 messages or 2 s), and a stop for any reason
+  (slice end, pause, session error) writes the current folder first. After a kill, messages appended after the last
+  checkpoint are found in the destination on resume and **counted as duplicates** (the result is exact; the counters
+  shift by at most one batch). Session errors back off 1, 2, 4 … 30 min, 10 in a row block `source_unreachable`.
+  `apps/worker/src/importer.ts` (`npm run importer`; `importer-config.ts` checks settings): no Stalwart key (and in
+  production no `STALWART_URL`, `REDIS_URL` or the web app's grant keys), `IMPORT_DESTINATION_IMAP` required in
+  production, the dev switches (`IMPORT_DEV_ALLOW_SOURCES`, `IMPORT_DEV_DESTINATION_INSECURE`,
+  `IMPORT_DEV_SOURCE_PORTS`, `IMPORT_MAX_MESSAGE_BYTES`) refused there, lease `IMPORT_LEASE_SECONDS` (default 120,
+  renewed every quarter). Dev: `npm run dev` runs it on the host (label `importer`); `docker compose --profile import
+up -d importer` runs it from the worker image on `importnet` (internal, no internet) behind `import-edge`, which
+  forwards only Postgres and the mail server's 993/143 — checked from inside the container: Stalwart HTTP, Redis,
+  Postgres directly and the internet all unreachable. ESLint keeps `apps/worker/src/importer*.ts` off every Stalwart
+  client and transport and the rest of `apps/worker` off `@anhourmail/adapters/imap`.
+- **Wipe, revoke, lifecycle (slice 8):** `endImport` (`lifecycle.ts`) is the one way to a terminal status and queues
+  `mail_import.credential_revoke`, whose subject is the import; the job takes **every** import credential off the
+  mailbox's account except the one a live import of that mailbox holds, so it also serves a resume's replaced
+  credential and an orphan. Suspending or deleting a mailbox and "Make this a user" cancel its live import in the same
+  transaction (`data.import_cancelled` reasons `mailbox_suspended` / `mailbox_deleted` / `mailbox_handover`), and so do
+  a staff, person or account-deletion hold (`holdMailboxes`, `mailbox_suspended`) and releasing a leaver's or a
+  converted mailbox (`releaseMailboxOwner` from removing someone or "Convert to shared mailbox", `mailbox_released`;
+  run-65 SA-65-01: the mailbox stays active there, so the importer's gate would never stop a leaver's sync). The
+  importer's mailbox gate (`blocked: mailbox_unavailable`) remains the backstop for anything else. Ending an import
+  that another runner holds (cancel, the sweep, a mailbox change) also queues a training-sample clean-up for what that
+  runner may have appended, `[lease end − lease − slice, max(lease end, now)]` (SA-65-02): a terminal import is never
+  claimed again, so the abandoned-lease backstop wouldn't fire. `job:import-expiry` (scheduler, hourly; `packages/core/src/imports/expiry.ts`) wipes terminal
+  leftovers, fails paused or blocked imports past their credential (`expired`) and completes syncs past their window (a
+  person-stopped sync gets an hour for its last pass). The reconciler (`reconcileAppPasswords`) lists import credentials
+  apart (`credentialInventory().importCredentials`), expects one only when a live import recorded it (id and creation
+  time), reports others as `importCredentialsOrphaned` and queues the latest import's revoke. The summary email
+  (`job:import-notify`) stays with slice 10.
+- **Phase 5 exit test (slice 9):** `packages/adapters/src/imap/import.int.test.ts` — the seeded source (nested and
+  non-ASCII folders, Sent, Junk, flags and keywords, 2015 dates, a duplicate Message-ID, one without, a `\Deleted` one,
+  one already in the destination), the real service and operations key, the importer as a child process SIGKILLed after
+  three appends and restarted, exact destination contents, the source unchanged, revoke and training clean-up with the
+  real provisioning and training keys (no import credential left, sealed columns and folder names null, the
+  destination's ham samples gone and the source account's untouched), an incremental sync that copies only new mail and
+  skips a copy delivered over SMTP first, and no secret, sign-in name or folder name in the importer's log. The demo
+  seed's `import-source@dev.test` and its `credentials.md` entry are left for the console slice (10), since `db:seed`
+  isn't run from here; the test seeds its own throwaway source.
+- **No migration:** the windows ride on the job subject and the abandoned lease on the claim, so 0041 is unchanged.
+
+**Update (2026-11-05, run-65 review of slices 6–9):** SA-65-01 and SA-65-02 fixed as described in the update above.
+Maintainer decisions built as defaults: the message cap counts per destination mailbox over a rolling 30 days, summed
+over its imports (SA-65-05); imported copies are never own Sent mail for images (SA-65-06, ADR-0027 update); config
+examples show placeholders for cap values (SA-65-07). Hardening: the destination's folders in other or shared
+namespaces are left out of `dest.folders()`, so role folders and the `\All` index never pick a delegated folder. Open
+items recorded by the coordinator, not code: the importer's own key ring and database role (SA-65-03), the one-way
+`holdSamplesFor` check (SA-65-04), and customers' own IMAP APPENDs training the shared model.
+
 ## Questions for the maintainer (defaults this ADR builds)
 
 1. **OAuth sources are deferred**, so business mailboxes at the largest provider that refuses password IMAP can't be

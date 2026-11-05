@@ -199,6 +199,31 @@ shown to anyone and belongs to the job. Customer accounts' `maxAppPasswords` (`C
 (five app passwords, the handoff's moment, one import); existing mailboxes pick it up on their next `mailbox.ensure`.
 Pinned in `packages/adapters/src/stalwart/import-credential.int.test.ts`.
 
+**Update (2026-11-05): a fourth key, training (ADR-0030 spam-training prerequisite).** Every IMAP APPEND on the pinned
+server adds an `x:SpamTrainingSample` for the account, and the classifier model is shared server-wide, so an import
+would train everyone's filter with someone else's mail. None of the three keys can remove samples (the provisioning
+key holds `sysSpamTrainingSample*` through the customer set but gets `forbidden` without `impersonate`; the operations
+and audit keys hold neither). A fourth key does only that:
+
+| Key (setting)                      | Account     | Containers | Permissions                                                                                        |
+| ---------------------------------- | ----------- | ---------- | -------------------------------------------------------------------------------------------------- |
+| Training (`STALWART_TRAINING_KEY`) | `svc-train` | worker     | `authenticate`, `impersonate`, `sysSpamTrainingSample{Get,Query,Destroy}` — samples only, 5 in all |
+
+Verified on v0.16.27 with the real key (`packages/adapters/src/stalwart/training-samples.int.test.ts`): without
+`impersonate` such a key sees only its own account's samples (none) and another `accountId` is `forbidden`; with it,
+samples are one server-wide list it can query by account, read and destroy — and sample create and update,
+`x:Account`, `x:Domain`, `x:AppPassword`, `x:SpamClassifier`, `Email/*`, `Mailbox/*`, `SieveScript/*` and `Blob/get` all
+answer `forbidden`. It holds `impersonate` like the operations and audit keys, which on this key opens nothing but
+samples. **It can read every sample's `from` and `subject`** (mail metadata the server stores with each sample, 180
+days by default) and destroy any account's samples: our code asks only for `id`, `accountId`, `isSpam` and
+`expiresAt` (`TRAINING_SAMPLE_PROPERTIES`), and the management proxy must refuse any other property and any method but
+`x:SpamTrainingSample/{get,query}` and `/set { destroy }` for this key (ops repo). The queue worker holds it (start-up
+check: worker = provisioning + training in production; the scheduler, one-off jobs, the web app and the importer
+never), uses it only in `mail_import.training_cleanup`, and verifies its exact set at start like the others; ESLint
+keeps `stalwartTraining` out of the web app and the importer. The importer itself still holds no key: it queues the
+clean-up job with its slice's window (ADR-0030 update "slices 6–9"). Rule 27: a security-reviewer pass is due before
+the importer runs anywhere.
+
 ## Consequences
 
 - Mail apps work for console-made mailboxes without anyone choosing or knowing a mailbox password.

@@ -370,3 +370,13 @@ Section 10's account-wide safe-senders list is decided and built in ADR-0032 §1
 in the console by Owners and User Administrators, matched after the mailbox's own list (the match carries
 `source: "account"`) and never over the mailbox's own Blocked senders, verified From only for images, and written into
 each mailbox's managed script for the trusted-only Junk rule.
+
+## Update (2026-11-05): imported copies are never own Sent mail
+
+A mail import (ADR-0030) copies the old mailbox's Sent folder into this one's Sent, so §5 would load the images of
+mail someone else's server (or whoever controls the source mailbox) put there, every time the person opened it. A
+message carrying the import marker (`X-AnhourMail-Imported`, `isImportedMail`) is therefore never own Sent mail: the
+message view carries `imported` (read with the headers when there are images to load) and the reader's
+`ownSentMail(inSentFolder, view)` is false for it, so its images follow the normal rules — and since imported mail is
+never verified (SA-64-01), that means asking. Everything else in §5 is unchanged. Unit test in
+`apps/web/src/components/webmail/remote-images.test.ts` (review SA-65-06).

@@ -157,7 +157,7 @@ Sending limits for free mailboxes are still Phase 6 (03-anti-spam-and-abuse.md "
 - Since v0.16 there is **no REST management API and no TOML**. Only `config.json` (the DataStore location) is on disk. Everything else is a JMAP object under `urn:stalwart:jmap` at `POST /jmap` (`x:Domain`, `x:Account`, `x:MtaRoute`, `x:MtaOutboundStrategy`, `x:NetworkListener`, `x:MtaOutboundThrottle`, `x:WebHook`, `x:Action`, …).
 - Directory changes apply immediately. Listener, route and expression changes need `x:Action ReloadSettings`.
 - All access goes through `packages/stalwart-client` (rule 21). Every write is an idempotent upsert by natural key.
-- **Production auth is three scoped API keys** (ADR-0017; ADR-0020 "Credential split", verified 2026-10-23 on
+- **Production auth is four scoped API keys** (ADR-0017; ADR-0020 "Credential split", verified 2026-10-23 on
   v0.16.27), never one credential that both creates accounts and acts inside one. Exact sets in
   `packages/stalwart-client/src/keys.ts`; each key is `Replace`-typed (`authenticate` is required — without it every
   request is 403), IP-restricted to the management network, expiring and rotated:
@@ -167,6 +167,7 @@ Sending limits for free mailboxes are still Phase 6 (03-anti-spam-and-abuse.md "
   | Provisioning (`STALWART_PROVISIONING_KEY`) | `svc-provision` | worker, scheduler | Domains, accounts, DKIM keys; the 162 permissions a customer mailbox keeps (so it can grant them); app passwords listed and revoked through `x:Account.credentials`. No `impersonate`                                                                   |
   | Operations (`STALWART_OPERATIONS_KEY`)     | `svc-ops`       | web               | `impersonate` + app passwords (`sysAppPassword{Create,Get,Query,Destroy}`, `sysApiKey{Get,Query}`) + the managed Sieve script (`jmapSieveScript{Get,Query,Create,Update,Validate}`, `jmapBlobUpload`, `jmapBlobGet`). No account, domain or DKIM access |
   | Audit (`STALWART_AUDIT_KEY`)               | `svc-audit`     | scheduler         | `impersonate` + `jmapSieveScript{Get,Query}` + `jmapBlobGet`: reads managed scripts for the hourly check                                                                                                                                                |
+  | Training (`STALWART_TRAINING_KEY`)         | `svc-train`     | worker            | `impersonate` + `sysSpamTrainingSample{Get,Query,Destroy}`: removes the spam-training samples a mail import's APPENDs created (ADR-0030; ADR-0020 update). Nothing else                                                                                 |
   - **Why the provisioning key holds mail permissions:** Stalwart lets a credential assign only permissions it holds,
     measured against the new account's effective set (role minus `disabledPermissions`; disabling needs nothing). The
     single key of earlier versions failed on staging with `not authorized to grant permissions: jmapPrincipalCreate, …
@@ -220,6 +221,14 @@ and 175 more`. Without `impersonate` these permissions apply to its own account 
     searchable, APPEND keeps dates and keywords and runs no Sieve or spam filter **but feeds spam training** by folder,
     50 MiB literals, refused commands get no reply, revocation cuts the session): `research/stalwart.md` "Mail import
     over IMAP", pinned in `packages/adapters/src/stalwart/import-credential.int.test.ts`.
+  - **Running an import** (ADR-0030 slices 6–9, 2026-11-05): the importer (`apps/worker/src/importer.ts`, its own
+    container, **no Stalwart key**) signs in over IMAPS with that credential and APPENDs one message at a time, our
+    `X-AnhourMail-Imported` marker on top (the webmail never treats such a message as verified: `isImportedMail`). It
+    never appends into Junk (the source's Junk is skipped or copied as `Imported Junk`), because every APPEND becomes a
+    spam-training sample and the classifier is shared server-wide; each slice queues `mail_import.training_cleanup` and
+    the worker's **training key** destroys that account's ham samples of the slice's window. The import ending queues
+    `mail_import.credential_revoke` (provisioning key: every import credential on the account but a live import's).
+    The reconciler lists import credentials apart and reports any no live import holds.
 
 - Stalwart's HTTP listener has no host port. On the public client host (`imap.`), NGINX proxies only what mail,
   contact and calendar apps use — `/jmap` (JMAP for third-party clients, `CLIENT_ENDPOINTS`), `/dav/*` and
