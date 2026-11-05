@@ -220,9 +220,11 @@
         <li>Drafts and undo send</li>
         <li>Archive, junk, move, pin, search</li>
         <li>Several mailboxes in one session</li>
-        <li>Named signatures, automatic replies</li>
+        <li>Named signatures, templates, automatic replies</li>
+        <li>Mail rules that run on the server</li>
         <li>Confirmed forwarding, blocked senders</li>
-        <li>Contacts that sync over CardDAV</li>
+        <li>Contacts that sync over CardDAV; vCard and CSV import</li>
+        <li>Mail import from another provider over IMAP</li>
       </ul>
     </td>
     <td width="33%" valign="top">
@@ -259,41 +261,45 @@
 
 ## What works today
 
-Everything below runs in local development and on our pre-staging server. It is not open to the public yet.
+Everything below runs in local development; our pre-staging server picks up the newest items at its next deploy. It
+is not open to the public yet.
 
-| Area                 | What you can do                                                                                                                                                                                                                                                                                |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Free address**     | Claim one free `you@anhourmail.com` address after confirming your email. Names that would pass for system or staff addresses are reserved, and a name is never handed out again.                                                                                                               |
-| **Custom domains**   | Add a domain, follow the guided DNS steps (DKIM published as TXT keys) and watch each record turn green. Catch-all on custom domains.                                                                                                                                                          |
-| **Mailboxes**        | "Add a user" in four steps (mailbox, sign-in and role together, with a password change at first sign-in); passwords set or generated, owner resets with a step-up, storage, suspend, resume, and delete with a 30-day restore window.                                                          |
-| **Aliases**          | Aliases and masked aliases, up to 400 per mailbox on paid plans, each switchable on and off.                                                                                                                                                                                                   |
-| **People and roles** | Invites, roles, profile details and photos. Removing someone keeps their mail as a shared mailbox and turns their sign-in off at once.                                                                                                                                                         |
-| **Delegation**       | Give people **Read and manage**, **Send as** or **Send on behalf** on a mailbox. Convert a mailbox to a shared mailbox and back. In the webmail, shared mailboxes open by address in a tab of their own (Open another mailbox) and can be chosen as From.                                      |
-| **Sign-in security** | Password first, then a second step with a passkey, an authenticator app or a recovery code; owners can require a second factor; a Security page with sessions and recent activity.                                                                                                             |
-| **Mail apps**        | App passwords scoped to IMAP, SMTP, contacts or mail over HTTPS, shown once.                                                                                                                                                                                                                   |
-| **Webmail**          | Folders and threads, a safe reader, rich-text writing (sent with a plain-text copy), drafts and undo send, archive, junk, move, pin, search, several mailboxes in one session, contacts that sync over CardDAV, named signatures, automatic replies, confirmed forwarding and blocked senders. |
-| **Your data**        | Export your mail and contacts; delete your account with a 14-day grace period.                                                                                                                                                                                                                 |
-| **Accountability**   | An append-only, tamper-evident audit log for every change. When Anhourtec support needs to look at your console, it is read-only, short, explained and shown in your audit log.                                                                                                                |
+| Area                  | What you can do                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Sign-up**           | Sign up with a confirmed email. A private automatic check runs in your browser while you fill in the form (no puzzles, no phone number, nothing sent to a third party). Invite codes from Anhourtec can be entered at sign-up or later on Billing.                                                                                                                                                                                                                         |
+| **Free address**      | Claim one free `you@anhourmail.com` address after confirming your email. Names that would pass for system or staff addresses are reserved, and a name is never handed out again.                                                                                                                                                                                                                                                                                           |
+| **Custom domains**    | Add a domain, follow the guided DNS steps (DKIM published as TXT keys) and watch each record turn green. Catch-all on custom domains.                                                                                                                                                                                                                                                                                                                                      |
+| **Mailboxes**         | "Add a user" in four steps (mailbox, sign-in and role together, with a password change at first sign-in); passwords set or generated, owner resets with a step-up, storage, suspend, resume, and delete with a 30-day restore window.                                                                                                                                                                                                                                      |
+| **Aliases**           | Aliases and masked aliases, up to 400 per mailbox on paid plans, each switchable on and off.                                                                                                                                                                                                                                                                                                                                                                               |
+| **People and roles**  | Invites, roles, profile details and photos. Removing someone keeps their mail as a shared mailbox and turns their sign-in off at once.                                                                                                                                                                                                                                                                                                                                     |
+| **Delegation**        | Give people **Read and manage**, **Send as** or **Send on behalf** on a mailbox. Convert a mailbox to a shared mailbox and back. In the webmail, shared mailboxes open by address in a tab of their own (Open another mailbox) and can be chosen as From.                                                                                                                                                                                                                  |
+| **Sign-in security**  | Password first, then a second step with a passkey, an authenticator app or a recovery code; owners can require a second factor; a Security page with sessions and recent activity.                                                                                                                                                                                                                                                                                         |
+| **Mail apps**         | App passwords scoped to IMAP, SMTP, contacts or mail over HTTPS, shown once.                                                                                                                                                                                                                                                                                                                                                                                               |
+| **Webmail**           | Folders and threads, a safe reader, new mail the moment it arrives, rich-text writing (sent with a plain-text copy), drafts and undo send, a notice when an address at AnhourMail doesn't exist, archive, junk, move, pin, search, several mailboxes in one session, contacts that sync over CardDAV (and vCard or CSV import), named signatures, templates, mail rules, automatic replies, confirmed forwarding, safe and blocked senders (also account-wide for admins). |
+| **Moving mail here**  | Copy an old mailbox's mail, folders, read and flagged marks and dates over IMAP with an app password from the old provider, keep copying new mail during a domain switch, and let admins import many mailboxes from one CSV file. The old mailbox is only read.                                                                                                                                                                                                            |
+| **Plans and billing** | A Billing page for owners and billing admins: plan, storage, extra mailboxes, invoices, cancelling and the refund window, with nothing deleted when a payment fails. Paid plans are not open yet, so checkout stays off until launch.                                                                                                                                                                                                                                      |
+| **Your data**         | Export your mail and contacts; delete your account with a 14-day grace period.                                                                                                                                                                                                                                                                                                                                                                                             |
+| **Accountability**    | An append-only, tamper-evident audit log for every change. When Anhourtec support needs to look at your console, it is read-only, short, explained and shown in your audit log.                                                                                                                                                                                                                                                                                            |
 
 ## Status
 
 > [!IMPORTANT]
 > **In development, not open for sign-ups yet.** A pre-staging server has run since 2026-10-23 with real DNS,
-> certificates and external mail. Billing, importing mail from another provider, abuse controls and monitoring are
-> still to come (see the phases below). Follow along in the
+> certificates and external mail. Billing and importing mail from another provider are built; paid plans stay
+> closed until launch. Abuse controls and monitoring are still to come (see the phases below). Follow along in the
 > [roadmap](./docs/internal/09-roadmap.md) and the [changelog](https://anhourmail.com/changelog).
 
-| Phase | What                                                                | State                               |
-| ----- | ------------------------------------------------------------------- | ----------------------------------- |
-| 0     | Research, docs, scaffold                                            | ✅ done                             |
-| 1     | Dev stack and mail-server prototypes                                | ✅ done                             |
-| 2     | Marketing site and public docs                                      | ✅ built (legal review open)        |
-| 3     | Control plane: accounts, domains, mailboxes, aliases, people, audit | ✅ built                            |
-| 4     | Webmail on JMAP                                                     | ✅ built (push sync and rules next) |
-| —     | Pre-staging on one server                                           | 🟢 running                          |
-| 5     | Billing, and importing mail and contacts from another provider      | ⏳ next                             |
-| 6     | Abuse controls, monitoring, backups                                 | ⏳ planned                          |
-| 7–9   | Dogfooding, closed beta, public launch                              | ⏳ planned                          |
+| Phase | What                                                                | State                              |
+| ----- | ------------------------------------------------------------------- | ---------------------------------- |
+| 0     | Research, docs, scaffold                                            | ✅ done                            |
+| 1     | Dev stack and mail-server prototypes                                | ✅ done                            |
+| 2     | Marketing site and public docs                                      | ✅ built (legal review open)       |
+| 3     | Control plane: accounts, domains, mailboxes, aliases, people, audit | ✅ built                           |
+| 4     | Webmail on JMAP                                                     | ✅ built                           |
+| —     | Pre-staging on one server                                           | 🟢 running                         |
+| 5     | Billing, and importing mail and contacts from another provider      | ✅ built (paid plans not open yet) |
+| 6     | Abuse controls, monitoring, backups                                 | ⏳ next                            |
+| 7–9   | Dogfooding, closed beta, public launch                              | ⏳ planned                         |
 
 Plans, prices and limits are defined once in [`packages/shared`](./packages/shared) and rendered into the app, the
 marketing site and the docs, so they never disagree.
@@ -318,7 +324,8 @@ marketing site and the docs, so they never disagree.
                        ├── Postgres (control plane only, never mail content)
                        └── Redis (sessions, queues, rate limits)
 
-  apps/worker: provisioning jobs, DNS checks, quota sync, reconciler, exports
+  apps/worker: provisioning jobs, DNS checks, quota sync, reconciler, exports, billing sync,
+               the mail importer (its own process, no management key)
   Stalwart: SMTP 25/465/587, IMAP 993, POP3 995, run unmodified
 ```
 
@@ -370,23 +377,23 @@ All ports are bound to `127.0.0.1` and can be changed in `.env`; `npm run ports:
 
 ## Project layout
 
-| Path                       | What it is                                                           | Licence       |
-| -------------------------- | -------------------------------------------------------------------- | ------------- |
-| `apps/web`                 | Console and webmail (Next.js), API routes, JMAP proxy                | AGPL-3.0-only |
-| `apps/site`                | Marketing site, public docs (`/docs`), changelog, credits            | AGPL-3.0-only |
-| `apps/worker`              | Jobs and scheduler: provisioning, DNS checks, reconciler, exports    | AGPL-3.0-only |
-| `packages/core`            | Domain rules and services, no database or SDK imports                | AGPL-3.0-only |
-| `packages/adapters`        | Postgres and in-memory adapters, contract tests                      | AGPL-3.0-only |
-| `packages/shared`          | Plans, limits, hostnames, DNS templates, roles (one source of truth) | AGPL-3.0-only |
-| `packages/ui`              | Design tokens, fonts, skeletons, brand assets                        | AGPL-3.0-only |
-| `packages/jmap-client`     | Small typed JMAP client                                              | MIT           |
-| `packages/stalwart-client` | Client for Stalwart's management API                                 | MIT           |
-| `packages/server`          | Logger, health probes, Redis helpers                                 | MIT           |
-| `packages/config`          | Shared TypeScript config                                             | MIT           |
-| `infra/`                   | Stalwart and Postgres dev configuration                              | AGPL-3.0-only |
-| `docs/public`              | User guides published at anhourmail.com/docs                         | —             |
-| `docs/internal`            | Architecture, ADRs, research, runbooks                               | —             |
-| `docs/images/readme`       | Screenshots used in this README (demo data only)                     | —             |
+| Path                       | What it is                                                             | Licence       |
+| -------------------------- | ---------------------------------------------------------------------- | ------------- |
+| `apps/web`                 | Console and webmail (Next.js), API routes, JMAP proxy                  | AGPL-3.0-only |
+| `apps/site`                | Marketing site, public docs (`/docs`), changelog, credits              | AGPL-3.0-only |
+| `apps/worker`              | Jobs, scheduler and mail importer: provisioning, DNS, billing, exports | AGPL-3.0-only |
+| `packages/core`            | Domain rules and services, no database or SDK imports                  | AGPL-3.0-only |
+| `packages/adapters`        | Postgres and in-memory adapters, contract tests                        | AGPL-3.0-only |
+| `packages/shared`          | Plans, limits, hostnames, DNS templates, roles (one source of truth)   | AGPL-3.0-only |
+| `packages/ui`              | Design tokens, fonts, skeletons, brand assets                          | AGPL-3.0-only |
+| `packages/jmap-client`     | Small typed JMAP client                                                | MIT           |
+| `packages/stalwart-client` | Client for Stalwart's management API                                   | MIT           |
+| `packages/server`          | Logger, health probes, Redis helpers                                   | MIT           |
+| `packages/config`          | Shared TypeScript config                                               | MIT           |
+| `infra/`                   | Stalwart and Postgres dev configuration                                | AGPL-3.0-only |
+| `docs/public`              | User guides published at anhourmail.com/docs                           | —             |
+| `docs/internal`            | Architecture, ADRs, research, runbooks                                 | —             |
+| `docs/images/readme`       | Screenshots used in this README (demo data only)                       | —             |
 
 ## Questions people ask
 
@@ -459,8 +466,15 @@ always for a sender we can verify.
 <details>
 <summary><b>Can I take my mail with me?</b></summary>
 
-Yes. Export your mail and contacts at any time, and delete your account whenever you like. Importing from another
-provider is coming with billing (Phase 5).
+Yes. Export your mail and contacts at any time, and delete your account whenever you like.
+
+</details>
+
+<details>
+<summary><b>Can I bring my old mail with me?</b></summary>
+
+Yes. The console copies an old mailbox's mail, folders and read marks over IMAP, using an app password you make at the
+old provider; the old mailbox is only read. Contacts come over as a vCard or CSV file in the webmail.
 
 </details>
 
