@@ -200,7 +200,8 @@ function AuditDrawer({ row, ipKind, onClose }: { row: AuditRow; ipKind: "full" |
           </Field>
           <Field label="Entry">
             <span className="am-micro am-num break-all">
-              #{row.seq} · {row.hash.slice(0, 16)}…
+              #{row.seq}
+              {row.hash !== "" && ` · ${row.hash.slice(0, 16)}…`}
             </span>
           </Field>
         </dl>
