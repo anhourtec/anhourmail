@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { isSuspensionReason, SUSPENSION_REASONS, type SuspensionReason } from "@anhourmail/shared/platform";
+import {
+  isSuspensionReason,
+  SUSPENSION_REASONS,
+  SUSPENSION_REVOKES_APP_PASSWORDS,
+  type SuspensionReason,
+} from "@anhourmail/shared/platform";
 import type { AccountRole } from "@anhourmail/shared/rbac";
 
-import { type Actor, authorize } from "../actor";
+import { type Actor, authorize, can } from "../actor";
 import type { AuditAction } from "../audit/catalogue";
 import { maskEmail } from "../audit/record";
 import { turnOffCatchAllFor } from "../domains/catch-all";
@@ -65,13 +70,29 @@ export const reasonLabel = (reason: SuspensionReason): string => SUSPENSION_REAS
 /**
  * Suspends the usable mailboxes among `list` (or adds this hold to one another suspension already holds). A mail import
  * into one it suspends ends with it (ADR-0030 §13; reason `mailbox_suspended`): `also` has the `data.import_cancelled`
- * entries for the caller's audit.
+ * entries for the caller's audit. With `revokeAppPasswords` (a staff suspension for spam, abuse or phishing:
+ * `SUSPENSION_REVOKES_APP_PASSWORDS`) every mailbox in `list`, whatever its state, has its app passwords revoked
+ * (`app_password.revoke`), which ends mail apps already signed in with them; `appPasswordsRevoked` counts them.
  */
-export async function holdMailboxes(deps: Deps, repos: Repositories, list: readonly Mailbox[], kind: MailboxHoldKind) {
+export async function holdMailboxes(
+  deps: Deps,
+  repos: Repositories,
+  list: readonly Mailbox[],
+  kind: MailboxHoldKind,
+  opts: { revokeAppPasswords?: boolean } = {},
+) {
   const holds = await repos.suspensions.holds(list.map((m) => m.id));
   let suspended = 0;
+  let appPasswordsRevoked = 0;
   const catchAllOff: string[] = [];
   const also: AuditAlso[] = [];
+  const revoke = async (m: Mailbox) => {
+    if (!opts.revokeAppPasswords) return;
+    const moved = await repos.appPasswords.markRevoking(m.id, null);
+    if (moved.length === 0) return;
+    appPasswordsRevoked += moved.length;
+    await repos.provisioning.enqueue({ kind: "app_password.revoke", subjectId: m.id, runAfter: deps.clock.now() });
+  };
   for (const m of list) {
     if (USABLE.includes(m.status)) {
       if (!(await repos.mailboxes.transition(m.id, [m.status], "suspended", null))) {
@@ -86,8 +107,11 @@ export async function holdMailboxes(deps: Deps, repos: Repositories, list: reado
       // Already held by the other kind of suspension: both must be lifted before it resumes.
       await repos.suspensions.addHold(m.id, kind);
     }
+    // Every mailbox of the suspended account or person, whatever its state: one the account had suspended itself (or
+    // is deleting) comes back when they resume or restore it, and its app passwords must not come back with it.
+    await revoke(m);
   }
-  return { suspended, catchAllOff, also };
+  return { suspended, catchAllOff, also, appPasswordsRevoked };
 }
 
 /** Removes this hold from `list`; mailboxes with no hold left are resumed (the worker restores access). */
@@ -116,6 +140,26 @@ export async function releaseMailboxes(
     resumed += 1;
   }
   return { resumed, stillHeld };
+}
+
+/**
+ * Takes the locks a person suspension or lift needs and returns their mailboxes as read under them: the accounts those
+ * mailboxes live in (sorted by id, the order every account-locking path follows), then the person's login row. An
+ * account suspension, a customer resuming a mailbox or a second staff click on the same person then waits for this one
+ * to finish and sees its result, so a racing account suspension can't leave a mailbox active and two clicks can't both
+ * suspend (one email and one audit entry). A mailbox in another account assigned to them between the first read and the
+ * locks is a 409 (try again), never a mailbox left out.
+ */
+async function lockPerson(repos: Repositories, userId: string): Promise<Mailbox[]> {
+  const accountsOf = (list: readonly Mailbox[]) => [...new Set(list.map((m) => m.accountId))].sort();
+  const locked = accountsOf(await repos.suspensions.mailboxesOf(userId));
+  for (const id of locked) await repos.accounts.lock(id);
+  await repos.dataLifecycle.lockLogin(userId);
+  const mailboxes = await repos.suspensions.mailboxesOf(userId);
+  if (accountsOf(mailboxes).some((id) => !locked.includes(id))) {
+    throw new ConflictError("This person's mailboxes changed. Try again.");
+  }
+  return mailboxes;
 }
 
 /** Act-as and step-up checks shared by every staff suspension change (refusals are audited as denied). */
@@ -203,13 +247,16 @@ export async function suspendAccount(
         byUserId: actor.kind === "user" ? actor.userId : null,
       };
       await repos.suspensions.setAccount(accountId, record);
-      const held = await holdMailboxes(deps, repos, await repos.mailboxes.listByAccount(accountId), "account");
+      const held = await holdMailboxes(deps, repos, await repos.mailboxes.listByAccount(accountId), "account", {
+        revokeAppPasswords: SUSPENSION_REVOKES_APP_PASSWORDS.includes(reason),
+      });
       const members = await repos.access.members(accountId);
       const meta = {
         reason: reasonLabel(reason),
         reasonCategory: reason,
         mailboxesSuspended: held.suspended,
         ...(held.catchAllOff.length > 0 ? { catchAllOff: held.catchAllOff } : {}),
+        ...(held.appPasswordsRevoked > 0 ? { appPasswordsRevoked: held.appPasswordsRevoked } : {}),
       };
       return {
         result: {
@@ -316,6 +363,7 @@ export async function suspendPerson(
       if (actor.kind === "user" && actor.userId === userId) return { result: "self", denied: { code: "self" } };
       if ((await repos.access.platformRoles(userId)).length > 0) return { result: "staff", denied: { code: "staff" } };
       const { reason, note } = parseSuspendInput(input);
+      const mailboxes = await lockPerson(repos, userId);
       if (await repos.suspensions.person(userId)) throw new ConflictError("This person is already suspended.");
       await repos.suspensions.setPerson(userId, {
         reason,
@@ -324,13 +372,18 @@ export async function suspendPerson(
         byUserId: actor.kind === "user" ? actor.userId : null,
       });
       const sessionsRevoked = await repos.security.revokeOtherSessions(userId, "");
-      const mailboxes = await repos.suspensions.mailboxesOf(userId);
-      const held = await holdMailboxes(deps, repos, mailboxes, "person");
+      const held = await holdMailboxes(deps, repos, mailboxes, "person", {
+        revokeAppPasswords: SUSPENSION_REVOKES_APP_PASSWORDS.includes(reason),
+      });
       const shared = { reason: reasonLabel(reason), reasonCategory: reason };
       // Each of their accounts' logs shows it too (rule 49), without the internal note.
       const copies = (await repos.access.memberships(userId)).map((m) => ({
         accountId: m.accountId,
-        meta: { ...shared, mailboxesSuspended: held.suspended },
+        meta: {
+          ...shared,
+          mailboxesSuspended: held.suspended,
+          ...(held.appPasswordsRevoked > 0 ? { appPasswordsRevoked: held.appPasswordsRevoked } : {}),
+        },
       }));
       return {
         result: { email: person.email, name: person.name, reason, mailboxes: held.suspended, sessionsRevoked },
@@ -340,6 +393,7 @@ export async function suspendPerson(
           sessionsRevoked,
           internalNote: note,
           ...(held.catchAllOff.length > 0 ? { catchAllOff: held.catchAllOff } : {}),
+          ...(held.appPasswordsRevoked > 0 ? { appPasswordsRevoked: held.appPasswordsRevoked } : {}),
         },
         copies,
         also: held.also,
@@ -369,10 +423,11 @@ export async function liftPersonSuspension(
     async (repos): Promise<MutationOutcome<PersonSuspensionResult | Refusal>> => {
       const refusal = await staffChecks(deps, repos, actor, session);
       if (refusal) return { result: refusal, denied: { code: refusal } };
+      const mailboxes = await lockPerson(repos, userId);
       const current = await repos.suspensions.person(userId);
       if (!current) throw new ConflictError("This person isn't suspended.");
       await repos.suspensions.setPerson(userId, null);
-      const released = await releaseMailboxes(deps, repos, await repos.suspensions.mailboxesOf(userId), "person");
+      const released = await releaseMailboxes(deps, repos, mailboxes, "person");
       const meta = {
         reason: reasonLabel(current.reason),
         reasonCategory: current.reason,
@@ -411,7 +466,10 @@ export async function accountSuspensionNotice(
   return s ? { reason: s.reason, reasonLabel: reasonLabel(s.reason), since: s.at } : null;
 }
 
-/** Staff view of an account's suspension (with the internal note), for the Platform → account page. */
+/**
+ * Staff view of an account's suspension, for the Platform → account page. The internal notes only with
+ * `platform.suspensionNotes.read` (Global, Support and Trust & Safety Administrators); other readers get `note: null`.
+ */
 export async function staffSuspensionView(
   deps: Deps,
   actor: Actor,
@@ -422,13 +480,15 @@ export async function staffSuspensionView(
 }> {
   authorize(actor, "platform.accounts.read");
   if (!isId(accountId)) throw new NotFoundError();
+  const notes = can(actor, "platform.suspensionNotes.read");
+  const shown = (s: SuspensionRecord) => ({ ...s, note: notes ? s.note : null, reasonLabel: reasonLabel(s.reason) });
   return deps.uow.run(async (r) => {
     const account = await r.suspensions.account(accountId);
     const people: Record<string, SuspensionRecord & { reasonLabel: string }> = {};
     for (const m of await r.access.members(accountId)) {
       const p = await r.suspensions.person(m.userId);
-      if (p) people[m.userId] = { ...p, reasonLabel: reasonLabel(p.reason) };
+      if (p) people[m.userId] = shown(p);
     }
-    return { account: account ? { ...account, reasonLabel: reasonLabel(account.reason) } : null, people };
+    return { account: account ? shown(account) : null, people };
   });
 }
