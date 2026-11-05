@@ -416,7 +416,8 @@ its mailboxes), then `platform.mailbox_purged` per mailbox (system `mailbox-purg
 Each deletion entry is in the account's log and copied to the platform log. The account's log stays after the account
 is gone (no foreign key; append-only), retained as the table below says. A person deleting their own console login:
 `auth.login_deleted` in the platform log (target the person, label masked; meta `accountsDeleted`, `accountsLeft`;
-`denied` `act_as`, `step_up_required`, `staff`, `mailboxes`, `sole_owner`, `deleting`; `failed` `bad_request` without
+`denied` `act_as`, `step_up_required`, `staff`, `mailboxes`, `sole_owner`, `deleting`, `suspended` (staff suspended
+the person while it waited), `session_ended` (the session it ran in is gone); `failed` `bad_request` without
 the typed address), copied to each account they left (`left: true`) or that went with them (`accountDeleted: true`).
 `data.deleted` stays reserved.
 
@@ -486,10 +487,17 @@ account: target `account` (label = the account name), the entry in the **account
 category in plain words —, `reasonCategory`, `mailboxesSuspended` / `mailboxesResumed`, `mailboxesStillHeld`,
 `catchAllOff`) and a copy in the **platform** log that alone adds `internalNote`. A person: target `user` (label = the
 masked email), the entry in the **platform** log (with `internalNote`, `sessionsRevoked`) and a copy in **each of their
-accounts' logs** without the note. Refusals are `denied`: `step_up_required`, `act_as`, `staff` (target holds a
-platform role), `self`, `not_found` and `forbidden` (the last two in the platform log only); a member's request to a
+accounts' logs** without the note. The platform log shows `internalNote` only to readers with
+`platform.suspensionNotes.read` (Global Administrator; a Reports Reader reads the entry without it — a view-time
+strip in `platformAuditPage`; the stored entry and its hash are unchanged). A spam, abuse or phishing suspension adds
+`appPasswordsRevoked` (the count of the suspended mailboxes' app passwords it revoked) to the entries. Refusals are `denied`: `step_up_required`,
+`act_as`, `staff` (target holds a platform role), `self`, `not_found` and `forbidden` (the last two in the platform log
+only); a member's request to a
 suspended account is `denied` `account_suspended` in that account's log. The mailbox jobs it queues aren't audited
 again. A suspended person's refused sign-in is `auth.sign_in_failed` denied `sign_in_requirement` (identity layer).
+
+A mailbox created for a person staff have suspended (either path) carries meta `heldBySuspension: "person"`: it
+starts suspended with that hold.
 
 Free platform addresses (ADR-0021): `mailbox.created` with meta `platformAddress: true` in the account's scope;
 refusals are `denied` with `email_unverified` (sign-in email not confirmed) or `act_as`, failures `failed` with
@@ -533,9 +541,14 @@ Mail content, subjects, bodies, previews, attachments, recipient lists, password
 
 ## Integrity
 
-- **Same unit of work:** the audit row is written in the same transaction as the change. If the audit write fails, the change fails. Denied attempts are written on their own (no change to roll back).
+- **Same unit of work:** the audit row is written in the same transaction as the change. If the audit write fails, the change fails. Denied attempts are written on their own (no change to roll back). A change Postgres rolls back to break a deadlock is recorded `failed` with error code `deadlock` (409, "try again").
 - **Append-only:** migration 0001 adds triggers on `audit_log` that refuse `UPDATE`, `DELETE` and `TRUNCATE` for every role, owner included. No repository method updates or deletes audit rows (rule 47; `check:audit` fails on one).
 - **Hash chain per scope:** `hash = sha256(prev_hash ‖ canonical_json(entry without hash))`. `prev_hash` of the first entry is a fixed genesis value. Writes take a per-scope advisory lock to read the previous hash.
+- **Who sees the chain fields:** `hash` and `prev_hash` are served only to a reader who sees the whole entry — the
+  platform log with `platform.audit.full_ip` and `platform.suspensionNotes.read` (Global Administrator). Everyone else
+  (account logs, a Reports Reader) gets them empty: the hash covers the full IP and any staff note their view leaves
+  out, so it would let them test guesses offline. The console hides the hash then. Verification stays server-side.
+  Open: the account data export (`data/archive.ts`) still writes both fields next to network-part IPs.
 - **Verification:** the scheduler job `audit-verify` (`apps/worker/src/jobs/audit-verify.ts`, every 6 hours) walks every scope's chain (`verifyAuditScope`). A break is logged at `fatal` and the job exits non-zero; `platform.audit_chain_broken` is catalogued for it and the alert channel arrives with monitoring (`09-roadmap.md` "Path to production").
 - **Retention purge** runs under a separate maintenance role. Before deleting a prefix it records a checkpoint (`scope`, `seq`, `hash`), and the purge itself is audited.
 
