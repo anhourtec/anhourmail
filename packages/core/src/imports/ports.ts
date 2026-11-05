@@ -116,3 +116,13 @@ export type ImportCredentialIssuer = {
   /** Clean-up when recording the import fails. */
   destroy(stalwartAccountId: string, id: string): Promise<void>;
 };
+
+/**
+ * Removes the spam-classifier training samples a mail import created (ADR-0030 update 2026-11-05): on the pinned mail
+ * server every APPEND adds one, and the model is shared server-wide. Adapter: the worker's training key, which can only
+ * read and destroy samples. Matched by the mail server account, kind (ham only: an import never writes into Junk) and
+ * the importer slice's window. Returns how many were destroyed (counts only, never what they were).
+ */
+export type ImportTrainingSamples = {
+  removeImported(stalwartAccountId: string, window: { from: Date; to: Date }): Promise<{ removed: number }>;
+};

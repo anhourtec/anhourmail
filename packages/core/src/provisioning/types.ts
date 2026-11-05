@@ -7,6 +7,10 @@
  * `billing.sync`: subject is an account; reads its subscription from the billing provider and reconciles (ADR-0029 §4).
  * `billing.resolve`: subject is a `billing_event` orphan (a dispute, which names no customer); finds its account with the
  * provider and queues that account's sync.
+ * `mail_import.credential_revoke`: subject is a mail import (ADR-0030 §1.5); takes every import credential off its
+ * mailbox's account except the one a live import of that mailbox holds (the provisioning key).
+ * `mail_import.training_cleanup`: subject is `<import id>:<from ms>:<to ms>`, one importer slice; destroys the
+ * spam-training samples its APPENDs created on the mailbox's account (the training key; ADR-0030 update 2026-11-05).
  */
 export type JobKind =
   | "domain.ensure"
@@ -15,7 +19,9 @@ export type JobKind =
   | "mailbox.password"
   | "app_password.revoke"
   | "billing.sync"
-  | "billing.resolve";
+  | "billing.resolve"
+  | "mail_import.credential_revoke"
+  | "mail_import.training_cleanup";
 export type JobStatus = "queued" | "running" | "succeeded" | "failed";
 
 export type ProvisioningJob = {

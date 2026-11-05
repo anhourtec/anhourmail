@@ -5,6 +5,7 @@ import { billingMailboxAccess } from "../billing/lifecycle";
 import type { BillingProvider } from "../billing/ports";
 import { resolveOrphanEvent, syncAccountBilling } from "../billing/sync";
 import { turnOffCatchAllFor } from "../domains/catch-all";
+import type { ImportTrainingSamples } from "../imports/ports";
 import { mailboxNameOf } from "../people/names";
 import { mutation } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
@@ -79,6 +80,28 @@ async function apply(deps: Deps, mail: MailServer, job: ClaimedJob, handlers: Jo
       });
       await held((r) => r.appPasswords.deleteRevoked(p.id));
     }
+    return;
+  }
+  if (job.kind === "mail_import.credential_revoke") {
+    await revokeImportCredentials(deps, mail, job, held, confirm);
+    return;
+  }
+  if (job.kind === "mail_import.training_cleanup") {
+    // Subject: `<import id>:<from ms>:<to ms>`, one importer slice (ADR-0030 update 2026-11-05).
+    const [importId = "", from = "", to = ""] = job.subjectId.split(":");
+    const window = { from: new Date(Number(from)), to: new Date(Number(to)) };
+    if (!Number.isFinite(window.from.getTime()) || !Number.isFinite(window.to.getTime())) {
+      throw new Error("training cleanup subject is not <import>:<from>:<to>");
+    }
+    const target = await held(async (r) => {
+      const imp = await r.imports.getById(importId);
+      return imp ? await r.directory.getMailbox(imp.mailboxId) : null;
+    });
+    // The import went with its mailbox or account: the account's samples go when the account is purged.
+    if (!target?.stalwartId) return;
+    // Without the training key this worker can't do it: fail (and alert after the retries) rather than pass.
+    if (!handlers.trainingSamples) throw new Error("no spam-training sample credential in this worker");
+    await handlers.trainingSamples.removeImported(target.stalwartId, window);
     return;
   }
   if (job.kind === "mailbox.password") {
@@ -288,8 +311,70 @@ export type ProcessedJob = ClaimedJob & { lockLost: boolean };
  * Every outcome is recorded only while this run's claim still holds the job (its lock token); otherwise nothing of it
  * is written and `lockLost` is set.
  */
-/** What jobs beyond the mail server need: the billing provider for `billing.*` jobs (null or absent: billing off). */
-export type JobHandlers = { billing?: BillingProvider | null };
+/**
+ * What jobs beyond the mail server need: the billing provider for `billing.*` jobs (null or absent: billing off), and
+ * the spam-training sample remover for `mail_import.training_cleanup` (the training key; absent: those jobs fail).
+ */
+export type JobHandlers = { billing?: BillingProvider | null; trainingSamples?: ImportTrainingSamples | null };
+
+const sameSecond = (a: Date, b: Date) => Math.abs(a.getTime() - b.getTime()) < 1000;
+
+/**
+ * `mail_import.credential_revoke` (ADR-0030 §1.5): under the mailbox's credential lock, every import credential on its
+ * account comes off except the one a live import of that mailbox holds (matched by id and creation time) — so the
+ * job serves an import that ended, a resume that replaced its credential, and an orphan the reconciler found. Audited
+ * `data.import_credentials_wiped` in the account's log with the number revoked.
+ */
+async function revokeImportCredentials(
+  deps: Deps,
+  mail: MailServer,
+  job: ClaimedJob,
+  held: <T>(fn: (r: Repositories) => Promise<T>) => Promise<T>,
+  confirm: (r: Repositories) => Promise<void>,
+): Promise<void> {
+  const imp = await held((r) => r.imports.getById(job.subjectId));
+  if (!imp) return; // gone with its mailbox or account (the account's credentials went with it)
+  if (!mail.importCredentials) throw new Error("this mail server can't list import credentials");
+  const revoked = await held(async (r) => {
+    await r.appPasswords.lockCredentials(imp.mailboxId);
+    const mailbox = await r.directory.getMailbox(imp.mailboxId);
+    if (!mailbox?.stalwartId) return 0;
+    const live = await r.imports.activeForMailbox(imp.mailboxId);
+    const keepId = live?.destinationCredentialId ?? null;
+    const keepAt = live?.destinationCredentialCreatedAt ?? null;
+    let n = 0;
+    for (const c of (await mail.importCredentials?.(mailbox.stalwartId)) ?? []) {
+      if (keepId !== null && keepAt !== null && c.credentialId === keepId && sameSecond(c.createdAt, keepAt)) continue;
+      await mail.revokeAppPassword({ externalId: mailbox.stalwartId, ...c });
+      n += 1;
+    }
+    return n;
+  });
+  await mutation(
+    deps,
+    SYSTEM,
+    req(job.id),
+    {
+      action: "data.import_credentials_wiped",
+      permission: "self.profile.read",
+      accountId: imp.accountId,
+      target: { type: "mail_import", id: imp.id },
+    },
+    async (r) => {
+      await confirm(r);
+      const now = await r.imports.getById(imp.id);
+      return {
+        result: undefined,
+        meta: {
+          importId: imp.id,
+          mailboxId: imp.mailboxId,
+          credentialRevoked: revoked,
+          sealedCleared: now === null || (now.sourceSecret === null && now.destinationSecret === null),
+        },
+      };
+    },
+  );
+}
 
 export async function runNextJob(
   deps: Deps,
@@ -379,8 +464,22 @@ export async function runClaimedJob(
           } else if (job.kind === "domain.ensure" || job.kind === "domain.remove") {
             await repos.directory.markDomain(job.subjectId, { lastError: error });
           }
+          // The import credential's revoke gave up: the account's admins see it too (its `expiresAt` still ends it).
+          const imp = job.kind === "mail_import.credential_revoke" ? await repos.imports.getById(job.subjectId) : null;
           return {
             result: undefined,
+            ...(imp
+              ? {
+                  also: [
+                    {
+                      action: "data.import_credentials_wiped" as const,
+                      accountId: imp.accountId,
+                      target: { type: "mail_import", id: imp.id },
+                      meta: { importId: imp.id, mailboxId: imp.mailboxId, credentialRevoked: 0, gaveUp: true },
+                    },
+                  ],
+                }
+              : {}),
             meta: {
               jobId: job.id,
               attempts: job.attempts,

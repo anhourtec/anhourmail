@@ -148,6 +148,11 @@ export type MailServer = {
    */
   revokeAppPassword(input: { externalId: string; credentialId: string; createdAt: Date }): Promise<void>;
   /**
+   * The mailbox's mail import credentials (exactly `isImportCredential` in `@anhourmail/stalwart-client`), read through
+   * the account's credential list with the provisioning key (ADR-0030). Absent on fakes that don't model imports.
+   */
+  importCredentials?(externalId: string): Promise<{ credentialId: string; createdAt: Date }[]>;
+  /**
    * Every mailbox with its quota, whether it is suspended (sign-in and delivery off), and whether the customer lock
    * is in place (the user can't change mail flow: no own Sieve, no VacationResponse). `sieveLocked` undefined =
    * not reported (treated as fine).
