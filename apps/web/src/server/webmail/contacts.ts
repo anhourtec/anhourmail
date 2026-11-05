@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { z } from "zod";
 
+import { IMPORT } from "@anhourmail/shared/import";
+
 /**
  * Contacts in the webmail (docs/internal/05-webmail.md "Contacts"). They live in Stalwart's own address books
  * (JMAP Contacts, RFC 9610 — JSContact cards), never in Postgres, so they also sync over CardDAV. The browser
@@ -17,12 +19,12 @@ export const OTHER_BOOK_NAME = "Other contacts";
 export const AUTO_SAVE_ON = "People you email are saved here automatically.";
 export const AUTO_SAVE_OFF = "Automatic saving is off.";
 
-/** Caps: contacts listed, imported per file, file size, labels per contact, values per field. */
+/** Caps: contacts listed, imported per file (vCard or CSV, ADR-0030 §10), file size, labels per contact, values per field. */
 export const MAX_CONTACTS = 5000;
-export const MAX_IMPORT_CARDS = 1000;
-export const MAX_IMPORT_BYTES = 1024 * 1024;
-const MAX_VALUES = 10;
-const MAX_LABELS = 10;
+export const MAX_IMPORT_CARDS = IMPORT.contactsMaxCards;
+export const MAX_IMPORT_BYTES = IMPORT.contactsMaxBytes;
+export const MAX_VALUES = 10;
+export const MAX_LABELS = 10;
 
 export type ContactView = {
   id: string;
@@ -270,41 +272,113 @@ const escapeVc = (v: string) =>
     .replace(/([,;])/g, "\\$1");
 
 /**
- * Contacts from a .vcf file (vCard 3.0 / 4.0): FN, N, EMAIL, TEL, ORG, NOTE, BDAY, CATEGORIES. Everything else is
- * ignored. Bounded: `MAX_IMPORT_BYTES` of input, `MAX_IMPORT_CARDS` cards; invalid entries are skipped, never thrown.
- * Every result goes through `ContactInput` like a contact typed in the app.
+ * Decodes a vCard 2.1 quoted-printable value (`=XX` bytes, soft line breaks already joined) as `charset` (UTF-8 when
+ * none is given or the label is unknown). Malformed `=` sequences are kept as written.
  */
-export function parseVcards(input: string): { contacts: ContactInput[]; skipped: number } {
-  const lines = input
+export function decodeQuotedPrintable(value: string, charset = "utf-8"): string {
+  const bytes: number[] = [];
+  for (let i = 0; i < value.length; i++) {
+    const c = value.charCodeAt(i);
+    if (c === 0x3d && /^[0-9A-Fa-f]{2}$/.test(value.slice(i + 1, i + 3))) {
+      bytes.push(parseInt(value.slice(i + 1, i + 3), 16));
+      i += 2;
+    } else if (c < 0x80) {
+      bytes.push(c);
+    } else {
+      // Not quoted-printable at all (8-bit text in the value): kept as its UTF-8 bytes.
+      bytes.push(...new TextEncoder().encode(value.charAt(i)));
+    }
+  }
+  let decoder: TextDecoder;
+  try {
+    decoder = new TextDecoder(charset);
+  } catch {
+    decoder = new TextDecoder("utf-8");
+  }
+  return decoder.decode(new Uint8Array(bytes));
+}
+
+/**
+ * One content line's parameters: TYPE values (from `TYPE=a,b` and vCard 2.1's bare `;HOME;CELL`), whether the value is
+ * quoted-printable (`ENCODING=QUOTED-PRINTABLE` or bare `QUOTED-PRINTABLE`) and its CHARSET.
+ */
+function vcParams(parts: readonly string[]): { type: string[]; qp: boolean; charset: string | undefined } {
+  const type: string[] = [];
+  let qp = false;
+  let charset: string | undefined;
+  for (const raw of parts) {
+    const p = raw.toLowerCase();
+    const eq = p.indexOf("=");
+    if (eq === -1) {
+      if (p === "quoted-printable") qp = true;
+      else if (p !== "") type.push(p);
+      continue;
+    }
+    const key = p.slice(0, eq);
+    const value = p.slice(eq + 1).replace(/"/g, "");
+    if (key === "type") type.push(...value.split(",").filter(Boolean));
+    else if (key === "encoding" && value === "quoted-printable") qp = true;
+    else if (key === "charset") charset = value;
+  }
+  return { type, qp, charset };
+}
+
+/** Longest quoted-printable value kept (encoded characters); more is never needed for a card field (all cut later). */
+export const MAX_QP_VALUE = 8 * 1024;
+
+/**
+ * Contacts from a .vcf file (vCard 2.1 / 3.0 / 4.0; 2.1 quoted-printable values are decoded): FN, N, EMAIL, TEL, ORG,
+ * NOTE, BDAY, CATEGORIES. Everything else is ignored, so an import never fetches anything. Bounded: `MAX_IMPORT_BYTES`
+ * of input; past `MAX_IMPORT_CARDS` cards `tooMany` is set and the rest aren't read. Invalid or empty cards are
+ * counted (`invalid`), never thrown. Every result goes through `ContactInput` like a contact typed in the app.
+ */
+export function parseVcards(input: string): { contacts: ContactInput[]; invalid: number; tooMany: boolean } {
+  const physical = input
     .slice(0, MAX_IMPORT_BYTES)
     .replace(/\r\n?/g, "\n")
     .replace(/\n[ \t]/g, "")
     .split("\n");
   const contacts: ContactInput[] = [];
-  let skipped = 0;
+  let invalid = 0;
+  let cards = 0;
   let cur: Record<string, unknown> | null = null;
-  for (const line of lines) {
+  for (let li = 0; li < physical.length; li++) {
+    let line = physical[li] ?? "";
     const colon = line.indexOf(":");
     if (colon <= 0) continue;
     const head = line.slice(0, colon);
-    const value = line.slice(colon + 1);
     const [nameRaw = "", ...paramParts] = head.split(";");
     const name = (nameRaw.split(".").pop() ?? "").toUpperCase();
-    const params = paramParts.join(";").toLowerCase();
-    const type = /type=([a-z,"]+)/.exec(params)?.[1]?.replace(/"/g, "").split(",") ?? [];
+    const { type, qp, charset } = vcParams(paramParts);
+    // vCard 2.1 quoted-printable: a value ending in `=` goes on in the next line (a soft line break).
+    // Parts are collected and joined once (linear, run-66 SA-66-02), and stop growing past `MAX_QP_VALUE` characters:
+    // the lines of an over-long value are still consumed, so the next property is read where it starts.
+    if (qp && line.endsWith("=")) {
+      const parts = [line.slice(0, -1)];
+      let size = parts[0]?.length ?? 0;
+      let next = line;
+      while (next.endsWith("=") && li + 1 < physical.length) {
+        next = physical[++li] ?? "";
+        const part = next.endsWith("=") ? next.slice(0, -1) : next;
+        if (size < MAX_QP_VALUE) {
+          parts.push(part);
+          size += part.length;
+        }
+      }
+      line = parts.join("").slice(0, colon + 1 + MAX_QP_VALUE);
+    }
+    const value = qp ? decodeQuotedPrintable(line.slice(colon + 1), charset) : line.slice(colon + 1);
     if (name === "BEGIN" && value.trim().toUpperCase() === "VCARD") {
       cur = { emails: [], phones: [], labels: [] };
       continue;
     }
     if (!cur) continue;
     if (name === "END" && value.trim().toUpperCase() === "VCARD") {
-      if (contacts.length >= MAX_IMPORT_CARDS) {
-        skipped += 1;
-      } else {
-        const parsed = ContactInput.safeParse(cur);
-        if (parsed.success && hasIdentity(parsed.data)) contacts.push(parsed.data);
-        else skipped += 1;
-      }
+      cards += 1;
+      if (cards > MAX_IMPORT_CARDS) return { contacts, invalid, tooMany: true };
+      const parsed = ContactInput.safeParse(cur);
+      if (parsed.success && hasIdentity(parsed.data)) contacts.push(parsed.data);
+      else invalid += 1;
       cur = null;
       continue;
     }
@@ -368,7 +442,7 @@ export function parseVcards(input: string): { contacts: ContactInput[]; skipped:
         break;
     }
   }
-  return { contacts, skipped };
+  return { contacts, invalid, tooMany: false };
 }
 
 /** Contacts as a vCard 4.0 file (text/vcard), every value escaped. */

@@ -270,6 +270,8 @@ function fakeStalwart() {
     ]),
     cards: new Map<string, Record<string, unknown> & { id: string }>(),
     failContacts: false,
+    /** `ContactCard/set` calls answered before the next ones fail (null: never). */
+    contactSetsLeft: null as number | null,
     /** Every `Identity/set` update the service sent (the names it renamed identities to). */
     identityUpdates: [] as Record<string, unknown>[],
   };
@@ -308,6 +310,7 @@ function fakeStalwart() {
         .filter(Boolean),
     }),
     "ContactCard/set": (a) => {
+      if (state.contactSetsLeft !== null && state.contactSetsLeft-- <= 0) return undefined;
       // Which account the cards were written to (auto-save must use the account that sent).
       if (a.create) state.calls.push(`cards@${String(a.accountId)}`);
       const created: Record<string, { id: string }> = {};
@@ -320,7 +323,14 @@ function fakeStalwart() {
       for (const [id, patch] of Object.entries((a.update ?? {}) as Record<string, Record<string, unknown>>)) {
         const c = state.cards.get(id);
         if (!c) continue;
-        Object.assign(c, patch);
+        // Like the server: a key with `/` is a JSON pointer into the card (RFC 8620 §5.3 PatchObject).
+        for (const [path, value] of Object.entries(patch)) {
+          const parts = path.split("/").map((p) => p.replace(/~1/g, "/").replace(/~0/g, "~"));
+          const last = parts.pop() ?? "";
+          let at: Record<string, unknown> = c;
+          for (const part of parts) at = at[part] as Record<string, unknown>;
+          at[last] = value;
+        }
         updated[id] = null;
       }
       const destroyed: string[] = [];
@@ -922,6 +932,7 @@ describe("contacts through the BFF", () => {
   const contact = (over: Record<string, unknown> = {}) =>
     ContactInput.parse({ given: "Sam", surname: "Rivera", emails: [{ address: "s@x.test" }], ...over });
   const ACC = "acc-a@x.test";
+  const vcard = (text: string) => ({ format: "vcard" as const, bytes: new TextEncoder().encode(text) });
   const cards = (t: ReturnType<typeof setup>, n: number) => {
     for (let i = 0; i < n; i++) {
       t.state.cards.set(`k${String(i)}`, {
@@ -952,14 +963,16 @@ describe("contacts through the BFF", () => {
     const imported = await t.svc.importContacts(
       sessionId,
       ACC,
-      "BEGIN:VCARD\nFN:Jo\nEMAIL:jo@x.test\nEND:VCARD\nBEGIN:VCARD\nEND:VCARD\n",
+      vcard("BEGIN:VCARD\nFN:Jo\nEMAIL:jo@x.test\nEND:VCARD\nBEGIN:VCARD\nEND:VCARD\n"),
     );
-    expect(imported).toEqual({ imported: 1, skipped: 1, full: false });
+    expect(imported).toEqual({ created: 1, merged: 0, duplicates: 0, invalid: 1, overCap: 0 });
     expect(await t.svc.exportContacts(sessionId)).toContain("EMAIL:jo@x.test");
-    expect(await t.svc.importContacts(sessionId, ACC, "nothing here")).toEqual({
-      imported: 0,
-      skipped: 0,
-      full: false,
+    expect(await t.svc.importContacts(sessionId, ACC, vcard("nothing here"))).toEqual({
+      created: 0,
+      merged: 0,
+      duplicates: 0,
+      invalid: 0,
+      overCap: 0,
     });
 
     expect(await t.svc.deleteContacts(sessionId, ACC, [id])).toBe(1);
@@ -977,7 +990,7 @@ describe("contacts through the BFF", () => {
       t.svc.deleteContacts(sessionId, other, [id]),
       t.svc.moveContacts(sessionId, other, [id], "other"),
       t.svc.setAutoSave(sessionId, other, false),
-      t.svc.importContacts(sessionId, other, "BEGIN:VCARD\nFN:Jo\nEND:VCARD\n"),
+      t.svc.importContacts(sessionId, other, vcard("BEGIN:VCARD\nFN:Jo\nEND:VCARD\n")),
     ];
     for (const p of refused) await expect(p).rejects.toBeInstanceOf(WebmailRefusedError);
     expect((await t.svc.contacts(sessionId)).contacts.map((c) => c.name)).toEqual(["Sam Rivera"]);
@@ -988,13 +1001,93 @@ describe("contacts through the BFF", () => {
     const { sessionId } = await t.svc.signIn("a@x.test", "right");
     cards(t, 4999);
     expect(
-      (await t.svc.importContacts(sessionId, ACC, "BEGIN:VCARD\nFN:A\nEND:VCARD\nBEGIN:VCARD\nFN:B\nEND:VCARD\n")).full,
-    ).toBe(true);
+      await t.svc.importContacts(sessionId, ACC, vcard("BEGIN:VCARD\nFN:A\nEND:VCARD\nBEGIN:VCARD\nFN:B\nEND:VCARD\n")),
+    ).toMatchObject({ created: 1, overCap: 1 });
     await expect(t.svc.createContact(sessionId, ACC, contact())).rejects.toThrow(/up to 5,000 contacts/);
     const list = await t.svc.contacts(sessionId);
     expect([list.contacts.length, list.truncated]).toEqual([5000, false]);
     t.state.cards.set("extra", { id: "extra", name: { full: "Extra" }, addressBookIds: { b: true } });
     expect((await t.svc.contacts(sessionId)).truncated).toBe(true);
+  });
+
+  it("imports a CSV with the submitted mapping, merging by email and filling only what's empty", async () => {
+    const t = setup();
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    await t.svc.createContact(sessionId, ACC, contact({ organization: "Kept Co" }));
+    const done: { address: string; counts: unknown }[] = [];
+    const csv = [
+      "First Name;Last Name;E-mail Address;Company;Notes;Middle Name",
+      "Samuel;R;S@X.test;New Co;Met on the trail;Q",
+      "Ana;Diaz;ana@x.test;;;",
+      "Ana;Diaz;ANA@x.test;;;",
+      "No;Identity;not-an-address;;;",
+    ].join("\r\n");
+    const counts = await t.svc.importContacts(
+      sessionId,
+      ACC,
+      {
+        format: "csv",
+        bytes: new TextEncoder().encode(csv),
+        columns: ["given", "surname", "emails", "organization", "notes", null],
+      },
+      async (address, c) => {
+        done.push({ address, counts: c });
+      },
+    );
+    expect(counts).toEqual({ created: 1, merged: 1, duplicates: 1, invalid: 1, overCap: 0 });
+    expect(done).toEqual([{ address: "a@x.test", counts }]);
+    const list = (await t.svc.contacts(sessionId)).contacts;
+    const sam = list.find((c) => c.emails.some((e) => e.address === "s@x.test"));
+    // Never overwritten: Sam keeps his name and company; the empty notes are filled.
+    expect(sam).toMatchObject({ given: "Sam", surname: "Rivera", organization: "Kept Co", notes: "Met on the trail" });
+    expect(list.map((c) => c.name).sort()).toEqual(["Ana Diaz", "Sam Rivera"]);
+  });
+
+  it("refuses a file it can't read, a mapping that doesn't fit and a vCard over the card limit, writing nothing", async () => {
+    const t = setup();
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const done: unknown[] = [];
+    const onDone = async (_a: string, c: unknown) => {
+      done.push(c);
+    };
+    const latin1 = new Uint8Array([0x4e, 0x0a, 0x43, 0x61, 0x66, 0xe9]);
+    await expect(
+      t.svc.importContacts(sessionId, ACC, { format: "csv", bytes: latin1, columns: ["fullName"] }, onDone),
+    ).rejects.toThrow(/Save it as UTF-8/);
+    await expect(
+      t.svc.importContacts(
+        sessionId,
+        ACC,
+        { format: "csv", bytes: new TextEncoder().encode("A,B\r\n1,2\r\n"), columns: ["fullName"] },
+        onDone,
+      ),
+    ).rejects.toThrow(/don't match this file/);
+    await expect(
+      t.svc.importContacts(sessionId, ACC, vcard("BEGIN:VCARD\nFN:x\nEND:VCARD\n".repeat(5001)), onDone),
+    ).rejects.toThrow(/up to 5,000 contacts/);
+    expect(done).toEqual([]);
+    expect(t.state.cards.size).toBe(0);
+  });
+
+  it("writes in batches of 100 and still reports what was written when the mail server stops part-way", async () => {
+    const t = setup();
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const many = Array.from({ length: 250 }, (_, i) => `BEGIN:VCARD\nFN:P${String(i)}\nEND:VCARD\n`).join("");
+    const sets = () => t.state.calls.filter((c) => c === "ContactCard/set").length;
+    const before = sets();
+    expect(await t.svc.importContacts(sessionId, ACC, vcard(many))).toMatchObject({ created: 250 });
+    expect(sets() - before).toBe(3);
+
+    const t2 = setup();
+    const s2 = (await t2.svc.signIn("a@x.test", "right")).sessionId;
+    t2.state.contactSetsLeft = 1;
+    const done: unknown[] = [];
+    await expect(
+      t2.svc.importContacts(s2, ACC, vcard(many), async (_a, c) => {
+        done.push(c);
+      }),
+    ).rejects.toBeInstanceOf(WebmailUnavailableError);
+    expect(done).toEqual([{ created: 100, merged: 0, duplicates: 0, invalid: 0, overCap: 0 }]);
   });
 
   it("reads more contacts than one /get allows, in batches", async () => {

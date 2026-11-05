@@ -561,7 +561,11 @@ describe("own-mailbox actions can't be aimed at a shared mailbox by switching af
       () => t.svc.deleteContacts(sessionId, account, ["c1"]),
       () => t.svc.moveContacts(sessionId, account, ["c1"], "mine"),
       () => t.svc.setAutoSave(sessionId, account, true),
-      () => t.svc.importContacts(sessionId, account, "BEGIN:VCARD\nVERSION:4.0\nFN:A\nEND:VCARD"),
+      () =>
+        t.svc.importContacts(sessionId, account, {
+          format: "vcard",
+          bytes: new TextEncoder().encode("BEGIN:VCARD\nVERSION:4.0\nFN:A\nEND:VCARD"),
+        }),
       () => t.svc.exportContacts(sessionId),
       () => t.svc.quota(sessionId),
       () => t.svc.identities(sessionId),

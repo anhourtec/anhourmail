@@ -24,6 +24,8 @@ import {
 } from "@anhourmail/core/webmail";
 import { log } from "@anhourmail/server/log";
 import type { SlidingQuotaStore } from "@anhourmail/server/rate-limit";
+import { decodeCsvBytes } from "@anhourmail/shared/csv";
+import type { ImportCsvField } from "@anhourmail/shared/import";
 import { DELEGATED_MAILBOXES_PER_PERSON } from "@anhourmail/shared/plans";
 
 import {
@@ -78,6 +80,14 @@ import {
   parseVcards,
   toVcards,
 } from "./contacts";
+import { CONTACTS_FILE_TOO_MANY, CSV_ERROR_TEXT, readContactsCsv } from "./contacts-csv";
+import {
+  columnsFit,
+  type ContactsImportCounts,
+  csvContacts,
+  type ExistingCard,
+  planContactsImport,
+} from "./contacts-import";
 import {
   type Address,
   BODY_PROPERTIES,
@@ -189,6 +199,11 @@ export class GrantRefusedError extends Error {
 }
 
 /** "Show original": summary fields from the mail server plus the source as text (first part when `cut`). */
+/** A contacts file to import (ADR-0030 §10): a vCard, or a CSV with one card field (or null: not imported) per column. */
+export type ContactsImportFile =
+  | { format: "vcard"; bytes: Uint8Array }
+  | { format: "csv"; bytes: Uint8Array; columns: readonly (ImportCsvField | null)[] };
+
 export type OriginalMessage = {
   id: string;
   messageId: string | null;
@@ -416,6 +431,8 @@ type FullDraft = StoredDraft & {
 
 /** At most this many recipients of one message are saved to Other contacts. */
 const MAX_AUTO_SAVE = 100;
+/** Cards per `ContactCard/set` when importing (ADR-0030 §10). */
+const CONTACT_SET_BATCH = 100;
 /** Cards per `ContactCard/get` (the server's `getMaxResults`); MAX_CONTACTS / CARD_BATCH ≤ 16 calls a request. */
 const CARD_BATCH = 500;
 const CONTACTS_FULL = `A mailbox can keep up to ${MAX_CONTACTS.toLocaleString("en-CA")} contacts. Delete some to add more.`;
@@ -3580,43 +3597,105 @@ export class WebmailService {
   }
 
   /**
-   * Imports a .vcf file into My contacts (parsed and capped here). Cards beyond the mailbox's room (`MAX_CONTACTS`
-   * in all) are skipped, and `full` says so.
+   * Imports a vCard or CSV file into My contacts (ADR-0030 §10), for the session's own mailbox only (a mailbox shared
+   * with the person is refused, ADR-0026 §6). The whole file is parsed here — a CSV with the person's column mapping,
+   * never the browser's preview — then merged by email with the mailbox's cards (read in 500-card batches) and earlier
+   * contacts in the file (`planContactsImport`), and written with `ContactCard/set` in batches of 100. New cards stop
+   * at the mailbox's `MAX_CONTACTS`. `onDone` gets the mailbox's address and the counts once writing started, also when
+   * it stopped part-way (the caller audits them); a file refused before anything was written calls nothing.
    */
   async importContacts(
     sessionId: string,
     account: string,
-    vcf: string,
-  ): Promise<{ imported: number; skipped: number; full: boolean }> {
-    const { contacts: parsed, skipped } = parseVcards(vcf);
-    if (parsed.length === 0) return { imported: 0, skipped, full: false };
-    const room = Math.max(0, MAX_CONTACTS - (await this.#cardCount(sessionId, account)));
-    const contacts = parsed.slice(0, room);
-    const full = contacts.length < parsed.length;
-    if (contacts.length === 0) return { imported: 0, skipped: skipped + parsed.length, full };
-    const bookId = await this.#mineBook(sessionId, account);
-    let imported = 0;
-    for (let i = 0; i < contacts.length; i += 200) {
-      const chunk = contacts.slice(i, i + 200);
-      const r = await this.#call(
-        sessionId,
-        (x) => [
-          [
-            "ContactCard/set",
-            {
-              accountId: x.accountId,
-              create: Object.fromEntries(chunk.map((c, j) => [`c${String(j)}`, newCard(c, bookId)])),
-            },
-            "s",
-          ],
-        ],
-        USING_CONTACTS,
-        account,
-      );
-      imported += Object.keys((r.get("s")?.created as Record<string, unknown> | undefined) ?? {}).length;
+    file: ContactsImportFile,
+    onDone?: (address: string, counts: ContactsImportCounts) => Promise<void>,
+  ): Promise<ContactsImportCounts> {
+    const s = ownMailbox(await this.session(sessionId));
+    if (s.accountId !== account) throw new WebmailRefusedError("Your active mailbox changed. Try again.");
+    let parsed: { contacts: ContactInput[]; invalid: number };
+    if (file.format === "csv") {
+      const csv = readContactsCsv(file.bytes);
+      if (!csv.ok) throw new WebmailRefusedError(CSV_ERROR_TEXT[csv.error]);
+      if (!columnsFit(csv.table, file.columns)) {
+        throw new WebmailRefusedError("The columns chosen don't match this file. Choose the file again.");
+      }
+      parsed = csvContacts(csv.table, file.columns);
+    } else {
+      // vCard files are UTF-8 (a BOM or UTF-16 with a BOM is read too); anything else is read leniently as before.
+      const text = decodeCsvBytes(file.bytes) ?? Buffer.from(file.bytes).toString("utf8");
+      const vc = parseVcards(text);
+      if (vc.tooMany) throw new WebmailRefusedError(CONTACTS_FILE_TOO_MANY);
+      parsed = vc;
     }
-    this.#afterContactsChange(sessionId, account);
-    return { imported, skipped: skipped + parsed.length - imported, full };
+    const counts: ContactsImportCounts = { created: 0, merged: 0, duplicates: 0, invalid: parsed.invalid, overCap: 0 };
+    if (parsed.contacts.length === 0) {
+      await onDone?.(s.username, counts);
+      return counts;
+    }
+    const { cards, total } = await this.#allCards(sessionId, CARD_PROPERTIES, account);
+    const plan = planContactsImport(cards as ExistingCard[], parsed.contacts, Math.max(0, MAX_CONTACTS - total));
+    counts.duplicates = plan.counts.duplicates;
+    counts.overCap = plan.counts.overCap;
+    try {
+      const bookId = plan.creates.length > 0 ? await this.#mineBook(sessionId, account) : "";
+      type Op =
+        | { kind: "create"; key: string; card: Record<string, unknown>; mergedIn: number }
+        | {
+            kind: "update";
+            id: string;
+            patch: Record<string, unknown>;
+            mergedIn: number;
+          };
+      const ops: Op[] = [
+        ...plan.creates.map((c, i): Op => ({
+          kind: "create",
+          key: `c${String(i)}`,
+          card: newCard(c.input, bookId),
+          mergedIn: c.mergedIn,
+        })),
+        ...plan.updates.map((u): Op => ({ kind: "update", ...u })),
+      ];
+      for (let i = 0; i < ops.length; i += CONTACT_SET_BATCH) {
+        const chunk = ops.slice(i, i + CONTACT_SET_BATCH);
+        const creates = chunk.filter((o) => o.kind === "create");
+        const updates = chunk.filter((o) => o.kind === "update");
+        const r = await this.#call(
+          sessionId,
+          (x) => [
+            [
+              "ContactCard/set",
+              {
+                accountId: x.accountId,
+                ...(creates.length > 0 ? { create: Object.fromEntries(creates.map((o) => [o.key, o.card])) } : {}),
+                ...(updates.length > 0 ? { update: Object.fromEntries(updates.map((o) => [o.id, o.patch])) } : {}),
+              },
+              "s",
+            ],
+          ],
+          USING_CONTACTS,
+          account,
+        );
+        const created = (r.get("s")?.created as Record<string, unknown> | null | undefined) ?? {};
+        const updated = (r.get("s")?.updated as Record<string, unknown> | null | undefined) ?? {};
+        for (const o of creates) {
+          if (o.key in created) {
+            counts.created += 1;
+            counts.merged += o.mergedIn;
+          } else {
+            // Refused by the mail server: it and what merged into it count as invalid.
+            counts.invalid += 1 + o.mergedIn;
+          }
+        }
+        for (const o of updates) {
+          if (o.id in updated) counts.merged += o.mergedIn;
+          else counts.invalid += o.mergedIn;
+        }
+      }
+    } finally {
+      if (counts.created > 0 || counts.merged > 0) this.#afterContactsChange(sessionId, account);
+      await onDone?.(s.username, counts);
+    }
+    return counts;
   }
 
   /** Contacts (all, or these ids) as a vCard file. */
