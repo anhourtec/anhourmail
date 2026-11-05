@@ -1,6 +1,6 @@
 # 08 — Operations
 
-Last updated: 2026-11-04 (webmail push through NGINX: buffering off, read timeout, caps); 2026-10-31 (file storage lockdown deploy step); 2026-10-30 (data export and account deletion jobs, ADR-0025).
+Last updated: 2026-11-05 (the mail importer and its deploy gate, import pages and notify job, orphaned spam-training samples clean-up, the emergency session kill; no phone verification, ADR-0031); 2026-11-04 (webmail push through NGINX: buffering off, read timeout, caps); 2026-10-31 (file storage lockdown deploy step); 2026-10-30 (data export and account deletion jobs, ADR-0025).
 
 ## Environments
 
@@ -277,7 +277,7 @@ Security patches skip the soak but still follow steps 1–4 and 6.
 **Current policy (maintainer decision, 2026-10-23): open to everyone.** The web hosts are public (no IP allow-list)
 and self-service sign-up is on (`SIGNUP_MODE=open`): anyone can create a personal Free account after verifying their
 email. This replaces the 2026-10-21 decision below while pre-staging runs. The main open risk is outbound abuse from new
-accounts until the abuse-controls phase (`09-roadmap.md` "Path to production": sending limits, trust tiers, phone verification, abuse queue) — staff watch new accounts and the
+accounts until the abuse-controls phase (`09-roadmap.md` "Path to production": sending limits, trust tiers, abuse queue; no phone verification, which the sign-up proof-of-work and sign-up limits replace, ADR-0031) — staff watch new accounts and the
 platform audit, and can close sign-up (`SIGNUP_MODE=closed`) or gate the web hosts (allow-list) at any time.
 
 Earlier decision, kept for the record:

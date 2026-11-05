@@ -1,6 +1,6 @@
 # 06 — Pricing and billing
 
-Last updated: 2026-11-04 (billing designed in ADR-0029; slices 1–4 built: webhook event set and column name aligned with it). Research: `research/market-and-legal.md` (not legal or tax advice; confirm with an accountant).
+Last updated: 2026-11-05 (billing built for local dev, ADR-0029 slices 1–14 and the rest, `BILLING.status` still `planned`; storage blocks now come from the add-ons in force; refunds and Stripe secrets as built); 2026-11-04 (billing designed in ADR-0029; slices 1–4 built: webhook event set and column name aligned with it). Research: `research/market-and-legal.md` (not legal or tax advice; confirm with an accountant).
 
 ## Plans
 
@@ -29,7 +29,7 @@ in `plans.ts`; in outline:
   the lines with `storageText()`. The earlier "fair use 30 GB, then $1/GB" line is withdrawn: at $9 it lost money for
   accounts storing 9–30 GB.
 - **Pooled enforcement (revised 2026-10-23 evening):** the mail server enforces quotas per mailbox only, so the sum of an
-  account's mailbox quotas can never exceed its pool (`accountPoolBytes(plan, blocks)` — blocks are 0 until billing).
+  account's mailbox quotas can never exceed its pool (`accountPoolBytes(plan, blocks)` — blocks are the storage add-ons in force, ADR-0029).
   `packages/core/src/mailboxes/service.ts`: a new mailbox defaults to an even share of the unassigned pool over the
   plan's remaining included mailboxes (`defaultShareBytes`, whole GB, at least 1 GB) or a chosen 1 GB … unassigned; it
   is refused when the pool is fully assigned ("All 10 GB of this account's storage is assigned. Lower another mailbox's
@@ -53,6 +53,11 @@ their own storage and the worst case is bounded rather than absorbed.
 
 ## Stripe design
 
+**Update (2026-11-05): built for local dev** (ADR-0029 updates): checkout, portal, changes, cancel, refunds, lapse
+and holds, the Billing page and banners, Platform billing, invite codes, the deletion hook, `billing.json`, catalogue
+drift refusals and the webmail's `403 billing_restricted`. Paid plans stay closed (`BILLING.status` `planned`) until
+the live test-mode suite has run with test keys and the maintainer opens them.
+
 **Update (2026-11-04): designed in ADR-0029** (`adr/0029-billing.md`): Stripe behind a `BillingProvider` port over
 plain `fetch`, webhooks as signed triggers with the worker fetching subscription state, the account billing states,
 holds instead of deletion on a downgrade, ceilings, invite codes, data model and slice plan. Where the two differ, the
@@ -66,9 +71,9 @@ ADR wins; its lifecycle replaces the "Account lifecycle" diagram below (no data 
 - **Stripe Tax** is on from day one for calculation and records. Registration is tracked by us (Stripe does not warn about Canadian thresholds).
 - **Smart Retries** (8 tries over 2 weeks), renewal reminder email 7 days before renewal (CASL transactional), receipts from Stripe.
 - **Webhooks** (recorded once by `billing_event.provider_event_id`, triggers for the worker's sync; the handled set is ADR-0029 §4): `checkout.session.completed`, `customer.subscription.created|updated|deleted|paused|resumed`, `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`, `charge.refunded`, `charge.dispute.created|closed`, `customer.deleted`.
-- **Refunds:** automatic within 14 days of first purchase or renewal via the console (Billing Administrator or Owner). Stripe fees are not returned, which is accepted.
+- **Refunds:** automatic within 14 days of first purchase or renewal via the console (Billing Administrator or Owner). Stripe fees are not returned, which is accepted. As built (ADR-0029 slices 8–10): one self-service refund per account; later ones go to staff (Platform billing's staff refund).
 - **Fees:** Stripe fees are absorbed, not surcharged. Add a USD bank account to avoid the 2% conversion on USD sales.
-- Stripe secrets go in the key ring (rule 16) and are never logged.
+- Stripe secrets are env-only in v1 (`.env` locally, the ops repo's secret store on servers; ADR-0029 §3), never in the database, logs or audit; if a staff screen to set them is ever built, they go in the key ring (rule 16).
 
 ## Account lifecycle
 
