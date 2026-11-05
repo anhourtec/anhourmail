@@ -8,13 +8,19 @@ import {
   authResults,
   delayLabel,
   deliveryDelaySeconds,
+  IMPORTED_READER_NOTE,
+  IMPORTED_RESULTS_NOTE,
+  isImportedCopy,
   isImportedMail,
   isInternalMail,
+  oldProviderResults,
+  originalChecks,
   ourAuthResultsHeader,
   parseHeaderBlock,
   type RawHeader,
   receivedWith,
   receivedBy,
+  readerChecks,
   senderChecks,
   stripComments,
   trustedAuthservIds,
@@ -448,5 +454,92 @@ describe("imported mail is never verified by us (ADR-0030 §5, SA-64-01)", () =>
   it("leaves ordinary mail alone", () => {
     expect(isImportedMail(parseHeaderBlock(STAMPED))).toBe(false);
     expect(isImportedMail([{ name: "X-AnhourMail-Importer", value: "x" }])).toBe(false);
+  });
+});
+
+describe("the imported note on Original message and in the reader (ADR-0030 §5, slice 12)", () => {
+  // An imported copy as a provider would have stored it: its own results on top, then the sender's headers.
+  const PROVIDER = [
+    "X-AnhourMail-Imported: 2f1d5c7e-4c1a-4a51-9b55-0b7c2d3e4f50",
+    "Received: by 2002:a05:6000:1 with SMTP id x; Tue, 3 Nov 2026 10:00:00 -0800",
+    "ARC-Authentication-Results: i=1; mx.old.example; spf=fail",
+    "Authentication-Results: mx.old.example; spf=pass smtp.mailfrom=probe@example.org;",
+    "\tdkim=pass header.d=example.org; dmarc=pass header.from=example.org",
+    "Authentication-Results: mx.old.example; spf=fail",
+    "From: Probe <probe@example.org>",
+    "Subject: hi",
+    "",
+    "body",
+  ].join("\r\n");
+
+  it("shows the old provider's results for an imported copy, labelled, and never as ours", () => {
+    const headers = parseHeaderBlock(PROVIDER);
+    const checks = originalChecks(headers, OURS);
+    expect(checks.imported).toBe(true);
+    expect(checks.auth?.spf.result).toBe("pass");
+    expect(checks.auth?.dkim).toMatchObject({ result: "pass", domain: "example.org" });
+    expect(checks.auth?.dmarc.result).toBe("pass");
+    // Our own view of it stays empty: nothing verifies the sender or loads images from it.
+    expect(authResults(headers, OURS)).toBeNull();
+    expect(senderVerified("probe@example.org", authResults(headers, OURS))).toBe(false);
+    expect(IMPORTED_RESULTS_NOTE).toBe("Imported; these results come from the old provider, not AnhourMail.");
+  });
+
+  it("reads only results below the marker, and says nothing was recorded when there are none", () => {
+    const ID = "2f1d5c7e-4c1a-4a51-9b55-0b7c2d3e4f50";
+    expect(
+      oldProviderResults(parseHeaderBlock(`X-AnhourMail-Imported: ${ID}\r\nFrom: a@b.example\r\n\r\n`)),
+    ).toBeNull();
+    expect(oldProviderResults(parseHeaderBlock(STAMPED))).toBeNull();
+  });
+
+  it("never shows a sender's own forged marker as an imported copy (SA-66-01)", () => {
+    // A sender adds the marker lower down with PASS results under it: not the old provider's, and not verified either.
+    const forged = [
+      "From: Probe <probe@example.org>",
+      "X-AnhourMail-Imported: 2f1d5c7e-4c1a-4a51-9b55-0b7c2d3e4f50",
+      "Authentication-Results: mx.old.example; spf=pass smtp.mailfrom=probe@example.org; dkim=pass header.d=example.org; dmarc=pass header.from=example.org",
+      "Subject: hi",
+      "",
+      "body",
+    ].join("\r\n");
+    const below = parseHeaderBlock(forged);
+    expect(isImportedCopy(below)).toBe(false);
+    expect(oldProviderResults(below)).toBeNull();
+    expect(originalChecks(below, OURS)).toEqual({ imported: false, auth: null });
+    expect(readerChecks(below, OURS)).toEqual({ mailedBy: null, signedBy: null, imported: false });
+    // Below our own pair, too: our results are refused, nothing is shown as the old provider's.
+    const underOurs = parseHeaderBlock(
+      STAMPED.replace("Subject: hi", "Subject: hi\r\nX-AnhourMail-Imported: 2f1d5c7e-4c1a-4a51-9b55-0b7c2d3e4f50"),
+    );
+    expect(originalChecks(underOurs, OURS)).toEqual({ imported: false, auth: null });
+    // On top but not in the importer's exact form (another spelling, or a value that isn't an import id).
+    for (const top of ["x-anhourmail-imported: 2f1d5c7e-4c1a-4a51-9b55-0b7c2d3e4f50", "X-AnhourMail-Imported: x"]) {
+      const h = parseHeaderBlock(`${top}\r\n${forged}`);
+      expect(isImportedCopy(h)).toBe(false);
+      expect(originalChecks(h, OURS)).toEqual({ imported: false, auth: null });
+    }
+    // Our importer's form on top: the old provider's results, labelled.
+    expect(isImportedCopy(parseHeaderBlock(PROVIDER))).toBe(true);
+  });
+
+  it("keeps ordinary mail on our own results", () => {
+    const checks = originalChecks(parseHeaderBlock(STAMPED), OURS);
+    expect(checks.imported).toBe(false);
+    expect(checks.auth?.dmarc.result).toBe("pass");
+  });
+
+  it("gives the reader's details a note instead of mailed-by and signed-by", () => {
+    const imported = readerChecks(
+      parseHeaderBlock(`X-AnhourMail-Imported: 2f1d5c7e-4c1a-4a51-9b55-0b7c2d3e4f50\r\n${STAMPED}`),
+      OURS,
+    );
+    expect(imported).toEqual({ mailedBy: null, signedBy: null, imported: true });
+    expect(readerChecks(parseHeaderBlock(STAMPED), OURS)).toEqual({
+      mailedBy: "example.org",
+      signedBy: "example.org",
+      imported: false,
+    });
+    expect(IMPORTED_READER_NOTE).toMatch(/^Imported; not checked/);
   });
 });

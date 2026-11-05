@@ -168,7 +168,11 @@ export function ourAuthResultsHeader(headers: readonly RawHeader[], trustedIds: 
  */
 export function authResults(headers: readonly RawHeader[], trustedIds: readonly string[]): AuthSummary | null {
   const value = ourAuthResultsHeader(headers, trustedIds);
-  if (value === null) return null;
+  return value === null ? null : summarizeAuthResults(value);
+}
+
+/** One `Authentication-Results` value as SPF, DKIM and DMARC (a method it doesn't report is `none`). */
+function summarizeAuthResults(value: string): AuthSummary {
   const [, ...rest] = splitOutsideQuotes(stripComments(value), ";");
   const infos = rest.map(parseResInfo).filter((r): r is ResInfo => r !== null);
   const of = (method: string) => infos.filter((r) => r.method === method);
@@ -199,6 +203,51 @@ export function authResults(headers: readonly RawHeader[], trustedIds: readonly 
       ? { result: dmarc.result, detail: withDomain(dmarc.result === "pass", dmarcDomain), domain: dmarcDomain }
       : none,
   };
+}
+
+const IMPORT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Whether the message is a copy our importer appended, for **display** (ADR-0030 run-66 SA-66-01): its first header is
+ * exactly our marker, as the importer writes it (`X-AnhourMail-Imported: <import id>`; an APPEND adds nothing above
+ * it). Only then are the headers below it the old provider's, worth showing as theirs. A marker anywhere else (or a
+ * look-alike) was written by a sender: it still refuses verification (`isImportedMail`), but the message shows as not
+ * checked, never with "the old provider's" results a sender wrote themselves.
+ */
+export function isImportedCopy(headers: readonly RawHeader[]): boolean {
+  const first = headers[0];
+  return first?.name === IMPORT_MARKER_HEADER && IMPORT_ID.test(first.value.trim());
+}
+
+/** What the summary says next to an imported message's results (ADR-0030 §5). */
+export const IMPORTED_RESULTS_NOTE = "Imported; these results come from the old provider, not AnhourMail.";
+/** What the reader's details say for an imported message (it shows no results of its own for one). */
+export const IMPORTED_READER_NOTE = "Imported; not checked by AnhourMail";
+
+/**
+ * For **display only** on the "Original message" page: the results the old provider recorded for an imported copy —
+ * the first `Authentication-Results` below our import marker, whoever wrote it — or null (not our importer's copy,
+ * `isImportedCopy`, or none recorded). Never use it to verify a sender, load images or anything else: the source mailbox's owner controls
+ * these headers (`isImportedMail`); the page labels them with `IMPORTED_RESULTS_NOTE`.
+ */
+export function oldProviderResults(headers: readonly RawHeader[]): AuthSummary | null {
+  if (!isImportedCopy(headers)) return null;
+  const ar = headers.slice(1).find((h) => isNamed(h, "authentication-results"));
+  return ar ? summarizeAuthResults(ar.value) : null;
+}
+
+/**
+ * The SPF, DKIM and DMARC rows of the "Original message" summary: ours for ordinary mail (`authResults`), the old
+ * provider's for an imported copy (`oldProviderResults`, labelled there), never mixed.
+ */
+export function originalChecks(
+  headers: readonly RawHeader[],
+  trustedIds: readonly string[],
+): { imported: boolean; auth: AuthSummary | null } {
+  // A marker that isn't on top answers "not checked" here: `authResults` refuses any marker (`isImportedMail`).
+  return isImportedCopy(headers)
+    ? { imported: true, auth: oldProviderResults(headers) }
+    : { imported: false, auth: authResults(headers, trustedIds) };
 }
 
 /** The protocol in a `Received` header's `with` clause, lower-cased, or null. */
@@ -263,6 +312,17 @@ export function senderChecks(a: AuthSummary | null): { mailedBy: string | null; 
     mailedBy: a?.spf.result === "pass" ? a.spf.domain : null,
     signedBy: a?.dkim.result === "pass" ? a.dkim.domain : null,
   };
+}
+
+/**
+ * The reader's "mailed-by" / "signed-by" from a message's headers, and whether it was imported (then both are null
+ * and the details say `IMPORTED_READER_NOTE` instead).
+ */
+export function readerChecks(
+  headers: readonly RawHeader[],
+  trustedIds: readonly string[],
+): { mailedBy: string | null; signedBy: string | null; imported: boolean } {
+  return { ...senderChecks(authResults(headers, trustedIds)), imported: isImportedCopy(headers) };
 }
 
 /** "PASS with IP 192.0.2.1", "FAIL", "NONE". */
