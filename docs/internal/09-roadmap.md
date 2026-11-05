@@ -1,11 +1,12 @@
 # 09 — Roadmap
 
-Last updated: 2026-11-04 (billing ADR-0029 slices 1–7 built; webmail push sync built); 2026-11-04 (mail and contacts import designed, ADR-0030; webmail first load: inside the page, IndexedDB first-view copy, `Server-Timing`; names as one source and the file-storage lockdown deployed at 6545a16; Safe senders load images and own Sent mail loads its images, ADR-0027 built). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
+Last updated: 2026-11-05 (Phase 5 billing and mail/contacts import built, ADR-0029 and ADR-0030; sign-up proof-of-work, ADR-0031, and webmail settings part 2, ADR-0032, built; product gaps for a beta all built; Phase 6 not started; Phase 3 delegation status corrected); 2026-11-04 (billing ADR-0029 slices 1–7 built; webmail push sync built); 2026-11-04 (mail and contacts import designed, ADR-0030; webmail first load: inside the page, IndexedDB first-view copy, `Server-Timing`; names as one source and the file-storage lockdown deployed at 6545a16; Safe senders load images and own Sent mail loads its images, ADR-0027 built). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
 
-## Path to production (as of 2026-10-29)
+## Path to production (as of 2026-11-05)
 
-Where we are: Phases 0–2 done; Phase 3 control plane and Phase 4 webmail built for local dev (see the phase status
-lines below and the handoff's "Current state"); the private staging setup (`anhourmail-ops`) is rehearsed end to end
+Where we are: Phases 0–2 done; Phase 3 control plane and Phase 4 webmail built for local dev, and Phase 5 billing
+(ADR-0029, `BILLING.status` still `planned`) and mail and contacts import (ADR-0030) built for local dev too; Phase 6
+not started (see the phase status lines below and the handoff's "Current state"); the private staging setup (`anhourmail-ops`) is rehearsed end to end
 locally — three scoped Stalwart keys behind an internal management proxy, NGINX path/host guards, backups, key
 rotation, smoke checks. Pre-staging has run on one VM since 2026-10-23; the handoff lists what it proved and the
 live-server fixes still open (Stalwart's own certificate, the mail-only submission network, backups and the restore
@@ -113,7 +114,12 @@ Built as described: `components/webmail/format-toolbar.tsx` + `format-options.ts
 9. **Billing and migration** (Phase 5): Stripe Checkout/Portal/Tax, webhooks, plan changes and the account
    lifecycle, paid-user invite codes; pricing decision (open item 3) and Supporter minimum confirmed; mail import
    over IMAP (and OAuth from the largest providers) and contacts import, so paying customers can switch with their
-   history.
+   history. **Built 2026-11-04 – 2026-11-05** (ADR-0029, ADR-0030; Phase 5 below): billing behind the provider port
+   with the fake, the console Billing page, Platform billing, invite codes, holds instead of deletion; mail import over
+   IMAP with an app password, the admins' CSV batch, cut-over sync and vCard/CSV contacts import. **Open:** run the
+   live test-mode suite with test keys, the maintainer's pricing decision (open item 3) and the open questions in
+   ADR-0029 and ADR-0030 (OAuth sources deferred), the importer's ops deploy gate; paid plans stay closed
+   (`BILLING.status` `planned`) until launch.
 10. **Abuse controls, monitoring, backups** (Phase 6): trust tiers stored and enforced, fail-closed outbound counters,
     Stalwart throttles pushed from the control plane, `x:WebHook` event ingestion (sign-ins, bounces), abuse queue and
     `abuse@` workflow, metrics and alerting, scheduled backups with a monthly restore drill, LUKS on the mail volume,
@@ -175,7 +181,7 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
 ## Phase 3 — Control plane
 
 - better-auth (email + password, TOTP, WebAuthn security keys/passkeys, recovery codes; admins can require a passkey), accounts, memberships and roles, act-as, domains with guided DNS and live per-record verification, mailboxes, aliases, catch-all, masked aliases (ADR-0009), app passwords (issued by the control plane, scoped per protocol; ADR-0020), quotas, audit UI, Security activity page, data export and account deletion. Collaboration (Plus/Supporter): shared mailboxes/groups, static distribution lists with members-only posting, full-access delegation, forwarding (`10-collaboration.md`).
-- **Status (2026-10-29):** built (pre-staging runs 73f401d until the next deploy) — domains (DKIM TXT keys, unverified
+- **Status (2026-11-05):** built (pre-staging last deployed at 6545a16 on 2026-10-31; later work waits for the next deploy) — domains (DKIM TXT keys, unverified
   domains expire and release their name), mailboxes (lifecycle, passwords, display names, quotas inside the account's
   storage pool with measured usage), Add a user (mailbox, person and role in one step, first-sign-in password change),
   shared addresses and Make this a user, editable profiles, aliases and masked aliases, people/invites/roles, audit
@@ -183,14 +189,15 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
   recovery codes, passkeys, breached-password check), app passwords, catch-all; refused pages answer a real 404/403.
   staff support access (act-as, read-only, ADR-0023, 2026-10-29), data export and account deletion (ADR-0025, 2026-10-29).
   Also built 2026-10-29: alias admin lock, free-tier alias limits (10 at a time, 10 new a year; paid 400 per
-  mailbox), provisioning claim tokens. Not built: collaboration and delegation (next: leavers' mailboxes to shared,
-  Full access / Send as / Send on behalf). Free sign-up proof-of-work check built 2026-11-05 (ADR-0031; no SMS).
+  mailbox), provisioning claim tokens. Leavers' mailboxes to shared and delegation (Full access, Send as, Send on
+  behalf) built 2026-10-30 (ADR-0026). Free sign-up proof-of-work check built 2026-11-05 (ADR-0031; no SMS). Not
+  built: groups and members-only distribution lists (`10-collaboration.md`).
 - **Exit:** RBAC harness covers every route × role; cross-account tests return 404; audit entries asserted for every mutation; a custom domain goes from add to active in ≤ 15 min in staging; a non-member can neither post to a members-only list nor send with a shared mailbox's From (integration tests); the reconciler reports ACL/membership drift.
 
 ## Phase 4 — Webmail v1 on JMAP
 
 - `05-webmail.md` v1 scope, BFF proxy and push fan-out, sanitiser + sandbox, image proxy. Folders: nested, favourites, archive (Archive folder created at provisioning), empty Trash/Junk, BFF-enforced depth/count limits; one signature per identity (sanitised, mirrored to JMAP Identity).
-- **Status (2026-10-29):** built (pre-staging runs 73f401d until the next deploy) — sign in (blocked and suspended
+- **Status (2026-11-05):** built (pre-staging last deployed at 6545a16 on 2026-10-31; later work waits for the next deploy) — sign in (blocked and suspended
   mailboxes told why, first-sign-in password change), read (all body types, sandboxed; whole conversations; original
   message with authentication results), compose/send/undo in rich text or plain text (sanitised HTML sent as
   multipart/alternative, quoted replies), actions, restore from Trash, search, several mailboxes, contacts, automatic
@@ -206,7 +213,7 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
 ## Phase 5 — Billing and migration
 
 - Stripe Checkout, Portal, Tax, Supporter flow, webhooks, account lifecycle, refunds, invoices (`06-pricing-and-billing.md`). Pricing decision made.
-  **In progress (ADR-0029):** slices 1–7 built 2026-11-04 — facts and lifecycle, provider port and adapters, tables,
+  **Built for local dev (ADR-0029), status 2026-11-05:** slices 1–7 built 2026-11-04 — facts and lifecycle, provider port and adapters, tables,
   the signed webhook and `billing.sync` with per-dispute tracking, send-blocked mailboxes on Stalwart, mailbox, people
   and address ceilings; slices 8–10 2026-11-05 — checkout, portal, dev simulation, changes, cancel, the refund, lapse
   and holds; slices 11–13 2026-11-05 — the console Billing page and banners, Platform billing (staff grants, the staff
@@ -232,9 +239,10 @@ per-import, IMAP-only credential the web app mints and the worker revokes; conta
 sources deferred; 13 build slices. **Slices 1–9 built (2026-11-05):** credential, net guard, facts, tables, IMAP
 adapter, start/control services and routes, the importer process (no Stalwart key) with resumable slices, wipe/revoke
 and lifecycle hooks, spam-training clean-up with the worker's training key, and the Phase 5 exit integration test
-(kill/restart, exact result, no credentials left, incremental sync). Left: console pages and emails (10), admins' CSV
-batch (11), webmail contacts and the imported note (12), public guides and ops (13); the importer runs nowhere until
-the ops deploy gate is in place.
+(kill/restart, exact result, no credentials left, incremental sync). **Slices 10–13 built (2026-11-05):** console
+pages and the summary email (10), the admins' CSV batch (11), webmail contacts import and the imported note (12),
+public guides and ops notes (13). Left: OAuth sources (deferred, ADR-0030 question 1), CardDAV and calendar import;
+the importer runs nowhere until the ops deploy gate is in place (`08-operations.md` "Mail importer").
 
 - **Mail import over IMAP from any provider:** source host, port, username and an app password; folders mapped onto
   ours (Inbox, Sent, Drafts, Junk, Trash, custom folders kept), flags and dates preserved, duplicates skipped by
@@ -258,6 +266,8 @@ the ops deploy gate is in place.
 
 ## Phase 6 — Abuse controls, monitoring, backups
 
+- **Status (2026-11-05):** not started (the manual staff suspension and the sign-up limits exist; everything below
+  is still to build).
 - Encryption at rest for the provider layer: LUKS on the mail volume (key off-disk), client-side encrypted off-server backups, DNSSEC + DANE on `mx1`, MTA-STS `enforce` after clean TLS-RPT (ADR-0016).
 - Trust tiers enforced end to end, outbound counters fail-closed, Stalwart throttles pushed from the control plane, detection signals, abuse queue, `abuse@` workflow, FBL ingestion, monitoring and alerts, backups + first restore drill.
 - Staff spam/abuse metrics per account on Platform → account (outbound volume, bounces, complaints, blocklist hits),
