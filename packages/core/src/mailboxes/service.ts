@@ -339,16 +339,17 @@ export async function createMailbox(
         if (!owner) throw new ValidationError("Choose someone in this account.");
         userId = owner.userId;
       }
+      const held = await personSuspendedForNewMailbox(repos, userId);
       const quotaBytes = await assertRoomForMailbox(deps, repos, accountId, onPlatform, input.quotaGb);
       const password = mailboxPassword(input.password, address);
       if (breached) throw new BreachedPasswordError();
       await assertAddressFree(repos, accountId, address, onPlatform);
       const mailbox = newMailbox(deps, accountId, userId, address, quotaBytes);
-      await repos.mailboxes.insert(mailbox);
+      await insertMailbox(repos, mailbox, held);
       // The worker sets it when it creates the account (`MailServer.ensureMailbox` `initialPasswordHash`).
       await repos.mailboxPasswords.setPending(mailbox.id, await hashMailboxPassword(hasher, password), null);
       await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: mailbox.id, runAfter: deps.clock.now() });
-      const v = await viewOf(repos, accountId, mailbox);
+      const v = await viewOf(repos, accountId, held ? { ...mailbox, status: "suspended" } : mailbox);
       return {
         result: v,
         target: { id: mailbox.id, label: address },
@@ -356,6 +357,7 @@ export async function createMailbox(
           quotaGb: quotaBytes / GB,
           owner: v.owner ? maskEmail(v.owner.email) : null,
           ...(onPlatform ? { platformAddress: true } : {}),
+          ...(held ? { heldBySuspension: "person" } : {}),
         },
       };
     },
@@ -423,6 +425,25 @@ export async function assertAddressFree(
   if (!free) throw new ConflictError("That address is already in use.");
 }
 
+/**
+ * A new mailbox for a person staff have suspended starts suspended, held by that suspension (`person`), so lifting it
+ * releases the mailbox like the ones it stopped (rule 27: a suspension can't be sidestepped by a new address). Call
+ * under the account lock; it takes the person's login lock too (accounts first, then the login: the order `lockPerson`
+ * takes), so a create racing a person suspension either waits for it and sees it, or lands first and the suspension
+ * finds the new mailbox (or answers 409 to try again). Returns whether the person is suspended.
+ */
+export async function personSuspendedForNewMailbox(repos: Repositories, userId: string | null): Promise<boolean> {
+  if (userId === null) return false;
+  await repos.dataLifecycle.lockLogin(userId);
+  return (await repos.suspensions.person(userId)) !== null;
+}
+
+/** Inserts a new mailbox; one for a suspended person (`held`) goes in suspended with a `person` hold. */
+async function insertMailbox(repos: Repositories, mailbox: Mailbox, held: boolean): Promise<void> {
+  await repos.mailboxes.insert(held ? { ...mailbox, status: "suspended" } : mailbox);
+  if (held) await repos.suspensions.addHold(mailbox.id, "person");
+}
+
 export function newMailbox(deps: Deps, accountId: string, userId: string | null, address: string, quotaBytes: number) {
   const mailbox: Mailbox = {
     id: randomUUID(),
@@ -488,6 +509,7 @@ export async function staffCreatePlatformMailbox(
         if (!owner) throw new ValidationError("Choose someone in this account.");
         userId = owner.userId;
       }
+      const held = await personSuspendedForNewMailbox(repos, userId);
       await assertPlatformAllowance(repos, deps.platform, accountId);
       // Staff are held to the address ceiling too: raising it is its own audited change (`billing.ceiling_changed`).
       if (await addressCeilingReached(deps, repos, accountId)) throw addressCeilingError();
@@ -503,10 +525,10 @@ export async function staffCreatePlatformMailbox(
         address,
         newMailboxQuota(await poolOf(repos, accountId), null),
       );
-      await repos.mailboxes.insert(mailbox);
+      await insertMailbox(repos, mailbox, held);
       // No password waiting: the worker gives the account a random one nobody knows until the account sets its own.
       await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: mailbox.id, runAfter: deps.clock.now() });
-      const v = await viewOf(repos, accountId, mailbox);
+      const v = await viewOf(repos, accountId, held ? { ...mailbox, status: "suspended" } : mailbox);
       return {
         result: v,
         target: { id: mailbox.id, label: address },
@@ -515,6 +537,7 @@ export async function staffCreatePlatformMailbox(
           owner: v.owner ? maskEmail(v.owner.email) : null,
           platformAddress: true,
           passwordSetBy: "account",
+          ...(held ? { heldBySuspension: "person" } : {}),
         },
       };
     },
@@ -873,7 +896,8 @@ export const PURGE_BATCH = 25;
 
 /**
  * Scheduler: permanently removes mailboxes whose grace period has ended — the mail-server account (and its mail)
- * first, then the mailbox and alias rows, which frees their addresses. Each one is audited in its account's log as
+ * first, then the mailbox and alias rows, which frees their addresses; a `mailbox.training_purge` job then removes the
+ * spam-training samples the account left on the mail server. Each one is audited in its account's log as
  * `platform.mailbox_purged` by the system; a failure is audited as `failed` and retried on the next run. A mailbox
  * staff hold (`staffHeld`) is skipped (`held`, not audited: nothing changed) until they lift it.
  */
@@ -921,6 +945,15 @@ export async function purgeDueMailboxes(
             throw new ConflictError("The mailbox changed before it could be removed.");
           }
           await mail.destroyMailbox({ externalId: current.stalwartId, address: current.address });
+          // Destroying the account leaves its spam-training samples (sender, subject and a copy of each message):
+          // the worker's training key removes them, matched by the account and this destroy time.
+          if (current.stalwartId !== null) {
+            await repos.provisioning.enqueue({
+              kind: "mailbox.training_purge",
+              subjectId: `${current.stalwartId}:${String(now.getTime())}`,
+              runAfter: now,
+            });
+          }
           // Its platform-domain addresses (the mailbox and its masked aliases) never go to another account (ADR-0021).
           const retired = [current.address, ...own.map((a) => a.address)].filter((a) =>
             onPlatformDomain(a, deps.platform),
