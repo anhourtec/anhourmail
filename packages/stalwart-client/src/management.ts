@@ -11,6 +11,7 @@ import {
   IMPORT_CREDENTIAL_MAX_LIFETIME_MS,
   importCredentialPermissions,
   isHandoffCredential,
+  isImportCredential,
   PRINCIPAL_READ_PERMISSIONS,
   SELF_SERVICE_PERMISSIONS,
 } from "./app-passwords";
@@ -753,6 +754,12 @@ export class StalwartManagement {
     appPasswords: { id: string; createdAt: Date; permissions: unknown }[];
     /** Console → webmail handoff credentials still there (each expires within two minutes; ADR-0024). */
     handoffCredentials: number;
+    /**
+     * Mail import credentials (ADR-0030): exactly `isImportCredential` (description, permissions and lifetime). The
+     * reconciler counts one as expected only while a live import recorded it; one with the description but anything
+     * else different stays in `appPasswords`, where it is unknown drift.
+     */
+    importCredentials: { id: string; createdAt: Date; expiresAt: Date | null }[];
     apiKeys: number;
     /** Password credentials (the mailbox sign-in password). A mailbox has exactly one; Stalwart refuses a second. */
     passwords: { id: string }[];
@@ -761,9 +768,12 @@ export class StalwartManagement {
     return {
       // A handoff credential lives for a moment (ADR-0024) and is not an app password anyone holds.
       appPasswords: credentials
-        .filter((c) => c.type === "AppPassword" && !isHandoffCredential(c))
+        .filter((c) => c.type === "AppPassword" && !isHandoffCredential(c) && !isImportCredential(c))
         .map((c) => ({ id: c.id, createdAt: c.createdAt, permissions: c.permissions })),
       handoffCredentials: credentials.filter((c) => c.type === "AppPassword" && isHandoffCredential(c)).length,
+      importCredentials: credentials
+        .filter((c) => c.type === "AppPassword" && isImportCredential(c))
+        .map((c) => ({ id: c.id, createdAt: c.createdAt, expiresAt: c.expiresAt })),
       apiKeys: credentials.filter((c) => c.type === "ApiKey").length,
       passwords: credentials.filter((c) => c.type === "Password").map((c) => ({ id: c.id })),
     };

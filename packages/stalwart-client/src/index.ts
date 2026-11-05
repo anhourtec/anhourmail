@@ -83,6 +83,7 @@ export {
   SERVICE_CREDENTIALS,
   type ServiceCredential,
   type StalwartCredentialRole,
+  TRAINING_KEY_PERMISSIONS,
   USER_ROLE_PERMISSIONS,
 } from "./keys";
 export {
@@ -106,6 +107,15 @@ export {
   WEBMAIL_OAUTH_CLIENT_ID,
   webmailRedirectUri,
 } from "./oauth";
+export {
+  accountTrainingSamples,
+  destroyTrainingSamples,
+  holdMismatch,
+  importSamples,
+  SPAM_SAMPLE_HOLD_DEFAULT_MS,
+  TRAINING_SAMPLE_PROPERTIES,
+  type TrainingSample,
+} from "./training";
 export {
   applySenderIdentityPolicy,
   INBOUND_HEADERS_SCRIPT,
@@ -139,8 +149,9 @@ function baseUrl(env: Record<string, string | undefined>): string {
 
 /**
  * The management client for one credential (`keys.ts`), configured from the environment: its own key
- * (`STALWART_PROVISIONING_KEY`, `STALWART_OPERATIONS_KEY` or `STALWART_AUDIT_KEY`), or — outside production only —
- * the dev recovery admin (`STALWART_DEV_ADMIN_USER` / `_PASSWORD`), which stands in for all three in development.
+ * (`STALWART_PROVISIONING_KEY`, `STALWART_OPERATIONS_KEY`, `STALWART_AUDIT_KEY` or `STALWART_TRAINING_KEY`), or —
+ * outside production only — the dev recovery admin (`STALWART_DEV_ADMIN_USER` / `_PASSWORD`), which stands in for all
+ * four in development.
  */
 function forRole(role: StalwartCredentialRole): StalwartManagement {
   const cache = (globalForStalwart.amStalwart ??= {});
@@ -175,6 +186,8 @@ export const stalwartProvisioning = (): StalwartManagement => forRole("provision
 export const stalwartOperations = (): StalwartManagement => forRole("operations");
 /** Scheduler: reads managed Sieve scripts for the reconciler, nothing else. */
 export const stalwartAudit = (): StalwartManagement => forRole("audit");
+/** Worker: finds and destroys the spam-training samples a mail import created (ADR-0030), nothing else. */
+export const stalwartTraining = (): StalwartManagement => forRole("training");
 
 /** Whether this process has a credential for `role` (its key, or the dev admin outside production). */
 export function hasStalwartCredential(role: StalwartCredentialRole): boolean {

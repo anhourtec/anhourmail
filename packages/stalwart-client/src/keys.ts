@@ -22,6 +22,14 @@
  *   mail objects). No `x:Account`, `x:Domain` or DKIM access at all.
  * - **audit** (scheduler): reads the managed Sieve scripts for the hourly reconciler (`impersonate`, Sieve and blob
  *   reads only — it can't write a script, create a credential or list mail).
+ * - **training** (worker): removes the spam-classifier training samples a mail import's APPENDs created (ADR-0030
+ *   update 2026-11-05; the model is shared server-wide). `impersonate` + `sysSpamTrainingSample{Get,Query,Destroy}`
+ *   only. Verified on v0.16.27: without `impersonate` such a key sees only its own account's samples (none) and
+ *   `accountId` on another account is `forbidden`; with it, samples are one server-wide list (any account's, with
+ *   their `from` and `subject`) that it can read and destroy — and nothing else: `x:SpamTrainingSample/set` create
+ *   and update, `x:Account`, `x:Domain`, `x:AppPassword`, `x:SpamClassifier`, `Email/*`, `Mailbox/*`, `SieveScript/*`
+ *   and `Blob/get` are all `forbidden`. Our code asks for `id`, `accountId`, `expiresAt` and `isSpam` only; the
+ *   management proxy refuses any other property for this key.
  *
  * Each key is `Replace`-typed with exactly its set below, and is also capped by its account's role (a key on a
  * User-role account with `sysDomainGet` answered `forbidden`, verified), so the service accounts get a custom role
@@ -127,7 +135,19 @@ export const AUDIT_KEY_PERMISSIONS: readonly string[] = unique([
   "jmapBlobGet",
 ]);
 
-export type StalwartCredentialRole = "provisioning" | "operations" | "audit";
+/**
+ * Worker: finds and destroys the spam-training samples a mail import created (ADR-0030). No mail, account, credential
+ * or classifier access; it can't create or change a sample.
+ */
+export const TRAINING_KEY_PERMISSIONS: readonly string[] = unique([
+  "authenticate",
+  "impersonate",
+  "sysSpamTrainingSampleGet",
+  "sysSpamTrainingSampleQuery",
+  "sysSpamTrainingSampleDestroy",
+]);
+
+export type StalwartCredentialRole = "provisioning" | "operations" | "audit" | "training";
 
 export type ServiceCredential = {
   /** The service account's name (local part, on the deployment's system domain). */
@@ -152,6 +172,12 @@ export const SERVICE_CREDENTIALS: Readonly<Record<StalwartCredentialRole, Servic
     permissions: OPERATIONS_KEY_PERMISSIONS,
   },
   audit: { account: "svc-audit", env: "STALWART_AUDIT_KEY", usedBy: "scheduler", permissions: AUDIT_KEY_PERMISSIONS },
+  training: {
+    account: "svc-train",
+    env: "STALWART_TRAINING_KEY",
+    usedBy: "worker",
+    permissions: TRAINING_KEY_PERMISSIONS,
+  },
 };
 
 export const CREDENTIAL_ROLES = Object.keys(SERVICE_CREDENTIALS) as StalwartCredentialRole[];

@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   HANDOFF_CREDENTIAL_DESCRIPTION,
   handoffCredentialPermissions,
+  IMPORT_CREDENTIAL_DESCRIPTION,
+  importCredentialPermissions,
   SELF_SERVICE_PERMISSIONS,
 } from "./app-passwords";
 import { StalwartError, StalwartTransport } from "./client";
@@ -23,6 +25,7 @@ import {
   OPERATIONS_KEY_PERMISSIONS,
   PROVISIONING_KEY_PERMISSIONS,
   SERVICE_CREDENTIALS,
+  TRAINING_KEY_PERMISSIONS,
   USER_ROLE_PERMISSIONS,
 } from "./keys";
 import { CUSTOMER_PERMISSIONS, StalwartManagement } from "./management";
@@ -101,7 +104,23 @@ describe("key permission sets", () => {
       "jmapSieveScriptGet",
       "jmapSieveScriptQuery",
     ]);
-    expect(Object.values(SERVICE_CREDENTIALS).map((c) => c.account)).toEqual(["svc-provision", "svc-ops", "svc-audit"]);
+    expect(Object.values(SERVICE_CREDENTIALS).map((c) => c.account)).toEqual([
+      "svc-provision",
+      "svc-ops",
+      "svc-audit",
+      "svc-train",
+    ]);
+  });
+
+  it("gives the training key training samples only: no mail, accounts, credentials or classifier", () => {
+    expect([...TRAINING_KEY_PERMISSIONS]).toEqual([
+      "authenticate",
+      "impersonate",
+      "sysSpamTrainingSampleDestroy",
+      "sysSpamTrainingSampleGet",
+      "sysSpamTrainingSampleQuery",
+    ]);
+    expect(SERVICE_CREDENTIALS.training).toMatchObject({ env: "STALWART_TRAINING_KEY", usedBy: "worker" });
   });
 });
 
@@ -173,6 +192,24 @@ describe("credentials on x:Account", () => {
       expiresAt: "2026-10-22T10:01:03Z",
       permissions: handoffCredentialPermissions(),
     },
+    // A mail import's credential (ADR-0030): listed apart from app passwords.
+    "5": {
+      "@type": "AppPassword",
+      credentialId: "f",
+      description: IMPORT_CREDENTIAL_DESCRIPTION,
+      createdAt: "2026-10-22T10:00:04Z",
+      expiresAt: "2026-10-29T10:00:04Z",
+      permissions: importCredentialPermissions(),
+    },
+    // The import description with other permissions is an ordinary (unknown) app password.
+    "6": {
+      "@type": "AppPassword",
+      credentialId: "g",
+      description: IMPORT_CREDENTIAL_DESCRIPTION,
+      createdAt: "2026-10-22T10:00:05Z",
+      expiresAt: "2026-10-29T10:00:05Z",
+      permissions: handoffCredentialPermissions(),
+    },
   };
 
   it("lists app passwords and counts API keys without owner access", async () => {
@@ -181,8 +218,12 @@ describe("credentials on x:Account", () => {
       appPasswords: [
         { id: "b", createdAt: new Date("2026-10-22T10:00:00Z"), permissions: { "@type": "Disable" } },
         { id: "d", createdAt: new Date("2026-10-22T10:00:02Z"), permissions: undefined },
+        { id: "g", createdAt: new Date("2026-10-22T10:00:05Z"), permissions: handoffCredentialPermissions() },
       ],
       handoffCredentials: 1,
+      importCredentials: [
+        { id: "f", createdAt: new Date("2026-10-22T10:00:04Z"), expiresAt: new Date("2026-10-29T10:00:04Z") },
+      ],
       apiKeys: 1,
       passwords: [{ id: "a" }],
     });
@@ -193,6 +234,7 @@ describe("credentials on x:Account", () => {
     expect(await empty.mgmt.credentialInventory("km")).toEqual({
       appPasswords: [],
       handoffCredentials: 0,
+      importCredentials: [],
       apiKeys: 0,
       passwords: [],
     });
@@ -259,7 +301,15 @@ describe("credentials on x:Account", () => {
           {
             id: "km",
             credentials:
-              calls++ === 0 ? credentials : { "0": credentials["0"], "2": credentials["2"], "3": credentials["3"] },
+              calls++ === 0
+                ? credentials
+                : {
+                    "0": credentials["0"],
+                    "2": credentials["2"],
+                    "3": credentials["3"],
+                    "5": credentials["5"],
+                    "6": credentials["6"],
+                  },
           },
         ],
       }),
