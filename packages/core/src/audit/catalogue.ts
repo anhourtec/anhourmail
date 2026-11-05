@@ -131,6 +131,12 @@ export const AUDIT_ACTIONS = [
   "billing.staff_plan_granted",
   "billing.staff_plan_revoked",
   "billing.comp_redeemed",
+  // Platform billing actions (ADR-0029 slice 12 remainder): staff re-sync (account log, rule 49) and dismissing an
+  // unmatched provider event (platform log); the provider's catalogue checked against plans.ts (platform log).
+  "billing.resynced",
+  "billing.orphan_dismissed",
+  "billing.catalogue_drift",
+  "billing.catalogue_restored",
   // trust and safety
   "trust.tier_changed",
   "trust.limits_changed",

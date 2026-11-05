@@ -29,7 +29,7 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `junk_rules` | `junk_rules.changed`, `junk_rules.account_safe_added`, `junk_rules.account_safe_removed` |
 | `identity` | `identity.changed` |
 | `webmail` | `webmail.preferences_changed`, `webmail.signature_added`, `webmail.signature_changed`, `webmail.signature_removed`, `webmail.signature_defaults_changed`, `webmail.template_added`, `webmail.template_changed`, `webmail.template_removed`, `webmail.handoff_started`, `webmail.handoff_redeemed` |
-| `billing` | `billing.plan_changed`, `billing.payment_succeeded`, `billing.payment_failed`, `billing.refunded`, `billing.suspended`, `billing.reactivated`, `billing.state_changed`, `billing.addons_changed`, `billing.supporter_amount_changed`, `billing.cancel_scheduled`, `billing.cancel_undone`, `billing.dispute_opened`, `billing.dispute_closed`, `billing.holds_applied`, `billing.holds_lifted`, `billing.ceiling_changed`, `billing.sync_failed`, `billing.customer_created`, `billing.checkout_started`, `billing.portal_opened`, `billing.holds_changed`, `billing.subscription_ended`, `billing.staff_plan_granted`, `billing.staff_plan_revoked`, `billing.comp_redeemed` |
+| `billing` | `billing.plan_changed`, `billing.payment_succeeded`, `billing.payment_failed`, `billing.refunded`, `billing.suspended`, `billing.reactivated`, `billing.state_changed`, `billing.addons_changed`, `billing.supporter_amount_changed`, `billing.cancel_scheduled`, `billing.cancel_undone`, `billing.dispute_opened`, `billing.dispute_closed`, `billing.holds_applied`, `billing.holds_lifted`, `billing.ceiling_changed`, `billing.sync_failed`, `billing.customer_created`, `billing.checkout_started`, `billing.portal_opened`, `billing.holds_changed`, `billing.subscription_ended`, `billing.staff_plan_granted`, `billing.staff_plan_revoked`, `billing.comp_redeemed`, `billing.resynced`, `billing.orphan_dismissed`, `billing.catalogue_drift`, `billing.catalogue_restored` |
 | `trust` | `trust.tier_changed`, `trust.limits_changed`, `trust.restricted`, `trust.suspended`, `trust.unsuspended` |
 | `abuse` | `abuse.report_received`, `abuse.report_resolved` |
 | `staff` | `staff.role_granted`, `staff.role_revoked`, `staff.act_as_started`, `staff.act_as_renewed`, `staff.act_as_ended`, `staff.account_viewed`, `staff.credentials_reset` |
@@ -165,6 +165,26 @@ claimed` before the identity layer runs (denied `invite_code_invalid`: wrong cod
 already claimed) and `stage: attached` once the person exists, with `billing.comp_redeemed` in the new account's log;
 `platform.invite_code_released` when that sign-up created no one and the code was given back. Checkout and changes
 refused while paid plans aren't open are denied `not_open`.
+
+Billing, the rest of slice 12 and the deletion hook (2026-11-05). Staff clearing an account's disputes write
+`billing.dispute_closed` as staff in the account's log (rule 49) and the platform log (meta `outcome: cleared`,
+`staff: true`, `cleared`, `disputeIds`, `state`; denied `not_disputed`, `changed` (the open or lost disputes differ
+from the ids the page showed; meta `shown`, `now`), `step_up_required`, `act_as`,
+`billing_unavailable`, and `not_found` in the platform log for an unknown account); the sync then writes the
+`billing.state_changed` it leads to. Re-sync now is `billing.resynced` the same way (`state`, `lastSyncedAt`; no
+step-up). Dismissing an unmatched provider event is `billing.orphan_dismissed` in the **platform** log only (it has no
+account; meta `type`, `objectId`, `receivedAt`; denied `not_found`, `step_up_required`, `act_as`). The catalogue check
+(system `billing-catalogue`, platform log) writes `billing.catalogue_drift` when drift appears or changes (meta
+`drift`: `{ item, problem }` pairs, `provider`) and `billing.catalogue_restored` when it is fixed (`driftSince`); the
+same drift on later days is logged, not audited again. Checkout and plan or add-on changes refused meanwhile are
+denied `catalogue_drift` (the preview, a read, writes nothing). Account deletion (ADR-0025, ADR-0029 §9) writes, under
+the system `account-deletion`, `billing.cancel_scheduled` (`reason: account_deletion`, `at`, `subscriptionId`) when the
+request (or the hourly timers' retry) sets the subscription to end at the period's end, and
+`billing.subscription_ended` (`reason: account_deletion`) when removal ends it now (open invoices voided first),
+each only once a fresh read of the subscription shows it; while the provider can't end it,
+removal waits and `data.deletion_started` is denied `billing_pending` (`waitingFor`), at most once a day. The webmail's
+`403 billing_restricted` send refusal is a read of the billing state and writes nothing (a refused delegated send is
+refused before its send is audited).
 
 Mailbox lifecycle: `mailbox.suspended` and `mailbox.unsuspended` (resume), `mailbox.deletion_scheduled` (meta: the
 status it came from, `purgeAfter`, alias count) and `mailbox.restored` are written by the person in the console;
