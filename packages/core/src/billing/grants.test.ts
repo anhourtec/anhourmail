@@ -227,7 +227,7 @@ describe("platform billing views", () => {
       available: true,
       plan: "free",
       addresses: 2,
-      can: { grant: true, endGrant: false, refund: false },
+      can: { grant: true, endGrant: false, refund: false, resync: false, clearDisputes: false },
     });
     expect(v.ceiling.effective).toBe(v.ceiling.configured);
     await expect(platformAccountBilling(w.d, w.ctx, support, ACCOUNT_A)).rejects.toMatchObject({ code: "forbidden" });

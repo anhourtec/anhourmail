@@ -15,7 +15,14 @@ import type { Deps, Repositories, RequestMeta } from "../ports";
 
 import { addressCeilingOf, DEV_ADDRESS_CEILING } from "./ceilings";
 import { billingOf, hasLiveSubscription } from "./checkout";
-import type { AccountBilling, BillingDispute, BillingState, PlanSource } from "./entity";
+import {
+  type AccountBilling,
+  type BillingDispute,
+  type BillingState,
+  type CatalogueStatus,
+  isRestrictingDispute,
+  type PlanSource,
+} from "./entity";
 import { BillingError, entitlements, refundEligibility } from "./entitlements";
 import {
   type BillingContext,
@@ -113,7 +120,7 @@ const STAFF_ERRORS: Record<Exclude<StaffRefusal, "act_as" | "step_up_required">,
 };
 
 /** The platform-scoped spec, the account lookup (404, audited in the platform log) and the account's own spec. */
-async function staffAccount(
+export async function staffAccount(
   deps: Deps,
   actor: Actor,
   accountId: string,
@@ -136,7 +143,7 @@ async function staffAccount(
 }
 
 /** Staff never change billing while acting as someone; the change needs a fresh step-up (ADR-0028). */
-async function staffGate(
+export async function staffGate(
   deps: Deps,
   actor: Actor,
   req: RequestMeta,
@@ -364,7 +371,7 @@ export type PlatformBillingView = {
   /** The address ceiling in force and the configured one (staff only: never shown to customers). */
   ceiling: { effective: number; configured: number };
   /** What staff may do now (the server checks each again). */
-  can: { grant: boolean; endGrant: boolean; refund: boolean };
+  can: { grant: boolean; endGrant: boolean; refund: boolean; resync: boolean; clearDisputes: boolean };
 };
 
 /**
@@ -409,6 +416,9 @@ export async function platformAccountBilling(
         grant: !live,
         endGrant: (row.planSource === "staff" || row.planSource === "comp") && row.state === "active",
         refund: ctx.provider !== null && row.providerCustomerId !== null && live,
+        resync: ctx.provider !== null && row.providerCustomerId !== null,
+        clearDisputes:
+          ctx.provider !== null && (row.disputedAt !== null || disputes.some((d) => isRestrictingDispute(d.status))),
       },
     };
   });
@@ -424,6 +434,8 @@ export type PlatformBillingSummary = {
   >;
   /** Provider events no account could be matched to yet (kept until staff dismiss them). */
   orphans: { id: string; type: string; objectId: string; receivedAt: Date }[];
+  /** The last check of the provider's catalogue against the plan facts (null before the first one). */
+  catalogue: CatalogueStatus | null;
 };
 
 /**
@@ -443,6 +455,7 @@ export async function platformBillingSummary(
     const restricted = await r.billing.listByState("restricted", limit);
     const lapsed = await r.billing.listByState("lapsed", limit);
     const orphans = await r.billing.listEvents("orphan", limit);
+    const catalogue = await r.billing.catalogue();
     const names = await r.access.accountNames([...pastDue, ...restricted, ...lapsed].map((b) => b.accountId));
     const row = (b: AccountBilling) => ({
       accountId: b.accountId,
@@ -455,6 +468,7 @@ export async function platformBillingSummary(
       status: BILLING.status,
       lists: { past_due: pastDue.map(row), restricted: restricted.map(row), lapsed: lapsed.map(row) },
       orphans: orphans.map((e) => ({ id: e.id, type: e.type, objectId: e.objectId, receivedAt: e.receivedAt })),
+      catalogue,
     };
   });
 }

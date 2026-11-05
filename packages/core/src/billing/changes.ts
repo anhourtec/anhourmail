@@ -26,6 +26,7 @@ import { authorizeAudited, mutation, type MutationSpec } from "../mutation";
 import type { AuditAction } from "../audit/catalogue";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 
+import { assertCatalogueInSync, requireCatalogueInSync } from "./catalogue";
 import { billingOf, hasLiveSubscription } from "./checkout";
 import type { AccountBilling } from "./entity";
 import {
@@ -245,6 +246,7 @@ export async function previewBillingChange(
   const provider = ctx.provider;
   if (!provider) throw unavailable();
   if (!ctx.paidPlansOpen) throw notOpen();
+  await assertCatalogueInSync(deps);
   const now = deps.clock.now();
   const { b, usage } = await deps.uow.run(async (r) => ({
     b: await billingOf(r, accountId, now),
@@ -288,6 +290,8 @@ export async function changeBilling(
   await refuseActAs(deps, actor, req, base);
   const provider = await requireProvider(deps, actor, req, base, ctx);
   await requireOpenPlans(deps, actor, req, base, ctx);
+  // The provider's prices must match the published ones before anything is charged or renewed (ADR-0029 §2).
+  await requireCatalogueInSync(deps, actor, req, base);
   const now = deps.clock.now();
   const { b, usage } = await deps.uow.run(async (r) => ({
     b: await billingOf(r, accountId, now),

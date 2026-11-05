@@ -16,6 +16,7 @@ import type { Deps, Repositories, RequestMeta } from "../ports";
 
 import { onPlatformDomain } from "../mailboxes/platform";
 
+import { requireCatalogueInSync } from "./catalogue";
 import { addressCeilingOf } from "./ceilings";
 import type { AccountBilling, BillingState, HoldSubject, PlanSource } from "./entity";
 import {
@@ -369,6 +370,8 @@ export async function startCheckout(
   await refuseActAs(deps, actor, req, spec);
   const provider = await requireProvider(deps, actor, req, spec, ctx);
   await requireOpenPlans(deps, actor, req, spec, ctx);
+  // The provider's prices must match the published ones before anyone is charged (ADR-0029 §2).
+  await requireCatalogueInSync(deps, actor, req, spec);
   if (actor.kind !== "user") throw new NotFoundError();
   const c = parseCheckout(input);
   const now = deps.clock.now();
