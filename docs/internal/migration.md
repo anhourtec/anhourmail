@@ -35,6 +35,7 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 | #    | Migration                            | Commit    | Date       | Change                                                                                                            | Rollback        |
 | ---- | ------------------------------------ | --------- | ---------- | ----------------------------------------------------------------------------------------------------------------- | --------------- |
+| 0042 | `0042_billing_catalogue`             | —         | 2026-11-05 | `billing_catalogue` table: the last check of the payment provider's prices against the plan facts (ADR-0029 §2)   | Safe            |
 | 0041 | `0041_mail_import`                   | —         | 2026-11-05 | `mail_import`, `mail_import_folder`, `mail_import_batch`: imports, progress, sealed secrets (ADR-0030)            | Safe            |
 | 0040 | `0040_webmail_template`              | —         | 2026-11-05 | `webmail_template` table: templates (canned replies) per mailbox, text only (ADR-0032 §3)                         | Safe            |
 | 0039 | `0039_account_safe_sender`           | —         | 2026-11-05 | `account_safe_sender` table: the account-wide Safe senders list (ADR-0032 §1)                                     | Safe            |
@@ -105,6 +106,17 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0042_billing_catalogue · — · 2026-11-05 · Safe
+
+- Added: `billing_catalogue` (id smallint primary key default 1 with `CHECK (id = 1)`: one row; checked_at; drift
+  jsonb default `[]`, the `{ item, problem }` pairs where the provider's catalogue disagrees with `plans.ts`, never a
+  key or secret; drift_since; updated_at). Written by `job:billing-catalogue`; while `drift` isn't empty, checkout
+  and plan or add-on changes answer 503 (ADR-0029 update 2026-11-05).
+- Changed: —
+- Removed: —
+- Data: none (no row until the first check, which reads as in sync).
+- Rollback: drop the table (the code before it doesn't read it; checkouts are then not refused on drift).
 
 ### 0041_mail_import · — · 2026-11-05 · Safe
 
