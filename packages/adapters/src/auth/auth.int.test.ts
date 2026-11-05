@@ -1162,13 +1162,38 @@ describe("breached passwords (fake check, no network)", () => {
         200,
       );
       const token = /reset-password\/([^?]+)/.exec(resetUrl)?.[1] ?? "";
+      // A dead or missing token is refused as such before any lookup: nothing is asked about the password.
+      const expired = `expired-${randomUUID()}`;
+      await db.insert(schema.authVerification).values({
+        id: randomUUID(),
+        identifier: `reset-password:${expired}`,
+        value: userId,
+        expiresAt: new Date(Date.now() - 1000),
+      });
+      const asked = check.calls;
+      for (const body of [
+        { token: "not-a-real-token", newPassword: breached },
+        { token: expired, newPassword: breached },
+        { newPassword: breached },
+      ]) {
+        const dead = await call("POST", "/reset-password", body);
+        expect(dead.status).toBe(400);
+        expect(dead.json?.code).toBe("INVALID_TOKEN");
+      }
+      expect(check.calls).toBe(asked);
       const reset = await call("POST", "/reset-password", { token, newPassword: breached });
       expect(reset.status).toBe(400);
       expect(reset.json?.code).toBe("PASSWORD_BREACHED");
+      expect(check.calls).toBe(asked + 1);
       expect((await call("POST", "/reset-password", { token, newPassword: `${password}-2` })).status).toBe(200);
+      // A used token is dead too: no lookup, INVALID_TOKEN.
+      const reused = await call("POST", "/reset-password", { token, newPassword: breached });
+      expect(reused.json?.code).toBe("INVALID_TOKEN");
+      expect(check.calls).toBe(asked + 2);
       // The stored hash is the accepted password's, never the refused one's.
       expect((await client(openAuth)("POST", "/sign-in/email", { email, password: `${password}-2` })).status).toBe(200);
     } finally {
+      await db.delete(schema.authVerification).where(eq(schema.authVerification.value, userId));
       await db.delete(schema.authUser).where(eq(schema.authUser.id, userId));
     }
   });
