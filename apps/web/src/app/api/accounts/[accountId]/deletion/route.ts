@@ -21,7 +21,8 @@ export const GET = route(async ({ req }, params) =>
 /**
  * Ask to delete the account (`account.delete`, Owners; ADR-0025): `{ confirmName }` must be its name (400), a fresh
  * step-up (403 `step_up_required`); 409 when already scheduled. Mailboxes are suspended now and everything is removed
- * after the grace period. Everyone in the account is emailed. `sensitive` tier (fail closed).
+ * after the grace period; a paid subscription stops renewing. Everyone in the account is emailed. `sensitive` tier
+ * (fail closed).
  */
 export const POST = route(
   async ({ req, meta }, params) => {
@@ -35,6 +36,8 @@ export const POST = route(
       { confirmName: parsed.success ? parsed.data.confirmName : undefined },
       { sessionId },
       meta,
+      // A paid subscription is set to end at the period's end (ADR-0029 §9).
+      container().billing ?? null,
     );
     await sendDeletionScheduled(accountId, out);
     return ok({ deleteAfter: out.deleteAfter.toISOString(), mailboxesSuspended: out.mailboxesSuspended });
