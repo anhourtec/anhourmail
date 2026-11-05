@@ -40,13 +40,17 @@ const keys = await issueTestKeys(mgmt, stalwartUrl, `svc-${tag}.test`);
 const domain = `trn-${tag}.test`;
 const ids: Record<"a" | "b", string> = { a: "", b: "" };
 
-const adminSamples = async (accountId: string) =>
-  (
-    await mgmt.transport.getAll<{ id: string; accountId?: string; isSpam?: boolean }>("x:SpamTrainingSample", [
-      "accountId",
-      "isSpam",
-    ])
-  ).filter((s) => s.accountId === accountId);
+/**
+ * One account's samples (one filtered query: the server's `position` paging repeats pages, so an unfiltered list read
+ * in pages shows samples twice and misses others on a server with many).
+ */
+const adminSamples = (accountId: string) => accountTrainingSamples(mgmt, accountId);
+
+/** Samples a destroyed account with the same id left behind (if the server ever hands an id out again) start at zero. */
+async function clearSamples(accountId: string): Promise<void> {
+  const left = (await adminSamples(accountId)).map((s) => s.id);
+  if (left.length > 0) await mgmt.transport.set("x:SpamTrainingSample", { destroy: left });
+}
 
 afterAll(async () => {
   try {
@@ -103,6 +107,7 @@ describe("spam-training sample clean-up with the training key (ADR-0030)", () =>
         quotaBytes: 50 * 1024 * 1024,
         suspended: false,
       });
+      await clearSamples(ids[name]);
     }
     // Before the window: a ham sample of the person's own.
     await appendTo("a", ["INBOX"]);
@@ -132,6 +137,15 @@ describe("spam-training sample clean-up with the training key (ADR-0030)", () =>
     expect(left.map((s) => s.isSpam).sort()).toEqual([false, true]);
     expect(await adminSamples(ids.b)).toHaveLength(1);
     expect(await cleaner.removeImported(ids.a, { from, to })).toEqual({ removed: 0 });
+
+    // The account's destroy (`mailbox.training_purge`): every sample made before it goes, spam included; one made
+    // after it (a later account given the same id) stays. The cut-off sits between the samples with room for
+    // `expiresAt` being rounded down to the second (slack 500 ms: before-sample ≤ from − 2.1 s, the rest ≥ from − 1 s).
+    expect(await cleaner.removeAccount(ids.a, new Date(from.getTime() - 1600))).toEqual({ removed: 1 });
+    expect((await adminSamples(ids.a)).map((s) => s.isSpam)).toEqual([true]);
+    expect(await cleaner.removeAccount(ids.a, new Date())).toEqual({ removed: 1 });
+    expect(await adminSamples(ids.a)).toEqual([]);
+    expect(await adminSamples(ids.b)).toHaveLength(1);
   });
 
   it("can do nothing else", async () => {
