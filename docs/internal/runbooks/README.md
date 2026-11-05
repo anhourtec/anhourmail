@@ -8,6 +8,7 @@ Each runbook covers: symptoms → impact → first five minutes → diagnosis �
 | `hosting-ip-block.md`           | The hosting provider's anti-spam system blocked port 25 on our IP: find the cause, unblock, prevent a repeat |
 | `postmaster-spam-rate-spike.md` | Postmaster spam rate ≥ 0.1%: find the accounts, restrict, review limits                                      |
 | `compromised-account.md`        | A user's account is sending spam: lock, revoke sessions and app passwords, notify, restore                   |
+| (until written)                 | Suspended sender still connected: restart Stalwart, the emergency blanket kill of open sessions              |
 | `mail-queue-backlog.md`         | The Stalwart queue is growing: diagnose deferrals, remote throttling, DNS, TLS                               |
 | `stalwart-down.md`              | Stalwart is unhealthy: restart, check the store, restore from snapshot                                       |
 | `stalwart-upgrade.md`           | Step-by-step upgrade from `08-operations.md`, with the verification checklist (Phase 1)                      |
