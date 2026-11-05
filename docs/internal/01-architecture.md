@@ -119,7 +119,18 @@ mail clients ─► Stalwart 465/587/993/995 (TLS by Stalwart itself)    MX traf
   ended comps, drops holds on deleted items and pins held mailboxes' storage (they leave the pool arithmetic). In dev
   the fake provider is driven from `/dev/billing/checkout/:id` and `/dev/billing/portal/:id` through
   `POST /api/dev/billing/simulate`, whose events go through the real webhook; none of it exists in production (three
-  guards). The console Billing page comes in slice 11.
+  guards). Slices 11–13 (2026-11-05): the console Billing page (`app/(console)/accounts/[accountId]/billing`,
+  components in `apps/web/src/components/billing/`) and a billing banner in the console shell
+  (`accountBillingNotice`); it offers paid plans only when billing is on and either `BILLING.status` is `open` or the
+  provider is a test setup (`billingOffered`), so a deployment that isn't open never takes a payment from the page.
+  Staff grants, comps and ending them change state directly through the sync's own derivation and effects
+  (`billing/grants.ts` → `applyDerivation` in `sync.ts`), so they work with billing off; the staff refund calls the
+  provider and queues a sync. Invite codes (`billing/invite-service.ts`): staff create (shown once, sha256 stored),
+  list and revoke; a sign-up with `x-sign-up-code` passes the proof-of-work and sign-up tiers first, then the code is
+  claimed atomically (pending) before anyone is created, carried through `AsyncLocalStorage`
+  (`server/auth/sign-up-code.ts`) to the identity layer's user-create hook (which, with sign-up closed, admits only
+  such a request), completed after the person exists, and given back if the sign-up created no one. Checkout and
+  changes are refused server-side while paid plans aren't offered (`BillingContext.paidPlansOpen`).
 - Provisioning is a **job**, never an inline request (CLAUDE.md rule 26): write intent (e.g. mailbox `status = provisioning`), enqueue, the worker applies it through `stalwart-client` (idempotent upserts by natural key), then set `active` or `failed` with an error code.
 - The **reconciler** (scheduler `job:reconcile`, hourly; plus the every-minute `job:service-accounts` check of the management keys' owners) compares Postgres intent with Stalwart (`x:Domain`, `x:Account` lists). It **reports** drift (audit `platform.reconciler_drift`; the alert channel comes with monitoring) and re-queues missing non-destructive state. It **never deletes** a Stalwart account or mail automatically. Deletions are explicit jobs with a grace period.
 

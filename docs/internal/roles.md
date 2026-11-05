@@ -319,9 +319,27 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
     cancels or undoes it and takes the 14-day refund (the last three with a fresh step-up, **403** `step_up_required`),
     and chooses what stays on after a lapse. Domain and User Administrators, Members and Auditors get **403**, other
     accounts **404**, staff acting as someone **403** (the act-as role holds no `billing.manage`, and the services
-    refuse act-as too). Staff refunds outside the window and staff grants come with Platform billing (slice 12). The
+    refuse act-as too). The console **Billing** page (`/accounts/:id/billing`, slice 11) follows the same rule: Owner and
+    Billing Administrator manage, Auditor and staff acting read-only see it without actions, every other role gets the
+    **403** page and no navigation entry. The billing banner above every account page shows "payment failed" to
+    `billing.read` roles only and "sending paused" / "plan ended" to everyone in the account, with a link only for those
+    who can see Billing. `POST /api/accounts/:accountId/billing/redeem` (`billing.manage` ★, a confirmed email) redeems a
+    comp code; every wrong code is **404** `invite_code_invalid`. The
     dev-only `POST /api/dev/billing/simulate` needs `billing.manage` on the fake object's account and is 404 outside a
     dev process with the fake provider. No matrix change; the RBAC harness probes every route as every persona.
+
+    **Platform billing and invite codes** (ADR-0029 §8, §9, slice 12; `packages/core/src/billing/grants.ts`,
+    `invite-service.ts`): `platform.billing.manage` ★ (Global and Billing Administrators) sees Platform billing
+    (`/platform/billing`) and the Billing tab on Platform → account, grants a plan (`PUT …/billing/grant`, days or no
+    end; never over a paying subscription, **409**), ends a grant (`DELETE …/billing/grant`) and refunds the latest paid
+    invoice outside the self-service rules (`POST …/billing/refund`); each needs a fresh step-up, is refused while acting
+    as someone and is audited by staff in the account's own log (rule 49). Invite codes (`/platform/invite-codes`,
+    `POST /api/platform/invite-codes`, `DELETE …/:codeId`): the routes' outer gate is `platform.accounts.read`, then a
+    sign-up-only code needs `platform.invites.manage` (Global, Support) and a code that comps a plan needs
+    `platform.billing.manage` (Global, Billing; with a step-up); Trust & Safety and customers get **403**. The nav entry
+    "Invite codes" shows for `platform.invites.manage`; Billing staff reach the page from Platform billing. No matrix
+    change.
+
 22. **Account-wide Safe senders** (ADR-0032 §1; `packages/core/src/webmail/account-safe-senders.ts`): new permissions
     `safe_sender.read` (Owner, User Administrator, Read-only; staff acting read-only) and `safe_sender.manage` (Owner,
     User Administrator; not critical: images still need a verified From and a person's own Blocked senders win).
@@ -415,6 +433,8 @@ webmail session acts as its mailbox); both routes are `webmail`-guarded in the h
 | Your data (self)         | ✓     | ✓          | ✓        | ✓           | ✓      | ✓       | own; ✗ via act-as                       |
 | Account settings         | ✓     | ✗          | ✗        | ✗           | ✗      | ✗       | ✗ (never via act-as)                    |
 | Pending deletions        | ✗     | ✗          | ✗        | ✗           | ✗      | ✗       | Global Administrator                    |
+| Platform billing         | ✗     | ✗          | ✗        | ✗           | ✗      | ✗       | Global, Billing Administrator           |
+| Invite codes             | ✗     | ✗          | ✗        | ✗           | ✗      | ✗       | Global, Support Administrator           |
 | Customer accounts        | ✗     | ✗          | ✗        | ✗           | ✗      | ✗       | all but Reports Reader                  |
 | Staff console            | ✗     | ✗          | ✗        | ✗           | ✗      | ✗       | per platform role                       |
 

@@ -1008,6 +1008,23 @@ customer's account without the customer knowing.
   Logins of people whose account was deleted are kept until they delete them (no automatic expiry of account-less
   logins yet).
 
+## Invite codes (ADR-0029 §8, 2026-11-05)
+
+- **Secret.** 160 random bits shown once as Crockford base32 (`XXXX-…`, 8 groups), stored as sha256 only; never in
+  audit entries or logs. Single-use (`claim` is one conditional update), expiry required (≤ 90 days), optionally bound
+  to one email (lower-cased).
+- **One answer.** Unknown, malformed, used, expired, revoked, bound to another email, or the wrong kind for the place
+  (a comp-only code at closed sign-up, a sign-up-only code on Billing) all answer **404** `invite_code_invalid`.
+- **Guessing.** `inviteCodeRedeem` per caller and `inviteCodeRedeemIp` per client address, both fail closed.
+- **Sign-up while closed.** The identity layer's sign-up endpoint stays on, but its user-create hook refuses every
+  new user unless sign-up is open or the route claimed an invite code for that request (`admitSignUp`); the route
+  answers 404 for a closed sign-up without a code before anything else. A code never replaces the proof-of-work or the
+  sign-up tiers: it is checked after them, and its atomic claim in Postgres is the admission (run-67 N1), made before
+  anyone is created; a sign-up that creates no one gives it back. A bound code that also gives a plan is refused at
+  sign-up (run-67 N2): a plan never starts on an unconfirmed email; on Billing the console email must be confirmed.
+- **Who issues them.** Staff only: sign-up codes `platform.invites.manage`; comp codes `platform.billing.manage` with
+  a fresh step-up. Staff grants and comps are audited in the account's own log (rule 49).
+
 ## Billing webhook, sync and access states (ADR-0029, 2026-11-04)
 
 - **Webhook (`POST /api/billing/webhook`).** Outside every session; the provider signs it, so `route()` skips the

@@ -208,7 +208,11 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
 - Stripe Checkout, Portal, Tax, Supporter flow, webhooks, account lifecycle, refunds, invoices (`06-pricing-and-billing.md`). Pricing decision made.
   **In progress (ADR-0029):** slices 1–7 built 2026-11-04 — facts and lifecycle, provider port and adapters, tables,
   the signed webhook and `billing.sync` with per-dispute tracking, send-blocked mailboxes on Stalwart, mailbox, people
-  and address ceilings. Next: checkout, portal and dev simulation (slice 8).
+  and address ceilings; slices 8–10 2026-11-05 — checkout, portal, dev simulation, changes, cancel, the refund, lapse
+  and holds; slices 11–13 2026-11-05 — the console Billing page and banners, Platform billing (staff grants, the staff
+  refund, the ceiling override), invite codes (staff create/revoke, redemption at sign-up and on Billing) and the
+  public billing guide. `BILLING.status` stays `planned`. Next: slice 14 (live test-clock suite), the account-deletion
+  hook and `billing.json` export, catalogue-drift refusals and the webmail's `403 billing_restricted`.
 - Migration (import mail and contacts) ships with billing, not after launch: paying customers switching a domain
   need their old mail and contacts on day one (moved here from Phase 8.1 on 2026-10-29). Scope below.
 - **Exit:** every lifecycle transition tested with Stripe test clocks; BC PST/GST position confirmed by an accountant;
