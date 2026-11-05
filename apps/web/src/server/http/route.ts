@@ -36,6 +36,8 @@ const STATUS: Record<string, number> = {
   not_found: 404,
   bad_request: 400,
   conflict: 409,
+  // Postgres broke a deadlock (DeadlockError): try again.
+  deadlock: 409,
   password_change_pending: 409,
   plan_limit: 403,
   enrolment_required: 403,
@@ -276,6 +278,8 @@ export function route(handler: Handler, opts: RouteOptions = {}) {
           res.headers.set(REFUSED_HEADER, "mailbox");
         } else if (err instanceof DomainError) {
           errorCode = err.code;
+          // Lock order is the same everywhere, so a deadlock is a bug worth seeing (answered 409, nothing committed).
+          if (err.code === "deadlock") log.warn("database deadlock broken", { component: "http", path: logPath(path) });
           res = errorBody(err.code, err.message, STATUS[err.code] ?? 400);
         } else if (err instanceof SyntaxError) {
           errorCode = "bad_request";
