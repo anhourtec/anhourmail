@@ -11,6 +11,8 @@
  * mailbox's account except the one a live import of that mailbox holds (the provisioning key).
  * `mail_import.training_cleanup`: subject is `<import id>:<from ms>:<to ms>`, one importer slice; destroys the
  * spam-training samples its APPENDs created on the mailbox's account (the training key; ADR-0030 update 2026-11-05).
+ * `mailbox.training_purge`: subject is `<mail server account id>:<destroyed ms>`, queued by the mailbox purge with the
+ * account it destroyed; removes every spam-training sample that account left (the training key; the mailbox row is gone).
  */
 export type JobKind =
   | "domain.ensure"
@@ -21,7 +23,8 @@ export type JobKind =
   | "billing.sync"
   | "billing.resolve"
   | "mail_import.credential_revoke"
-  | "mail_import.training_cleanup";
+  | "mail_import.training_cleanup"
+  | "mailbox.training_purge";
 export type JobStatus = "queued" | "running" | "succeeded" | "failed";
 
 export type ProvisioningJob = {

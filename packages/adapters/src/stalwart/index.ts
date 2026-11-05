@@ -19,6 +19,7 @@ import {
   holdMismatch,
   importSamples,
   LEGACY_SERVICE_ACCOUNT,
+  samplesMadeBefore,
   scopesOf,
   SERVICE_CREDENTIALS,
   SPAM_SAMPLE_HOLD_DEFAULT_MS,
@@ -82,7 +83,8 @@ export function stalwartImportCredentials(mgmt: StalwartManagement): ImportCrede
  * account's ham samples created within the slice's window, widened by `slackMs` (default two minutes: clocks, and
  * samples the server writes a moment after the APPEND). `holdMs` is the server's `holdSamplesFor`
  * (`STALWART_SPAM_SAMPLE_HOLD_MS`, default 180 days): a sample expiring later than it allows means the setting
- * differs, and the job fails loudly instead of matching nothing.
+ * differs, and the job fails loudly instead of matching nothing. `removeAccount` takes every sample of a destroyed
+ * mail server account made before its destroy time (`mailbox.training_purge`).
  */
 export function stalwartImportTrainingSamples(
   mgmt: StalwartManagement,
@@ -97,6 +99,14 @@ export function stalwartImportTrainingSamples(
         throw new Error("spam-training samples outlive STALWART_SPAM_SAMPLE_HOLD_MS: set it to holdSamplesFor");
       }
       const ids = importSamples(samples, window, { holdMs, slackMs });
+      return { removed: await destroyTrainingSamples(mgmt, ids) };
+    },
+    async removeAccount(stalwartAccountId, destroyedAt) {
+      const samples = await accountTrainingSamples(mgmt, stalwartAccountId);
+      if (holdMismatch(samples, (opts.now ?? (() => new Date()))(), holdMs)) {
+        throw new Error("spam-training samples outlive STALWART_SPAM_SAMPLE_HOLD_MS: set it to holdSamplesFor");
+      }
+      const ids = samplesMadeBefore(samples, destroyedAt, { holdMs, slackMs });
       return { removed: await destroyTrainingSamples(mgmt, ids) };
     },
   };

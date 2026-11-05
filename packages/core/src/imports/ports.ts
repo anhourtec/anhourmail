@@ -125,4 +125,10 @@ export type ImportCredentialIssuer = {
  */
 export type ImportTrainingSamples = {
   removeImported(stalwartAccountId: string, window: { from: Date; to: Date }): Promise<{ removed: number }>;
+  /**
+   * Every sample (spam and ham) of a mail server account that was destroyed at `destroyedAt`: destroying the account
+   * leaves them (each holds a sender, a subject and a copy of the message). Only samples created before then go, since
+   * the server can give the same id to a later account (`mailbox.training_purge`).
+   */
+  removeAccount(stalwartAccountId: string, destroyedAt: Date): Promise<{ removed: number }>;
 };

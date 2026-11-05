@@ -120,6 +120,7 @@ describe("mail_import.training_cleanup", () => {
         calls.push({ account, from: window.from.getTime(), to: window.to.getTime() });
         return { removed: 3 };
       },
+      removeAccount: async () => ({ removed: 0 }),
     };
     await t.d.uow.run((r) =>
       r.provisioning.enqueue({
@@ -147,7 +148,9 @@ describe("mail_import.training_cleanup", () => {
       });
     });
     const { mail } = fakeMail(t.server);
-    await runNextJob(t.d, mail, { trainingSamples: { removeImported: async () => ({ removed: 0 }) } });
+    await runNextJob(t.d, mail, {
+      trainingSamples: { removeImported: async () => ({ removed: 0 }), removeAccount: async () => ({ removed: 0 }) },
+    });
     expect(t.s.jobs[0]?.lastError).toMatch(/not <import>/);
     await t.d.uow.run((r) =>
       r.provisioning.enqueue({
@@ -240,5 +243,48 @@ describe("reconciler and import credentials", () => {
     // Once the import ends, its own credential is no longer expected either.
     await cancelImport(t.d, member, ACCOUNT_A, v.id, req);
     expect((await reconcileAppPasswords(t.d, inventory(t.server))).importCredentialsOrphaned).toBe(2);
+  });
+});
+
+describe("mailbox.training_purge", () => {
+  it("removes a destroyed account's samples made before its destroy, fails without the training key", async () => {
+    const t = await setup();
+    const calls: { account: string; at: number }[] = [];
+    const training: ImportTrainingSamples = {
+      removeImported: async () => ({ removed: 0 }),
+      async removeAccount(account, destroyedAt) {
+        calls.push({ account, at: destroyedAt.getTime() });
+        return { removed: 2 };
+      },
+    };
+    await t.d.uow.run((r) =>
+      r.provisioning.enqueue({ kind: "mailbox.training_purge", subjectId: "s:dd:ee:1500", runAfter: t.clock.now() }),
+    );
+    const { mail } = fakeMail(t.server);
+    await runNextJob(t.d, mail);
+    expect(t.s.jobs.find((j) => j.kind === "mailbox.training_purge")?.lastError).toMatch(/no spam-training/);
+    for (const j of t.s.jobs) j.runAfter = t.clock.now();
+    await runNextJob(t.d, mail, { trainingSamples: training });
+    // The account id may hold colons: only the last part is the time.
+    expect(calls).toEqual([{ account: "s:dd:ee", at: 1500 }]);
+    expect(t.s.jobs.find((j) => j.kind === "mailbox.training_purge")?.status).toBe("succeeded");
+  });
+
+  it("refuses a malformed subject", async () => {
+    const t = await setup();
+    const training: ImportTrainingSamples = {
+      removeImported: async () => ({ removed: 0 }),
+      removeAccount: async () => ({ removed: 0 }),
+    };
+    for (const subjectId of ["no-time", ":1500", "acct:soon"]) {
+      await t.d.uow.run((r) =>
+        r.provisioning.enqueue({ kind: "mailbox.training_purge", subjectId, runAfter: t.clock.now() }),
+      );
+    }
+    const { mail } = fakeMail(t.server);
+    for (let i = 0; i < 3; i++) await runNextJob(t.d, mail, { trainingSamples: training });
+    expect(t.s.jobs.map((j) => j.lastError)).toEqual(
+      Array.from({ length: 3 }, () => expect.stringMatching(/not <account>/) as unknown),
+    );
   });
 });

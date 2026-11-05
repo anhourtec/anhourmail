@@ -97,11 +97,23 @@ async function apply(deps: Deps, mail: MailServer, job: ClaimedJob, handlers: Jo
       const imp = await r.imports.getById(importId);
       return imp ? await r.directory.getMailbox(imp.mailboxId) : null;
     });
-    // The import went with its mailbox or account: the account's samples go when the account is purged.
+    // The import went with its mailbox or account: the purge's `mailbox.training_purge` takes the account's samples.
     if (!target?.stalwartId) return;
     // Without the training key this worker can't do it: fail (and alert after the retries) rather than pass.
     if (!handlers.trainingSamples) throw new Error("no spam-training sample credential in this worker");
     await handlers.trainingSamples.removeImported(target.stalwartId, window);
+    return;
+  }
+  if (job.kind === "mailbox.training_purge") {
+    // Subject: `<mail server account id>:<destroyed ms>`, the account the purge destroyed (its row is gone).
+    const at = job.subjectId.lastIndexOf(":");
+    const stalwartId = at > 0 ? job.subjectId.slice(0, at) : "";
+    const destroyedAt = new Date(Number(job.subjectId.slice(at + 1)));
+    if (stalwartId === "" || !Number.isFinite(destroyedAt.getTime())) {
+      throw new Error("training purge subject is not <account>:<destroyed ms>");
+    }
+    if (!handlers.trainingSamples) throw new Error("no spam-training sample credential in this worker");
+    await handlers.trainingSamples.removeAccount(stalwartId, destroyedAt);
     return;
   }
   if (job.kind === "mailbox.password") {
@@ -313,7 +325,8 @@ export type ProcessedJob = ClaimedJob & { lockLost: boolean };
  */
 /**
  * What jobs beyond the mail server need: the billing provider for `billing.*` jobs (null or absent: billing off), and
- * the spam-training sample remover for `mail_import.training_cleanup` (the training key; absent: those jobs fail).
+ * the spam-training sample remover for `mail_import.training_cleanup` and `mailbox.training_purge` (the training key;
+ * absent: those jobs fail).
  */
 export type JobHandlers = { billing?: BillingProvider | null; trainingSamples?: ImportTrainingSamples | null };
 
