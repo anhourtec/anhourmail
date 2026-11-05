@@ -127,7 +127,7 @@ export default tseslint.config(
           paths: [
             {
               name: "@anhourmail/stalwart-client",
-              importNames: ["stalwartProvisioning", "stalwartAudit", "stalwartDevAdmin"],
+              importNames: ["stalwartProvisioning", "stalwartAudit", "stalwartTraining", "stalwartDevAdmin"],
               message: "The web app holds the operations key only (ADR-0020 'Credential split').",
             },
           ],
@@ -137,6 +137,7 @@ export default tseslint.config(
   },
   {
     files: ["apps/worker/**"],
+    ignores: ["apps/worker/src/importer*.ts"],
     rules: {
       "no-restricted-imports": [
         "error",
@@ -146,6 +147,43 @@ export default tseslint.config(
               name: "@anhourmail/stalwart-client",
               importNames: ["stalwartOperations", "stalwartDevAdmin"],
               message: "Worker processes hold the provisioning (and the scheduler the audit) key only (ADR-0020).",
+            },
+          ],
+          patterns: [
+            IMAP_LIBRARY,
+            {
+              group: ["@anhourmail/adapters/imap", "@anhourmail/adapters/imap/*"],
+              message: "Only the mail importer (apps/worker/src/importer*.ts) speaks IMAP (ADR-0030 §1).",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // The mail importer holds no Stalwart key at all (ADR-0030 §1): no management client, no transport.
+  {
+    files: ["apps/worker/src/importer*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@anhourmail/stalwart-client",
+              importNames: [
+                "stalwartProvisioning",
+                "stalwartOperations",
+                "stalwartAudit",
+                "stalwartTraining",
+                "stalwartDevAdmin",
+                "StalwartManagement",
+                "StalwartTransport",
+              ],
+              message: "The mail importer holds no Stalwart key (ADR-0030 §1).",
+            },
+            {
+              name: "@anhourmail/adapters/stalwart",
+              message: "The mail importer holds no Stalwart key (ADR-0030 §1).",
             },
           ],
           patterns: [IMAP_LIBRARY],

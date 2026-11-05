@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * `npm run dev`: starts the Docker services if they're down, syncs brand assets, then runs the console/webmail
- * (apps/web, with the webmail port forwarder), the site + docs (apps/site) and the provisioning worker together with labelled, coloured output. Ctrl-C stops the apps;
+ * (apps/web, with the webmail port forwarder), the site + docs (apps/site), the provisioning worker and the mail importer together with labelled, coloured output. Ctrl-C stops the apps;
  * `npm run stack:down` stops the containers (CLAUDE.md rule 51: do that at the end of every session).
  * `--no-stack` skips starting the containers (CI starts its own `ci` profile first).
  */
@@ -37,13 +37,15 @@ const child = spawn(
     "concurrently",
     "--kill-others-on-fail",
     "--names",
-    "web,mail,site,worker",
+    "web,mail,site,worker,importer",
     "--prefix-colors",
-    "blue,cyan,magenta,yellow",
+    "blue,cyan,magenta,yellow,green",
     "npm run dev --workspace @anhourmail/web",
     "node scripts/dev-mail-proxy.mjs",
     "npm run dev --workspace @anhourmail/site",
     "npm run dev --workspace @anhourmail/worker",
+    // The mail importer (ADR-0030): outside production it reaches only the dev mail server (IMPORT_DEV_ALLOW_SOURCES).
+    "npm run dev:importer --workspace @anhourmail/worker",
   ],
   { stdio: "inherit", env: process.env },
 );

@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=../../.env src/worker.ts",
     "scheduler": "tsx src/scheduler.ts",
+    "importer": "tsx src/importer.ts",
+    "dev:importer": "tsx watch --env-file-if-exists=../../.env src/importer.ts",
     "job:audit-verify": "tsx src/jobs/audit-verify.ts",
     "job:act-as-expiry": "tsx src/jobs/act-as-expiry.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -22,6 +24,7 @@
     "job:data-export": "tsx src/jobs/data-export.ts",
     "job:account-deletion": "tsx src/jobs/account-deletion.ts",
     "job:quota-cap": "tsx src/jobs/quota-cap.ts",
+    "job:import-expiry": "tsx src/jobs/import-expiry.ts",
     "job:billing-reconcile": "tsx src/jobs/billing-reconcile.ts",
     "job:billing-timers": "tsx src/jobs/billing-timers.ts",
     "job:bootstrap-admin": "tsx --env-file-if-exists=../../.env src/jobs/bootstrap-admin.ts"

@@ -18,6 +18,7 @@
     "dev:site": "npm run dev --workspace @anhourmail/site",
     "dev:docs": "npm run dev --workspace @anhourmail/docs",
     "dev:worker": "npm run dev --workspace @anhourmail/worker",
+    "importer": "npm run importer --workspace @anhourmail/worker",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint . --max-warnings=0",
