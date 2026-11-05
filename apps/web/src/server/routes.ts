@@ -963,6 +963,33 @@ export const ROUTES: readonly RouteSpec[] = [
     audits: "billing.refunded",
     probeStatus: 404,
   },
+  // Clearing an account's disputes (step-up), re-sync now (no step-up: it only asks the provider) and dismissing an
+  // unmatched provider event (step-up) (ADR-0029 §9; `platform.billing.manage` ★, tier `sensitive`). The harness probes
+  // random ids: allowed callers get 404 before any step-up.
+  {
+    method: "POST",
+    path: "/api/platform/accounts/:accountId/billing/disputes/clear",
+    file: "app/api/platform/accounts/[accountId]/billing/disputes/clear/route.ts",
+    guard: "platform.billing.manage",
+    audits: "billing.dispute_closed",
+    probeStatus: 404,
+  },
+  {
+    method: "POST",
+    path: "/api/platform/accounts/:accountId/billing/resync",
+    file: "app/api/platform/accounts/[accountId]/billing/resync/route.ts",
+    guard: "platform.billing.manage",
+    audits: "billing.resynced",
+    probeStatus: 404,
+  },
+  {
+    method: "POST",
+    path: "/api/platform/billing/orphans/:eventId/dismiss",
+    file: "app/api/platform/billing/orphans/[eventId]/dismiss/route.ts",
+    guard: "platform.billing.manage",
+    audits: "billing.orphan_dismissed",
+    probeStatus: 404,
+  },
   // Invite codes (ADR-0029 §8). Every staff role passes this gate (`platform.accounts.read`); the service then needs
   // `platform.invites.manage` for a sign-up-only code or `platform.billing.manage` for a comp code. The harness's empty
   // body has no expiry (400); revoking a random id is a 404.

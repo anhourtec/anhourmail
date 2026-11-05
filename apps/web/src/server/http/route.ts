@@ -63,6 +63,8 @@ const STATUS: Record<string, number> = {
   not_subscribed: 409,
   addon_in_use: 409,
   refund_not_eligible: 409,
+  not_disputed: 409,
+  changed: 409,
   confirmation_required: 409,
   invalid_change: 400,
   billing_restricted: 403,

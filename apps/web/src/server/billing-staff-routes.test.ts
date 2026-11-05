@@ -23,7 +23,10 @@ import {
   DELETE as endGrantRoute,
   PUT as grantRoute,
 } from "@/app/api/platform/accounts/[accountId]/billing/grant/route";
+import { POST as clearDisputesRoute } from "@/app/api/platform/accounts/[accountId]/billing/disputes/clear/route";
 import { POST as staffRefundRoute } from "@/app/api/platform/accounts/[accountId]/billing/refund/route";
+import { POST as resyncRoute } from "@/app/api/platform/accounts/[accountId]/billing/resync/route";
+import { POST as dismissOrphanRoute } from "@/app/api/platform/billing/orphans/[eventId]/dismiss/route";
 import { POST as createCodeRoute } from "@/app/api/platform/invite-codes/route";
 import { DELETE as revokeCodeRoute } from "@/app/api/platform/invite-codes/[codeId]/route";
 
@@ -248,5 +251,66 @@ describe("staff billing routes", () => {
       (await createCodeRoute(post("/api/platform/invite-codes", { grantsSignup: true, expiresInDays: 3 }), none))
         .status,
     ).toBe(403);
+  });
+
+  it("clear disputes: 409 when nothing is disputed, 404 for unknown accounts, 403 for other staff and customers", async () => {
+    staffReady();
+    actor = billingStaff;
+    const clear = (accountId = ACCOUNT) =>
+      clearDisputesRoute(
+        post(`/api/platform/accounts/${accountId}/billing/disputes/clear`, { disputeIds: [] }),
+        params(accountId),
+      );
+    const res = await clear();
+    expect(res.status).toBe(409);
+    expect((await json(res)).error?.code).toBe("not_disputed");
+    expect((await clear(OTHER.replace("2222", "3333"))).status).toBe(404);
+    actor = support;
+    expect((await clear()).status).toBe(403);
+    actor = owner;
+    expect((await clear()).status).toBe(403);
+  });
+
+  it("re-sync now: queues the account's sync for billing staff; 503 with billing off", async () => {
+    staffReady();
+    actor = billingStaff;
+    const res = await resyncRoute(post(`/api/platform/accounts/${ACCOUNT}/billing/resync`, {}), params());
+    expect(res.status).toBe(200);
+    expect((await json(res)).data).toEqual({ queued: true });
+    expect(uow.state.jobs.some((j) => j.kind === "billing.sync" && j.subjectId === ACCOUNT)).toBe(true);
+    actor = member;
+    expect((await resyncRoute(post(`/api/platform/accounts/${ACCOUNT}/billing/resync`, {}), params())).status).toBe(
+      403,
+    );
+    actor = billingStaff;
+    useContainer(undefined);
+    expect((await resyncRoute(post(`/api/platform/accounts/${ACCOUNT}/billing/resync`, {}), params())).status).toBe(
+      503,
+    );
+  });
+
+  it("dismiss an orphan: once for billing staff, then 404; unknown ids 404; customers 403", async () => {
+    staffReady();
+    const eventId =
+      (await uow.run((r) =>
+        r.billing.recordEvent({
+          providerEventId: "evt_unmatched",
+          type: "invoice.paid",
+          accountId: null,
+          objectId: "in_unknown",
+          providerCreatedAt: new Date(),
+          receivedAt: new Date(),
+        }),
+      )) ?? "";
+    const dismiss = (id: string) =>
+      dismissOrphanRoute(post(`/api/platform/billing/orphans/${id}/dismiss`, {}), {
+        params: Promise.resolve({ eventId: id }),
+      });
+    actor = owner;
+    expect((await dismiss(eventId)).status).toBe(403);
+    actor = billingStaff;
+    expect((await dismiss(OTHER)).status).toBe(404);
+    expect((await dismiss(eventId)).status).toBe(200);
+    expect((await dismiss(eventId)).status).toBe(404);
   });
 });
