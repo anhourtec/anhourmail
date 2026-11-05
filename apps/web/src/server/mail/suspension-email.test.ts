@@ -45,6 +45,17 @@ afterEach(() => {
 });
 
 describe("suspension notices", () => {
+  it("spam, abuse and phishing say the app passwords are gone (also on the lift); payment doesn't", () => {
+    const base = { to: "a@example.test", subject: "person" as const, consoleUrl: "http://c", site: "s" };
+    for (const reason of ["spam", "abuse", "phishing"] as const) {
+      expect(suspensionEmail({ ...base, state: "suspended", reason }).text).toContain("app passwords");
+      expect(suspensionEmail({ ...base, state: "restored", reason }).text).toContain("App passwords removed");
+    }
+    for (const state of ["suspended", "restored"] as const) {
+      expect(suspensionEmail({ ...base, state, reason: "payment" }).text).not.toMatch(/app passwords/i);
+    }
+  });
+
   it("account suspended: plain-words reason, mail kept, the appeal address; never a note", async () => {
     await sendSuspensionNotices(["owner@example.test", "admin@example.test"], {
       subject: "account",
