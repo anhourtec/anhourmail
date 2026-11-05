@@ -19,6 +19,7 @@ import {
 import type { ExportFile } from "./entity";
 import { buildNextExport, downloadExport, expireExports, listExports, requestExport } from "./export-service";
 import { deleteOwnLogin, loginDeletionPlan } from "./login-service";
+import { recordContactsImport } from "./contacts-import-service";
 import { recordMailExport } from "./mail-export-service";
 import type { ExportArchiver } from "./repository";
 
@@ -424,6 +425,26 @@ describe("mail export record", () => {
         meta: info,
       },
     ]);
+  });
+});
+
+describe("contacts import record", () => {
+  it("is written as the mailbox in its account's log with the format and counts only; an unknown address records nothing", async () => {
+    const d = world();
+    const info = { format: "csv" as const, created: 4, merged: 2, duplicates: 1, invalid: 1, overCap: 0 };
+    // Anything else the caller passes along never reaches the entry.
+    await recordContactsImport(d, " ME@acme.test ", { ...info, names: ["Sam Rivera"] } as typeof info, req);
+    await recordContactsImport(d, "nobody@acme.test", info, req);
+    const rows = audits(d, "data.contacts_imported");
+    expect(rows).toMatchObject([
+      {
+        scope: `account:${ACCOUNT_A}`,
+        actor: { type: "system", email: "me@acme.test" },
+        target: { type: "mailbox", id: M_OWNER, label: "me@acme.test" },
+        result: "success",
+      },
+    ]);
+    expect(rows[0]?.meta).toEqual(info);
   });
 });
 

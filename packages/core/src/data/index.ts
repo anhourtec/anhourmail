@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 export * from "./archive";
+export * from "./contacts-import-service";
 export * from "./deletion-service";
 export type * from "./entity";
 export * from "./export-service";
