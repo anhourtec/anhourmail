@@ -329,6 +329,10 @@ describe("scheduled purge", () => {
       target: { type: "mailbox", id: MBX, label: "kid@family.ca" },
       meta: { aliases: 1 },
     });
+    // The account's spam-training samples outlive it on the mail server: a job removes them, by id and destroy time.
+    expect(d.uow.state.jobs.filter((j) => j.kind === "mailbox.training_purge").map((j) => j.subjectId)).toEqual([
+      `s-${MBX}:${String(clock.now().getTime())}`,
+    ]);
     // Gone for good: restoring is now "not found", and another run has nothing to do.
     await expect(restoreMailbox(d, owner, ACCOUNT_A, MBX, req, fakeHasher)).rejects.toThrow(NotFoundError);
     expect(await purgeDueMailboxes(d, mail)).toEqual({ purged: 0, failed: 0, held: 0 });
@@ -344,7 +348,9 @@ describe("scheduled purge", () => {
     expect(box(d)?.status).toBe("deleting");
     expect(d.uow.state.aliases).toHaveLength(1);
     expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "platform.mailbox_purged", result: "failed" });
+    expect(d.uow.state.jobs.some((j) => j.kind === "mailbox.training_purge")).toBe(false); // rolled back with it
     expect(await purgeDueMailboxes(d, fakeMail())).toEqual({ purged: 1, failed: 0, held: 0 });
+    expect(d.uow.state.jobs.filter((j) => j.kind === "mailbox.training_purge")).toHaveLength(1);
   });
 
   it("skips a mailbox restored between listing and purging, and one whose row changed underneath", async () => {
