@@ -1,6 +1,6 @@
 # 05 — Webmail
 
-Last updated: 2026-11-04 (push sync: one upstream JMAP WebSocket per session and mailbox, fanned out over our own event stream, tabs sharing one stream, a 5-minute safety check and the 30-second check when push is down; shared mailboxes keep polling); 2026-11-04 (undo from a shared mailbox is stateless: it carries the send's sealed ticket, the end of the hold asks the mail server whether it was undone, and report reads pass the delegation gate; handoff item 21); 2026-11-04 (delivery problems: the send and a check after the undo hold read the submission's `deliveryStatus` and name the recipients the mail server refused, `POST /api/webmail/send/status`; handoff item 14); 2026-10-31 (remote images, ADR-0027: Safe senders load their images when the From is verified, in every Reading mode, checked on the server with a per-process cache and a Redis rules version; "Always for" / "Stop loading" change Safe senders from the message; the person's own Sent mail loads by itself; old fingerprints read-only; managed-script writes are compare-and-swap; first load: session, folders and the opened view's first window in one answer, streamed inside the page for the person's own mailbox, `GET /api/webmail/bootstrap` otherwise; this browser's copy of the first view painted at once; `Server-Timing` on the webmail API; customer mailboxes have no file storage; remote images: the person's own mail in Sent loads once with no unverified line or remember choice; sender name = the one source in the control plane, identities renamed to it; mailboxes shared with you: no "Shared with you" list or in-place switch in the UI — they open only with Open another mailbox, in a tab named after the mailbox, with Your mailbox in its account menu; no banner; a session left on a shared mailbox goes back to the own one; the account menu tidied (maintainer decision); forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
+Last updated: 2026-11-05 (contacts import, ADR-0030 §10: vCard 2.1–4.0 and CSV with a column-mapping step, merge by email that only fills empty fields, 5 MB and 5,000 cards per file, `data.contacts_imported`; Show original and the reader's details mark imported mail, its results the old provider's); 2026-11-04 (push sync: one upstream JMAP WebSocket per session and mailbox, fanned out over our own event stream, tabs sharing one stream, a 5-minute safety check and the 30-second check when push is down; shared mailboxes keep polling); 2026-11-04 (undo from a shared mailbox is stateless: it carries the send's sealed ticket, the end of the hold asks the mail server whether it was undone, and report reads pass the delegation gate; handoff item 21); 2026-11-04 (delivery problems: the send and a check after the undo hold read the submission's `deliveryStatus` and name the recipients the mail server refused, `POST /api/webmail/send/status`; handoff item 14); 2026-10-31 (remote images, ADR-0027: Safe senders load their images when the From is verified, in every Reading mode, checked on the server with a per-process cache and a Redis rules version; "Always for" / "Stop loading" change Safe senders from the message; the person's own Sent mail loads by itself; old fingerprints read-only; managed-script writes are compare-and-swap; first load: session, folders and the opened view's first window in one answer, streamed inside the page for the person's own mailbox, `GET /api/webmail/bootstrap` otherwise; this browser's copy of the first view painted at once; `Server-Timing` on the webmail API; customer mailboxes have no file storage; remote images: the person's own mail in Sent loads once with no unverified line or remember choice; sender name = the one source in the control plane, identities renamed to it; mailboxes shared with you: no "Shared with you" list or in-place switch in the UI — they open only with Open another mailbox, in a tab named after the mailbox, with Your mailbox in its account menu; no banner; a session left on a shared mailbox goes back to the own one; the account menu tidied (maintainer decision); forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
 notifications; quoted replies; compose image placeholders; first-sign-in password step; sign-in links not pre-filled).
 
 **Status (2026-10-22): slice 1 is built** — webmail sign-in (OAuth code flow + PKCE, tokens sealed server-side), the
@@ -73,7 +73,12 @@ and the access states at sign-in ("Who may use the webmail").
     and the first-sign-in gate, rate-limits on `webmailDownload`, and reads the source with the session's token for
     the active mailbox only (any other id is a 404). It shows Message ID, Created at (with "Delivered after …" from
     Date vs receivedAt), From, To, Cc, Subject and SPF / DKIM / DMARC (`server/webmail/original.ts`: only the
-    Authentication-Results our own authserv-ids added are trusted, `MAIL_AUTHSERV_ID` or the MX hosts), then the
+    Authentication-Results our own authserv-ids added are trusted, `MAIL_AUTHSERV_ID` or the MX hosts; for **imported
+    mail** — only when the first header is exactly our importer's marker (`isImportedCopy`, run-66 SA-66-01; a marker
+    lower down shows as not checked, and SMTP strips the marker) — (`originalChecks`, ADR-0030 §5) an "Imported" row says "Imported; these results come from the old provider,
+    not AnhourMail." and the rows show the first results header below our marker, display only — nothing verifies a
+    sender or loads images from them; the reader's details say "Imported; not checked by AnhourMail" instead of
+    mailed-by / signed-by), then the
     source as text (first 2 MB) with **Download original** (`/api/webmail/messages/:id/raw?download=1`, `.eml`) and
     **Copy to clipboard**. The source is never rendered as HTML. `/raw` without `download` still serves text/plain
     with nosniff and a sandbox CSP. **Print** (`/messages/:id/print`: escaped headers + the sanitised body, served with `sandbox` CSP — an opaque
@@ -221,13 +226,40 @@ frame-ancestors 'none'` unless the route sets its own sandboxing one). `next.con
   | `PATCH /api/webmail/contacts/:contactId` | edit                                                                            | `write`           |
   | `POST /api/webmail/contacts/move`        | move ≤ 500 ids to My contacts or Other contacts                                 | `write`           |
   | `PUT /api/webmail/contacts/settings`     | "Automatically save people I email"                                             | `write`           |
-  | `POST /api/webmail/contacts/import`      | .vcf import, ≤ 1 MB and ≤ 1,000 cards, parsed by the BFF                        | `webmailUpload`   |
+  | `POST /api/webmail/contacts/import`      | vCard or CSV import (`?format=`, CSV `?columns=`), ≤ 5 MB and ≤ 5,000 cards     | `webmailUpload`   |
   | `GET /api/webmail/contacts/export`       | .vcf download (all or `?ids=`), `sandbox` CSP, attachment                       | `webmailDownload` |
 
-- **vCard import** (`parseVcards`): vCard 3.0/4.0, unfolded; only FN, N, EMAIL, TEL, ORG, NOTE, BDAY and
-  CATEGORIES are read. PHOTO, URLs and everything else are ignored, so an import never fetches anything. Each card
-  goes through `ContactInput`; invalid or empty cards are skipped and counted. Linear-time parsing (no
-  backtracking regexes over whole lines). **Export** (`toVcards`) escapes every value.
+- **Import** (ADR-0030 §10, 2026-11-05): Contacts → ⋯ → **Import contacts** (`components/webmail/contacts-import.tsx`)
+  takes a `.vcf` or `.csv` file, up to `IMPORT.contactsMaxBytes` (5 MB) and `IMPORT.contactsMaxCards` (5,000) per
+  file — a file with more is refused, never cut — still capped by the mailbox's 5,000 cards. Own mailbox only (a
+  mailbox shared with the person is refused by the delegation gate and again by `ownMailbox`), pinned to the account
+  the tab shows. The answer is `{ format, created, merged, duplicates, invalid, overCap }`; audited
+  `data.contacts_imported` in the mailbox's account, written as the mailbox (`system` actor named by its address, like
+  `data.mail_exported`), meta = format and counts only, also when writing stopped part-way.
+  - **vCard** (`parseVcards`): 2.1 (quoted-printable values with soft line breaks and CHARSET decoded; bare `;HOME;CELL`
+    type parameters), 3.0 and 4.0, unfolded; only FN, N, EMAIL, TEL, ORG, NOTE, BDAY and CATEGORIES are read. PHOTO,
+    URLs and everything else are ignored, so an import never fetches anything. UTF-8 (a BOM or UTF-16 with a BOM is
+    read too; other bytes leniently as before). Each card goes through `ContactInput`; invalid or empty cards are
+    counted. Linear-time parsing (no backtracking regexes over whole lines). **Export** (`toVcards`) escapes every value.
+  - **CSV** (`server/webmail/contacts-csv.ts`, shared by the browser and the BFF; parser `packages/shared/src/csv.ts`):
+    `,` `;` or tab, UTF-8 with or without a BOM or UTF-16 with a BOM; anything else is refused with "Save it as
+    UTF-8". The browser parses the file for the **mapping step**: one row per column with examples from the first five
+    rows and a select holding the detected field (`detectCsvColumns`) or "Don't import". The request carries the
+    mapping as `?columns=given,,emails,…` (field names only); the BFF parses the whole file again with it and never
+    trusts the preview. `csvContacts` (`server/webmail/contacts-import.ts`): several address, phone and label columns
+    add up (cells split on `:::`, `;` and `,` for addresses and labels), labels from headers ("Home Phone" → home,
+    "Mobile" → mobile), a single field mapped twice takes the first non-empty cell, a leading `*` group (an exporting
+    app's system group) is dropped, birthdays only as `YYYY-MM-DD` / `--MM-DD` (otherwise left out, not an error).
+  - **Merge by email** (`planContactsImport`): addresses matched case-insensitively against every card's `emails` (all
+    books, read in 500-card batches through `#allCards`, not the lagging `email` filter) and earlier contacts of the
+    same file. A match only fills what's empty — more addresses and phones (≤ 10 each, an address already on another
+    card is never copied), company, notes, birthday, labels (≤ 10), a name when the card has none — counted `merged`,
+    or `duplicates` when it adds nothing. No address: a duplicate when a card has the same full name (case and spaces
+    ignored) and a phone with the same digits. Existing cards get a **patch of additions only**: new entries under
+    unused keys (`emails/ie1`, `keywords/<label>` as JSON pointers; the whole map only where the card had none), so
+    nothing on the card is replaced (verified on the pinned server, `contacts-import.int.test.ts`). New cards go to My
+    contacts; creates and updates go in `ContactCard/set` batches of 100. Cards past the mailbox's room are `overCap`;
+    a card the server refuses counts as `invalid` with what merged into it.
 - **Auto-save after the send is released** (server-side): `send` schedules a check for `UNDO_SECONDS` + 2 s later
   (an unref'd in-process timer, so the send response never waits). The check reads the submission's `undoStatus`:
   `canceled` (undone) saves nobody, `pending` checks again every 5 s (three times at most), anything else saves every
