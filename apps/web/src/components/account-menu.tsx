@@ -29,7 +29,14 @@ export type MenuUser = {
   /** The webmail sign-in on its own origin, with the address pre-filled (never a credential; ADR-0018). */
   webmailHref?: string;
 };
-export type MenuAccount = { id: string; name: string; role: string; href: string };
+export type MenuAccount = {
+  id: string;
+  name: string;
+  role: string;
+  href: string;
+  /** The account's Billing page when the person's role includes `billing.read`; null otherwise. */
+  billingHref: string | null;
+};
 
 export function initials(name: string, email: string): string {
   const base = name.trim() !== "" ? name.trim() : (email.split("@")[0] ?? "");
@@ -103,7 +110,6 @@ const itemClass =
 
 /**
  * The person's menu: who they are, their accounts (current one ticked), then account-wide pages and sign-out.
- * Pages not built yet are listed as "Soon" and can't be chosen.
  */
 export function AccountMenu({
   user,
@@ -119,14 +125,7 @@ export function AccountMenu({
   const pathname = usePathname();
   const currentId = /^\/accounts\/([^/]+)/.exec(pathname)?.[1] ?? null;
   const { signOut, failed: signOutError } = useSignOut();
-
-  const soon = (label: string, Icon: typeof CircleUser) => (
-    <span role="menuitem" aria-disabled="true" className={`${itemClass} cursor-default text-muted-foreground`}>
-      <Icon className="size-4" aria-hidden />
-      <span className="flex-1">{label}</span>
-      <span className="am-micro">Soon</span>
-    </span>
-  );
+  const billingHref = (accounts.find((a) => a.id === currentId) ?? accounts[0])?.billingHref ?? null;
 
   return (
     <div role="menu" aria-label="Your account" onKeyDown={menuKeys} className="flex w-72 flex-col">
@@ -178,8 +177,13 @@ export function AccountMenu({
         <FileArchive className="size-4" aria-hidden />
         Your data
       </Link>
-      {/* Billing belongs to an account: staff without one (roles.md) don't get the entry. */}
-      {accounts.length > 0 && soon("Billing", CreditCard)}
+      {/* Billing belongs to an account: the current one's (or the first's), only for roles that can see it. */}
+      {billingHref && (
+        <Link role="menuitem" href={billingHref} onClick={onNavigate} className={itemClass}>
+          <CreditCard className="size-4" aria-hidden />
+          Billing
+        </Link>
+      )}
       {user.webmailHref && (
         <a role="menuitem" href={user.webmailHref} className={itemClass} onClick={onNavigate}>
           <Mail className="size-4" aria-hidden />

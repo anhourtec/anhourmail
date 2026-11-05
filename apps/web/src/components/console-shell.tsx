@@ -91,17 +91,20 @@ export async function ConsoleShell({
   const compact = jar.get(SIDEBAR_COOKIE)?.value === "compact";
   const current =
     accountId && actor.memberships.some((m) => m.accountId === accountId) ? accountId : actor.memberships[0]?.accountId;
-  const accounts: MenuAccount[] = actor.memberships.map((m) => ({
-    id: m.accountId,
-    name: names[m.accountId] ?? "Account",
-    // Staff acting in the account hold a read-only role there (ADR-0023); say what it is, not "Auditor".
-    role: actor.actingAs ? "Anhourtec support (read-only)" : ROLE_LABELS[`account:${m.role}`],
-    href:
-      navTree(actor, m.accountId)
-        .filter((s) => s.id !== "platform")
-        .flatMap((s) => s.items)
-        .find((i) => i.href)?.href ?? "/",
-  }));
+  const accounts: MenuAccount[] = actor.memberships.map((m) => {
+    const items = navTree(actor, m.accountId)
+      .filter((s) => s.id !== "platform")
+      .flatMap((s) => s.items);
+    return {
+      id: m.accountId,
+      name: names[m.accountId] ?? "Account",
+      // Staff acting in the account hold a read-only role there (ADR-0023); say what it is, not "Auditor".
+      role: actor.actingAs ? "Anhourtec support (read-only)" : ROLE_LABELS[`account:${m.role}`],
+      href: items.find((i) => i.href)?.href ?? "/",
+      // The navigation's own Billing entry (shown only with `billing.read`), so the menu and the sidebar agree.
+      billingHref: items.find((i) => i.href === `/accounts/${m.accountId}/billing`)?.href ?? null,
+    };
+  });
   const staffRole = actor.platformRoles[0];
   const photo = await ownAvatar(container().deps, actor);
   // A suspended account (staff, `platform.account.suspend`): its people see the notice instead of its pages.
