@@ -16,7 +16,10 @@ import type { BreachedPasswords, BreachVerdict } from "@anhourmail/core/security
 
 export const PWNED_PASSWORDS_RANGE_URL = "https://api.pwnedpasswords.com/range/";
 
-/** The service's padded answers are well under 64 KiB; anything far larger is not an answer we trust. */
+/**
+ * The service's padded answers are well under 64 KiB; anything far larger is not an answer we trust. The body is read
+ * as a stream and cut off here, so a huge or endless answer can't fill the server's memory.
+ */
 const MAX_BODY_BYTES = 256 * 1024;
 
 export type WarnLogger = { warn(msg: string, ctx?: Record<string, unknown>): void };
@@ -55,6 +58,29 @@ export function countInRange(body: string, suffix: string): number | null {
   return seenLine ? 0 : null;
 }
 
+/**
+ * The body as UTF-8, read chunk by chunk so at most about `max` bytes are ever held: once it passes `max` the rest is
+ * cancelled and the answer is null (a declared length can be absent or wrong, so it is never trusted alone).
+ */
+export async function readCapped(res: Response, max: number): Promise<string | null> {
+  if (!res.body) return "";
+  const reader: ReadableStreamDefaultReader<Uint8Array> = res.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytes += value.byteLength;
+    if (bytes > max) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
 export function pwnedPasswords(opts: PwnedPasswordsOptions): BreachedPasswords {
   const go = opts.fetch ?? fetch;
   const timeoutMs = opts.timeoutMs ?? BREACHED_PASSWORD.timeoutMs;
@@ -89,8 +115,8 @@ export function pwnedPasswords(opts: PwnedPasswordsOptions): BreachedPasswords {
           await res.body?.cancel().catch(() => undefined);
           return unknown("too_large", started);
         }
-        const body = await res.text();
-        if (body.length > MAX_BODY_BYTES) return unknown("too_large", started);
+        const body = await readCapped(res, MAX_BODY_BYTES);
+        if (body === null) return unknown("too_large", started);
         const count = countInRange(body, suffix);
         if (count === null) return unknown("malformed", started);
         return count > 0 ? "breached" : "clean";
