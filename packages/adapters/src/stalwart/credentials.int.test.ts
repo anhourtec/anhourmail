@@ -325,8 +325,9 @@ describe("the credential split on Stalwart", () => {
       "svc-audit:ApiKey",
       "svc-ops:ApiKey",
       "svc-provision:ApiKey+ApiKey", // the second is the "wider" key of the first test
+      "svc-train:ApiKey",
     ]);
-    expect(await reconcileServiceAccounts(deps, inventory, expected)).toMatchObject({ checked: 3, clean: true });
+    expect(await reconcileServiceAccounts(deps, inventory, expected)).toMatchObject({ checked: 4, clean: true });
     // The infrastructure domain is also the platform domain (free addresses, ADR-0021): a customer mailbox and the
     // system mailboxes there, each with a password, are neither service accounts nor drift.
     for (const name of ["jane.free", "no-reply", "postmaster"]) {
@@ -341,8 +342,9 @@ describe("the credential split on Stalwart", () => {
       "svc-audit",
       "svc-ops",
       "svc-provision",
+      "svc-train",
     ]);
-    expect(await reconcileServiceAccounts(deps, inventory, expected)).toMatchObject({ checked: 3, clean: true });
+    expect(await reconcileServiceAccounts(deps, inventory, expected)).toMatchObject({ checked: 4, clean: true });
     // No infrastructure domain configured must not pass with checked: 0.
     expect(
       await reconcileServiceAccounts(deps, stalwartServiceAccounts(keys.provisioning, []), expected),

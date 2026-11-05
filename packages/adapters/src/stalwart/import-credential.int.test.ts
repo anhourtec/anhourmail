@@ -233,9 +233,11 @@ describe("mail import credential on Stalwart (ADR-0030)", () => {
         expiresAt: stored?.expiresAt ? new Date(stored.expiresAt) : null,
       }),
     ).toBe(true);
-    // The provisioning key sees it in the account's credential list (what the revoke job and the reconciler read).
+    // The provisioning key sees it in the account's credential list (what the revoke job and the reconciler read),
+    // listed apart from app passwords people hold.
     const inventory = await keys.provisioning.credentialInventory(accountId);
-    expect(inventory.appPasswords.map((a) => a.id)).toContain(made.id);
+    expect(inventory.importCredentials.map((a) => a.id)).toContain(made.id);
+    expect(inventory.appPasswords.map((a) => a.id)).not.toContain(made.id);
   });
 
   it("creates folders, appends keeping dates and keywords, doesn't de-duplicate and can't search Message-IDs", async () => {
