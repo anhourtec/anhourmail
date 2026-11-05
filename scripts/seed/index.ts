@@ -57,6 +57,7 @@ import {
   INVITED,
   type SeedPerson,
   STAFF_DOMAIN,
+  SUSPENDED_ACCOUNT,
   UNVERIFIED_DOMAIN,
 } from "./people";
 
@@ -361,6 +362,16 @@ if (demo) {
     accountIds.set(key, id);
     if (created) newAccounts.add(key);
   }
+  // An account staff suspended, as `suspendAccount` leaves it (it has no mailbox to hold).
+  await db
+    .update(schema.customerAccount)
+    .set({
+      status: "suspended",
+      suspensionReason: SUSPENDED_ACCOUNT.reason,
+      suspensionNote: SUSPENDED_ACCOUNT.note,
+      suspendedAt: new Date(),
+    })
+    .where(eq(schema.customerAccount.id, accountIds.get(SUSPENDED_ACCOUNT.key) ?? ""));
 }
 
 const passwords = new Map<string, string>();
@@ -748,6 +759,10 @@ if (demo) {
       detail: `\`${INVITED.email}\` invited to Demo Family as member — open the link signed out to create the login and join: ${APP_URL}/invite/${inviteToken}`,
     },
     { label: "Suspended", detail: `\`suspended@${ACCOUNTS.group.domain}\` (see the Demo Group table)` },
+    {
+      label: "Suspended account",
+      detail: `\`suspended-owner@${FREE_DOMAIN}\` owns "${ACCOUNTS.suspended.name}" (see the Customer: ${ACCOUNTS.suspended.name} table)`,
+    },
     {
       label: "Unverified domain",
       detail: `\`${UNVERIFIED_DOMAIN.name}\` on Demo Family, status pending_dns, ${records.filter((r) => r.required).length} required records`,
