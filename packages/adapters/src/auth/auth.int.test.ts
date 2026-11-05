@@ -528,6 +528,10 @@ describe("console sign-in factors at rest", () => {
         .where(eq(schema.authSession.id, soloSession?.id ?? ""));
       const enabled = await s2("POST", "/two-factor/enable", { password });
       const key = base32(new URL(String(enabled.json?.totpURI)).searchParams.get("secret") ?? "");
+      // The codes for step - 1 and step + 1 are used below and the server accepts one step either side of now: start
+      // early in a 30-second step so the clock can't move on to step + 1 meanwhile (step - 1 would then be refused).
+      const intoStep = Date.now() % 30_000;
+      if (intoStep > 20_000) await new Promise((r) => setTimeout(r, 30_000 - intoStep + 50));
       const step = Math.floor(Date.now() / 30_000);
       expect((await s2("POST", "/two-factor/verify-totp", { code: totpAt(key, step) })).status).toBe(200);
       const after = await sessionsOf(solo.id);
