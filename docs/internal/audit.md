@@ -33,7 +33,7 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `trust` | `trust.tier_changed`, `trust.limits_changed`, `trust.restricted`, `trust.suspended`, `trust.unsuspended` |
 | `abuse` | `abuse.report_received`, `abuse.report_resolved` |
 | `staff` | `staff.role_granted`, `staff.role_revoked`, `staff.act_as_started`, `staff.act_as_renewed`, `staff.act_as_ended`, `staff.account_viewed`, `staff.credentials_reset` |
-| `data` | `data.export_requested`, `data.export_ready`, `data.export_downloaded`, `data.export_expired`, `data.mail_exported`, `data.import_started`, `data.import_finished`, `data.deletion_requested`, `data.deletion_cancelled`, `data.deletion_started`, `data.deleted` |
+| `data` | `data.export_requested`, `data.export_ready`, `data.export_downloaded`, `data.export_expired`, `data.mail_exported`, `data.import_started`, `data.import_paused`, `data.import_resumed`, `data.import_cancelled`, `data.import_blocked`, `data.import_sync_stopped`, `data.import_finished`, `data.import_credentials_wiped`, `data.deletion_requested`, `data.deletion_cancelled`, `data.deletion_started`, `data.deleted` |
 | `platform` | `platform.settings_changed`, `platform.admin_bootstrapped`, `platform.secret_changed`, `platform.stalwart_upgraded`, `platform.provisioning_failed`, `platform.reconciler_drift`, `platform.mailboxes_requeued`, `platform.mail_rules_upgraded`, `platform.mailbox_purged`, `platform.audit_chain_broken` |
 | `audit` | `audit.exported` |
 | `shared_mailbox` | `shared_mailbox.created`, `shared_mailbox.deleted`, `shared_mailbox.member_added`, `shared_mailbox.member_removed` |
@@ -335,6 +335,21 @@ console session is gone or no longer meets a sign-in requirement; then the actor
 `step_up_required`, or `failed` when the mail server refused or couldn't be reached. Never the code, the verifier, the
 challenge or the throwaway credential. A code nobody knows (or one already used) writes no row: it names nobody
 (rate-limited, logged).
+
+Mail import (ADR-0030; `packages/core/src/imports`), all in the mailbox's account log, metadata only — `importId`,
+`mailboxId`, the source's registrable domain (`sourceDomain`) and port, options, counts, codes; never the source
+username, a secret, folder names, subjects or Message-IDs: `data.import_started` (the person; meta `options`,
+`requestedAs`; `denied` `act_as` / `forbidden` / `step_up_required`, `failed` `not_found`, `mailbox_unavailable`,
+`import_running`, `bad_request`, or a mint error), `data.import_paused` (meta `immediate`), `data.import_resumed` (meta
+`credentialRenewed`, `sourcePasswordChanged`, or `alreadyRunning`), `data.import_cancelled` (the person with reason
+`person`, or written with the mailbox change that ended it: `mailbox_suspended`, `mailbox_deleted`, `mailbox_handover`),
+`data.import_blocked` (system `importer`; meta `reason`, and the sizes for `quota_full`), `data.import_sync_stopped`
+(the person with reason `person`, or system `import-expiry` with `window_ended`), `data.import_finished` (system
+`importer` or `import-expiry`; meta `status`, `errorCode`, counts) and `data.import_credentials_wiped` (system
+`provisioning` when the revoke job ran: meta `credentialRevoked`, `sealedCleared`; `gaveUp` with the
+`platform.provisioning_failed` alert when it gave up; system `import-expiry` with `leftover` for a terminal row that
+still held a secret). The runner's checkpoints and the training-sample clean-ups aren't audited (progress, not
+changes of intent); the clean-up's failures alert through `platform.provisioning_failed`.
 
 Data export and account deletion (ADR-0025; `packages/core/src/data`). Exports: `data.export_requested` (the
 requester; account exports in the account's log with the account as target, personal ones in the platform log with
