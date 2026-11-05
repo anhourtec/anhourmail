@@ -11,6 +11,7 @@ import { billingDate } from "@/components/billing/labels";
 import { ListEmpty } from "@/components/console/data-list";
 import { listClass } from "@/components/console/list-classes";
 import { billingContext } from "@/server/billing";
+import { DismissOrphanControl } from "@/components/platform/billing-controls";
 import { requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
 
@@ -43,6 +44,8 @@ export default async function PlatformBillingPage() {
   const actor = await requireUser();
   if (!can(actor, "platform.billing.manage")) notFound();
   const s = await platformBillingSummary(container().deps, billingContext(), actor);
+  // Staff acting as someone see the page and change nothing (the server refuses too).
+  const canAct = actor.actingAs === undefined;
   return (
     <>
       <PageHeader
@@ -50,6 +53,27 @@ export default async function PlatformBillingPage() {
         description="Accounts whose billing needs attention, and payment events we couldn't match to an account. Open an account for its billing details, grants, refunds and its address ceiling."
         breadcrumbs={[{ label: "Home", href: "/" }, { label: "Platform billing" }]}
       />
+      {s.catalogue && s.catalogue.drift.length > 0 && (
+        <div role="alert" className="flex max-w-3xl flex-col gap-1.5 rounded-lg border border-destructive px-4 py-3">
+          <p className="font-medium">
+            The payment processor&apos;s prices don&apos;t match the published plans: new checkouts and plan or add-on
+            changes are refused until they do.
+          </p>
+          <ul className="am-small list-disc pl-5">
+            {s.catalogue.drift.map((d) => (
+              <li key={`${d.item}-${d.problem}`}>
+                <span className="font-mono text-[13px]">{d.item}</span>: {d.problem}
+              </li>
+            ))}
+          </ul>
+          <p className="am-small">
+            Since <span className="am-num">{billingDate.format(s.catalogue.driftSince ?? s.catalogue.checkedAt)}</span>;
+            last checked <span className="am-num">{billingDate.format(s.catalogue.checkedAt)}</span>. Fix the prices at
+            the processor (the plan facts are the source); the next daily check, or a worker restart, lifts it. Existing
+            subscriptions keep syncing.
+          </p>
+        </div>
+      )}
       <p className="am-small">
         {s.available ? "Billing is on" : "Billing is off on this deployment"}; paid plans are{" "}
         {s.status === "open" ? "open" : "not open to customers yet"}.{" "}
@@ -97,7 +121,7 @@ export default async function PlatformBillingPage() {
         </h2>
         <p className="am-small max-w-[80ch]">
           Signed events from the payment processor whose customer isn&apos;t one of ours yet (a dispute is matched
-          through its payment by the next sync). Kept until matched.
+          through its payment by the next sync). Kept until matched or dismissed.
         </p>
         {s.orphans.length === 0 ? (
           <ListEmpty>None.</ListEmpty>
@@ -115,6 +139,11 @@ export default async function PlatformBillingPage() {
                   <th scope="col" className={`${listClass.th} hidden sm:table-cell`}>
                     Received
                   </th>
+                  {canAct && (
+                    <th scope="col" className={listClass.th}>
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -125,6 +154,11 @@ export default async function PlatformBillingPage() {
                     <td className={`${listClass.td} am-num hidden sm:table-cell`}>
                       {billingDate.format(o.receivedAt)}
                     </td>
+                    {canAct && (
+                      <td className={listClass.td}>
+                        <DismissOrphanControl eventId={o.id} />
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

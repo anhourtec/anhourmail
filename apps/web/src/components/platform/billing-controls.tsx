@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 "use client";
 
-import { Gift, RotateCcw, XCircle } from "lucide-react";
+import { EyeOff, Gift, RefreshCw, RotateCcw, ShieldCheck, XCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 
@@ -277,5 +277,79 @@ export function CeilingOverrideControl({
         </p>
       )}
     </form>
+  );
+}
+
+/**
+ * Staff: sync the account with the payment provider now (no step-up: it only asks the provider for the truth, and the
+ * sync records what it finds).
+ */
+export function ResyncControl({ accountId }: { accountId: string }) {
+  const { busy, error, done, send } = useStaffRequest(
+    `/api/platform/accounts/${encodeURIComponent(accountId)}/billing/resync`,
+    "POST",
+  );
+  return (
+    <div className="flex flex-col gap-1.5">
+      <button type="button" disabled={busy} onClick={() => void send({})} className={`${secondaryButtonClass} w-fit`}>
+        <RefreshCw className="size-4" aria-hidden />
+        {busy ? "Asking…" : "Re-sync now"}
+      </button>
+      {error && (
+        <p role="alert" className="am-small text-destructive">
+          {error}
+        </p>
+      )}
+      {done && (
+        <p role="status" className="am-small">
+          Sync queued. Reload in a few seconds for the result.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Staff: clear the disputes shown that keep the account's sending paused, a lost one included. Sends the ids shown, so
+ * a dispute that arrived since the page loaded is never cleared unseen (the server answers 409 and the page reloads).
+ */
+export function ClearDisputesControl({ accountId, disputeIds }: { accountId: string; disputeIds: readonly string[] }) {
+  return (
+    <ConfirmAction
+      label="Clear disputes"
+      icon={<ShieldCheck className="size-4" aria-hidden />}
+      title="Clear this account's disputes"
+      confirmLabel="Clear them"
+      url={`/api/platform/accounts/${encodeURIComponent(accountId)}/billing/disputes/clear`}
+      body={() => ({ disputeIds })}
+      why={WHY}
+      done="Cleared. Sending comes back once the account's billing syncs, within a minute."
+    >
+      <p>
+        The {disputeIds.length === 1 ? "dispute" : "disputes"} listed above stop pausing the account&apos;s sending, now
+        and later, whatever the payment processor reports about them. A new dispute still pauses it. Clear a lost
+        dispute only after the account has paid what it owes, or when you&apos;ve decided it doesn&apos;t need to.
+      </p>
+    </ConfirmAction>
+  );
+}
+
+/** Staff: dismiss a payment event no account could be matched to. */
+export function DismissOrphanControl({ eventId }: { eventId: string }) {
+  return (
+    <ConfirmAction
+      label="Dismiss"
+      icon={<EyeOff className="size-4" aria-hidden />}
+      title="Dismiss this event"
+      confirmLabel="Dismiss it"
+      url={`/api/platform/billing/orphans/${encodeURIComponent(eventId)}/dismiss`}
+      why={WHY}
+      done="Dismissed."
+    >
+      <p>
+        It leaves this list and is no longer matched to an account by later syncs. Dismiss only events you&apos;ve
+        checked at the payment processor.
+      </p>
+    </ConfirmAction>
   );
 }

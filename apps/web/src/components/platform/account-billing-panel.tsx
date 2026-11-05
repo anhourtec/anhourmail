@@ -9,7 +9,14 @@ import { listClass } from "../console/list-classes";
 import { StatusText } from "../console/status-text";
 import { CopyValue } from "../copy-value";
 
-import { CeilingOverrideControl, EndGrantControl, GrantPlanControl, StaffRefundControl } from "./billing-controls";
+import {
+  CeilingOverrideControl,
+  ClearDisputesControl,
+  EndGrantControl,
+  GrantPlanControl,
+  ResyncControl,
+  StaffRefundControl,
+} from "./billing-controls";
 
 const at = (d: Date | null) => (d ? <span className="am-num">{billingDate.format(d)}</span> : "—");
 
@@ -141,6 +148,15 @@ export function AccountBillingPanel({
       {canAct && (
         <div className="flex flex-col gap-4">
           <div className="flex flex-wrap items-start gap-3">
+            {view.can.resync && <ResyncControl accountId={accountId} />}
+            {view.can.clearDisputes && (
+              <ClearDisputesControl
+                accountId={accountId}
+                disputeIds={view.disputes
+                  .filter((d) => d.status === "open" || d.status === "lost")
+                  .map((d) => d.disputeId)}
+              />
+            )}
             {view.can.endGrant && <EndGrantControl accountId={accountId} />}
             {view.can.refund && <StaffRefundControl accountId={accountId} />}
           </div>
