@@ -44,6 +44,8 @@ export type ImportView = {
   id: string;
   mailboxId: string;
   address: string;
+  /** The admins' CSV batch it was started from, or null. */
+  batchId: string | null;
   requestedAs: "own" | "admin";
   /** The viewer started it (an admin-started import into someone's mailbox shows false to that person). */
   startedByYou: boolean;
@@ -83,7 +85,14 @@ export type ImportFolderView = {
   failed: number;
 };
 
-export type ImportDetail = ImportView & { folders: ImportFolderView[] };
+export type ImportDetail = ImportView & {
+  folders: ImportFolderView[];
+  /**
+   * The mailbox's domain is one of the account's own and active (MX verified): mail for it now arrives here, so a
+   * syncing import can be stopped (ADR-0030 §7). False for the platform's free addresses.
+   */
+  domainActive: boolean;
+};
 
 /** What the app wires in: the operations-key issuer, the key ring, and (development only) the sources allowed in. */
 export type ImportContext = {
@@ -100,20 +109,21 @@ export type ImportNotice = { to: string; address: string; startedBy: string; sou
 const ownedBy = (actor: Actor, m: Pick<Mailbox, "userId">): boolean =>
   actor.kind === "user" && m.userId !== null && m.userId === actor.userId;
 
-type Access = "own" | "admin" | null;
+export type Access = "own" | "admin" | null;
 
 /** How the actor may act on this mailbox's imports: as its person, as an admin with `.any`, or not at all. */
-async function accessTo(repos: Repositories, actor: Actor, accountId: string, m: Mailbox): Promise<Access> {
+export async function accessTo(repos: Repositories, actor: Actor, accountId: string, m: Mailbox): Promise<Access> {
   if (ownedBy(actor, m) && can(actor, "mailbox.import.own", accountId)) return "own";
   if (!can(actor, "mailbox.import.any", accountId)) return null;
   return lifecycleLocked(actor, accountId, m, await repos.access.members(accountId)) ? null : "admin";
 }
 
-function view(i: MailImport, address: string, actor: Actor): ImportView {
+export function view(i: MailImport, address: string, actor: Actor): ImportView {
   return {
     id: i.id,
     mailboxId: i.mailboxId,
     address,
+    batchId: i.batchId,
     requestedAs: i.requestedAs,
     startedByYou: actor.kind === "user" && i.requestedBy === actor.userId,
     sourceHost: i.sourceHost,
@@ -144,7 +154,7 @@ function view(i: MailImport, address: string, actor: Actor): ImportView {
  * Audit metadata of an import: ids, the source's registrable domain (`finishedSourceHost`; the full host name is a
  * redacted log key, and finished history keeps only the domain too) and port. Never the username or a secret.
  */
-const auditMeta = (i: Pick<MailImport, "id" | "mailboxId" | "sourceHost" | "sourcePort">) => ({
+export const auditMeta = (i: Pick<MailImport, "id" | "mailboxId" | "sourceHost" | "sourcePort">) => ({
   importId: i.id,
   mailboxId: i.mailboxId,
   sourceDomain: finishedSourceHost(i.sourceHost),
@@ -205,6 +215,68 @@ async function lockedMailbox(
 }
 
 /**
+ * The part of a start that writes (shared by `startImport` and the admins' batch): under the account and credential
+ * locks re-reads the mailbox and the actor's role, refuses a second live import (409 `import_running`), mints the
+ * IMAP-only destination credential (reported through `onMint` at once, so a later failure can destroy it), seals both
+ * secrets and records the import (`queued`). Returns the row, the fresh mailbox and, for an admin starting one into
+ * someone else's mailbox, the notice to email that person.
+ */
+export async function createImport(
+  repos: Repositories,
+  ctx: ImportContext,
+  actor: UserActor,
+  accountId: string,
+  m: Mailbox,
+  as: "own" | "admin",
+  source: { host: string; port: MailImport["sourcePort"]; username: string; secret: string },
+  options: MailImportOptions,
+  now: Date,
+  opts: { batchId: string | null; onMint: (minted: { stalwartId: string; id: string }) => void },
+): Promise<{ row: MailImport; fresh: Mailbox & { stalwartId: string }; notice: ImportNotice | null }> {
+  const fresh = await lockedMailbox(repos, actor, accountId, m, as);
+  if (await repos.imports.activeForMailbox(fresh.id)) throw new ImportRefusedError("import_running");
+  const id = randomUUID();
+  const expiresAt = credentialExpiry(now, options.sync);
+  const credential = await ctx.issuer.mint(fresh.stalwartId, expiresAt);
+  opts.onMint({ stalwartId: fresh.stalwartId, id: credential.id });
+  const inserted = await repos.imports.insert({
+    id,
+    accountId,
+    mailboxId: fresh.id,
+    batchId: opts.batchId,
+    requestedBy: actor.userId,
+    requestedAs: as,
+    sourceKind: "imap_password",
+    sourceHost: source.host,
+    sourcePort: source.port,
+    sourceUsername: source.username,
+    sourceSecret: sealSourceSecret(ctx.sealer, id, source.secret),
+    destinationSecret: sealDestinationSecret(ctx.sealer, id, credential.secret),
+    destinationCredentialId: credential.id,
+    destinationCredentialCreatedAt: credential.createdAt,
+    destinationCredentialExpiresAt: expiresAt,
+    options,
+    syncUntil: options.sync ? new Date(now.getTime() + IMPORT.syncWindowDays * DAY) : null,
+    createdAt: now,
+    runAfter: now,
+  });
+  if (inserted === "import_running") throw new ImportRefusedError("import_running");
+  const row = await repos.imports.get(accountId, id);
+  if (!row) throw new NotFoundError();
+  const person =
+    as === "admin" && fresh.userId !== null && fresh.userId !== actor.userId
+      ? (await repos.access.members(accountId)).find((x) => x.userId === fresh.userId)
+      : undefined;
+  return {
+    row,
+    fresh,
+    notice: person
+      ? { to: person.email, address: fresh.address, startedBy: actor.email, sourceHost: source.host, at: now }
+      : null,
+  };
+}
+
+/**
  * Starts an import into one of the account's mailboxes (ADR-0030 §1–§2, §13): checks the source, needs a fresh
  * step-up on this console session, mints the IMAP-only destination credential under the mailbox's credential lock,
  * seals both secrets and records the import (`queued`) for the importer. One live import per mailbox (409
@@ -256,46 +328,14 @@ export async function startImport(
         if (!session.sessionId || !(await repos.security.stepUpFresh(actor.userId, session.sessionId, now))) {
           return refuse("step_up_required", m.address);
         }
-        const fresh = await lockedMailbox(repos, actor, accountId, m, as);
-        if (await repos.imports.activeForMailbox(fresh.id)) throw new ImportRefusedError("import_running");
-        const id = randomUUID();
-        const credential = await ctx.issuer.mint(fresh.stalwartId, credentialExpiry(now, options.sync));
-        minted = { stalwartId: fresh.stalwartId, id: credential.id };
-        const inserted = await repos.imports.insert({
-          id,
-          accountId,
-          mailboxId: fresh.id,
+        const { row, fresh, notice } = await createImport(repos, ctx, actor, accountId, m, as, source, options, now, {
           batchId: null,
-          requestedBy: actor.userId,
-          requestedAs: as,
-          sourceKind: "imap_password",
-          sourceHost: source.host,
-          sourcePort: source.port,
-          sourceUsername: source.username,
-          sourceSecret: sealSourceSecret(ctx.sealer, id, source.secret),
-          destinationSecret: sealDestinationSecret(ctx.sealer, id, credential.secret),
-          destinationCredentialId: credential.id,
-          destinationCredentialCreatedAt: credential.createdAt,
-          destinationCredentialExpiresAt: credentialExpiry(now, options.sync),
-          options,
-          syncUntil: options.sync ? new Date(now.getTime() + IMPORT.syncWindowDays * DAY) : null,
-          createdAt: now,
-          runAfter: now,
-        });
-        if (inserted === "import_running") throw new ImportRefusedError("import_running");
-        const row = await repos.imports.get(accountId, id);
-        if (!row) throw new NotFoundError();
-        const person =
-          as === "admin" && fresh.userId !== null && fresh.userId !== actor.userId
-            ? (await repos.access.members(accountId)).find((x) => x.userId === fresh.userId)
-            : undefined;
-        return {
-          result: {
-            import: view(row, fresh.address, actor),
-            notice: person
-              ? { to: person.email, address: fresh.address, startedBy: actor.email, sourceHost: source.host, at: now }
-              : null,
+          onMint: (made) => {
+            minted = made;
           },
+        });
+        return {
+          result: { import: view(row, fresh.address, actor), notice },
           target: { id: fresh.id, label: fresh.address },
           meta: { ...auditMeta(row), options, requestedAs: as },
         };
@@ -343,6 +383,45 @@ export async function listImports(deps: Deps, actor: Actor, accountId: string): 
   });
 }
 
+/** A mailbox the "New import" form offers, with why it can't take one right now (null: it can). */
+export type ImportTarget = {
+  mailboxId: string;
+  address: string;
+  as: "own" | "admin";
+  /** Someone else's mailbox with a person (who is emailed when an admin starts one); false for shared ones. */
+  hasPerson: boolean;
+  unavailable: "mailbox_unavailable" | "import_running" | null;
+};
+
+/**
+ * The mailboxes the actor may import into (their own with `mailbox.import.own`; any they may manage with
+ * `mailbox.import.any`), own ones first, each with the reason it can't take an import now. Also whether the actor may
+ * run the admins' CSV batch.
+ */
+export async function importTargets(
+  deps: Deps,
+  actor: Actor,
+  accountId: string,
+): Promise<{ targets: ImportTarget[]; canBatch: boolean }> {
+  authorize(actor, "mailbox.import.own", accountId);
+  return deps.uow.run(async (r) => {
+    const targets: ImportTarget[] = [];
+    for (const m of await r.mailboxes.listByAccount(accountId)) {
+      if (m.status === "deleting") continue;
+      const as = await accessTo(r, actor, accountId, m);
+      if (as === null) continue;
+      const unavailable = !mailboxImportable(m)
+        ? "mailbox_unavailable"
+        : (await r.imports.activeForMailbox(m.id))
+          ? "import_running"
+          : null;
+      targets.push({ mailboxId: m.id, address: m.address, as, hasPerson: m.userId !== null, unavailable });
+    }
+    targets.sort((a, b) => (a.as === b.as ? a.address.localeCompare(b.address) : a.as === "own" ? -1 : 1));
+    return { targets, canBatch: can(actor, "mailbox.import.any", accountId) };
+  });
+}
+
 /** One import with its folders (names only while it runs). Another account's, or one the actor can't see, is 404. */
 export async function getImport(
   deps: Deps,
@@ -355,8 +434,13 @@ export async function getImport(
   return deps.uow.run(async (r) => {
     const { row, mailbox } = await scopedImport(r, actor, accountId, importId);
     const folders = await r.imports.folders(row.id);
+    const domain = mailbox.address.slice(mailbox.address.lastIndexOf("@") + 1).toLowerCase();
+    const domainActive = (await r.domains.listByAccount(accountId)).some(
+      (d) => d.name.toLowerCase() === domain && d.status === "active",
+    );
     return {
       ...view(row, mailbox.address, actor),
+      domainActive,
       folders: folders.map((f) => {
         let name: string | null = null;
         if (f.sourcePath !== null && !isTerminalImportStatus(row.status)) {
