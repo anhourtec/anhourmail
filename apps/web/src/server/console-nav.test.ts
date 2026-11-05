@@ -15,12 +15,13 @@ const actor = (platform: UserActor["platformRoles"], account: UserActor["members
 });
 
 describe("console navigation follows the matrix", () => {
-  it("owner sees every account section, a member only aliases and app passwords", () => {
+  it("owner sees every account section, a member only aliases, app passwords and mail import", () => {
     const owner = visibleNav(actor([], [{ accountId: "a", role: "owner" }]), "a").map((n) => n.label);
     expect(owner).toEqual(NAV.filter((n) => n.scope === "account").map((n) => n.label));
     expect(visibleNav(actor([], [{ accountId: "a", role: "member" }]), "a").map((n) => n.label)).toEqual([
       "Aliases",
       "App passwords",
+      "Import mail",
     ]);
     // The Auditor holds no write permission, so no app passwords of their own.
     expect(visibleNav(actor([], [{ accountId: "a", role: "auditor" }]), "a").map((n) => n.label)).not.toContain(
@@ -28,6 +29,10 @@ describe("console navigation follows the matrix", () => {
     );
     expect(visibleNav(actor([], [{ accountId: "a", role: "auditor" }]), "a").map((n) => n.label)).toContain(
       "People and roles",
+    );
+    // Importing mints a mail-server credential: never the Auditor (nor staff acting as one).
+    expect(visibleNav(actor([], [{ accountId: "a", role: "auditor" }]), "a").map((n) => n.label)).not.toContain(
+      "Import mail",
     );
     expect(visibleNav(actor([], [{ accountId: "a", role: "billing_admin" }]), "a").map((n) => n.label)).not.toContain(
       "People and roles",
@@ -60,7 +65,7 @@ describe("left navigation sections", () => {
 
   it("groups an owner's account pages under Mail and People, then Billing and the audit log", () => {
     expect(sections(actor([], [{ accountId: "a", role: "owner" }]), "a")).toEqual([
-      ["Mail", ["Mailboxes", "Aliases", "App passwords", "Safe senders", "Domains"]],
+      ["Mail", ["Mailboxes", "Aliases", "App passwords", "Import mail", "Safe senders", "Domains"]],
       ["People", ["People and roles"]],
       ["Billing", ["Billing"]],
       ["Audit log", ["Audit log"]],
@@ -68,9 +73,9 @@ describe("left navigation sections", () => {
     ]);
   });
 
-  it("leaves out sections with nothing visible: a member gets Mail with Aliases and App passwords only", () => {
+  it("leaves out sections with nothing visible: a member gets Mail with Aliases, App passwords and Import mail", () => {
     expect(sections(actor([], [{ accountId: "a", role: "member" }]), "a")).toEqual([
-      ["Mail", ["Aliases", "App passwords"]],
+      ["Mail", ["Aliases", "App passwords", "Import mail"]],
     ]);
   });
 

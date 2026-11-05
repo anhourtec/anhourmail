@@ -69,6 +69,16 @@ export const NAV: readonly NavItem[] = [
     href: (accountId) => `/accounts/${accountId}/app-passwords`,
   },
   {
+    // ADR-0030 §17: import mail from another provider (own mailboxes; any with mailbox.import.any).
+    label: "Import mail",
+    icon: "inbox",
+    permission: "mailbox.import.own",
+    scope: "account",
+    section: "mail",
+    phase: 5,
+    href: (accountId) => `/accounts/${accountId}/import`,
+  },
+  {
     // ADR-0032 §1: the account-wide Safe senders list.
     label: "Safe senders",
     icon: "shield",

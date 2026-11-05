@@ -368,7 +368,7 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
     Administrator is reported as `forbidden` (the row, not the request). Console pages: `/accounts/:id/import` (list),
     `/import/new`, `/import/:importId` (layout `mailbox.import.own`, a real 403 page for the Auditor) and
     `/import/batch/new`, `/import/batch/:batchId` (layout `mailbox.import.any`, 403 for everyone else). The nav entry
-    "Import mail" (next to App passwords, `mailbox.import.own`) is a separate change to `console-nav.ts`.
+    "Import mail" sits next to App passwords (`mailbox.import.own`).
 
 ## Webmail
 
@@ -425,6 +425,7 @@ webmail session acts as its mailbox); both routes are `webmail`-guarded in the h
 | Mailboxes                | ✓     | read       | ✓        | ✗           | ✗      | read    | read via act-as                         |
 | Aliases                  | all   | own        | all      | own         | own    | ✗       | ✗ (not via act-as)                      |
 | App passwords            | own   | own        | own      | own         | own    | ✗       | ✗ (never via act-as)                    |
+| Import mail              | all   | own        | all      | own         | own    | ✗       | ✗ (never via act-as)                    |
 | Safe senders (account)   | ✓     | ✗          | ✓        | ✗           | ✗      | read    | read via act-as                         |
 | Billing                  | ✓     | ✗          | ✗        | ✓           | ✗      | read    | Billing Adm; read via act-as            |
 | Audit log                | ✓     | ✗          | ✓        | ✗           | ✗      | ✓       | Reports Reader, Global; read via act-as |
@@ -441,7 +442,7 @@ webmail session acts as its mailbox); both routes are `webmail`-guarded in the h
 † The link opens one's own mailbox without its password (`webmail.open.own`, ADR-0024) for every role but Auditor;
 an Auditor gets the ordinary webmail sign-in page.
 
-The console groups these under section labels (Mail: Mailboxes, Aliases, App passwords, Safe senders, Domains · People · Account: Billing, Audit
+The console groups these under section labels (Mail: Mailboxes, Aliases, App passwords, Import mail, Safe senders, Domains · People · Account: Billing, Audit
 log · Platform for staff; `navTree` in `console-nav.ts`). Counts beside rows come from the same services with the
 person's own permissions (mailboxes with `mailbox.read`, aliases with `alias.manage.own`, domains with `domain.read`,
 pending invites with `member.read`), and the sidebar's main button is the first create action the role allows
