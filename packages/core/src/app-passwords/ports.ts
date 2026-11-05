@@ -30,5 +30,10 @@ export type AppPasswordInventory = {
     passwords: number;
     /** The Password credentials' ids (a mailbox has exactly one; compared with the one the control plane set). */
     passwordIds: string[];
+    /**
+     * Mail import credentials (exactly the import permission set; ADR-0030), apart from `appPasswords`: expected only
+     * while a live import of the mailbox recorded them. Absent on fakes that don't model imports.
+     */
+    importCredentials?: { credentialId: string; createdAt: Date }[];
   }>;
 };

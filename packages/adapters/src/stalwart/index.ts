@@ -8,14 +8,20 @@
 import { randomBytes } from "node:crypto";
 
 import type { AppPasswordInventory, AppPasswordIssuer } from "@anhourmail/core/app-passwords";
+import type { ImportCredentialIssuer, ImportTrainingSamples } from "@anhourmail/core/imports";
 import type { MailboxUsageReader } from "@anhourmail/core/mailboxes";
 import type { MailServer, ServiceAccountInventory } from "@anhourmail/core/provisioning";
 import type { ManagedScriptReader } from "@anhourmail/core/webmail";
 import { MANAGED_SIEVE_SCRIPT } from "@anhourmail/shared/webmail";
 import {
+  accountTrainingSamples,
+  destroyTrainingSamples,
+  holdMismatch,
+  importSamples,
   LEGACY_SERVICE_ACCOUNT,
   scopesOf,
   SERVICE_CREDENTIALS,
+  SPAM_SAMPLE_HOLD_DEFAULT_MS,
   type StalwartManagement,
 } from "@anhourmail/stalwart-client";
 
@@ -57,6 +63,46 @@ export function stalwartAppPasswords(mgmt: StalwartManagement): AppPasswordIssue
 }
 
 /**
+ * The mail import's destination credential (ADR-0030 §1) with the web app's operations key: minted when an import
+ * starts or resumes (IMAP only, `expiresAt`), destroyed again only when recording the import failed — every other
+ * revocation is the worker's `mail_import.credential_revoke` job with the provisioning key.
+ */
+export function stalwartImportCredentials(mgmt: StalwartManagement): ImportCredentialIssuer {
+  return {
+    async mint(stalwartAccountId, expiresAt) {
+      const made = await mgmt.createImportCredential(stalwartAccountId, expiresAt);
+      return { id: made.id, createdAt: made.createdAt, secret: made.secret };
+    },
+    destroy: (stalwartAccountId, id) => mgmt.destroyAppPassword(stalwartAccountId, id),
+  };
+}
+
+/**
+ * Removing a mail import's spam-training samples with the worker's training key (ADR-0030 update 2026-11-05): the
+ * account's ham samples created within the slice's window, widened by `slackMs` (default two minutes: clocks, and
+ * samples the server writes a moment after the APPEND). `holdMs` is the server's `holdSamplesFor`
+ * (`STALWART_SPAM_SAMPLE_HOLD_MS`, default 180 days): a sample expiring later than it allows means the setting
+ * differs, and the job fails loudly instead of matching nothing.
+ */
+export function stalwartImportTrainingSamples(
+  mgmt: StalwartManagement,
+  opts: { holdMs?: number; slackMs?: number; now?: () => Date } = {},
+): ImportTrainingSamples {
+  const holdMs = opts.holdMs ?? SPAM_SAMPLE_HOLD_DEFAULT_MS;
+  const slackMs = opts.slackMs ?? 120_000;
+  return {
+    async removeImported(stalwartAccountId, window) {
+      const samples = await accountTrainingSamples(mgmt, stalwartAccountId);
+      if (holdMismatch(samples, (opts.now ?? (() => new Date()))(), holdMs)) {
+        throw new Error("spam-training samples outlive STALWART_SPAM_SAMPLE_HOLD_MS: set it to holdSamplesFor");
+      }
+      const ids = importSamples(samples, window, { holdMs, slackMs });
+      return { removed: await destroyTrainingSamples(mgmt, ids) };
+    },
+  };
+}
+
+/**
  * What each mailbox holds, for the reconciler: read from `x:Account.credentials` with the provisioning key, which has
  * no owner access to the mailbox (ADR-0020 "Credential split").
  */
@@ -73,6 +119,7 @@ export function stalwartAppPasswordInventory(mgmt: StalwartManagement): AppPassw
         apiKeys: inv.apiKeys,
         passwords: inv.passwords.length,
         passwordIds: inv.passwords.map((p) => p.id),
+        importCredentials: inv.importCredentials.map((c) => ({ credentialId: c.id, createdAt: c.createdAt })),
       };
     },
   };
@@ -171,6 +218,11 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
 
     async revokeAppPassword({ externalId, credentialId, createdAt }) {
       await mgmt.revokeAppPasswordCredential(externalId, credentialId, createdAt);
+    },
+
+    async importCredentials(externalId) {
+      const inv = await mgmt.credentialInventory(externalId);
+      return inv.importCredentials.map((c) => ({ credentialId: c.id, createdAt: c.createdAt }));
     },
 
     async ensureMailbox({
