@@ -43,6 +43,7 @@ import { type StalwartManagement, stalwartDevAdmin } from "@anhourmail/stalwart-
 
 import { applyDevMailPlan, DEV_DOMAIN, DEV_MAILBOXES, devWebmailOrigins } from "../../infra/stalwart/dev-plan";
 import { type CredentialRow, writeCredentials } from "./credentials";
+import { seedImportSource } from "./import-source";
 import { seedRefusal } from "./guard";
 import { demoQuotaBytes } from "./quota";
 import { importSampleContacts } from "./sample-contacts";
@@ -587,6 +588,36 @@ if (demo) {
     imapPort: Number(process.env.STALWART_IMAPS_PORT ?? "993"),
     smtpPort: Number(process.env.STALWART_SUBMISSIONS_PORT ?? "465"),
   };
+
+  // The mail import source (ADR-0030 §20): a dev.test mailbox standing in for "another provider", filled once over
+  // IMAPS. Outside production imports can only read from the dev mail server, so this is what the console's "New
+  // import" form is tried against (Other IMAP server, host 127.0.0.1, port 993).
+  const importSource = `import-source@${DEV_DOMAIN}`;
+  await mgmt.upsertUser({
+    name: local(importSource),
+    domain: DEV_DOMAIN,
+    password: await hashPassword(devPassword),
+    resetPassword: true,
+    quotaBytes: 100 * 1024 * 1024,
+    suspended: false,
+  });
+  const imapsPort = Number(process.env.STALWART_IMAPS_PORT ?? "993");
+  const appended = await seedImportSource(importSource, devPassword, imapsPort);
+  log(
+    appended > 0 ? `import source: ${String(appended)} messages for ${importSource}` : "import source: already filled",
+  );
+  rows.push({
+    group: "Dev mailboxes (dev.test, mail only)",
+    role: "import source",
+    email: importSource,
+    password: devPassword,
+    tryThis:
+      "The old provider for Import mail: New import → Other IMAP server, host `127.0.0.1`, port 993, this address and password",
+  });
+  special.push({
+    label: "Mail import source",
+    detail: `\`${importSource}\` on the dev mail server: nested and non-ASCII folders, Sent, Drafts, Junk, Deleted Items, flags, 2015 dates, a duplicate Message-ID, one without and one \`\\Deleted\` (console → Import mail; \`npm run dev\` runs the importer)`,
+  });
 
   // Mailbox lifecycle states (console Mailboxes page): one suspended, one deleted and waiting out its grace period.
   // Written as intent and applied by the worker's mailbox.ensure job, like the console does (CLAUDE.md rule 26).
