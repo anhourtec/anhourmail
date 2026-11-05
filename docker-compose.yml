@@ -141,6 +141,47 @@ services:
     ports: *mail-ports
     networks: [default, mailnet]
 
+  # Dev only, opt-in (`docker compose --profile import up -d importer`; `npm run dev` runs it on the host instead): the
+  # mail importer (ADR-0030) as production runs it — its own container from the worker image, no Stalwart key, on
+  # `importnet`, an internal network with no internet route. `import-edge` is its only way out and forwards exactly
+  # Postgres and the mail server's IMAP ports, never Stalwart's HTTP/JMAP/management listener or Redis, so dev rehearses
+  # the deploy gate (docs/internal/08-operations.md "Mail importer"). Sources: only `import-edge:993`/`:143` (the dev
+  # mail server itself); NODE_ENV=development is what lets those through.
+  importer:
+    build: { context: ., dockerfile: deploy/Dockerfile.worker }
+    image: anhourmail-worker:dev
+    profiles: [import]
+    command: ["npm", "run", "--silent", "--workspace", "@anhourmail/worker", "importer"]
+    depends_on:
+      import-edge: { condition: service_started }
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: "postgres://${POSTGRES_USER:-anhourmail}:${POSTGRES_PASSWORD}@import-edge:5432/${POSTGRES_DB:-anhourmail}"
+      SECRETS_KEYRING: ${SECRETS_KEYRING:-}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
+      IMPORT_DESTINATION_IMAP: import-edge:993
+      IMPORT_DEV_DESTINATION_INSECURE: "true"
+      IMPORT_DEV_ALLOW_SOURCES: import-edge:993,import-edge:143
+      IMPORT_MESSAGE_CAPS: ${IMPORT_MESSAGE_CAPS:-}
+    healthcheck:
+      test: ["CMD-SHELL", "find /tmp/importer-heartbeat -mmin -2 | grep -q ."]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [importnet]
+
+  import-edge:
+    image: alpine/socat:1.8.0.3
+    profiles: [import]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        socat TCP-LISTEN:5432,fork,reuseaddr TCP:postgres:5432 &
+        socat TCP-LISTEN:993,fork,reuseaddr TCP:stalwart:993 &
+        socat TCP-LISTEN:143,fork,reuseaddr TCP:stalwart:143 &
+        wait
+    networks: [default, mailnet, importnet]
+
 volumes:
   pgdata:
   redisdata:
@@ -149,4 +190,7 @@ volumes:
 networks:
   default:
   mailnet:
+    internal: true
+  # The dev importer's network: no internet route; `import-edge` is the only other member.
+  importnet:
     internal: true

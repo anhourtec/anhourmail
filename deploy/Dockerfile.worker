@@ -1,9 +1,14 @@
 # syntax=docker/dockerfile:1.7
-# apps/worker — queue worker and scheduler (same image, different command). Runs TypeScript via tsx, non-root.
+# apps/worker — queue worker, scheduler and mail importer (same image, different command). Runs TypeScript via tsx,
+# non-root.
 # Build from the repo root:  docker build -f deploy/Dockerfile.worker --build-arg GIT_SHA=$(git rev-parse --short HEAD) .
 #
 #   worker:    CMD ["npm", "run", "--silent", "--workspace", "@anhourmail/worker", "start"]
 #   scheduler: command: ["npm", "run", "--silent", "--workspace", "@anhourmail/worker", "scheduler"]
+#   importer:  command: ["npm", "run", "--silent", "--workspace", "@anhourmail/worker", "importer"]
+#              its own container with NO Stalwart key, Redis or Stalwart HTTP setting, on a network that reaches only
+#              Postgres, the mail server's IMAPS port and public TCP 993/143 (ADR-0030; deploy/README.md "Mail
+#              importer"); healthcheck `find /tmp/importer-heartbeat -mmin -2`.
 
 ARG NODE_IMAGE=node:22.22.3-alpine3.24
 
