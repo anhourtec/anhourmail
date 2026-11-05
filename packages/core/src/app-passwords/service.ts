@@ -308,6 +308,12 @@ export type AppPasswordDrift = {
   passwordReplaced: number;
   /** Mailboxes whose Password credential was never recorded (from before tracking; `job:mailbox-backfill` records). */
   passwordUntracked: number;
+  /**
+   * Mail import credentials (ADR-0030 §16) that no live import of the mailbox recorded (id and creation time): left by
+   * an import whose revoke gave up, or made outside the console. Their revoke is queued again (through the import's
+   * own job); one on a mailbox that never had an import is only reported.
+   */
+  importCredentialsOrphaned: number;
   /** Mailboxes whose credentials the mail server couldn't list. */
   unreachable: number;
   /** Addresses with drift (returned to the caller; never logged or audited). */
@@ -338,10 +344,13 @@ export async function reconcileAppPasswords(deps: Deps, inventory: AppPasswordIn
     extraPasswords: 0,
     passwordReplaced: 0,
     passwordUntracked: 0,
+    importCredentialsOrphaned: 0,
     unreachable: 0,
     addresses: [],
     clean: true,
   };
+  /** Imports whose credential revoke is queued again (one per import). */
+  const importRevokes = new Set<string>();
   for (const m of mailboxes) {
     const rows = await deps.uow.run((r) => r.appPasswords.listByMailbox(m.id));
     // One mailbox the mail server can't answer for (e.g. its account removed by hand) doesn't stop the rest.
@@ -369,6 +378,23 @@ export async function reconcileAppPasswords(deps: Deps, inventory: AppPasswordIn
       if (!found) {
         out.missingOnMailServer += 1;
         drift = true;
+      }
+    }
+    const importCredentials = onServer.importCredentials ?? [];
+    if (importCredentials.length > 0) {
+      const [live, latest] = await deps.uow.run(async (r) => [
+        await r.imports.activeForMailbox(m.id),
+        (await r.imports.list(m.accountId, { mailboxIds: [m.id], limit: 1 }))[0] ?? null,
+      ]);
+      for (const c of importCredentials) {
+        const held =
+          live?.destinationCredentialId === c.credentialId &&
+          live.destinationCredentialCreatedAt !== null &&
+          sameTime(live.destinationCredentialCreatedAt, c.createdAt);
+        if (held) continue;
+        out.importCredentialsOrphaned += 1;
+        drift = true;
+        if (latest) importRevokes.add(latest.id);
       }
     }
     if (onServer.apiKeys > 0) {
@@ -400,6 +426,7 @@ export async function reconcileAppPasswords(deps: Deps, inventory: AppPasswordIn
       out.extraPasswords +
       out.passwordReplaced +
       out.passwordUntracked +
+      out.importCredentialsOrphaned +
       out.unreachable +
       out.requeued ===
     0;
@@ -420,6 +447,9 @@ export async function reconcileAppPasswords(deps: Deps, inventory: AppPasswordIn
         for (const id of pending) {
           await repos.provisioning.enqueue({ kind: "app_password.revoke", subjectId: id, runAfter: now });
         }
+        for (const id of importRevokes) {
+          await repos.provisioning.enqueue({ kind: "mail_import.credential_revoke", subjectId: id, runAfter: now });
+        }
         return {
           result: undefined,
           meta: {
@@ -431,6 +461,8 @@ export async function reconcileAppPasswords(deps: Deps, inventory: AppPasswordIn
             mailboxesWithExtraPasswords: out.extraPasswords,
             mailboxPasswordsReplaced: out.passwordReplaced,
             mailboxPasswordsUntracked: out.passwordUntracked,
+            importCredentialsOrphaned: out.importCredentialsOrphaned,
+            importCredentialRevokesQueued: importRevokes.size,
             mailboxesUnreachable: out.unreachable,
           },
         };
