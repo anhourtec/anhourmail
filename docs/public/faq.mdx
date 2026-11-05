@@ -16,6 +16,24 @@ Export** downloads every folder as an mbox file and your contacts as a vCard fil
 [Terms of Service](/legal/terms) promise this on every plan. See
 [Export your data and delete your account](/docs/export-and-deletion).
 
+## Can I bring my old mail with me?
+
+Yes. In the console, **Import mail** copies your old mailbox's mail, folders, read and flagged marks and dates over
+IMAP, using an app password from the old provider. The old mailbox is only read; nothing there changes. See
+[Move your mail here](/docs/import).
+
+## Will I lose mail while my domain moves over?
+
+No. Turn on **Keep copying new mail until I stop it** when you start the import, change your MX record, then choose
+**Stop syncing** once nothing new arrives at the old provider. Nothing is copied twice, even with forwarding on. See
+[Switch a domain without losing mail](/docs/import/switching-a-domain).
+
+## Why can't I import my work mailbox?
+
+Some providers, including business mailboxes at some of the largest providers, only let other apps sign in through
+their own sign-in page, not with an app password. We can't import from those yet. See
+[Providers we can't import from yet](/docs/import#providers-we-cant-import-from-yet).
+
 ## What happens when I delete my account?
 
 Its mailboxes are suspended at once, and after a grace period of <Value of="accountDeletionGraceDays" /> days, in
