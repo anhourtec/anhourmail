@@ -2,6 +2,8 @@
 import { ACCOUNT_DELETION_GRACE_DAYS } from "@anhourmail/shared/data-lifecycle";
 
 import { type Actor, authorize, can } from "../actor";
+import { cancelBillingForDeletion } from "../billing/deletion";
+import type { BillingProvider } from "../billing/ports";
 import { turnOffCatchAllFor } from "../domains/catch-all";
 import { ConflictError, ForbiddenError, NotFoundError, StepUpRequiredError, ValidationError } from "../errors";
 import { mutation, type MutationOutcome } from "../mutation";
@@ -22,7 +24,8 @@ import type { AccountDeletion } from "./entity";
  *   3. once no domain is left, the account row goes, and with it memberships, invites and exports.
  *
  * The audit log stays (append-only; retained per audit.md "Retention"). People keep their console logins (they may
- * belong to other accounts); each can delete their own afterwards. Billing has no hook yet (Phase 5). Never while staff
+ * belong to other accounts); each can delete their own afterwards. Billing (ADR-0029 §9): asking sets a paid
+ * subscription to end at the period's end; removal starts only once the subscription is ended now. Never while staff
  * act as someone; while staff hold the account or any of its mailboxes (an account or person suspension), no step
  * runs and the wait is audited (`data.deletion_started` denied `staff_hold`, at most once a day).
  */
@@ -95,6 +98,8 @@ export async function requestAccountDeletion(
   input: { confirmName?: unknown },
   session: Session,
   req: RequestMeta,
+  /** The billing provider (null when billing is off): a paid subscription is set to end at the period's end. */
+  billing: BillingProvider | null = null,
 ): Promise<DeletionNotice> {
   const out = await mutation(
     deps,
@@ -162,6 +167,8 @@ export async function requestAccountDeletion(
     },
   );
   if (typeof out === "string") throwRefusal(out);
+  // After the deletion is recorded: a provider failure never undoes it (the hourly billing timers try again).
+  await cancelBillingForDeletion(deps, billing, accountId, "period_end", out).catch(() => "failed");
   return out;
 }
 
@@ -249,7 +256,13 @@ export const DELETION_BATCH = 10;
 export type DeletionStep =
   | {
       accountId: string;
-      step: "held" | "started" | "waiting_for_mailboxes" | "releasing_domains" | "waiting_for_domains";
+      step:
+        | "held"
+        | "waiting_for_billing"
+        | "started"
+        | "waiting_for_mailboxes"
+        | "releasing_domains"
+        | "waiting_for_domains";
     }
   | { accountId: string; step: "deleted"; accountName: string; notify: string[] };
 
@@ -266,8 +279,15 @@ async function deletionHeld(r: Repositories, accountId: string): Promise<boolean
 /** How often a deletion held by staff is recorded again (the job runs every 10 minutes). */
 const HELD_AUDIT_MS = 86_400_000;
 
-/** Records that the deletion waits for staff (`data.deletion_started` denied `staff_hold`), at most once a day. */
-async function auditHeld(deps: Deps, accountId: string): Promise<void> {
+/**
+ * Records that the deletion waits (`data.deletion_started` denied `staff_hold`, or `billing_pending` while its paid
+ * subscription can't be ended yet), at most once a day.
+ */
+async function auditHeld(
+  deps: Deps,
+  accountId: string,
+  code: "staff_hold" | "billing_pending" = "staff_hold",
+): Promise<void> {
   const since = new Date(deps.clock.now().getTime() - HELD_AUDIT_MS);
   const recent = await deps.uow.run((r) =>
     r.audit.list({
@@ -289,7 +309,7 @@ async function auditHeld(deps: Deps, accountId: string): Promise<void> {
       accountId,
       target: { type: "account", id: accountId },
     },
-    async () => ({ result: undefined, meta: { waitingFor: "staff_hold" }, denied: { code: "staff_hold" } }),
+    async () => ({ result: undefined, meta: { waitingFor: code }, denied: { code } }),
   );
 }
 
@@ -414,7 +434,12 @@ async function finish(deps: Deps, accountId: string): Promise<{ accountName: str
  * comment). Idempotent and resumable: every step re-reads the state and does only what is left; a failed step is
  * audited as `failed` and tried again on the next run. Never touches an account before its `deleteAfter`.
  */
-export async function runDueDeletions(deps: Deps, limit = DELETION_BATCH): Promise<DeletionStep[]> {
+export async function runDueDeletions(
+  deps: Deps,
+  limit = DELETION_BATCH,
+  /** The billing provider (null when billing is off): a paid subscription is ended before removal starts. */
+  billing: BillingProvider | null = null,
+): Promise<DeletionStep[]> {
   const due = await deps.uow.run((r) => r.dataLifecycle.dueDeletions(deps.clock.now(), limit));
   const out: DeletionStep[] = [];
   for (const d of due) {
@@ -427,6 +452,12 @@ export async function runDueDeletions(deps: Deps, limit = DELETION_BATCH): Promi
         continue;
       }
       if (d.startedAt === null) {
+        // A paid subscription ends now, before anything is removed: a deleted account is never left paying.
+        if ((await cancelBillingForDeletion(deps, billing, d.accountId, "now", d)) === "failed") {
+          await auditHeld(deps, d.accountId, "billing_pending");
+          out.push({ accountId: d.accountId, step: "waiting_for_billing" });
+          continue;
+        }
         await start(deps, d);
         out.push({ accountId: d.accountId, step: "started" });
         continue;

@@ -21,7 +21,8 @@ import { NotFoundError, ValidationError } from "../errors";
 import { authorizeAudited, mutation, recordSystemChanges, type MutationSpec } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 
-import { billingOf } from "./checkout";
+import { billingOf, hasLiveSubscription } from "./checkout";
+import { cancelBillingForDeletion } from "./deletion";
 import type { PlanHold, PlanHoldInput } from "./entity";
 import { BillingError } from "./entitlements";
 import { billingTarget, refuse, refuseActAs } from "./guards";
@@ -157,6 +158,10 @@ export type BillingTimersRun = {
   /** Held mailboxes past their receive window (receiving stays on for now; see the module comment). */
   receiveWindowsPassed: number;
   syncsQueued: number;
+  /** Accounts waiting to be deleted whose subscription was set to end at the period's end now (a retry). */
+  deletionCancels: number;
+  /** The provider couldn't set one (tried again next hour). */
+  deletionCancelsFailed: number;
 };
 
 const reqOf = (at: Date): RequestMeta => ({
@@ -185,6 +190,8 @@ export async function runBillingTimers(
     holdsPruned: 0,
     receiveWindowsPassed: 0,
     syncsQueued: 0,
+    deletionCancels: 0,
+    deletionCancelsFailed: 0,
   };
   const queueSync = (r: Repositories, accountId: string) => {
     run.syncsQueued++;
@@ -272,6 +279,19 @@ export async function runBillingTimers(
       run.holdsPruned++;
       if (kept.length === 0) await queueSync(r, lapsed.accountId);
     });
+  }
+
+  // 4. Accounts waiting to be deleted (ADR-0029 §9): a subscription still set to renew ends at the period's end. The
+  // request does this at once; this heals a provider failure then (removal itself waits until it is ended).
+  if (provider) {
+    const waiting = (await deps.uow.run((r) => r.dataLifecycle.pendingDeletions())).filter((d) => d.startedAt === null);
+    for (const d of waiting.slice(0, batch)) {
+      const b = await deps.uow.run((r) => r.billing.get(d.accountId));
+      if (!b || !hasLiveSubscription(b) || b.cancelAt !== null) continue;
+      const outcome = await cancelBillingForDeletion(deps, provider, d.accountId, "period_end", d, { retry: true });
+      if (outcome === "scheduled") run.deletionCancels++;
+      else if (outcome === "failed") run.deletionCancelsFailed++;
+    }
   }
   return run;
 }
