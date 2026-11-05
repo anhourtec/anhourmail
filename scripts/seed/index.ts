@@ -42,6 +42,7 @@ import {
 import { type StalwartManagement, stalwartDevAdmin } from "@anhourmail/stalwart-client";
 
 import { applyDevMailPlan, DEV_DOMAIN, DEV_MAILBOXES, devWebmailOrigins } from "../../infra/stalwart/dev-plan";
+import { seedBillingDemo } from "./billing";
 import { type CredentialRow, writeCredentials } from "./credentials";
 import { seedImportSource } from "./import-source";
 import { seedRefusal } from "./guard";
@@ -752,6 +753,9 @@ if (demo) {
       detail: `\`${UNVERIFIED_DOMAIN.name}\` on Demo Family, status pending_dns, ${records.filter((r) => r.required).length} required records`,
     },
   );
+  const billingDemo = await seedBillingDemo({ db, deps, mgmt, newPassword, appUrl: APP_URL, log });
+  rows.push(...billingDemo.rows);
+  special.push(...billingDemo.special);
 }
 
 for (const name of DEV_MAILBOXES) {
