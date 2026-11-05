@@ -72,6 +72,32 @@ describe("changing the webmail password", () => {
     ]);
   });
 
+  it("ends what still runs on the old session id once it moved, and only then", async () => {
+    const t = setup();
+    const ended: string[] = [];
+    t.d.renewed = (old) => void ended.push(old);
+    await changeWebmailPassword(t.d, "sid", { current: CURRENT, next: NEXT, account: "acc1" }, meta);
+    expect(ended).toEqual(["sid"]);
+    // Not renewed (the person signs in again) or still applying: nothing moved.
+    for (const other of [
+      setup({ renew: () => Promise.reject(new WebmailUnavailableError("down")) }),
+      setup({ states: ["pending"] }),
+    ]) {
+      other.d.waitMs = 0;
+      other.d.renewed = (old) => void ended.push(`unexpected ${old}`);
+      await changeWebmailPassword(other.d, "sid", { current: CURRENT, next: NEXT, account: "acc1" }, meta);
+    }
+    expect(ended).toEqual(["sid"]);
+    // Its failure never costs the renewed session its new cookie.
+    const throws = setup();
+    throws.d.renewed = () => {
+      throw new Error("hub gone");
+    };
+    expect(
+      await changeWebmailPassword(throws.d, "sid", { current: CURRENT, next: NEXT, account: "acc1" }, meta),
+    ).toEqual({ applied: true, signedIn: true, sessionId: "new-session-id" });
+  });
+
   it("refuses when the page shows another mailbox than the session's (a switch in another tab)", async () => {
     const t = setup();
     for (const account of ["acc2", null]) {
