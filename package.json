@@ -42,6 +42,7 @@
     "test": "vitest run --coverage",
     "test:watch": "vitest",
     "test:int": "vitest run --config vitest.int.config.ts",
+    "test:billing-live": "vitest run --config vitest.billing-live.config.ts",
     "test:rbac": "tsx --env-file-if-exists=.env scripts/rbac-e2e.ts",
     "test:e2e": "playwright test",
     "db:migrate": "npm run db:migrate --workspace @anhourmail/adapters",
