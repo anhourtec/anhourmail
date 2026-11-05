@@ -81,7 +81,8 @@ if (mode === "create") {
   const avatars: Record<string, { person: string; mailbox: string; mailboxPassword: string }> = {};
   const names: Record<string, { person: string; mailbox: string; mailboxPassword: string }> = {};
   const aliasLimits: Record<string, { owner: string; mailbox: string; day: string }> = {};
-  const billing: Record<string, { accountId: string; owner: string }> = {};
+  const billing: Record<string, { accountId: string; owner: string; billingAdmin: string; member: string }> = {};
+  const billingHolds: Record<string, { accountId: string; owner: string; kept: string; other: string }> = {};
   const imports: Record<
     string,
     {
@@ -458,8 +459,49 @@ if (mode === "create") {
       .returning();
     if (!blAccount) throw new Error("billing account not created");
     const blOwner = await addLogin(`bl-${project}-owner`);
-    await db.insert(schema.accountMembership).values({ accountId: blAccount.id, userId: blOwner.id, role: "owner" });
-    billing[project] = { accountId: blAccount.id, owner: blOwner.email };
+    // The Billing page's roles (rule 35): a Billing Administrator manages billing; a Member has no Billing page.
+    const blAdmin = await addLogin(`bl-${project}-billing-admin`);
+    const blMember = await addLogin(`bl-${project}-member`);
+    await db.insert(schema.accountMembership).values([
+      { accountId: blAccount.id, userId: blOwner.id, role: "owner" },
+      { accountId: blAccount.id, userId: blAdmin.id, role: "billing_admin" },
+      { accountId: blAccount.id, userId: blMember.id, role: "member" },
+    ]);
+    billing[project] = {
+      accountId: blAccount.id,
+      owner: blOwner.email,
+      billingAdmin: blAdmin.email,
+      member: blMember.email,
+    };
+    // Holds journey (ADR-0029 §6): a Free account with the Owner's platform-domain mailbox and a second one, so a lapse
+    // after a paid year holds one and "Choose what stays on" can swap them. Addresses carry the run id (cleanup).
+    const [hlAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} Billing holds ${project}`, plan: "free" })
+      .returning();
+    if (!hlAccount) throw new Error("billing holds account not created");
+    const hlOwner = await addLogin(`hl-${project}-owner`);
+    await db.insert(schema.accountMembership).values({ accountId: hlAccount.id, userId: hlOwner.id, role: "owner" });
+    const platformDomain = (process.env.PLATFORM_DOMAIN ?? "").trim() || "anhourmail.com";
+    const hlKept = `${run}-hl-${project}-me@${platformDomain}`;
+    const hlOther = `${run}-hl-${project}-two@${platformDomain}`;
+    await db.insert(schema.mailbox).values([
+      {
+        accountId: hlAccount.id,
+        userId: hlOwner.id,
+        address: hlKept,
+        status: "provisioning",
+        quotaBytes: 100 * 1024 * 1024,
+      },
+      {
+        accountId: hlAccount.id,
+        userId: null,
+        address: hlOther,
+        status: "provisioning",
+        quotaBytes: 100 * 1024 * 1024,
+      },
+    ]);
+    billingHolds[project] = { accountId: hlAccount.id, owner: hlOwner.email, kept: hlKept, other: hlOther };
     // Mail import journeys (ADR-0030): an account with a Member whose own mailbox imports from a source mailbox on the
     // dev mail server (outside production imports can only read from it), and a User Admin who runs a two-row CSV
     // batch into two more of the account's mailboxes. The source is on the mail server only (it stands in for "another
@@ -582,6 +624,7 @@ if (mode === "create") {
         data,
         aliasLimits,
         billing,
+        billingHolds,
         imports,
         delegation,
         delegationWebmail,

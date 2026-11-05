@@ -30,7 +30,9 @@ export type E2eUsers = {
   /** Per browser project: the alias limits journey's Free account (its Owner, mailbox, and the day its year filled). */
   aliasLimits: Record<string, { owner: string; mailbox: string; day: string }>;
   /** Per browser project: the billing journey's Free account (ADR-0029, the dev fake provider) and its Owner. */
-  billing: Record<string, { accountId: string; owner: string }>;
+  billing: Record<string, { accountId: string; owner: string; billingAdmin: string; member: string }>;
+  /** Per browser project: the holds journey's Free account, its Owner and its two platform-domain mailboxes. */
+  billingHolds: Record<string, { accountId: string; owner: string; kept: string; other: string }>;
   /**
    * Per browser project: the mail import journeys' account (ADR-0030) — a Member with their own mailbox, a User Admin,
    * two person-less mailboxes for the CSV batch, and a filled source mailbox on the dev mail server (its password).
