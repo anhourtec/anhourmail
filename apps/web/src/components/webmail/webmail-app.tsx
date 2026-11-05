@@ -72,7 +72,7 @@ import {
   type SharedMailbox,
 } from "./mail-client";
 import { iconButtonClass, Menu, type MenuEntry } from "./menu";
-import { startPush } from "./push";
+import { type PushHandlers, startPush } from "./push";
 import { MessageList } from "./message-list";
 import { type MailChange, restoreTarget } from "./conversation";
 import {
@@ -916,7 +916,7 @@ function Mailroom({
       .then(() => (life.stopped ? null : client.push()))
       .then((p) => {
         if (life.stopped || !p) return;
-        stopPush = startPush(p.url, p.key, {
+        const handlers: PushHandlers = {
           onUp: () => {
             pushUp = true;
             // Catch up with anything missed before push was up (or while it was down). The first time, a moment later:
@@ -949,7 +949,9 @@ function Mailroom({
             pushUp = false;
             if (!running) schedule();
           },
-        });
+        };
+        // Opened with the client's fetch: a stream opened again during a password change waits for the new cookie.
+        stopPush = startPush(p.url, p.key, handlers, { fetch: p.fetch });
       })
       .catch(() => undefined);
     return () => {
