@@ -1,0 +1,113 @@
+---
+title: Plans and billing
+description: Paid plans, storage and extra mailboxes, cancelling, refunds, invoices, what happens when a payment fails, and invite codes.
+---
+
+<BillingStatusNote />
+
+## Plans
+
+<PlanTable />
+
+Every account starts on **Free**. Free is the trial: paid plans have no trial period, so there's nothing to remember to
+cancel. Paid plans are billed once a year, in US or Canadian dollars, and cover everyone in the account. Prices don't
+include tax; the payment page adds it for your billing address.
+
+**Supporter** is pay-what-you-want: you choose a yearly amount from <Value of="supporterMinUsd" /> up, in whole
+dollars. It includes everything in Plus, and everything above the Plus price funds the free plan.
+
+## Where billing lives
+
+Open **Billing** in the console's navigation. Owners and Billing Administrators can change billing; Read-only
+members can see it; other roles don't have the page. If the account has a payment problem, everyone in it sees a
+notice at the top of the console (see [When a payment fails](#when-a-payment-fails)).
+
+Payments are handled by our payment processor on its own secure pages: you're sent there to pay and to manage your card,
+and the console never sees or stores card details. **Manage payment and invoices** opens its portal, where you change
+the card, billing address and tax number, and download every invoice and receipt.
+
+## Choosing a paid plan
+
+1. On **Billing**, choose **Plus** or **Supporter** (and the Supporter amount).
+2. Choose the currency. Once an account has paid in one currency it keeps it.
+3. Optionally add storage blocks or extra mailboxes. The page shows the first year's total before tax.
+4. **Continue to payment** takes you to the payment page. When the payment goes through you come back to Billing and
+   the plan starts within a minute.
+
+A checkout you leave unfinished stays open for an hour; you can start a new one after that.
+
+## Storage and extra mailboxes
+
+Paid plans include <Value of="plusStorage" /> shared by the whole account and <Value of="includedMailboxes" />
+mailboxes. You can add:
+
+- **Storage blocks** of +<Value of="storageBlock" /> for <Value of="storageBlockPrice" /> a year each (up to
+  <Value of="maxStorageBlocks" />
+  );
+- **Extra mailboxes** for <Value of="extraMailboxPrice" /> a year each (up to <Value of="maxExtraMailboxes" />).
+
+Nothing is ever charged without you seeing the amount first. When you add something, **Review the change** shows what
+it costs now, for the rest of the current year, and you confirm that exact amount. Lowering costs nothing now: the
+lower number applies at renewal, and what you already paid for stays until then. You can't lower below what the
+account uses (delete a mailbox, or lower mailbox storage, first).
+
+Very large accounts also have a ceiling on the number of addresses (mailboxes and aliases together). If you reach it,
+contact support: we can raise it.
+
+## Changing plan
+
+Switch between Plus and Supporter, or change your Supporter amount, under **Change plan**. The plan's features switch
+at once; the price changes at your next renewal, so nothing is charged now.
+
+## Cancelling
+
+**Cancel the plan** (it asks for your console password) stops it from renewing. Nothing changes until the end of the
+year you paid for, and you can **Undo the cancellation** until then. When the plan ends, the account moves to Free (see
+[What's kept on Free](#whats-kept-on-free)).
+
+## Refunds
+
+Within <Value of="refundWindowDays" /> days of your first payment or a renewal you can refund it in full yourself:
+**Ask for a refund** on Billing (it asks for your console password). The plan then ends at once and the account
+moves to Free. Each account can do this once. For anything else (an add-on charge, a later refund, a payment you
+don't recognise) contact support.
+
+## When a payment fails
+
+1. **Payment failed, retrying.** A renewal didn't go through. Our payment processor tries the card again over the
+   following days and emails you. Nothing changes in the account; updating the card settles it sooner.
+2. **Sending paused.** If the retries run out, no mailbox in the account can send. Receiving, reading, mail apps and
+   export keep working. Pay the open invoice from Billing and sending comes back within a minute.
+3. **Plan ended.** If it's still unpaid after <Value of="restrictedDays" /> days, the plan ends and the account
+   moves to Free.
+
+A payment disputed with the card issuer also pauses sending until the dispute is settled; our support team handles
+those.
+
+Nothing in the account is ever deleted because a payment failed.
+
+## What's kept on Free
+
+When a paid plan ends, the account moves to Free. What Free doesn't include is **held**, not deleted:
+
+- One mailbox on our domain stays fully on (the Owner's, by default) with Free's number of aliases and masked aliases.
+- Every other mailbox is held: it can't send, it keeps receiving for <Value of="heldReceiveDays" /> days after the
+  plan ended, and you can always sign in, read and export it.
+- Your own domains stay set up, without catch-all or new addresses; held aliases stop receiving.
+- People stay in the account; pending invites are withdrawn.
+
+On Billing, **Choose what stays on** lets an Owner or Billing Administrator pick the mailbox and aliases that stay
+on. Subscribing again (or redeeming a code) brings everything back at once.
+
+## Invite codes
+
+Anhourtec sometimes sends invite codes: to let you sign up while sign-up is closed, to give an account a paid plan for
+a while with no card, or both. A code works once and expires.
+
+- **At sign-up:** open the link you were sent (or choose **Have an invite code?** on the sign-up page and type it).
+- **On an existing account:** on Free, or after a paid plan ended, enter it under **Redeem a code** on Billing.
+  A code made for your email address that gives a paid plan is redeemed here, once you've confirmed your email.
+
+When a complimentary period ends the account moves to Free like any other plan, unless you subscribed meanwhile (a
+subscription replaces the complimentary period at once; days left on it aren't credited). A wrong, used or expired
+code gets the same answer: check it with whoever sent it.
