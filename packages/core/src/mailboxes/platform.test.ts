@@ -40,6 +40,7 @@ import {
 import type { Deps } from "../ports";
 import type { MailServer } from "../provisioning/ports";
 import { CHECK_REFUSED, checkPlatformAddress, normalisePlatformLocalPart, PLATFORM_DOMAIN_ID } from "./platform";
+import { liftPersonSuspension, suspendPerson } from "../platform/suspension";
 import { createMailbox, deleteMailbox, mailboxOptions, purgeDueMailboxes, staffCreatePlatformMailbox } from "./service";
 
 const PLATFORM = "platform-mail.test"; // TEST_PLATFORM's domain
@@ -485,5 +486,75 @@ describe("breached passwords on a free address", () => {
       ),
     ).rejects.toMatchObject({ code: "password_breached" });
     expect(d.uow.state.mailboxes).toHaveLength(0);
+  });
+});
+
+describe("a new mailbox for a person staff have suspended (rule 27)", () => {
+  const GA_SESSION = { sessionId: "s-ga" };
+  const suspendMember = (d: ReturnType<typeof setup>["d"]) =>
+    suspendPerson(d, globalAdmin, "member", { reason: "abuse" }, GA_SESSION, req);
+  const withStaff = (planA: "free" | "plus" = "plus") => {
+    const t = setup(planA);
+    t.d.uow.state.stepUps.push({ userId: "ga", sessionId: "s-ga", expiresAt: new Date("2026-10-23T12:05:00Z") });
+    t.d.uow.state.platformRoles.push({ userId: "ga", role: "global_admin" });
+    t.d.uow.state.userEmails.ga = "ga@anhourtec.test";
+    return t;
+  };
+  const row = (d: ReturnType<typeof setup>["d"], id: string) => d.uow.state.mailboxes.find((m) => m.id === id);
+  const holdsOf = (d: ReturnType<typeof setup>["d"], id: string) =>
+    d.uow.state.mailboxHolds.filter((h) => h.mailboxId === id).map((h) => h.kind);
+
+  it("the account's own path creates it suspended with a person hold (audited); lifting releases it", async () => {
+    const { d } = withStaff();
+    await suspendMember(d);
+    const m = await claim(d, owner, ACCOUNT_A, "kept", { ownerUserId: "member" });
+    expect(m.status).toBe("suspended");
+    expect(row(d, m.id)?.status).toBe("suspended");
+    expect(holdsOf(d, m.id)).toEqual(["person"]);
+    expect(d.uow.state.audit.at(-1)).toMatchObject({
+      action: "mailbox.created",
+      result: "success",
+      meta: { heldBySuspension: "person" },
+    });
+    // The job creates the account on the mail server suspended (`mailbox.ensure` reads the status).
+    expect(d.uow.state.jobs.some((j) => j.kind === "mailbox.ensure" && j.subjectId === m.id)).toBe(true);
+    const lifted = await liftPersonSuspension(d, globalAdmin, "member", GA_SESSION, req);
+    expect(lifted.mailboxes).toBe(1);
+    expect(row(d, m.id)?.status).toBe("provisioning");
+    expect(holdsOf(d, m.id)).toEqual([]);
+  });
+
+  it("the staff path does the same; someone not suspended and no owner at all get an ordinary mailbox", async () => {
+    const { d } = withStaff();
+    await suspendMember(d);
+    const held = await staffCreatePlatformMailbox(
+      d,
+      globalAdmin,
+      ACCOUNT_A,
+      { localPart: "pat.lee", ownerUserId: "member" },
+      req,
+    );
+    expect(held.status).toBe("suspended");
+    expect(holdsOf(d, held.id)).toEqual(["person"]);
+    expect(d.uow.state.audit.at(-1)?.meta).toMatchObject({ heldBySuspension: "person", platformAddress: true });
+    const { d: d2 } = withStaff();
+    await suspendMember(d2);
+    const free = await staffCreatePlatformMailbox(d2, globalAdmin, ACCOUNT_A, { localPart: "jo.bloggs" }, req);
+    expect(free.status).toBe("provisioning");
+    const ownerBox = await claim(d2, owner, ACCOUNT_A, "alex.kent", { ownerUserId: "owner" });
+    expect(ownerBox.status).toBe("provisioning");
+    expect(d2.uow.state.audit.at(-1)?.meta).not.toHaveProperty("heldBySuspension");
+  });
+
+  it("a create racing the suspension ends suspended either way", async () => {
+    for (const createFirst of [true, false]) {
+      const { d } = withStaff();
+      const create = () => claim(d, owner, ACCOUNT_A, "racer", { ownerUserId: "member" });
+      const [first] = createFirst
+        ? await Promise.all([create(), suspendMember(d)])
+        : await Promise.all([suspendMember(d), create()]).then(([, m]) => [m]);
+      expect(row(d, first.id)?.status).toBe("suspended");
+      expect(holdsOf(d, first.id)).toEqual(["person"]);
+    }
   });
 });
