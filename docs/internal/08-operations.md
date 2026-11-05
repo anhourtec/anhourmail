@@ -192,7 +192,25 @@ gives it back. Heartbeat: `find /tmp/importer-heartbeat -mmin -2`.
   summaries (they land in Mailpit). A `npm run dev` started before the import routes existed must be restarted (seen
   2026-11-05: its web server answered 500 on every route using the new import tiers until restarted).
 - **Alerts:** `platform.provisioning_failed` for `mail_import.credential_revoke` (with `data.import_credentials_wiped`
-  in the account's log; the credential still expires on its own) and for `mail_import.training_cleanup`.
+  in the account's log; the credential still expires on its own), for `mail_import.training_cleanup` and for
+  `mailbox.training_purge` (the samples a purged mailbox's account left; ADR-0030 update).
+
+### Orphaned spam-training samples
+
+Before 2026-11-05 a purged mailbox's spam-training samples (sender, subject and a copy of each message) stayed on the
+mail server for up to `holdSamplesFor` (180 days). Since then the purge queues `mailbox.training_purge`; the ones from
+before are removed once with `scripts/stalwart-training-orphans.ts`:
+
+- `npm run ops:training-orphans` — **dry run** (default): prints counts only (`samples`, `accounts`, `orphaned`,
+  `orphanedAccountIds`, `reappearedAccountIds`, `inherited`); changes nothing. Before anything goes, the account ids
+  missing from the full list are asked for again by id; any that exist keep their samples, and `--apply` then refuses
+  (exit 1, `refused`, with the count) so the list can be checked first. `-- --apply` destroys the orphaned samples; `-- --inherited`
+  also destroys samples of an existing account made before it was created (none so far: ids aren't reused).
+- Credentials: the provisioning key (reads account ids and creation times) and the training key (reads only a sample's
+  `accountId`, `isSpam`, `expiresAt`; destroys), or the dev admin in development. On a server, run it where both keys
+  are already held and through the management proxy, like the other one-off jobs; set `STALWART_SPAM_SAMPLE_HOLD_MS`
+  if `holdSamplesFor` isn't the default.
+- Dev, 2026-11-05 (dry run, latest): 1,252 samples, 1,251 orphaned across 259 account ids, 0 reappeared, 0 inherited.
 
 ## Suspending an account or a person
 
@@ -201,6 +219,12 @@ or, in the People tab, **Suspend person**, then a reason category, an internal n
 procedure and when to use which is in `03-anti-spam-and-abuse.md` "Staff suspension". The worker applies the mailbox
 changes like any suspension (jobs `mailbox.ensure`); if one gives up, the reconciler reports the mismatch and the
 mailbox panel shows "not in force yet". Appeals come to `support@anhourtec.com`; **Lift suspension** restores.
+
+**Emergency blanket session kill:** a mail app that was signed in before the suspension keeps its open IMAP and
+submission sessions (Stalwart v0.16.27; app passwords are revoked for spam, abuse and phishing, which ends sessions
+that used one). If a suspended sender is still pushing mail through a session signed in with the password, restart
+the Stalwart container: every open session ends and the suspension refuses the reconnect. Mail already queued still
+goes out unless cancelled by hand in Stalwart's queue (no key of ours may do it yet).
 
 ## Runbooks
 
