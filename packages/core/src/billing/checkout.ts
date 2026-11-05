@@ -14,6 +14,8 @@ import { EmailUnverifiedError, NotFoundError, ValidationError } from "../errors"
 import { authorizeAudited, mutation, type MutationOutcome, type MutationSpec } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 
+import { onPlatformDomain } from "../mailboxes/platform";
+
 import { addressCeilingOf } from "./ceilings";
 import type { AccountBilling, BillingState, HoldSubject, PlanSource } from "./entity";
 import {
@@ -90,6 +92,12 @@ export type BillingOverview = {
   portal: boolean;
   /** Why a checkout can't start now, or null. */
   checkoutBlocked: "already_subscribed" | "checkout_pending" | null;
+  /**
+   * While a checkout started in the last hour may still be open at the provider: when a new one can start. Returning
+   * from an abandoned checkout doesn't clear it (the provider's session stays payable until then, and two paid
+   * sessions would be two subscriptions).
+   */
+  checkoutPendingUntil: Date | null;
   usage: {
     mailboxes: number;
     mailboxCeiling: number;
@@ -105,10 +113,20 @@ export type BillingOverview = {
   };
   holds: BillingHoldView[];
   /**
+   * After a lapse ("Choose what stays on", ADR-0029 §6): the platform-domain mailboxes Free can keep and the enabled
+   * platform-domain aliases on them, each marked kept (not held) or held. Null in every other state.
+   */
+  holdChoices: HoldChoices | null;
+  /**
    * From our row only (no provider call): the paid plan's first or renewal invoice may still be inside the 14-day
    * window. The refund itself re-checks the provider's invoice.
    */
   refund: { mayBeEligible: boolean; windowEndsAt: Date | null };
+};
+
+export type HoldChoices = {
+  mailboxes: { id: string; address: string; kept: boolean }[];
+  aliases: { id: string; address: string; kind: "alias" | "masked"; mailboxId: string; kept: boolean }[];
 };
 
 /** Where the current period started (the plans are yearly), from our row. */
@@ -130,14 +148,13 @@ export async function billingOverview(
   return deps.uow.run(async (r) => {
     const b = await billingOf(r, accountId, now);
     if (!b) throw new NotFoundError();
-    const [mailboxes, domains, aliases, members, holds, ceiling] = await Promise.all([
-      r.mailboxes.listByAccount(accountId),
-      r.domains.listByAccount(accountId),
-      r.aliases.listByAccount(accountId),
-      r.access.members(accountId),
-      r.billing.holds(accountId),
-      addressCeilingOf(deps, r, accountId),
-    ]);
+    // One query at a time: a unit of work holds one database connection.
+    const mailboxes = await r.mailboxes.listByAccount(accountId);
+    const domains = await r.domains.listByAccount(accountId);
+    const aliases = await r.aliases.listByAccount(accountId);
+    const members = await r.access.members(accountId);
+    const holds = await r.billing.holds(accountId);
+    const ceiling = await addressCeilingOf(deps, r, accountId);
     const e = entitlements(b);
     const heldMailboxes = new Set(holds.filter((h) => h.subjectType === "mailbox").map((h) => h.subjectId));
     const labels = new Map<string, string>([
@@ -168,6 +185,8 @@ export async function billingOverview(
       lapsedAt: b.lapsedAt,
       portal: b.providerCustomerId !== null,
       checkoutBlocked: checkoutBlock(b, now),
+      checkoutPendingUntil:
+        b.checkoutPendingUntil !== null && b.checkoutPendingUntil > now ? b.checkoutPendingUntil : null,
       usage: {
         mailboxes: mailboxes.length,
         mailboxCeiling: e.mailboxCeiling,
@@ -185,6 +204,7 @@ export async function billingOverview(
         heldAt: h.heldAt,
         receiveUntil: h.receiveUntil,
       })),
+      holdChoices: b.state === "lapsed" ? holdChoicesOf(deps, mailboxes, aliases, holds) : null,
       refund: {
         mayBeEligible:
           b.state === "active" &&
@@ -198,6 +218,33 @@ export async function billingOverview(
       },
     };
   });
+}
+
+/**
+ * What "Choose what stays on" can choose from: the account's platform-domain mailboxes (not being deleted) and their
+ * enabled platform-domain aliases, the same candidates `computeHolds` accepts.
+ */
+function holdChoicesOf(
+  deps: Deps,
+  mailboxes: readonly { id: string; address: string; status: string }[],
+  aliases: readonly { id: string; address: string; kind: "alias" | "masked"; mailboxId: string; enabled: boolean }[],
+  holds: readonly { subjectType: HoldSubject; subjectId: string }[],
+): HoldChoices {
+  const held = new Set(holds.map((h) => `${h.subjectType}:${h.subjectId}`));
+  const platform = mailboxes.filter((m) => m.status !== "deleting" && onPlatformDomain(m.address, deps.platform));
+  const ids = new Set(platform.map((m) => m.id));
+  return {
+    mailboxes: platform.map((m) => ({ id: m.id, address: m.address, kept: !held.has(`mailbox:${m.id}`) })),
+    aliases: aliases
+      .filter((a) => ids.has(a.mailboxId) && a.enabled && onPlatformDomain(a.address, deps.platform))
+      .map((a) => ({
+        id: a.id,
+        address: a.address,
+        kind: a.kind,
+        mailboxId: a.mailboxId,
+        kept: !held.has(`alias:${a.id}`),
+      })),
+  };
 }
 
 export type CheckoutRequest = {
