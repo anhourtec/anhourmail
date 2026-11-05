@@ -4,9 +4,12 @@ import { JmapClient, JmapError } from "@anhourmail/jmap-client";
 import type { SafeSenderMatch } from "@anhourmail/shared/senders";
 import type { SignatureDefaults, SignatureSet } from "@anhourmail/shared/signatures";
 import type { TemplateView } from "@anhourmail/shared/templates";
+import type { ImportCsvField } from "@anhourmail/shared/import";
 import type { WebmailPreferences } from "@anhourmail/shared/webmail";
 
 import type { BookView, ContactInput, ContactView } from "@/server/webmail/contacts";
+import { encodeColumns } from "@/server/webmail/contacts-csv";
+import type { ContactsImportCounts } from "@/server/webmail/contacts-import";
 import type { Bootstrap, BootstrapInput } from "@/server/webmail/bootstrap";
 import type { DelegatedSender, MailboxList, SendResult } from "@/server/webmail/service";
 import type { Undelivered } from "@/server/webmail/delivery";
@@ -959,12 +962,25 @@ export function createMailClient(
         headers: { [ACCOUNT]: account },
         body: JSON.stringify({ autoSave }),
       }),
-    importContacts: (account: string, file: File) =>
-      bff<{ imported: number; skipped: number; full: boolean }>(`${origin}/api/webmail/contacts/import`, {
-        method: "POST",
-        headers: { "Content-Type": "text/vcard", [ACCOUNT]: account },
-        body: file,
-      }),
+    /**
+     * Imports a vCard or CSV file into My contacts (ADR-0030 §10); for a CSV, one field (or null: "Don't import") per
+     * column. The BFF parses the whole file again with that mapping and merges by email.
+     */
+    importContacts: (
+      account: string,
+      file: Blob,
+      as: { format: "vcard" } | { format: "csv"; columns: readonly (ImportCsvField | null)[] },
+    ) =>
+      bff<ContactsImportCounts & { format: "vcard" | "csv" }>(
+        `${origin}/api/webmail/contacts/import?format=${as.format}${
+          as.format === "csv" ? `&columns=${encodeURIComponent(encodeColumns(as.columns))}` : ""
+        }`,
+        {
+          method: "POST",
+          headers: { "Content-Type": as.format === "csv" ? "text/csv" : "text/vcard", [ACCOUNT]: account },
+          body: file,
+        },
+      ),
     exportContactsUrl: (ids?: string[]) =>
       `${origin}/api/webmail/contacts/export${ids && ids.length > 0 ? `?ids=${ids.map(encodeURIComponent).join(",")}` : ""}`,
 

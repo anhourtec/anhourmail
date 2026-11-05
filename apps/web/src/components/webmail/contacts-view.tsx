@@ -22,7 +22,7 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { type SyntheticEvent, useRef, useState } from "react";
+import { type SyntheticEvent, useState } from "react";
 
 import { Bone } from "@anhourmail/ui/skeletons";
 
@@ -30,6 +30,7 @@ import type { ContactView } from "@/server/webmail/contacts";
 
 import { inputClass, primaryButtonClass, secondaryButtonClass } from "@/components/ui-classes";
 
+import { ContactsImportDialog } from "./contacts-import";
 import { ConfirmDialog } from "./dialogs";
 import type { ContactFields, ContactsData, MailClient } from "./mail-client";
 import { RefusedError } from "./mail-client";
@@ -557,7 +558,7 @@ export function ContactsView({
   const [mode, setMode] = useState<"view" | "edit" | "new">("view");
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [confirm, setConfirm] = useState<{ ids: string[] } | null>(null);
-  const file = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
 
   const books = data?.books ?? [];
   // The account these contacts belong to; every change carries it (the BFF refuses another active mailbox).
@@ -613,7 +614,15 @@ export function ContactsView({
   };
 
   const menu: MenuEntry[] = [
-    { label: "Import contacts (.vcf)", icon: Upload, onSelect: () => file.current?.click() },
+    {
+      label: "Import contacts",
+      icon: Upload,
+      // Imports go to the account the list shows: offered once it's known.
+      disabled: account === "",
+      onSelect: () => {
+        setImporting(true);
+      },
+    },
     {
       label: "Export all contacts",
       icon: Download,
@@ -681,37 +690,6 @@ export function ContactsView({
             <UserPlus className="size-4" aria-hidden />
           </button>
           <Menu label="Contacts options" icon={Ellipsis} items={menu} />
-          <input
-            ref={file}
-            type="file"
-            accept=".vcf,text/vcard,text/x-vcard"
-            className="hidden"
-            aria-hidden
-            tabIndex={-1}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              e.target.value = "";
-              if (!f) return;
-              if (f.size > 1024 * 1024) {
-                toasts.show({ message: "Contact files can be up to 1 MB.", tone: "error" });
-                return;
-              }
-              void (async () => {
-                try {
-                  const r = await client.importContacts(account, f);
-                  await onChanged();
-                  toasts.show({
-                    message: `Imported ${String(r.imported)} contact${r.imported === 1 ? "" : "s"}${r.skipped ? ` (${String(r.skipped)} skipped)` : ""}.${r.full ? " A mailbox can keep up to 5,000 contacts." : ""}`,
-                  });
-                } catch (err) {
-                  toasts.show({
-                    message: err instanceof RefusedError ? err.message : "That file couldn't be imported.",
-                    tone: "error",
-                  });
-                }
-              })();
-            }}
-          />
         </header>
         {checked.size > 0 ? (
           <div
@@ -817,7 +795,7 @@ export function ContactsView({
               <p className="am-small max-w-64">
                 {group === "other"
                   ? "People you email are saved here automatically."
-                  : "Add people with New contact, import a .vcf file, or just email them."}
+                  : "Add people with New contact, import a vCard or CSV file, or just email them."}
               </p>
             </div>
           ) : (
@@ -978,6 +956,16 @@ export function ContactsView({
           onClose={() => {
             setConfirm(null);
           }}
+        />
+      )}
+      {importing && (
+        <ContactsImportDialog
+          client={client}
+          account={account}
+          onClose={() => {
+            setImporting(false);
+          }}
+          onImported={onChanged}
         />
       )}
     </div>
