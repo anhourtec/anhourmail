@@ -78,11 +78,15 @@ what matters, and a number invites "only 3 times, fine".
 - **How (k-anonymity):** the port is core `BreachedPasswords` (`packages/core/src/security/breached-passwords.ts`); the
   adapter (`packages/adapters/src/breached-passwords`) takes the SHA-1 of the UTF-8 password server-side, sends only the
   first 5 hex characters to `https://api.pwnedpasswords.com/range/<prefix>` with `Add-Padding: true` and
-  `User-Agent: AnhourMail`, no redirects, a 2 s timeout covering the body, a 256 KiB body cap, and compares suffixes
+  `User-Agent: AnhourMail`, no redirects, a 2 s timeout covering the body, a 256 KiB body cap (the body is read as a
+  stream and cut off at the cap, whatever its declared length says), and compares suffixes
   locally (padding lines have count 0). The password, the full hash and the prefix are never logged, audited, cached
   or sent anywhere else. The browser never calls the service (rule 29); the mailbox password is checked while it
   still exists only in the request, before hashing.
-- **Order:** the length and shape rules first (their message wins), then the breach check. In core services the
+- **Order:** the length and shape rules first (their message wins), then the breach check. A password reset checks
+  its token first (the same verification row and expiry the endpoint reads): a missing, unknown, used or expired token
+  gets the endpoint's `INVALID_TOKEN` with no outbound lookup, so a dead link can't be used to ask the service
+  about passwords. In core services the
   lookup runs **before** the unit of work (no row lock is held across a network call) and only for an actor who has
   the permission, so a 403 actor causes no outbound request; the answer is applied after the rules, inside the
   mutation, so a refusal is audited as `failed` with `password_breached` (never the password).
@@ -542,9 +546,12 @@ Built 2026-10-22 (ADR-0020). Code: `packages/core/src/app-passwords`, `packages/
 - **Creation re-checks under the account lock** (the lock removal also takes): a person removed, or no longer holding
   the mailbox, by then gets 404 and nothing is issued.
 - **Suspended console users:** a suspended person can't sign in, so can't create or list; their existing app passwords
-  keep working while their mailbox is active. Abuse handling suspends the mailbox (which blocks every app password at
-  once, reversible). A person-level suspension action doesn't exist yet (Phase 6): when it lands it must revoke the
-  app passwords on that person's mailboxes, as removal does (open item).
+  keep working while their mailbox is active. A staff suspension (account or person) blocks every app password of the
+  suspended mailboxes at once; for **spam, abuse or phishing** it also revokes them (`SUSPENSION_REVOKES_APP_PASSWORDS`,
+  `app_password.revoke` jobs queued in the suspension's unit of work, audited as `appPasswordsRevoked` on
+  `trust.suspended`), which ends mail-app sessions signed in with one — Stalwart keeps open IMAP and submission sessions
+  through a suspension (research/stalwart.md). They aren't restored on a lift; the emails and the public page say to
+  make new ones. Payment, legal and other suspensions leave them (reversible).
 - **Rate limits:** create `sensitive` (fail closed); revoke `write`; list `read`.
 - **Known gap:** replacing an account's credential list on Stalwart (setting a mailbox password with
   `credentials: {0: Password}`) drops every app password (verified). The dev seed accounts for it; a future "set
@@ -999,7 +1006,17 @@ customer's account without the customer knowing.
   suspended; a 14-day grace period with mailboxes suspended at once (`deletion` holds) and the account frozen
   (`allowedWhileDeleting`); removal by idempotent audited steps that never run before `delete_after`, and never while
   staff hold the account suspended. Audit rows are never deleted (rule 47). Deleting one's own login needs a step-up
-  and the typed address, locks the login row first, and is refused while any account depends on it.
+  and the typed address, locks the person's accounts (id order) and then the login row — the order a staff
+  suspension takes, so the two can't deadlock (a deadlock Postgres breaks anyway answers 409 `deadlock`, "try
+  again", audited `failed` with that code and logged as a warning, `PgUnitOfWork.run`) — and is refused while any account depends on it, and (409, audited `suspended` /
+  `session_ended`) when staff suspended the person or the session ended while it waited.
+- **Mail server leftovers (2026-11-05):** destroying a mail server account doesn't remove its spam-training samples
+  (each holds a sender, a subject and a copy of the message, up to 180 days; rule 24 data on the mail server). The
+  purge — the one path that destroys an account, for a mailbox deletion, an account deletion and a leaver's mailbox
+  alike — queues `mailbox.training_purge` in the same unit of work, and the worker's training key destroys every sample
+  of that account id made before the destroy (ADR-0030 update). Samples from before the change are removed with
+  `npm run ops:training-orphans` (08-operations.md). Until the job runs (normally within seconds; retried, and a
+  give-up is audited and alerts) the samples still exist; a backup of the mail server keeps them for its retention.
 - **Residuals:** (0) a person suspension that lands while a purge is between its check and its
   delete isn't serialised by the account lock (an account suspension is); the window is one transaction. (1) the mail
   export is bounded only by the `export` tier (5 per hour per webmail session) and the
