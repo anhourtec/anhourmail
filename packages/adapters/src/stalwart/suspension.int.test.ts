@@ -3,7 +3,9 @@
  * Staff suspension end to end (`platform.account.suspend`): a Global Administrator with a fresh step-up suspends a
  * customer account, the provisioning jobs suspend its mailbox on the real dev Stalwart (sign-in refused, so no sending
  * either), and lifting it brings the mailbox back — but never a mailbox the account had suspended itself. Then the
- * same for a person: their console sessions end, their mailbox is suspended and comes back when lifted.
+ * same for a person: their console sessions end, their mailbox is suspended and comes back when lifted. A webmail token
+ * issued before the person suspension is refused once the mail server suspends the principal; an IMAP connection
+ * already signed in is the documented v0.16.27 limitation and is pinned as such.
  */
 import { randomBytes, randomUUID } from "node:crypto";
 
@@ -14,12 +16,20 @@ import { type Actor, systemClock } from "@anhourmail/core";
 import { enqueueProvisioning, runNextJob } from "@anhourmail/core/provisioning";
 import { liftAccountSuspension, liftPersonSuspension, suspendAccount, suspendPerson } from "@anhourmail/core/platform";
 import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
-import { StalwartManagement, StalwartTransport } from "@anhourmail/stalwart-client";
+import {
+  StalwartManagement,
+  StalwartOAuth,
+  StalwartTransport,
+  WEBMAIL_OAUTH_CLIENT_ID,
+  webmailRedirectUri,
+} from "@anhourmail/stalwart-client";
 
 import { hashPassword } from "../auth/password";
 import { createDb, schema } from "../db-postgres/client";
 import { PgUnitOfWork } from "../db-postgres/repositories";
 import { stalwartMailServer } from ".";
+import { imapSession } from "./int-imap";
+import { smtpSession } from "./int-smtp";
 
 const dbUrl = process.env.TEST_DATABASE_URL;
 const stalwartUrl = process.env.STALWART_URL;
@@ -36,6 +46,11 @@ const mgmt = new StalwartManagement(
 );
 const mail = stalwartMailServer(mgmt);
 const meta = { requestId: "int-suspension", ip: null, userAgent: null };
+const oauth = new StalwartOAuth({
+  baseUrl: stalwartUrl,
+  clientId: WEBMAIL_OAUTH_CLIENT_ID,
+  redirectUri: webmailRedirectUri(process.env.WEBMAIL_URL ?? "http://localhost:43300"),
+});
 
 const tag = randomUUID().slice(0, 8);
 const domain = `susp-${tag}.test`;
@@ -92,6 +107,14 @@ const sessionStatus = async () =>
         Authorization: `Basic ${Buffer.from(`${address}:${password}`).toString("base64")}`,
         "X-Forwarded-For": clientAddress,
       },
+    })
+  ).status;
+
+/** The JMAP session status for a webmail access token (what the webmail proxy sends for the signed-in user). */
+const tokenStatus = async (token: string) =>
+  (
+    await fetch(`${stalwartUrl}/jmap/session`, {
+      headers: { Authorization: `Bearer ${token}`, "X-Forwarded-For": clientAddress },
     })
   ).status;
 
@@ -181,11 +204,43 @@ describe("staff suspension against Stalwart", () => {
     expect((await mailboxRow(own.id))?.status).toBe("suspended");
     expect(await sessionStatus()).toBe(200);
 
+    // Already signed in before the person suspension: a mail app over IMAP and the webmail (its OAuth token).
+    const imap = await imapSession();
+    expect(await imap.run(`LOGIN "${address}" "${password}"`)).toMatch(/^t1 OK/m);
+    expect(await imap.run("SELECT INBOX")).toMatch(/^t2 OK/m);
+    const tokens = await oauth.signIn(address, password, clientAddress);
+    expect(await tokenStatus(tokens.accessToken)).toBe(200);
+    // A mail app signed in to submission (465) with the password, idle on an open connection.
+    const smtp = await smtpSession();
+    expect(await smtp.send("EHLO int-test")).toMatch(/^250 /m);
+    const plain = Buffer.from(`\0${address}\0${password}`).toString("base64");
+    expect(await smtp.send(`AUTH PLAIN ${plain}`)).toMatch(/^235 /m);
+
     // Person suspension: console sessions end, their mailbox is suspended; lifting restores it.
     const p = await suspendPerson(deps, staff, memberId, { reason: "abuse" }, session, meta);
     expect(p).toMatchObject({ mailboxes: 1, sessionsRevoked: 1 });
     await drain(m.id);
     expect(await sessionStatus()).toBe(403);
+    // A webmail token issued before it is refused at once (403); a refresh still mints one, which is refused too —
+    // the webmail BFF also ends the session itself (MailboxAccessGate, research/stalwart.md "Suspension").
+    expect(await tokenStatus(tokens.accessToken)).toBe(403);
+    const refreshed = await oauth.refresh(tokens.refreshToken ?? "", clientAddress);
+    expect(await tokenStatus(refreshed.accessToken)).toBe(403);
+    // Pinned limitation of v0.16.27 (research/stalwart.md): an IMAP connection already signed in keeps reading until
+    // the client disconnects (new mail can't reach it, delivery is refused; a new IMAP sign-in is refused). If an
+    // upgrade starts ending open sessions this assertion fails: update the docs and drop the limitation.
+    expect(await imap.run("STATUS INBOX (MESSAGES)")).toMatch(/^t3 OK/m);
+    imap.close();
+    // Pinned gap of v0.16.27 (research/stalwart.md "Suspension"): the submission session signed in before the
+    // suspension still has a message accepted for delivery (queued). Only to its own local address here — nothing
+    // leaves the dev network. Mitigations: spam/abuse/phishing suspensions revoke app passwords (sessions signed in with
+    // one end); a session signed in with the password lasts until the client disconnects or Stalwart restarts.
+    expect(await smtp.send(`MAIL FROM:<${address}>`)).toMatch(/^250 /m);
+    expect(await smtp.send(`RCPT TO:<${address}>`)).toMatch(/^250 /m);
+    expect(await smtp.send("DATA")).toMatch(/^354 /m);
+    const body = `From: <${address}>\r\nTo: <${address}>\r\nSubject: after suspension\r\nMessage-ID: <${randomUUID()}@int>\r\nDate: ${new Date().toUTCString()}\r\n\r\nhi\r\n.`;
+    expect(await smtp.send(body)).toMatch(/^250 /m);
+    smtp.close();
     expect(await db.select().from(schema.authSession).where(eq(schema.authSession.userId, memberId))).toEqual([]);
     await liftPersonSuspension(deps, staff, memberId, session, meta);
     await drain(m.id);
