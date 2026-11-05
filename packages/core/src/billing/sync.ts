@@ -12,11 +12,12 @@ import { onPlatformDomain } from "../mailboxes/platform";
 import { recordSystemChanges, type SystemChange } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 
-import type { AccountBilling, BillingEvent } from "./entity";
+import type { AccountBilling, BillingEvent, PlanHold } from "./entity";
 import { computeHolds, type HoldResources } from "./holds";
 import {
   type BillingChange,
   defaultBilling,
+  type Derivation,
   deriveBilling,
   effectivePlan,
   type PendingBillingEvent,
@@ -48,12 +49,11 @@ export type SyncOutcome =
 
 /** What the sync needs to compute holds: the account's people, mailboxes, custom domains and aliases. */
 export async function holdResources(deps: Deps, r: Repositories, accountId: string): Promise<HoldResources> {
-  const [members, mailboxes, domains, aliases] = await Promise.all([
-    r.access.members(accountId),
-    r.mailboxes.listByAccount(accountId),
-    r.domains.listByAccount(accountId),
-    r.aliases.listByAccount(accountId),
-  ]);
+  // One query at a time: a unit of work holds one database connection.
+  const members = await r.access.members(accountId);
+  const mailboxes = await r.mailboxes.listByAccount(accountId);
+  const domains = await r.domains.listByAccount(accountId);
+  const aliases = await r.aliases.listByAccount(accountId);
   return {
     ownerUserIds: members.filter((m) => m.role === "owner").map((m) => m.userId),
     mailboxes: mailboxes.map((m) => ({
@@ -179,6 +179,74 @@ const touchesMailServer = (changes: readonly BillingChange[]): boolean =>
   );
 
 /**
+ * Writes one derivation (`deriveBilling`) inside the caller's unit of work, under the account lock the caller holds:
+ * the billing row and the effective plan, processed events and tracked disputes, plan holds applied (with pending
+ * invites revoked) or lifted, and the mail-server work the change implies. Returns the audit entries for it; the
+ * caller records them (the sync as the system, a staff grant or a code redemption with the person's own entry).
+ * Shared by `billing.sync` and the changes made without the provider (staff grants, comps; ADR-0029 §8, §9).
+ */
+export async function applyDerivation(
+  deps: Deps,
+  r: Repositories,
+  input: {
+    accountId: string;
+    /** `customer_account.plan` before this change. */
+    accountPlan: string;
+    derivation: Derivation;
+    /** The account's resources when they were read for the hold count (read again when needed). */
+    resources: HoldResources | null;
+    currentHolds: readonly PlanHold[];
+    now: Date;
+  },
+): Promise<SystemChange[]> {
+  const { accountId, derivation: d, resources, currentHolds, now } = input;
+  await r.billing.save(d.next);
+  const plan = effectivePlan(d.next);
+  if (input.accountPlan !== plan) await r.accounts.setPlan(accountId, plan);
+  await r.billing.markEventsProcessed(accountId, d.processedEventIds, now);
+  if (d.disputes.length > 0) await r.billing.saveDisputes(accountId, d.disputes);
+
+  let held: HeldCounts | null = null;
+  const revoked: SystemChange[] = [];
+  if (d.changes.some((c) => c.kind === "holds_needed")) {
+    const planned = computeHolds(resources ?? (await holdResources(deps, r, accountId)), now);
+    await r.billing.replaceHolds(accountId, planned.holds, now);
+    held = countHolds(planned.holds);
+    // Free can't add people (ADR-0029 §6): pending invites are revoked; members stay members.
+    for (const invite of await r.invites.listPending(accountId)) {
+      if (await r.invites.revoke(invite.id)) {
+        revoked.push({
+          action: "account.invite_revoked",
+          accountId,
+          target: { type: "invite", id: invite.id },
+          meta: { reason: "plan_lapsed" },
+        });
+      }
+    }
+  } else if (d.changes.some((c) => c.kind === "holds_lifted")) {
+    held = countHolds(currentHolds);
+    await r.billing.clearHolds(accountId);
+  }
+
+  if (touchesMailServer(d.changes)) {
+    // Every mailbox's access follows the account's state and holds (`mailbox.ensure`); custom domains drop or regain
+    // their catch-all with their holds (`domain.ensure`). Deleting mailboxes and removing domains have their own jobs.
+    for (const m of await r.mailboxes.listByAccount(accountId)) {
+      if (m.status !== "deleting") {
+        await r.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: m.id, runAfter: now });
+      }
+    }
+    if (held !== null) {
+      for (const dom of await r.domains.listByAccount(accountId)) {
+        if (dom.status === "active")
+          await r.provisioning.enqueue({ kind: "domain.ensure", subjectId: dom.id, runAfter: now });
+      }
+    }
+  }
+  return [...auditOf(accountId, d.next, d.changes, held), ...revoked];
+}
+
+/**
  * Syncs one account's billing with the provider (job `billing.sync`, subject = account id). Idempotent: a second run
  * with nothing new writes only `last_synced_at`. Events that arrive while it runs stay queued for the next run (their
  * own job is already queued by ingestion).
@@ -259,50 +327,15 @@ export async function syncAccountBilling(
       previous.state === "lapsed" ? currentHolds.length : resources ? computeHolds(resources, now).holds.length : 0;
     const d = deriveBilling(previous, sub, events, { now, holdCount, disputes, disputeStatuses: fresh });
 
-    await r.billing.save(d.next);
-    const plan = effectivePlan(d.next);
-    if (account.plan !== plan) await r.accounts.setPlan(accountId, plan);
-    await r.billing.markEventsProcessed(accountId, d.processedEventIds, now);
-    if (d.disputes.length > 0) await r.billing.saveDisputes(accountId, d.disputes);
-
-    let held: HeldCounts | null = null;
-    const revoked: SystemChange[] = [];
-    if (d.changes.some((c) => c.kind === "holds_needed")) {
-      const planned = computeHolds(resources ?? (await holdResources(deps, r, accountId)), now);
-      await r.billing.replaceHolds(accountId, planned.holds, now);
-      held = countHolds(planned.holds);
-      // Free can't add people (ADR-0029 §6): pending invites are revoked; members stay members.
-      for (const invite of await r.invites.listPending(accountId)) {
-        if (await r.invites.revoke(invite.id)) {
-          revoked.push({
-            action: "account.invite_revoked",
-            accountId,
-            target: { type: "invite", id: invite.id },
-            meta: { reason: "plan_lapsed" },
-          });
-        }
-      }
-    } else if (d.changes.some((c) => c.kind === "holds_lifted")) {
-      held = countHolds(currentHolds);
-      await r.billing.clearHolds(accountId);
-    }
-
-    if (touchesMailServer(d.changes)) {
-      // Every mailbox's access follows the account's state and holds (`mailbox.ensure`); custom domains drop or regain
-      // their catch-all with their holds (`domain.ensure`). Deleting mailboxes and removing domains have their own jobs.
-      for (const m of await r.mailboxes.listByAccount(accountId)) {
-        if (m.status !== "deleting") {
-          await r.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: m.id, runAfter: now });
-        }
-      }
-      if (held !== null) {
-        for (const dom of await r.domains.listByAccount(accountId)) {
-          if (dom.status === "active")
-            await r.provisioning.enqueue({ kind: "domain.ensure", subjectId: dom.id, runAfter: now });
-        }
-      }
-    }
-    await recordSystemChanges(deps, r, SYNC, req, [...auditOf(accountId, d.next, d.changes, held), ...revoked]);
+    const entries = await applyDerivation(deps, r, {
+      accountId,
+      accountPlan: account.plan,
+      derivation: d,
+      resources,
+      currentHolds,
+      now,
+    });
+    await recordSystemChanges(deps, r, SYNC, req, entries);
     return { status: "synced", changes: d.changes };
   });
 }
