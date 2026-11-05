@@ -68,6 +68,8 @@ const STATUS: Record<string, number> = {
   billing_restricted: 403,
   billing_unavailable: 503,
   card_declined: 402,
+  // Invite codes (ADR-0029 §8): every way a code can be wrong is the same 404.
+  invite_code_invalid: 404,
   // Mail import (ADR-0030): the mailbox can't take one now, one is already running, or it has finished.
   mailbox_unavailable: 409,
   import_running: 409,
