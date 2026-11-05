@@ -35,6 +35,8 @@ import {
 } from "../mail/system-email";
 import { platform } from "../platform";
 
+import { admittedSignUpCode, completeAdmittedCode } from "./sign-up-code";
+
 /**
  * Sign-up mode: `open` (anyone who can reach the console; production keeps it behind the firewall allow-list) or
  * `closed` (no sign-up page).
@@ -226,6 +228,8 @@ export function auth(): Auth {
       ],
       secureCookies: e.APP_URL.startsWith("https://") || e.NODE_ENV === "production",
       signUp: e.SIGNUP_MODE,
+      // A new user only through the sign-up route's gate: sign-up open, or an invite code it admitted (ADR-0029 §8).
+      admitSignUp: () => e.SIGNUP_MODE === "open" || admittedSignUpCode() !== null,
       sealer: keyRingFromEnv({
         spec: e.SECRETS_KEYRING,
         production: e.NODE_ENV === "production",
@@ -328,22 +332,29 @@ export function auth(): Auth {
         },
       },
       onUserCreated: async (user) => {
+        const meta = {
+          requestId: requestContext()?.requestId ?? "sign-up",
+          ip: requestContext()?.clientIp ?? null,
+          userAgent: null,
+        };
+        let accountId: string | null = null;
         try {
-          await provisionSignUp(
-            container().deps,
-            { kind: "system", name: "sign-up" },
-            { userId: user.id, email: user.email, name: user.name },
-            // Where the sign-up came from (platform log, full address for staff watching open sign-ups); no user agent.
-            {
-              requestId: requestContext()?.requestId ?? "sign-up",
-              ip: requestContext()?.clientIp ?? null,
-              userAgent: null,
-            },
-          );
+          // Where the sign-up came from (platform log, full address for staff watching open sign-ups); no user agent.
+          accountId = (
+            await provisionSignUp(
+              container().deps,
+              { kind: "system", name: "sign-up" },
+              { userId: user.id, email: user.email, name: user.name },
+              meta,
+            )
+          ).accountId;
         } catch (err) {
           // The console user exists; the account can be provisioned again on retry (idempotent).
           log.error("sign-up provisioning failed", { component: "auth", userId: user.id, err });
         }
+        // A sign-up admitted with an invite code: attach the person (and account) to the claim and apply a comp,
+        // whether or not provisioning succeeded (run-67 N1).
+        await completeAdmittedCode({ id: user.id }, accountId, meta);
       },
     });
   }

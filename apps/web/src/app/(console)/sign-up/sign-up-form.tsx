@@ -4,7 +4,7 @@
 import { useRouter } from "next/navigation";
 import { type SyntheticEvent, useState } from "react";
 
-import { POW_HEADERS, SIGN_UP_REFUSAL } from "@anhourmail/shared/proof-of-work";
+import { POW_HEADERS, SIGN_UP_CODE_HEADER, SIGN_UP_REFUSAL } from "@anhourmail/shared/proof-of-work";
 import { BREACHED_PASSWORD } from "@anhourmail/shared/security";
 
 import { useHydrated } from "@/components/use-hydrated";
@@ -25,8 +25,18 @@ const MIN_PASSWORD = 12;
  * (ADR-0008) and the server re-validates and applies the same display-name default. A proof-of-work runs in the
  * background as the page opens and goes with the request (ADR-0031); a refused proof is solved again and sent once more.
  */
-export function SignUpForm() {
+export function SignUpForm({
+  inviteCode = null,
+  codeRequired = false,
+}: {
+  /** From the link (`?code=`), prefilled. */
+  inviteCode?: string | null;
+  /** Sign-up is closed: only an invite code lets someone in. */
+  codeRequired?: boolean;
+} = {}) {
   const router = useRouter();
+  const [code, setCode] = useState(inviteCode ?? "");
+  const [showCode, setShowCode] = useState(codeRequired || inviteCode !== null);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -34,7 +44,7 @@ export function SignUpForm() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const hydrated = useHydrated();
-  const pow = useSignUpProof(hydrated);
+  const pow = useSignUpProof(hydrated, code.trim() === "" ? null : code.trim());
 
   const autoDisplay = [firstName.trim(), lastName.trim()].filter(Boolean).join(" ");
   const shownDisplay = displayEdited ? displayName : autoDisplay;
@@ -52,6 +62,10 @@ export function SignUpForm() {
       setError(`Use at least ${String(MIN_PASSWORD)} characters for your password.`);
       return;
     }
+    if (codeRequired && code.trim() === "") {
+      setError("Enter your invite code.");
+      return;
+    }
     setPending(true);
     setError(null);
     try {
@@ -66,6 +80,7 @@ export function SignUpForm() {
             "Content-Type": "application/json",
             [POW_HEADERS.challenge]: proof.challenge,
             [POW_HEADERS.proof]: proof.proof,
+            ...(code.trim() !== "" ? { [SIGN_UP_CODE_HEADER]: code.trim() } : {}),
           },
           body: JSON.stringify({
             firstName: firstName.trim(),
@@ -93,7 +108,9 @@ export function SignUpForm() {
         }
         pow.restart();
         if (gate === SIGN_UP_REFUSAL.proofOfWork) setError("The automatic check didn't go through. Try again.");
-        else if (gate === SIGN_UP_REFUSAL.attempts) {
+        else if (gate === SIGN_UP_REFUSAL.inviteCode) {
+          setError("That invite code isn't valid. Check it, or ask whoever sent it.");
+        } else if (gate === SIGN_UP_REFUSAL.attempts) {
           setError("Too many sign-up attempts from your network. Try again later.");
         } else if (gate === SIGN_UP_REFUSAL.limited) {
           setError("Too many accounts were created from your network recently. Try again later.");
@@ -208,6 +225,42 @@ export function SignUpForm() {
           At least {MIN_PASSWORD} characters. A passphrase works well.
         </span>
       </div>
+      {showCode ? (
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="sign-up-invite-code" className="am-h4">
+            Invite code {!codeRequired && <span className="am-micro font-normal">(optional)</span>}
+          </label>
+          <input
+            id="sign-up-invite-code"
+            name="inviteCode"
+            autoComplete="off"
+            spellCheck={false}
+            maxLength={64}
+            value={code}
+            placeholder="XXXX-XXXX-XXXX-…"
+            aria-describedby="sign-up-invite-code-hint"
+            onChange={(e) => {
+              setCode(e.target.value);
+            }}
+            className={`${inputClass} font-mono`}
+          />
+          <span id="sign-up-invite-code-hint" className="am-micro">
+            {codeRequired
+              ? "Sign-up is by invitation for now. Use the code you were sent."
+              : "If you were sent a code, it can come with a paid plan for a while."}
+          </span>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            setShowCode(true);
+          }}
+          className="am-small w-fit text-primary underline-offset-2 hover:underline"
+        >
+          Have an invite code?
+        </button>
+      )}
       <ProofStatus state={pow.state} onRetry={pow.restart} />
       {error && (
         <p role="alert" className="am-small text-destructive">

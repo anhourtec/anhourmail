@@ -48,6 +48,12 @@ export type AuthOptions = {
   secureCookies: boolean;
   /** Allow self-service sign-up (POST /api/auth/sign-up/email). */
   signUp: "open" | "closed";
+  /**
+   * Whether this request may create a user, asked as each new user is about to be stored. With it, the endpoint stays
+   * on even when `signUp` is `closed`, and the caller's route gate decides (open sign-up, or an admitted invite code,
+   * ADR-0029 §8); a `false` refuses the creation (404). Without it, `closed` refuses at the endpoint as before.
+   */
+  admitSignUp?: () => boolean;
   /** Runs after a new console user is stored (personal account provisioning). Errors are logged by the caller. */
   onUserCreated?: (user: { id: string; email: string; name: string }) => Promise<void>;
   /** Sends the reset link. Must not reveal whether the address has an account (the endpoint answers the same). */
@@ -124,7 +130,7 @@ export function createAuth(opts: AuthOptions) {
       ),
     emailAndPassword: {
       enabled: true,
-      disableSignUp: opts.signUp === "closed",
+      disableSignUp: opts.signUp === "closed" && opts.admitSignUp === undefined,
       minPasswordLength: CONSOLE_PASSWORD.min,
       maxPasswordLength: CONSOLE_PASSWORD.max,
       // Salted argon2id (OWASP baseline) instead of the library default (docs/internal/07-security.md).
@@ -200,6 +206,7 @@ export function createAuth(opts: AuthOptions) {
       user: {
         create: {
           before: async (user) => {
+            if (opts.admitSignUp && !opts.admitSignUp()) throw new APIError("NOT_FOUND", { message: "Not found." });
             const names = normaliseNames(user);
             if (!names) throw new APIError("BAD_REQUEST", { message: "First name is required." });
             refuseBadNames(names);

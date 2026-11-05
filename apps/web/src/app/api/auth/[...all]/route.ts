@@ -4,6 +4,13 @@ import type { LimitName } from "@anhourmail/server/rate-limit";
 
 import { auth, signUpOpen } from "@/server/auth/instance";
 import { authEndpoint } from "@/server/auth/endpoints";
+import {
+  type AdmittedCode,
+  admitSignUpCode,
+  releaseAdmittedCode,
+  signUpCodeOf,
+  withSignUpCode,
+} from "@/server/auth/sign-up-code";
 import { signUpGate } from "@/server/auth/sign-up-gate";
 import { route } from "@/server/http/route";
 
@@ -25,17 +32,33 @@ const byTier = (method: "GET" | "POST") => {
       async ({ req, meta }) => {
         const path = new URL(req.url).pathname;
         if (!authEndpoint(method, path)) return notFound();
-        if (method === "POST" && path === SIGN_UP && signUpOpen()) {
+        if (method === "POST" && path === SIGN_UP) {
+          const open = signUpOpen();
+          const code = signUpCodeOf(req);
+          // Closed sign-up: only a request carrying an invite code goes further (ADR-0029 §8).
+          if (!open && code === null) return notFound();
           const gate = await signUpGate(req, meta);
           if ("refused" in gate) return gate.refused;
-          // The account tiers count only a created account: anything else (or a throw) gives them back.
+          // The account tiers count only a created account: anything else (or a throw) gives them back; a code
+          // claimed for this sign-up is given back too.
           let created = false;
+          let admitted: AdmittedCode | null = null;
           try {
-            const res = await handlers()[method](req);
+            // The code is claimed after the proof and the limits, never instead of them; the claim is the admission.
+            if (code !== null) {
+              const a = await admitSignUpCode(req, code, meta, open);
+              if ("refused" in a) return a.refused;
+              admitted = a.admitted;
+            }
+            const claim = admitted;
+            const res = claim
+              ? await withSignUpCode(claim, () => handlers()[method](req))
+              : await handlers()[method](req);
             created = res.ok;
             return res;
           } finally {
             await gate.settle(created);
+            if (admitted && !created) await releaseAdmittedCode(admitted, meta);
           }
         }
         return handlers()[method](req);

@@ -16,11 +16,20 @@ import { setLogSinkForTests } from "@anhourmail/server/log";
 import { memoryOneTime, type OneTimeStore } from "@anhourmail/server/one-time";
 import { type Counter, memoryCounter, type Uncount } from "@anhourmail/server/rate-limit";
 import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
-import { leadingZeroBits, POW_BITS, POW_HEADERS, powInput } from "@anhourmail/shared/proof-of-work";
+import { hashInviteCode, newInviteCode, normaliseInviteCode } from "@anhourmail/core/billing";
+import {
+  leadingZeroBits,
+  POW_BITS,
+  POW_HEADERS,
+  powInput,
+  SIGN_UP_CODE_HEADER,
+  SIGN_UP_REFUSAL,
+} from "@anhourmail/shared/proof-of-work";
 
 import { POST as authPost } from "@/app/api/auth/[...all]/route";
 import { POST as challengeRoute } from "@/app/api/sign-up/challenge/route";
 
+import { admittedSignUpCode } from "./auth/sign-up-code";
 import { setContainerForTests } from "./container";
 import { env, resetEnvForTests } from "./env";
 
@@ -395,7 +404,7 @@ describe("POST /api/auth/sign-up/email behind the gate", () => {
     expect(reached).not.toHaveBeenCalled();
   });
 
-  it("leaves other auth endpoints alone, and closed sign-up to the identity layer", async () => {
+  it("leaves other auth endpoints alone; closed sign-up without an invite code is a 404", async () => {
     const signIn = await authPost(
       new Request(`${APP}/api/auth/sign-in/email`, { method: "POST", headers: headers(IP), body: "{}" }),
       { params: Promise.resolve({ all: ["sign-in", "email"] }) },
@@ -403,7 +412,157 @@ describe("POST /api/auth/sign-up/email behind the gate", () => {
     expect(signIn.status).toBe(200);
     vi.stubEnv("SIGNUP_MODE", "closed");
     resetEnvForTests();
-    expect((await signUp(IP, null)).status).toBe(200);
-    expect(reached).toHaveBeenCalledTimes(2);
+    expect((await signUp(IP, null)).status).toBe(404);
+    expect(reached).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("invite codes at sign-up (ADR-0029 §8)", () => {
+  const staff = "staff-1";
+  async function code(spec: { grantsSignup?: boolean; compPlan?: "plus" | null; email?: string | null }) {
+    const { code } = newInviteCode();
+    const canonical = normaliseInviteCode(code) ?? "";
+    uow.state.userEmails[staff] = "staff@example.test";
+    await uow.run((r) =>
+      r.inviteCodes.create({
+        codeHash: hashInviteCode(canonical),
+        label: "",
+        grantsSignup: spec.grantsSignup ?? true,
+        compPlan: spec.compPlan ?? null,
+        compDays: spec.compPlan ? 30 : null,
+        email: spec.email ?? null,
+        createdBy: staff,
+        expiresAt: new Date(Date.now() + 86_400_000),
+        at: new Date(),
+      }),
+    );
+    return code;
+  }
+  const signUpWith = async (c: string, ip = IP) => {
+    const proof = await solvedWith(c, ip);
+    return authPost(
+      new Request(`${APP}/api/auth/sign-up/email`, {
+        method: "POST",
+        headers: headers(ip, {
+          [POW_HEADERS.challenge]: proof.challenge,
+          [POW_HEADERS.proof]: proof.proof,
+          [SIGN_UP_CODE_HEADER]: c,
+        }),
+        body: JSON.stringify(FORM),
+      }),
+      catchAll,
+    );
+  };
+  async function solvedWith(c: string, ip: string) {
+    const res = await challengeRoute(
+      new Request(`${APP}/api/sign-up/challenge`, {
+        method: "POST",
+        headers: headers(ip, { [SIGN_UP_CODE_HEADER]: c }),
+        body: "{}",
+      }),
+      noParams,
+    );
+    expect(res.status).toBe(200);
+    const data = ((await res.json()) as { data: { challenge: string; bits: number } }).data;
+    return { challenge: data.challenge, proof: solve(data.challenge, data.bits) };
+  }
+
+  beforeEach(() => {
+    vi.stubEnv("SIGNUP_MODE", "closed");
+    resetEnvForTests();
+  });
+
+  it("closed: a challenge only for a request carrying something shaped like a code", async () => {
+    const bare = await challengeRoute(
+      new Request(`${APP}/api/sign-up/challenge`, {
+        method: "POST",
+        headers: headers(IP, { [SIGN_UP_CODE_HEADER]: "not-a-code" }),
+        body: "{}",
+      }),
+      noParams,
+    );
+    expect(bare.status).toBe(404);
+    await solvedWith("0000-0000-0000-0000-0000-0000-0000-0000", IP);
+  });
+
+  it("closed: a sign-up code lets the sign-up through, with the code in scope for the identity layer", async () => {
+    const c = await code({});
+    let seen: unknown = null;
+    answer = async () => {
+      seen = admittedSignUpCode();
+      return Response.json({ ok: true });
+    };
+    const res = await signUpWith(c);
+    expect(res.status).toBe(200);
+    const stored = uow.state.inviteCodes.find((x) => x.codeHash === hashInviteCode(normaliseInviteCode(c) ?? ""));
+    // Claimed before the identity layer ran (pending: nobody attached yet in this stub).
+    expect(seen).toEqual({ codeId: stored?.id });
+    expect(stored?.redeemedAt).not.toBeNull();
+  });
+
+  it("a failed sign-up gives the code back, so it works on the next try", async () => {
+    const c = await code({});
+    answer = async () => Response.json({ code: "USER_ALREADY_EXISTS" }, { status: 422 });
+    expect((await signUpWith(c, "203.0.113.51")).status).toBe(422);
+    answer = async () => Response.json({ ok: true });
+    expect((await signUpWith(c, "203.0.113.52")).status).toBe(200);
+    expect(uow.state.audit.filter((e) => e.action === "platform.invite_code_released")).toHaveLength(1);
+  });
+
+  it("a code revoked before the sign-up admits no one", async () => {
+    const c = await code({});
+    const stored = uow.state.inviteCodes[uow.state.inviteCodes.length - 1];
+    if (stored) stored.revokedAt = new Date();
+    expect((await signUpWith(c, "203.0.113.53")).status).toBe(404);
+    expect(reached).not.toHaveBeenCalled();
+  });
+
+  it("a code redeemed on Billing first admits no sign-up", async () => {
+    const c = await code({ compPlan: "plus" });
+    await uow.run((r) =>
+      r.inviteCodes.claim({
+        codeHash: hashInviteCode(normaliseInviteCode(c) ?? ""),
+        email: FORM.email,
+        userId: staff,
+        accountId: null,
+        now: new Date(),
+      }),
+    );
+    expect((await signUpWith(c, "203.0.113.54")).status).toBe(404);
+    expect(reached).not.toHaveBeenCalled();
+  });
+
+  it("closed: every wrong code is the same 404 after the proof, and a code still needs a proof", async () => {
+    const compOnly = await code({ grantsSignup: false, compPlan: "plus" });
+    const bound = await code({ email: "someone@else.test" });
+    for (const c of ["0000-0000-0000-0000-0000-0000-0000-0000", compOnly, bound]) {
+      const res = await signUpWith(c, `203.0.113.${String(20 + Math.floor(Math.random() * 100))}`);
+      expect(res.status).toBe(404);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe(SIGN_UP_REFUSAL.inviteCode);
+    }
+    const noProof = await authPost(
+      new Request(`${APP}/api/auth/sign-up/email`, {
+        method: "POST",
+        headers: headers(IP, { [SIGN_UP_CODE_HEADER]: await code({}) }),
+        body: JSON.stringify(FORM),
+      }),
+      catchAll,
+    );
+    expect(noProof.status).toBe(400);
+    expect(reached).not.toHaveBeenCalled();
+  });
+
+  it("one code can't open two sign-ups at once", async () => {
+    const c = await code({});
+    const [a, b] = await Promise.all([signUpWith(c, "203.0.113.31"), signUpWith(c, "203.0.113.32")]);
+    expect([a.status, b.status].sort()).toEqual([200, 404]);
+  });
+
+  it("counts code guesses per client address, fail closed", async () => {
+    for (let i = 0; i < 10; i++) {
+      await signUpWith("0000-0000-0000-0000-0000-0000-0000-0000", "203.0.113.40");
+    }
+    const res = await signUpWith("0000-0000-0000-0000-0000-0000-0000-0000", "203.0.113.40");
+    expect(res.status).toBe(429);
   });
 });

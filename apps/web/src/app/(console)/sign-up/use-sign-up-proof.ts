@@ -3,6 +3,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { SIGN_UP_CODE_HEADER } from "@anhourmail/shared/proof-of-work";
+
 import { type PowRequest, type PowResponse, powProgress } from "./pow-messages";
 
 /** A solved challenge, spent by one sign-up request. */
@@ -20,11 +22,12 @@ const EXPIRY_MARGIN_MS = 30_000;
 
 type Challenge = { challenge: string; bits: number; expiresAt: string };
 
-async function fetchChallenge(): Promise<Challenge | "limited" | "network"> {
+async function fetchChallenge(code: string | null): Promise<Challenge | "limited" | "network"> {
   try {
     const res = await fetch("/api/sign-up/challenge", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      // With sign-up closed, a challenge is issued only to a page that carries an invite code (ADR-0029 §8).
+      headers: { "Content-Type": "application/json", ...(code ? { [SIGN_UP_CODE_HEADER]: code } : {}) },
       body: "{}",
     });
     if (res.status === 429) return "limited";
@@ -42,15 +45,20 @@ async function fetchChallenge(): Promise<Challenge | "limited" | "network"> {
  * solve is still running, solving again if it expired); `restart()` starts the next one (after a refused attempt, or
  * "Try again" after a failure).
  */
-export function useSignUpProof(enabled: boolean) {
+export function useSignUpProof(enabled: boolean, inviteCode: string | null = null) {
   const [state, setState] = useState<ProofState>({ status: "solving", progress: 0 });
   const current = useRef<Promise<Solved | null> | null>(null);
   const stop = useRef<(() => void) | null>(null);
+  // Read when a challenge is fetched (a code typed later goes with the next one; the proof isn't tied to it).
+  const code = useRef(inviteCode);
+  useEffect(() => {
+    code.current = inviteCode;
+  }, [inviteCode]);
 
   const start = useCallback((): Promise<Solved | null> => {
     stop.current?.();
     const run = (async (): Promise<Solved | null> => {
-      const c = await fetchChallenge();
+      const c = await fetchChallenge(code.current);
       if (c === "limited" || c === "network") {
         setState({ status: "failed", reason: c });
         return null;
