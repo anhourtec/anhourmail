@@ -22,16 +22,7 @@ import {
   VenetianMaskIcon,
 } from "lucide-react";
 
-import {
-  ADDONS,
-  ALIASES_PER_MAILBOX,
-  BILLING,
-  formatPrice,
-  PLAN_ORDER,
-  PLANS,
-  PRODUCT_DOMAIN,
-  storageText,
-} from "@anhourmail/shared";
+import { ADDONS, BILLING, formatPrice, PLAN_ORDER, PLANS, planHighlights, PRODUCT_DOMAIN } from "@anhourmail/shared";
 import { Breadcrumbs, type Crumb } from "@anhourmail/ui/page-header";
 
 import { PROTOCOL_LIST } from "@/lib/ia";
@@ -272,19 +263,7 @@ export function PlanCards() {
                   : "One free account per person"}
               </p>
               <ul className="flex flex-col gap-2.5 border-t pt-5 text-sm">
-                {[
-                  p.includedMailboxes === 1 ? `${String(p.storagePoolGb)} GB storage` : storageText(p).pool,
-                  p.includedMailboxes === 1 ? "1 mailbox" : `${String(p.includedMailboxes)} mailboxes included`,
-                  p.customDomains ? "Bring your own domains" : `An @${PRODUCT_DOMAIN} address`,
-                  p.aliases === null
-                    ? `Up to ${String(ALIASES_PER_MAILBOX)} aliases per mailbox`
-                    : `${String(p.aliases)} aliases`,
-                  p.maskedAliases === null
-                    ? "Masked aliases within the same allowance"
-                    : `${String(p.maskedAliases)} masked aliases`,
-                  ...(p.catchAll ? ["Catch-all addresses"] : []),
-                  ...(p.supporterBadge ? ["Supporter badge and early features"] : []),
-                ].map((line) => (
+                {planHighlights(p).map((line) => (
                   <li key={line} className="flex items-center gap-2.5">
                     <PlusIcon className="size-3.5 text-[rgb(var(--am-btn))]" aria-hidden="true" />
                     {line}
