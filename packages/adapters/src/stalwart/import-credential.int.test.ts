@@ -24,6 +24,7 @@ import tls from "node:tls";
 import { afterAll, describe, expect, it } from "vitest";
 
 import {
+  accountTrainingSamples,
   IMPORT_CREDENTIAL_DESCRIPTION,
   isImportCredential,
   StalwartManagement,
@@ -62,6 +63,9 @@ afterAll(async () => {
     await mgmt.transport.call([["x:Action/set", { create: { r: { "@type": "ReloadBlockedIps" } } }, "r"]]);
   }
   for (const u of (await mgmt.listUsers()).filter((x) => x.address.endsWith(`@${domain}`))) {
+    // The account's destroy leaves its spam-training samples (the purge's `mailbox.training_purge` does this in the app).
+    const samples = (await accountTrainingSamples(mgmt, u.id)).map((x) => x.id);
+    if (samples.length > 0) await mgmt.transport.set("x:SpamTrainingSample", { destroy: samples });
     await mgmt.destroy("x:Account", u.id);
   }
   const d = (await mgmt.listDomains()).find((x) => x.name === domain);
@@ -187,13 +191,8 @@ const sessionStatus = async (secret: string) =>
     })
   ).status;
 
-const trainingSamples = async (accountId: string) =>
-  (
-    await mgmt.transport.getAll<{ id: string; accountId?: string; isSpam?: boolean }>("x:SpamTrainingSample", [
-      "accountId",
-      "isSpam",
-    ])
-  ).filter((s) => s.accountId === accountId);
+/** One account's samples, by one filtered query (the server's `position` paging repeats pages; research/stalwart.md). */
+const trainingSamples = (accountId: string) => accountTrainingSamples(mgmt, accountId);
 
 let accountId = "";
 let secret = "";
@@ -202,6 +201,9 @@ let credential = { id: "", createdAt: new Date(0) };
 describe("mail import credential on Stalwart (ADR-0030)", () => {
   it("is minted by the operations key on a customer account with room for seven credentials", async () => {
     accountId = await customerAccount();
+    // Samples an earlier account with this id left (if the server ever hands an id out again) start at zero.
+    const inherited = (await trainingSamples(accountId)).map((x) => x.id);
+    if (inherited.length > 0) await mgmt.transport.set("x:SpamTrainingSample", { destroy: inherited });
     const [account] = await keys.provisioning.transport.getAll<{ id: string; quotas?: Record<string, unknown> }>(
       "x:Account",
       ["quotas"],
