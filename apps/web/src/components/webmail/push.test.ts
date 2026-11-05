@@ -342,6 +342,50 @@ describe("startPush", () => {
     u.stop();
   });
 
+  it("renewed (the session's new id after a password change) opens the stream again soon, never signed out", async () => {
+    const b = browser();
+    const streams = [sseResponse(), sseResponse()];
+    let n = 0;
+    const f = vi.fn(async () => (streams[n++] ?? sseResponse()).res);
+    const a = tab(b, f);
+    const other = tab(b, async () => sseResponse().res);
+    await flush();
+    streams[0]?.send('event: ready\ndata: {}\n\nevent: end\ndata: {"reason":"renewed"}\n\n');
+    await flush();
+    expect(a.events).toEqual(["up", "down"]);
+    expect(other.events).toEqual(["up", "down"]);
+    // Like a planned end: a short jittered wait, not the failure backoff.
+    expect(a.waits.map((w) => w.ms)).toEqual([625]);
+    a.waits.shift()?.fn();
+    await flush();
+    expect(f).toHaveBeenCalledTimes(2);
+    streams[1]?.send("event: ready\ndata: {}\n\n");
+    await flush();
+    expect(a.events).toEqual(["up", "down", "up"]);
+    a.stop();
+    other.stop();
+  });
+
+  it("opens the stream with the fetch it is given, the browser's for everything else", async () => {
+    const s = sseResponse();
+    const given = vi.fn(async () => s.res);
+    const stop = startPush(
+      "/api/webmail/push?account=b",
+      "b",
+      {
+        onUp: () => undefined,
+        onDown: () => undefined,
+        onState: () => undefined,
+        onSignedOut: () => undefined,
+      },
+      { fetch: given, locks: null, BroadcastChannel: null },
+    );
+    await flush();
+    expect(given).toHaveBeenCalledOnce();
+    expect(given.mock.calls[0]).toMatchObject(["/api/webmail/push?account=b", { credentials: "same-origin" }]);
+    stop();
+  });
+
   it("ignores malformed state events and gives up a stream that never ends an event", async () => {
     const s = sseResponse();
     const t = tab(null, async () => s.res);
