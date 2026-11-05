@@ -6,3 +6,11 @@ fdc1cae181c1f0cc1b2f583af5b42c7b8bd344e6:apps/web/src/app/api/webmail/img/route.
 f427b00df6129c2ed06c4ee37630a757a6599b55:packages/stalwart-client/src/sender.test.ts:generic-api-key:15
 55dc55a467a6475bc8e96db2ca3a6c66db03134b:packages/core/src/webmail/internal-mail.test.ts:generic-api-key:9
 e16b3634cbd2626c3939c72e35a347cb06ff18cd:apps/web/src/server/webmail/original.test.ts:generic-api-key:263
+# 162fa2a, 3a9e583, e876f16: dummy billing test keys ("rk_test_0000example", "sk_live_0000example", "rk_live_0000example"), not real keys.
+162fa2a9aa19e20edeec087ba8f81479bb41041a:packages/adapters/src/billing-stripe/http.test.ts:stripe-access-token:11
+3a9e583b013786b54ce3dd488330a2067932f6da:packages/adapters/src/billing-stripe/config.test.ts:stripe-access-token:10
+3a9e583b013786b54ce3dd488330a2067932f6da:packages/adapters/src/billing-stripe/config.test.ts:stripe-access-token:42
+3a9e583b013786b54ce3dd488330a2067932f6da:packages/adapters/src/billing-stripe/config.test.ts:stripe-access-token:62
+3a9e583b013786b54ce3dd488330a2067932f6da:packages/adapters/src/billing-stripe/config.test.ts:stripe-access-token:63
+3a9e583b013786b54ce3dd488330a2067932f6da:packages/adapters/src/billing-stripe/config.test.ts:stripe-access-token:64
+e876f16b13eccd733df546e5bd301d5f0c9e540f:packages/adapters/src/billing-stripe/adapter.test.ts:stripe-access-token:18
