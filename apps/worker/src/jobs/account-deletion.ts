@@ -3,20 +3,22 @@
  * Every 10 minutes (ADR-0025): advances accounts whose deletion grace period ended by one step each — mailboxes to
  * `deleting` (the hourly `mailbox-purge` removes them and their mail), then domains released, then the account row —
  * and emails everyone who was in an account once it is gone. Never before the grace period ends; idempotent; every step
- * audited. Database only (the mail server is reached through the provisioning queue and the purge job).
+ * audited. A paid subscription is ended at the billing provider first (ADR-0029 §9). Database and the billing provider
+ * only (the mail server is reached through the provisioning queue and the purge job).
  */
 import { accountDeletedEmail } from "@anhourmail/adapters/mail/data-lifecycle";
-import { runDueDeletions } from "@anhourmail/core/data";
+import { DELETION_BATCH, runDueDeletions } from "@anhourmail/core/data";
 import { log } from "@anhourmail/server/log";
 
 import { lifecycleDeps, sendQuietly } from "../data-lifecycle";
 import { runtime } from "../runtime";
 
 const l = log.child({ component: "account-deletion" });
-const { deps, close } = runtime();
+const { deps, billing, close } = runtime();
 const { mailer, consoleUrl } = lifecycleDeps();
 try {
-  const steps = await runDueDeletions(deps);
+  // A paid subscription is ended at the provider before removal starts (ADR-0029 §9).
+  const steps = await runDueDeletions(deps, DELETION_BATCH, billing());
   let emailed = 0;
   for (const s of steps) {
     if (s.step !== "deleted") continue;

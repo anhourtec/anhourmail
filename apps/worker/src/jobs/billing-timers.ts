@@ -3,8 +3,9 @@
  * Hourly billing timers (ADR-0029 §5, §6; rule 17): a restricted account past `BILLING.restrictedDays` has its
  * subscription ended (the sync then lapses it with holds), ended comps are synced, holds on what the Owner since deleted
  * are dropped, and the lapsed accounts' held mailboxes have their storage pinned to their mail (out of the pool
- * arithmetic, sizes read with the provisioning key). Held mailboxes past their receive window keep receiving for now
- * (send-blocked; the backscatter decision is the maintainer's). Never deletes mail or data.
+ * arithmetic, sizes read with the provisioning key), and accounts waiting to be deleted have a subscription still set to
+ * renew set to end at the period's end (a retry of the request's own call). Held mailboxes past their receive window
+ * keep receiving for now (send-blocked; the backscatter decision is the maintainer's). Never deletes mail or data.
  */
 import { stalwartMailboxUsage } from "@anhourmail/adapters/stalwart";
 import { runBillingTimers } from "@anhourmail/core/billing";
@@ -17,7 +18,7 @@ import { runtime } from "../runtime";
 const l = log.child({ component: "billing-timers" });
 const { deps, billing, close } = runtime();
 const run = await runBillingTimers(deps, billing());
-l.at(run.restrictedFailed > 0 ? "warn" : "info", "billing timers finished", run);
+l.at(run.restrictedFailed + run.deletionCancelsFailed > 0 ? "warn" : "info", "billing timers finished", run);
 const lapsed = await deps.uow.run((r) => r.billing.listByState("lapsed", 500));
 if (lapsed.length > 0) {
   const pinned = await rebalanceStoragePools(deps, stalwartMailboxUsage(stalwartProvisioning()), {
