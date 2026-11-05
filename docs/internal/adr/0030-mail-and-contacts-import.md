@@ -732,6 +732,73 @@ namespaces are left out of `dest.folders()`, so role folders and the `\All` inde
 items recorded by the coordinator, not code: the importer's own key ring and database role (SA-65-03), the one-way
 `holdSamplesFor` check (SA-65-04), and customers' own IMAP APPENDs training the shared model.
 
+**Update (2026-11-05): slices 10–13 built** (uncommitted at the time of writing). Where the build went beyond or
+differs from the text above:
+
+- **Console (slice 10):** pages as §17, with one change of shape: the list page lives in a `(list)` route group so the
+  batch pages' `mailbox.import.any` layout answers a real 403 (a parent `loading.tsx` would have streamed a 200 first).
+  The detail page polls the import's `GET` every 5 s while it is live and visible; the list and batch pages refresh the
+  server render on the same beat. A syncing import shows 100 % (its first pass is done; the source total also counts
+  messages that are never copied, e.g. `\Deleted` ones). After the end, custom folders (names wiped) show as one
+  "Other folders" row. `getImport` gains `domainActive` (the mailbox's domain is one of the account's own and
+  `active`) for the cut-over banner; the free platform domain never shows it. `importTargets` lists the mailboxes the
+  form offers, with why one can't take an import (`mailbox_unavailable`, `import_running`) and whether it has a person.
+- **Presets:** `IMPORT_SOURCE_PRESETS` now names Gmail, Yahoo Mail, iCloud Mail and AOL Mail (published IMAP hosts, port
+  993, a per-provider guide) plus "Other IMAP server" (setup text, rule 57's exception). Each has a `usernameHint`.
+  Outside production a preset is still refused by the dev allow-list.
+- **Texts as facts:** what each blocked reason means and its fix (`IMPORT_BLOCKED_TEXT`), what an end code means
+  (`IMPORT_END_TEXT` / `importEndText`), role labels (`IMPORT_ROLE_LABELS`), the batch columns, row codes and their texts
+  and the batch template live in `packages/shared/src/import.ts`, shared by the console, the summary email and the docs.
+- **Summary email (`job:import-notify`, every minute):** `claimImportSummaries` claims each ended import with
+  `markNotified` **before** sending, so two runs never send twice; a failed send is logged and not retried (the
+  console has the result). Emails go for `completed` and `failed` only; **cancelled imports are claimed without an
+  email** (the person cancelled it, or the mailbox change that cancelled it has its own notice). Counts per role with
+  custom folders as one line, too-large and refused totals, duration, the end code's text; never folder names.
+- **Batch (slice 11):** the body is the **raw CSV** (`text/csv`, capped at `IMPORT.batchMaxBytes` while reading),
+  not multipart — the contacts upload's pattern. At most `MAX_MAILBOXES` rows (a flat bound, not the account's current
+  mailbox count, so a file with a typo still gets per-row answers). Header names are matched case-insensitively,
+  spaces and hyphens read as `_`, any column order; `source_port` defaults to 993; booleans `yes/no/true/false/1/0/y/n`
+  or empty. File-level problems (encoding, missing columns, no rows, too many rows) are 400 **before** the step-up is
+  asked for, so the admin fixes the file first. Row codes: `mailbox_not_found`, `duplicate_mailbox`, `forbidden` (a
+  User Administrator naming an Owner's or admin's mailbox), `mailbox_unavailable`, `import_running`, `invalid_host`,
+  `invalid_port`, `invalid_username`, `invalid_password`, `invalid_option`. No valid row: nothing recorded
+  (`batchId: null`), the attempt still audited. Each started row is minted, sealed and recorded exactly as a single
+  start (`createImport`, shared with `startImport`) and audited `data.import_started` (meta `batchId`) beside
+  `data.import_batch_created`; a mint failure destroys every credential the request minted and records nothing. Each
+  valid row is charged to the `importStartAccount` daily budget before anything is minted (run-66, below).
+- **Contacts and the imported note (slice 12):** see `../05-webmail.md` "Contacts"; the reader's details and
+  Original message say the results come from the old provider; contacts CSV (mapping preview, re-parsed by the BFF with
+  `?columns=`) and vCard 2.1–4.0 merge by email with additions-only patches; a file over 5,000 cards is refused, not
+  cut.
+- **Demo and e2e sources:** the demo seed creates `import-source@dev.test` (filled once over IMAPS by
+  `scripts/seed/import-source.ts`, 25 messages covering every case in §20); the e2e fixtures make one per browser
+  project with the same content.
+
+**Update (2026-11-05, run-66 review of slices 10–13):** fixed in the same change.
+
+- **SA-66-01 (forged import marker):** the display of an imported copy — the "Imported" rows and the old provider's
+  results on Original message, the reader's "Imported; not checked" — now needs the message's **first** header to be
+  exactly our marker as the importer writes it (`X-AnhourMail-Imported: <import id>`, exact name, a UUID value;
+  `isImportedCopy` in `original.ts`). A marker anywhere else, or a look-alike, still refuses verification and image
+  trust (`isImportedMail`, SA-64-01 / SA-65-06 unchanged) but shows as not checked, never with results a sender wrote.
+  The marker is also **removed from all SMTP mail** by the two Sieve system scripts in
+  `packages/stalwart-client/src/sender.ts`: `sender-identity` (authenticated submissions, 465/587 and JMAP) and
+  `inbound-headers` (port 25, `MtaStageData.script` for unauthenticated sessions) each `deleteheader
+"X-AnhourMail-Imported"`. So the only way the header reaches a mailbox is our importer's APPEND (or a customer's own
+  IMAP APPEND into their own mailbox, which only fools themselves). Verified on v0.16.27
+  (`apps/web/src/server/adapters/import-marker-strip.int.test.ts`): the marker on top of a message sent to port 25 from
+  outside and of one submitted on 587 (STARTTLS, signed in) is gone from the stored copy; before the scripts were
+  reapplied and reloaded, both copies kept it. The scripts take effect on `ReloadSettings` (the dev plan applies and
+  reloads them; production needs the same apply and reload with its next Stalwart bootstrap — an ops-repo step).
+- **Rule 27, batch budget:** the batch charges `importStartAccount` once per valid row before anything is minted, only
+  for callers who hold `mailbox.import.own` in the account (as a single start), fail closed; when fewer starts are left
+  than valid rows the whole batch is refused with 429 (the check counts one, like a refused single start).
+- **SA-66-04:** a row whose import can't be recorded after its credential was minted (e.g. another import of the
+  mailbox landed in between) has that credential destroyed at once; the other rows go ahead.
+- **SA-66-02 / SA-66-03 (contacts):** vCard quoted-printable soft breaks are joined once and stop growing past 8 KB per
+  value (a 5 MB soft-break file parses in well under a second); the no-address duplicate check uses a set of
+  full-name + phone-digit keys kept current as cards are created or merged, one lookup per phone instead of a scan.
+
 ## Questions for the maintainer (defaults this ADR builds)
 
 1. **OAuth sources are deferred**, so business mailboxes at the largest provider that refuses password IMAP can't be
