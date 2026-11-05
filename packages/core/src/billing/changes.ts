@@ -48,6 +48,8 @@ import {
   providerError,
   refuse,
   refuseActAs,
+  notOpen,
+  requireOpenPlans,
   requireProvider,
   requireStepUp,
   unavailable,
@@ -242,6 +244,7 @@ export async function previewBillingChange(
     throw new ForbiddenError("Billing can't be changed while acting as someone.");
   const provider = ctx.provider;
   if (!provider) throw unavailable();
+  if (!ctx.paidPlansOpen) throw notOpen();
   const now = deps.clock.now();
   const { b, usage } = await deps.uow.run(async (r) => ({
     b: await billingOf(r, accountId, now),
@@ -284,6 +287,7 @@ export async function changeBilling(
   await authorizeAudited(deps, actor, req, base);
   await refuseActAs(deps, actor, req, base);
   const provider = await requireProvider(deps, actor, req, base, ctx);
+  await requireOpenPlans(deps, actor, req, base, ctx);
   const now = deps.clock.now();
   const { b, usage } = await deps.uow.run(async (r) => ({
     b: await billingOf(r, accountId, now),

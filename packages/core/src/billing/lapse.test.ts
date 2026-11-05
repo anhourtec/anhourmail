@@ -85,7 +85,7 @@ async function world() {
     clock: () => clock.now(),
     nodeEnv: "test",
   });
-  const ctx: BillingContext = { provider: fake, appUrl: APP, redirectOrigins: [APP] };
+  const ctx: BillingContext = { provider: fake, appUrl: APP, redirectOrigins: [APP], paidPlansOpen: true };
   const sync = () => syncAccountBilling(d, fake, ACCOUNT_A);
   const subscribe = async () => {
     const { url } = await startCheckout(d, ctx, owner, ACCOUNT_A, { plan: "plus", currency: "USD" }, req);

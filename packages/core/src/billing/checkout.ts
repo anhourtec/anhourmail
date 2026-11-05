@@ -31,6 +31,7 @@ import {
   callProvider,
   refuse,
   refuseActAs,
+  requireOpenPlans,
   requireProvider,
 } from "./guards";
 import { defaultBilling, effectivePlan, isPaidState } from "./lifecycle";
@@ -320,6 +321,7 @@ export async function startCheckout(
   await authorizeAudited(deps, actor, req, spec);
   await refuseActAs(deps, actor, req, spec);
   const provider = await requireProvider(deps, actor, req, spec, ctx);
+  await requireOpenPlans(deps, actor, req, spec, ctx);
   if (actor.kind !== "user") throw new NotFoundError();
   const c = parseCheckout(input);
   const now = deps.clock.now();

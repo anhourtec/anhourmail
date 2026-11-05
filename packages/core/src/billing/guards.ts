@@ -22,6 +22,13 @@ export type BillingContext = {
   provider: BillingProvider | null;
   appUrl: string;
   redirectOrigins: readonly string[];
+  /**
+   * Paid plans may be bought here: `BILLING.status` is `open`, or the provider is a test setup (the dev fake, or the
+   * processor with test keys). The composition root decides (`billingOffered` in the web app); while false, checkout
+   * and plan or add-on changes answer 503 `billing_unavailable` even through the API (run-67 N3). Existing
+   * subscriptions keep their portal, cancel and refund.
+   */
+  paidPlansOpen: boolean;
 };
 
 /** The console session, for the step-up check. */
@@ -69,6 +76,21 @@ export async function requireProvider(
 ): Promise<BillingProvider> {
   if (ctx.provider) return ctx.provider;
   return refuse(deps, actor, req, spec, "billing_unavailable", unavailable());
+}
+
+/** The error while paid plans aren't open on this deployment. */
+export const notOpen = (): BillingError =>
+  new BillingError("billing_unavailable", "Paid plans aren't open yet. Nothing can be bought for now.");
+
+/** Paid plans not open here (run-67 N3): 503 `billing_unavailable`, audited as denied `not_open`. */
+export async function requireOpenPlans(
+  deps: Deps,
+  actor: Actor,
+  req: RequestMeta,
+  spec: MutationSpec,
+  ctx: Pick<BillingContext, "paidPlansOpen">,
+): Promise<void> {
+  if (!ctx.paidPlansOpen) await refuse(deps, actor, req, spec, "not_open", notOpen());
 }
 
 /** A fresh password step-up on this console session (ADR-0028), else 403 `step_up_required`, audited as denied. */

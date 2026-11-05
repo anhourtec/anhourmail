@@ -52,7 +52,7 @@ async function subscribed(opts: { storageBlocks?: number; extraMailboxes?: numbe
     clock: () => clock.now(),
     nodeEnv: "test",
   });
-  const ctx: BillingContext = { provider: fake, appUrl: APP, redirectOrigins: [APP] };
+  const ctx: BillingContext = { provider: fake, appUrl: APP, redirectOrigins: [APP], paidPlansOpen: true };
   const { url } = await startCheckout(
     d,
     ctx,
@@ -296,6 +296,26 @@ describe("who may change billing", () => {
     await expect(
       previewBillingChange(w.d, { ...w.ctx, provider: null }, owner, ACCOUNT_A, { storageBlocks: 2 }),
     ).rejects.toMatchObject({ code: "billing_unavailable" });
+  });
+});
+
+describe("paid plans not open on this deployment (run-67 N3)", () => {
+  it("refuses previews and changes (503, audited), but cancelling still works", async () => {
+    const w = await subscribed();
+    const closed = { ...w.ctx, paidPlansOpen: false };
+    await expect(previewBillingChange(w.d, closed, owner, ACCOUNT_A, { storageBlocks: 2 })).rejects.toMatchObject({
+      code: "billing_unavailable",
+    });
+    await expect(
+      changeBilling(w.d, closed, owner, ACCOUNT_A, { storageBlocks: 2, confirmAmountMinor: 0 }, req),
+    ).rejects.toMatchObject({
+      code: "billing_unavailable",
+      message: "Paid plans aren't open yet. Nothing can be bought for now.",
+    });
+    expect(w.audit("billing.addons_changed").at(-1)).toMatchObject({ result: "denied", errorCode: "not_open" });
+    expect((await w.row()).storageBlocks).toBe(1);
+    w.stepUp(owner.userId);
+    await expect(cancelSubscription(w.d, closed, owner, ACCOUNT_A, SESSION, req)).resolves.toHaveProperty("cancelAt");
   });
 });
 

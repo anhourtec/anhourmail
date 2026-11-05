@@ -55,7 +55,7 @@ function world(opts: { plan?: "free" | "plus" } = {}) {
     clock: () => clock.now(),
     nodeEnv: "test",
   });
-  const ctx: BillingContext = { provider: fake, appUrl: APP, redirectOrigins: [APP] };
+  const ctx: BillingContext = { provider: fake, appUrl: APP, redirectOrigins: [APP], paidPlansOpen: true };
   const audit = (action: string) => d.uow.state.audit.filter((e) => e.action === action);
   return { clock, d, fake, ctx, audit };
 }
@@ -194,7 +194,14 @@ describe("startCheckout", () => {
   it("answers 503 billing_unavailable when billing is off, audited denied", async () => {
     const { d, audit } = world();
     await expect(
-      startCheckout(d, { provider: null, appUrl: APP, redirectOrigins: [] }, owner, ACCOUNT_A, plus, req),
+      startCheckout(
+        d,
+        { provider: null, appUrl: APP, redirectOrigins: [], paidPlansOpen: true },
+        owner,
+        ACCOUNT_A,
+        plus,
+        req,
+      ),
     ).rejects.toMatchObject({ code: "billing_unavailable" });
     expect(audit("billing.checkout_started")[0]).toMatchObject({ result: "denied", errorCode: "billing_unavailable" });
   });
@@ -291,6 +298,17 @@ describe("startCheckout", () => {
   });
 });
 
+describe("paid plans not open on this deployment (run-67 N3)", () => {
+  it("refuses a checkout (503, audited denied) before anything is claimed or created", async () => {
+    const { d, ctx, audit } = world();
+    await expect(startCheckout(d, { ...ctx, paidPlansOpen: false }, owner, ACCOUNT_A, plus, req)).rejects.toMatchObject(
+      { code: "billing_unavailable" },
+    );
+    expect(audit("billing.checkout_started")).toMatchObject([{ result: "denied", errorCode: "not_open" }]);
+    expect(d.uow.state.billing).toEqual([]);
+  });
+});
+
 describe("openBillingPortal", () => {
   it("opens the portal for an account with a provider customer, audited", async () => {
     const { d, ctx, audit } = world();
@@ -306,7 +324,13 @@ describe("openBillingPortal", () => {
     await expect(openBillingPortal(d, ctx, auditor, ACCOUNT_A, req)).rejects.toMatchObject({ code: "forbidden" });
     await expect(openBillingPortal(d, ctx, outsider, ACCOUNT_A, req)).rejects.toMatchObject({ code: "not_found" });
     await expect(
-      openBillingPortal(d, { provider: null, appUrl: APP, redirectOrigins: [] }, owner, ACCOUNT_A, req),
+      openBillingPortal(
+        d,
+        { provider: null, appUrl: APP, redirectOrigins: [], paidPlansOpen: true },
+        owner,
+        ACCOUNT_A,
+        req,
+      ),
     ).rejects.toMatchObject({ code: "billing_unavailable" });
     expect(audit("billing.portal_opened").map((e) => e.errorCode)).toEqual([
       "not_subscribed",
@@ -383,7 +407,12 @@ describe("guards", () => {
   });
 
   it("accepts only the expected origins", () => {
-    const ctx: BillingContext = { provider: null, appUrl: APP, redirectOrigins: ["https://checkout.example"] };
+    const ctx: BillingContext = {
+      provider: null,
+      appUrl: APP,
+      redirectOrigins: ["https://checkout.example"],
+      paidPlansOpen: true,
+    };
     expect(assertRedirect(ctx, "https://checkout.example/c/pay/1")).toBe("https://checkout.example/c/pay/1");
     expect(() => assertRedirect(ctx, "https://checkout.example.evil.test/x")).toThrow();
     expect(() => assertRedirect(ctx, "javascript:alert(1)")).toThrow();
