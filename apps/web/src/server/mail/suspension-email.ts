@@ -4,7 +4,12 @@ import "server-only";
 import type { MailMessage } from "@anhourmail/adapters/mail";
 import { systemEmail } from "@anhourmail/adapters/mail/layout";
 import { log } from "@anhourmail/server/log";
-import { SUPPORT_EMAIL, SUSPENSION_REASONS, type SuspensionReason } from "@anhourmail/shared/platform";
+import {
+  SUPPORT_EMAIL,
+  SUSPENSION_REASONS,
+  SUSPENSION_REVOKES_APP_PASSWORDS,
+  type SuspensionReason,
+} from "@anhourmail/shared/platform";
 
 import { container } from "../container";
 import { env } from "../env";
@@ -25,6 +30,8 @@ export function suspensionEmail(input: {
   site: string;
 }): MailMessage {
   const what = input.subject === "account" ? "Your AnhourMail account" : "Your AnhourMail sign-in";
+  // Spam, abuse and phishing suspensions also remove the mailboxes' app passwords (they don't come back on a lift).
+  const appPasswordsGone = SUSPENSION_REVOKES_APP_PASSWORDS.includes(input.reason);
   if (input.state === "restored") {
     return systemEmail({
       to: input.to,
@@ -34,6 +41,11 @@ export function suspensionEmail(input: {
       lines: [
         `${what} is no longer suspended. You can sign in again, and mailboxes that were suspended with it are coming back on — it takes a minute or two.`,
         "Mail sent to those mailboxes while they were suspended was returned to its senders and wasn't kept.",
+        ...(appPasswordsGone
+          ? [
+              "App passwords removed by the suspension don't come back. Make new ones for your mail apps on the App passwords page.",
+            ]
+          : []),
       ],
       action: { label: "Open the console", url: input.consoleUrl },
       note: `Questions? Email ${SUPPORT_EMAIL}.`,
@@ -51,6 +63,11 @@ export function suspensionEmail(input: {
         ? "Anhourtec has suspended your AnhourMail account. Its mailboxes can't sign in, send or receive mail, and the console shows only a notice until the suspension is lifted."
         : "Anhourtec has suspended your AnhourMail sign-in. You can't sign in to the console, and the mailboxes assigned to you can't sign in, send or receive mail until the suspension is lifted.",
       "Your stored mail is kept. Mail sent to suspended mailboxes is returned to its senders.",
+      ...(appPasswordsGone
+        ? [
+            "The app passwords of those mailboxes have been removed, so mail apps signed in with them are signed out. After the suspension is lifted, make new ones on the App passwords page.",
+          ]
+        : []),
       `If you think this is a mistake, email ${SUPPORT_EMAIL} from this address and tell us why. A person reads every appeal.`,
     ],
     facts: [{ label: "Reason:", value: SUSPENSION_REASONS[input.reason] }],
