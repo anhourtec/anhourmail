@@ -11,6 +11,7 @@ export * from "./ingest";
 export * from "./invite-codes";
 export * from "./lapse";
 export * from "./lifecycle";
+export * from "./notice";
 export * from "./ports";
 export type * from "./repository";
 export * from "./service";
