@@ -94,14 +94,18 @@ Pre-staging has run on one VM since 2026-10-23 from the private ops repository (
 local-only `deploy.md`); it was last deployed on 2026-10-31 at 6545a16 (names as one source, mail-server file storage switched off for
 customers, delegation's webmail side, the forwarding guard, the SEO pass). Pushed since, for the next deploy:
 password-first console sign-in with a passkey second step and password-only step-up (ADR-0028), the faster webmail
-first load, and safe senders loading images with own Sent mail loading images (ADR-0027). The work plan stops before Phase 6. The next
-phases, in order, with exit criteria, are in `docs/internal/09-roadmap.md` "Path to production":
+first load, and safe senders loading images with own Sent mail loading images (ADR-0027); built after that
+(2026-11-04 to 2026-11-05), also for the next deploy: the rest of the product gaps, billing and mail and contacts
+import. The work plan stops before Phase 6, which has not started. The next phases, in order, with exit criteria, are in `docs/internal/09-roadmap.md` "Path to production":
 
 1. pre-staging on one VM (real DNS, certificates, rDNS, external mail, backups and a restore drill);
-2. product gaps a beta needs (built: webmail session handoff, data export and deletion, act-as, image proxy, leavers
-   mailbox delegation and names as one source; left: free sign-up with proof-of-work instead of SMS/OTP, push sync,
-   webmail settings part 2);
-3. billing, plus mail and contacts import (migration);
+2. product gaps a beta needs (all built: webmail session handoff, data export and deletion, act-as, image proxy,
+   leavers mailbox delegation, names as one source, free sign-up with proof-of-work instead of SMS/OTP (ADR-0031),
+   push sync, webmail settings part 2 (ADR-0032));
+3. billing, plus mail and contacts import (migration) (built for local dev: billing, ADR-0029, stays `planned` until
+   launch, so paid plans aren't open; mail import over IMAP with app passwords and vCard/CSV contacts import, ADR-0030;
+   open: the live test-mode billing suite run with test keys, the importer's ops deploy gate, and the maintainer
+   decisions on pricing and the ADRs' open questions);
 4. abuse controls, monitoring and backups;
 5. production host (app VM + mail VM), warm-up and dogfood;
 6. closed beta, then launch.
@@ -407,3 +411,4 @@ an app container direct access to Stalwart's management listener.
 | 2026-10-30 | Nishchayjeet Singh (Nish) | Rule 62: no marketing or bulk mail from our own domains; bulk only from customers' verified domains; blocklist response            |
 | 2026-10-31 | Nishchayjeet Singh (Nish) | "Where we are and what's next": pre-staging deployed at 6545a16 (names, file storage lockdown)                                     |
 | 2026-11-01 | Nishchayjeet Singh (Nish) | "Where we are and what's next": password-first sign-in, faster webmail, safe-sender images pushed                                  |
+| 2026-11-05 | Nishchayjeet Singh (Nish) | "Where we are and what's next": product gaps all built; billing and mail/contacts import built, billing still `planned`            |
