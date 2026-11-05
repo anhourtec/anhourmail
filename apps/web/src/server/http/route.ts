@@ -68,6 +68,10 @@ const STATUS: Record<string, number> = {
   billing_restricted: 403,
   billing_unavailable: 503,
   card_declined: 402,
+  // Mail import (ADR-0030): the mailbox can't take one now, one is already running, or it has finished.
+  mailbox_unavailable: 409,
+  import_running: 409,
+  import_finished: 409,
 };
 
 export type RouteOptions = {

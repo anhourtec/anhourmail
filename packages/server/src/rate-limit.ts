@@ -101,6 +101,12 @@ export const LIMITS = {
   // The account-wide Safe senders list (ADR-0032 §1): each change rewrites a line in every mailbox's managed script in
   // the background, so tighter than other console writes; no sending effect, so it fails open.
   accountSafeSenders: { limit: 30, windowSec: 600, by: "caller", failMode: "open" },
+  // Mail import (ADR-0030 §15): starting or resuming one mints a mail-server credential, so it fails closed; the
+  // handler also counts starts per account and day (`importStartAccount`, only for callers who may import there). The
+  // admins' CSV batch mints one per row.
+  importStart: { limit: 10, windowSec: 3600, by: "caller", failMode: "closed" },
+  importStartAccount: { limit: 30, windowSec: 86_400, by: "caller", failMode: "closed" },
+  importBatch: { limit: 3, windowSec: 3600, by: "caller", failMode: "closed" },
 } as const satisfies Record<string, RateLimit>;
 
 export type LimitName = keyof typeof LIMITS;
