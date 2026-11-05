@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import "server-only";
 
-import { stalwartAppPasswords } from "@anhourmail/adapters/stalwart";
+import { stalwartAppPasswords, stalwartImportCredentials } from "@anhourmail/adapters/stalwart";
 import type { AppPasswordIssuer } from "@anhourmail/core/app-passwords";
+import type { ImportCredentialIssuer } from "@anhourmail/core/imports";
 import type { ManagedScriptStore } from "@anhourmail/core/webmail";
 import { type StalwartManagement, stalwartOperations, verifyStalwartCredential } from "@anhourmail/stalwart-client";
 
@@ -62,6 +63,17 @@ export function appPasswordIssuer(): AppPasswordIssuer {
   return {
     create: async (input) => stalwartAppPasswords(await operations()).create(input),
     revoke: async (input) => stalwartAppPasswords(await operations()).revoke(input),
+  };
+}
+
+/**
+ * A mail import's destination credential (ADR-0030 §1), with the operations key: minted in the request that starts or
+ * resumes an import (sealed at once, never returned) and destroyed only when recording the import failed.
+ */
+export function importCredentialIssuer(): ImportCredentialIssuer {
+  return {
+    mint: async (externalId, expiresAt) => stalwartImportCredentials(await operations()).mint(externalId, expiresAt),
+    destroy: async (externalId, id) => stalwartImportCredentials(await operations()).destroy(externalId, id),
   };
 }
 
