@@ -247,6 +247,28 @@ export function createMailClient(
     }
   }
 
+  /**
+   * Runs `fn` alone: once the requests in flight have been answered, holding new ones until it ends (either way). For
+   * the own password change: the server moves the session to a new id (a new cookie) once the mail server has revoked
+   * the old tokens, so a request sent with the old cookie meanwhile would be refused, end the session and sign the
+   * page out. `fn` must send through `send`, not the gated fetch.
+   */
+  async function alone<T>(fn: () => Promise<T>): Promise<T> {
+    while (hold) await hold;
+    let release: (() => void) | undefined;
+    const mine = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    hold = mine;
+    try {
+      if (inFlight > 0) await new Promise<void>((resolve) => drained.push(resolve));
+      return await fn();
+    } finally {
+      if (hold === mine) hold = null;
+      release?.();
+    }
+  }
+
   /** Runs a mailbox change (add or switch) once nothing else is in flight; the caller reloads the page on success. */
   async function changeMailbox<T>(fn: () => Promise<T>): Promise<T> {
     while (hold) await hold;
@@ -288,20 +310,21 @@ export function createMailClient(
     }
   }
 
-  const net: typeof fetch = (input, init) =>
-    gated(async () => {
-      if (own !== undefined) {
-        const headers = new Headers(init?.headers);
-        headers.set(OWN_PIN_HEADER, own);
-        return fetch(input, { ...init, headers });
-      }
-      if (shared === undefined) return fetch(input, init);
+  /** This client's fetch with its pin, not gated (`alone` sends through it). */
+  const send: typeof fetch = async (input, init) => {
+    if (own !== undefined) {
       const headers = new Headers(init?.headers);
-      headers.set(PIN_HEADER, shared);
-      const res = await fetch(input, { ...init, headers });
-      if (res.status === 404 && res.headers.get(REFUSED) === "mailbox") opts.onRefused?.();
-      return res;
-    });
+      headers.set(OWN_PIN_HEADER, own);
+      return fetch(input, { ...init, headers });
+    }
+    if (shared === undefined) return fetch(input, init);
+    const headers = new Headers(init?.headers);
+    headers.set(PIN_HEADER, shared);
+    const res = await fetch(input, { ...init, headers });
+    if (res.status === 404 && res.headers.get(REFUSED) === "mailbox") opts.onRefused?.();
+    return res;
+  };
+  const net: typeof fetch = (input, init) => gated(() => send(input, init));
   const bff = <T>(path: string, init: RequestInit = {}) => api<T>(path, init, net);
   /** The first load, asked for once per client (`bootstrap`). */
   let first: Promise<Bootstrap> | null = null;
@@ -824,10 +847,14 @@ export function createMailClient(
      * The push stream for this client's mailbox (`GET /api/webmail/push`) and the key tabs share it under (the JMAP
      * account id); null in a tab showing a mailbox shared with the person, which keeps polling (05-webmail.md "Push").
      */
-    async push(): Promise<{ url: string; key: string } | null> {
+    /**
+     * The push stream for the active own mailbox, with the fetch to open it with: this client's, so a stream opened
+     * again during a password change waits for the session's new cookie (`alone`).
+     */
+    async push(): Promise<{ url: string; key: string; fetch: typeof fetch } | null> {
       if (shared !== undefined || own !== undefined) return null;
       const a = await accountId();
-      return { url: `${origin}/api/webmail/push?account=${encodeURIComponent(a)}`, key: a };
+      return { url: `${origin}/api/webmail/push?account=${encodeURIComponent(a)}`, key: a, fetch: net };
     },
 
     rawDownloadUrl: (emailId: string) =>
@@ -1129,13 +1156,18 @@ export function createMailClient(
           body: JSON.stringify({ enabled, keepCopy }),
         },
       ),
-    /** Changes the mailbox's own password (current one checked by the mail server); this session stays signed in. */
+    /**
+     * Changes the mailbox's own password (current one checked by the mail server); this session stays signed in. Sent
+     * alone (`alone`): nothing else of this page is on its way while the session moves to its new cookie.
+     */
     changePassword: (account: string, current: string, next: string) =>
-      bff<{ applied: boolean; signedIn: boolean }>(`${origin}/api/webmail/settings/password`, {
-        method: "POST",
-        headers: { [ACCOUNT]: account },
-        body: JSON.stringify({ current, next }),
-      }),
+      alone(() =>
+        api<{ applied: boolean; signedIn: boolean }>(
+          `${origin}/api/webmail/settings/password`,
+          { method: "POST", headers: { [ACCOUNT]: account }, body: JSON.stringify({ current, next }) },
+          send,
+        ),
+      ),
     removeForwarding: (account: string) =>
       bff<{ removed: boolean }>(`${origin}/api/webmail/settings/forwarding`, {
         method: "DELETE",

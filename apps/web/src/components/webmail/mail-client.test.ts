@@ -159,6 +159,46 @@ describe("changing the mailbox's own password", () => {
     }
   });
 
+  it("is sent alone: after the requests in flight, holding new ones until it's answered (the session's new cookie)", async () => {
+    const client = createMailClient(ORIGIN);
+    const list = client.folders();
+    await settle();
+    const changed = client.changePassword("acc1", "old one", "new one");
+    void client.contacts();
+    await settle();
+    // Not sent while a request with the old cookie is out; nothing new goes out meanwhile.
+    expect(server.sent()).toEqual(["POST /api/webmail/jmap"]);
+    server.answer("/api/webmail/jmap", folders());
+    await expect(list).resolves.toEqual([]);
+    await settle();
+    expect(server.sent()).toEqual(["POST /api/webmail/settings/password"]);
+    // A push stream opened again meanwhile waits too.
+    const push = await client.push();
+    void push?.fetch(push.url);
+    await settle();
+    expect(server.sent()).toEqual(["POST /api/webmail/settings/password"]);
+    server.answer("/api/webmail/settings/password", Response.json({ data: { applied: true, signedIn: true } }));
+    await expect(changed).resolves.toEqual({ applied: true, signedIn: true });
+    await settle();
+    // Then everything held goes out (with the cookie the answer set).
+    expect(server.sent().sort()).toEqual(["GET /api/webmail/contacts", "GET /api/webmail/push"]);
+  });
+
+  it("lets held requests through when the change is refused", async () => {
+    const client = createMailClient(ORIGIN);
+    const changed = client.changePassword("acc1", "wrong", "new one");
+    void client.contacts();
+    await settle();
+    expect(server.sent()).toEqual(["POST /api/webmail/settings/password"]);
+    server.answer(
+      "/api/webmail/settings/password",
+      Response.json({ error: { code: "refused", message: "Your current password isn't right." } }, { status: 400 }),
+    );
+    await expect(changed).rejects.toBeInstanceOf(RefusedError);
+    await settle();
+    expect(server.sent()).toEqual(["GET /api/webmail/contacts"]);
+  });
+
   it("keeps other conflicts generic", async () => {
     const client = createMailClient(ORIGIN);
     const changed = client.changePassword("acc1", "old one", "new one");
@@ -407,10 +447,9 @@ describe("automatic refresh", () => {
 
   it("names the push stream for its own mailbox only", async () => {
     vi.stubGlobal("fetch", jmapServer(() => []).fetchFn);
-    expect(await createMailClient(ORIGIN).push()).toEqual({
-      url: `${ORIGIN}/api/webmail/push?account=acc1`,
-      key: "acc1",
-    });
+    const push = await createMailClient(ORIGIN).push();
+    expect(push).toMatchObject({ url: `${ORIGIN}/api/webmail/push?account=acc1`, key: "acc1" });
+    expect(typeof push?.fetch).toBe("function");
     expect(await createMailClient(ORIGIN, { shared: "desk@x.test" }).push()).toBeNull();
     expect(await createMailClient(ORIGIN, { own: "me@x.test" }).push()).toBeNull();
   });
