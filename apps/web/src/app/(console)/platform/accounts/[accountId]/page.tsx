@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 
 import { can, NotFoundError } from "@anhourmail/core";
 import { accountAvatars, avatarPath } from "@anhourmail/core/avatars";
+import { platformAccountBilling } from "@anhourmail/core/billing";
 import { GB } from "@anhourmail/core/mailboxes";
 import { staffSuspensionView, viewAccount } from "@anhourmail/core/platform";
 import { PLANS } from "@anhourmail/shared/plans";
@@ -19,11 +20,13 @@ import { DetailTabs, Field, FieldGrid } from "@/components/console/flyout";
 import { StatusText, type Tone } from "@/components/console/status-text";
 import { CopyValue } from "@/components/copy-value";
 import { MailboxStatus } from "@/components/mailboxes/mailbox-status";
+import { AccountBillingPanel } from "@/components/platform/account-billing-panel";
 import { ActAsStart } from "@/components/platform/act-as";
 import { StaffCreateAddress } from "@/components/platform/staff-create-address";
 import { SuspensionControl } from "@/components/platform/suspension-control";
 import { requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
+import { billingContext } from "@/server/billing";
 import { platform } from "@/server/platform";
 import { clientIp } from "@anhourmail/server/client-ip";
 
@@ -73,6 +76,10 @@ export default async function CustomerAccountPage({
   // Read-only support access (ADR-0023): Global and Support Administrators; the server refuses staff and suspended
   // accounts and checks the reason and a fresh step-up.
   const canActAs = can(actor, "platform.accounts.actAs") && actor.actingAs === undefined;
+  // Billing (ADR-0029 §9): Global and Billing Administrators see the account's billing and act on it.
+  const billing = can(actor, "platform.billing.manage")
+    ? await platformAccountBilling(container().deps, billingContext(), actor, accountId)
+    : null;
 
   const peopleTab = (
     <>
@@ -289,6 +296,17 @@ export default async function CustomerAccountPage({
               </>
             ),
           },
+          ...(billing
+            ? [
+                {
+                  id: "billing",
+                  label: "Billing",
+                  content: (
+                    <AccountBillingPanel accountId={summary.id} view={billing} canAct={actor.actingAs === undefined} />
+                  ),
+                },
+              ]
+            : []),
         ]}
       />
     </>

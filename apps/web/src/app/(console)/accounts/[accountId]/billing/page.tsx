@@ -16,6 +16,7 @@ import { HoldsChooser } from "@/components/billing/holds-chooser";
 import { BILLING_STATE_LABELS, billingDate, gigabytes, PLAN_SOURCE_LABELS } from "@/components/billing/labels";
 import { PlanForm } from "@/components/billing/plan-form";
 import { PortalButton } from "@/components/billing/portal-button";
+import { RedeemCode } from "@/components/billing/redeem-code";
 import { Field, FieldGrid } from "@/components/console/flyout";
 import { StatusText } from "@/components/console/status-text";
 import { billingContext, billingOffered } from "@/server/billing";
@@ -391,6 +392,16 @@ export default async function BillingPage({
             <PlanForm accountId={accountId} currency={currency} plan={o.paidPlan} amountMinor={o.planAmountMinor} />
           </Section>
         </>
+      )}
+
+      {canManage && (o.state === "free" || o.state === "lapsed") && (
+        <Section
+          id="redeem"
+          title="Redeem a code"
+          description="A code from Anhourtec can give this account a paid plan for a while, with no card. It works once."
+        >
+          <RedeemCode accountId={accountId} />
+        </Section>
       )}
 
       <p className="am-small">

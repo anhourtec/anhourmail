@@ -23,7 +23,8 @@ export type NavIcon =
   | "user-cog"
   | "key-round"
   | "settings"
-  | "trash";
+  | "trash"
+  | "ticket";
 
 export type NavSection = "mail" | "people" | "billing" | "audit" | "settings" | "platform";
 
@@ -156,6 +157,18 @@ export const NAV: readonly NavItem[] = [
     scope: "platform",
     section: "platform",
     phase: 5,
+    href: () => "/platform/billing",
+  },
+  {
+    // ADR-0029 §8: sign-up and comp codes (Global and Support Administrators; Billing staff reach them from Platform
+    // billing).
+    label: "Invite codes",
+    icon: "ticket",
+    permission: "platform.invites.manage",
+    scope: "platform",
+    section: "platform",
+    phase: 5,
+    href: () => "/platform/invite-codes",
   },
   {
     label: "Platform audit",

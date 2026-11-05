@@ -14,6 +14,7 @@ import {
   Settings,
   Shield,
   ShieldAlert,
+  Ticket,
   Trash2,
   UserCog,
   Users,
@@ -39,4 +40,5 @@ export const NAV_ICONS: Record<NavIcon, LucideIcon> = {
   "key-round": KeyRound,
   settings: Settings,
   trash: Trash2,
+  ticket: Ticket,
 };
