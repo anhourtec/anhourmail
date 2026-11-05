@@ -31,6 +31,11 @@ export type PasswordChangeDeps = {
   state: (jobId: string) => Promise<PasswordJobState>;
   /** Wrong current passwords per address (the webmail sign-in's failure-only limit; fail closed). */
   failures: { exceeded(address: string): Promise<boolean>; record(address: string): Promise<void> };
+  /**
+   * The session moved to a new id: ends what still runs on the old one in this process (its push streams, whose
+   * channel holds a revoked token; the browser opens them again with the new cookie). A throw is ignored.
+   */
+  renewed?: (oldSessionId: string) => void;
   sleep?: (ms: number) => Promise<void>;
   /** How long to wait for the worker before answering (it normally takes a few seconds). */
   waitMs?: number;
@@ -86,9 +91,9 @@ export async function changeWebmailPassword(
   }
   if (ownerEmail) await d.notify(ownerEmail, address);
   if (state === "pending") return { applied: false, signedIn: false };
+  let renewed: string;
   try {
-    const renewed = await d.mail.renewMailbox(sessionId, address, input.next);
-    return { applied: true, signedIn: true, sessionId: renewed };
+    renewed = await d.mail.renewMailbox(sessionId, address, input.next);
   } catch (err) {
     // Changed, but this session couldn't sign in again (e.g. the mail server was busy): the person signs in again.
     log.warn("webmail session renewal after a password change failed", {
@@ -97,4 +102,10 @@ export async function changeWebmailPassword(
     });
     return { applied: true, signedIn: false };
   }
+  try {
+    d.renewed?.(sessionId);
+  } catch {
+    // Housekeeping only: the old id is gone either way, and what still runs on it ends at its next check.
+  }
+  return { applied: true, signedIn: true, sessionId: renewed };
 }
