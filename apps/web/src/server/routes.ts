@@ -436,6 +436,32 @@ export const ROUTES: readonly RouteSpec[] = [
     accountParam: "accountId",
     probeStatus: 404,
   },
+  // The admins' CSV batch (ADR-0030 §8): mailbox.import.any. The harness's empty body has no rows (400); a random
+  // batch id is a 404.
+  {
+    method: "POST",
+    path: "/api/accounts/:accountId/imports/batch",
+    file: "app/api/accounts/[accountId]/imports/batch/route.ts",
+    guard: "mailbox.import.any",
+    accountParam: "accountId",
+    probeStatus: 400,
+  },
+  {
+    method: "GET",
+    path: "/api/accounts/:accountId/import-batches/:batchId",
+    file: "app/api/accounts/[accountId]/import-batches/[batchId]/route.ts",
+    guard: "mailbox.import.any",
+    accountParam: "accountId",
+    probeStatus: 404,
+  },
+  {
+    method: "GET",
+    path: "/api/accounts/:accountId/import-batches/:batchId/report",
+    file: "app/api/accounts/[accountId]/import-batches/[batchId]/report/route.ts",
+    guard: "mailbox.import.any",
+    accountParam: "accountId",
+    probeStatus: 404,
+  },
   {
     method: "GET",
     path: "/api/accounts/:accountId/aliases",

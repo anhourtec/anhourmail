@@ -5,10 +5,12 @@ import { systemEmail } from "@anhourmail/adapters/mail/layout";
 import { devImportSources, type ImportContext, type ImportNotice } from "@anhourmail/core/imports";
 import { keyRingFromEnv } from "@anhourmail/server/keyring";
 import { log } from "@anhourmail/server/log";
+import { checkRateLimit, LIMITS } from "@anhourmail/server/rate-limit";
 
 import { importCredentialIssuer } from "./adapters/stalwart";
 import { container } from "./container";
 import { env } from "./env";
+import { RateLimitedError } from "./http/route";
 import { platform } from "./platform";
 
 /*
@@ -68,5 +70,23 @@ export async function sendImportNotice(accountId: string, notice: ImportNotice):
   } catch (err) {
     // The import is recorded either way; log only the error's name (no addresses).
     log.error("import notice failed", { component: "imports", errorName: err instanceof Error ? err.name : "unknown" });
+  }
+}
+
+/**
+ * Charges `rows` starts to the account's daily import budget (`importStartAccount`, fail closed), all or nothing as far
+ * as the counter allows: the first count reads what is left; when fewer than `rows` remain the batch is refused (429)
+ * with only that one count used, as a refused single start uses one. Rule 27 (run-66): a batch is as many starts as it
+ * has valid rows.
+ */
+export async function chargeImportStarts(accountId: string, rows: number): Promise<void> {
+  if (rows <= 0) return;
+  const subject = `account:${accountId}`;
+  const count = () => checkRateLimit(container().counter, "importStartAccount", LIMITS.importStartAccount, subject);
+  const first = await count();
+  const left = Number(first.headers["RateLimit-Remaining"] ?? "0");
+  if (!first.allowed || left < rows - 1) throw new RateLimitedError();
+  for (let i = 1; i < rows; i++) {
+    if (!(await count()).allowed) throw new RateLimitedError();
   }
 }

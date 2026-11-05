@@ -12,7 +12,7 @@ import { type Actor, ANONYMOUS, systemClock, type UserActor } from "@anhourmail/
 import type { ImportContext } from "@anhourmail/core/imports";
 import type { Mailbox } from "@anhourmail/core/mailboxes";
 import { setLogSinkForTests } from "@anhourmail/server/log";
-import { memoryCounter } from "@anhourmail/server/rate-limit";
+import { checkRateLimit, LIMITS, memoryCounter } from "@anhourmail/server/rate-limit";
 import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 import type { AccountRole } from "@anhourmail/shared/rbac";
 
@@ -22,6 +22,9 @@ import { POST as resumeRoute } from "@/app/api/accounts/[accountId]/imports/[imp
 import { GET as getRoute } from "@/app/api/accounts/[accountId]/imports/[importId]/route";
 import { POST as stopSyncRoute } from "@/app/api/accounts/[accountId]/imports/[importId]/stop-sync/route";
 import { GET as listRoute, POST as startRoute } from "@/app/api/accounts/[accountId]/imports/route";
+import { GET as reportRoute } from "@/app/api/accounts/[accountId]/import-batches/[batchId]/report/route";
+import { GET as batchRoute } from "@/app/api/accounts/[accountId]/import-batches/[batchId]/route";
+import { POST as startBatchRoute } from "@/app/api/accounts/[accountId]/imports/batch/route";
 
 import { setContainerForTests } from "./container";
 import type * as ImportsModule from "./imports";
@@ -81,6 +84,7 @@ vi.mock("@/server/imports", async (load) => ({
 
 let uow: MemoryUnitOfWork;
 let mailer: ReturnType<typeof memoryMailer>;
+let counter: ReturnType<typeof memoryCounter>;
 
 const box = (id: string, accountId: string, address: string, userId: string | null): Mailbox => ({
   id,
@@ -127,9 +131,10 @@ beforeEach(() => {
     s.stepUps.push({ userId, sessionId: SESSION, expiresAt: new Date(Date.now() + 300_000) });
   }
   mailer = memoryMailer();
+  counter = memoryCounter();
   setContainerForTests({
     deps: { uow, clock: systemClock, platform: PUBLIC_PLATFORM },
-    counter: memoryCounter(),
+    counter,
     mailer,
     dns: { lookup: async () => [] },
     passwords: { hash: async () => "x" },
@@ -264,5 +269,91 @@ describe("mail import routes", () => {
     const over = await start(KIM_BOX);
     expect(over.status).toBe(429);
     expect(minted).toEqual([]);
+  });
+});
+
+describe("admins' batch routes", () => {
+  const HEADER = "mailbox,source_host,source_port,source_username,source_password,exclude_junk_trash,sync";
+  const csv = [
+    HEADER,
+    "kim@family.test,imap.old.example,993,kim@old.example,old-app-pw,,",
+    "nobody@family.test,imap.old.example,993,x,y,,",
+  ].join("\n");
+  const post = (body: string, accountId = ACCOUNT) =>
+    startBatchRoute(
+      new Request(`http://localhost:43200${base(accountId)}/batch`, {
+        method: "POST",
+        headers: { "content-type": "text/csv", host: "localhost:43200", origin: "http://localhost:43200" },
+        body,
+      }),
+      params({ accountId }),
+    );
+  type BatchBody = {
+    data: { batchId: string; started: { importId: string }[]; invalid: { row: number; code: string }[] };
+  };
+
+  it("starts the valid rows, reports the others by line, emails the mailbox's person, and serves the batch and its report", async () => {
+    actor = userAdmin;
+    const res = await post(csv);
+    expect(res.status).toBe(201);
+    expect(res.headers.get("ratelimit-limit")).toBe("3");
+    const text = await res.text();
+    expect(text).not.toMatch(/old-app-pw|app_dest_secret|kim@old\.example/);
+    const body = JSON.parse(text) as BatchBody;
+    expect(body.data.started).toHaveLength(1);
+    expect(body.data.invalid).toEqual([{ row: 3, code: "mailbox_not_found" }]);
+    expect(mailer.sent.map((m) => m.to)).toEqual(["kim@family.test"]);
+    // The one valid row was charged to the account's daily starts (this check counts one more: 30 - 2 left).
+    const left = await checkRateLimit(counter, "importStartAccount", LIMITS.importStartAccount, `account:${ACCOUNT}`);
+    expect(left.headers["RateLimit-Remaining"]).toBe("28");
+    const p = params({ accountId: ACCOUNT, batchId: body.data.batchId });
+    const batch = await batchRoute(req("GET", `/api/accounts/${ACCOUNT}/import-batches/${body.data.batchId}`), p);
+    expect(batch.status).toBe(200);
+    const report = await reportRoute(
+      req("GET", `/api/accounts/${ACCOUNT}/import-batches/${body.data.batchId}/report`),
+      p,
+    );
+    expect(report.headers.get("content-type")).toBe("text/csv; charset=utf-8");
+    expect(report.headers.get("content-disposition")).toMatch(/^attachment; filename="import-batch-/);
+    expect(await report.text()).toMatch(
+      /^mailbox,status,messages,duplicates,too_large,failed,error\r\nkim@family\.test,queued,0,0,0,0,/,
+    );
+    actor = outsider;
+    expect((await batchRoute(req("GET", "/x"), p)).status).toBe(404);
+  });
+
+  it("refuses: 403 for members and without a step-up, 413 for a file over the limit, 400 for an unreadable one", async () => {
+    // More requests than the batch tier allows in one test.
+    vi.stubEnv("RATE_LIMIT_MULTIPLIER", "10");
+    actor = member;
+    expect((await post(csv)).status).toBe(403);
+    actor = userAdmin;
+    stepUp = false;
+    const noStepUp = await post(csv);
+    expect(noStepUp.status).toBe(403);
+    expect(await errorCode(noStepUp)).toBe("step_up_required");
+    stepUp = true;
+    expect((await post("x".repeat(300 * 1024))).status).toBe(413);
+    expect((await post("mailbox\nkim@family.test")).status).toBe(400);
+    expect(minted).toEqual([]);
+  });
+
+  it("charges each valid row to the account's daily starts and refuses a batch the budget can't cover", async () => {
+    actor = userAdmin;
+    const use = async (n: number) => {
+      for (let i = 0; i < n; i++) {
+        await checkRateLimit(counter, "importStartAccount", LIMITS.importStartAccount, `account:${ACCOUNT}`);
+      }
+    };
+    const two = [HEADER, "kim@family.test,imap.old.example,993,a,b,,", "owner@family.test,imap.old.example,993,a,b,,"];
+    // 29 of 30 used: one start is left, the batch has two valid rows (an Owner may import into both).
+    await use(29);
+    actor = owner;
+    const refused = await post(two.join("\n"));
+    expect(refused.status).toBe(429);
+    expect(await errorCode(refused)).toBe("rate_limited");
+    // Refused before anything was minted or recorded.
+    expect(minted).toEqual([]);
+    expect(uow.state.mailImports).toHaveLength(0);
   });
 });
