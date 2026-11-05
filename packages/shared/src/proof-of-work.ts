@@ -41,4 +41,13 @@ export const SIGN_UP_REFUSAL = {
   attempts: "sign_up_attempts",
   /** Too many accounts created from this address or network for now. */
   limited: "sign_up_limited",
+  /** The invite code can't be used (unknown, used, expired, revoked, another email's): one answer for all (ADR-0029). */
+  inviteCode: "invite_code_invalid",
 } as const;
+
+/**
+ * An invite code that goes with a sign-up (ADR-0029 §8): sent in this header next to the proof, never in the form body
+ * the identity layer reads. With sign-up closed only a code that grants sign-up lets the request through; the proof
+ * and every sign-up limit still apply.
+ */
+export const SIGN_UP_CODE_HEADER = "x-sign-up-code";
