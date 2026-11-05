@@ -107,6 +107,11 @@ frame-ancestors 'none'` unless the route sets its own sandboxing one). `next.con
   the draft and checks: in Drafts with `$draft`, exactly one From equal to the chosen identity, 1..max recipients,
   size ≤ 30 MB. It submits with an explicit envelope (MAIL FROM = the identity; RCPT TO = To + Cc + Bcc) held for
   `UNDO_SECONDS`, moving the message to Sent on success. Stalwart's sender rules (ADR-0019) also apply.
+- **Billing (ADR-0029 §5, 2026-11-05).** Before the draft is read, the BFF asks core `billingSendBlock` for the mailbox
+  (and, sending from a shared mailbox, for it and the person's own, after the grant is confirmed and before the send is
+  audited): a restricted account's mailbox or a held one is answered `403 billing_restricted` with why and who can fix
+  it, which the composer shows; a failed check refuses (fail closed). Nothing is submitted or charged to the quotas.
+  The mail server refuses the same mailboxes on every protocol (`SEND_BLOCKED_PERMISSIONS`).
 - **Trust tiers (rule 27, security review run-15):** the tier comes from one helper, `sendingTier()` — `new` for
   every mailbox until tiers are stored per account; `restricted` refuses sending. Sending is charged per rolling
   hour and day, one unit per recipient (03-anti-spam-and-abuse.md), in sliding windows per mailbox and per webmail

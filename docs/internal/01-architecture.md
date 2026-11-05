@@ -132,7 +132,14 @@ mail clients ─► Stalwart 465/587/993/995 (TLS by Stalwart itself)    MX traf
   such a request), completed after the person exists, and given back if the sign-up created no one. Checkout and
   changes are refused server-side while paid plans aren't offered (`BillingContext.paidPlansOpen`).
 - Provisioning is a **job**, never an inline request (CLAUDE.md rule 26): write intent (e.g. mailbox `status = provisioning`), enqueue, the worker applies it through `stalwart-client` (idempotent upserts by natural key), then set `active` or `failed` with an error code.
-- The **reconciler** (scheduler `job:reconcile`, hourly; plus the every-minute `job:service-accounts` check of the management keys' owners) compares Postgres intent with Stalwart (`x:Domain`, `x:Account` lists). It **reports** drift (audit `platform.reconciler_drift`; the alert channel comes with monitoring) and re-queues missing non-destructive state. It **never deletes** a Stalwart account or mail automatically. Deletions are explicit jobs with a grace period.
+- The **reconciler** (scheduler `job:reconcile`, hourly; plus the every-minute `job:service-accounts` check of the management keys' owners) compares Postgres intent with Stalwart (`x:Domain`, `x:Account` lists). It **reports** drift (audit `platform.reconciler_drift`; the alert channel comes with monitoring) and re-queues missing non-destructive state. It **never deletes** a Stalwart account or mail automatically. Deletions are explicit jobs with a grace period. The rest (2026-11-05): staff clear disputes, re-sync and dismiss orphans (`billing/staff.ts`); the daily scheduler
+  job `job:billing-catalogue` records the provider's catalogue against `plans.ts` (`billing/catalogue.ts`,
+  `billing_catalogue`) and drift refuses checkouts and changes; account deletion sets the subscription to end at the
+  period's end and removal ends it now first (`billing/deletion.ts`, called from `data/deletion-service.ts` and
+  `billing.timers`); the account export carries `billing.json`; the webmail BFF refuses a send for billing before it
+  submits (`billing/send-block.ts`, `403 billing_restricted`). The demo seed drives three accounts through the fake
+  (`scripts/seed/billing.ts`) and `npm run test:billing-live` (`tests/billing-live/`, manual, test keys only) checks
+  the real processor with test clocks.
 
 ## Identity and auth model
 

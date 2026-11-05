@@ -211,8 +211,11 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
   and address ceilings; slices 8–10 2026-11-05 — checkout, portal, dev simulation, changes, cancel, the refund, lapse
   and holds; slices 11–13 2026-11-05 — the console Billing page and banners, Platform billing (staff grants, the staff
   refund, the ceiling override), invite codes (staff create/revoke, redemption at sign-up and on Billing) and the
-  public billing guide. `BILLING.status` stays `planned`. Next: slice 14 (live test-clock suite), the account-deletion
-  hook and `billing.json` export, catalogue-drift refusals and the webmail's `403 billing_restricted`.
+  public billing guide; the rest 2026-11-05 — the account-deletion hook, `billing.json` in the export, catalogue-drift
+  refusals, the webmail's `403 billing_restricted`, staff dispute clears, re-sync and orphan dismissal, demo billing
+  states and the live test-clock suite (written; skips without test keys). `BILLING.status` stays `planned`. Next: run
+  the live suite with test keys (slice 14), the backscatter decision for held mailboxes, held submissions after a
+  restriction, the reconciler's billing-access drift.
 - Migration (import mail and contacts) ships with billing, not after launch: paying customers switching a domain
   need their old mail and contacts on day one (moved here from Phase 8.1 on 2026-10-29). Scope below.
 - **Exit:** every lifecycle transition tested with Stripe test clocks; BC PST/GST position confirmed by an accountant;

@@ -1102,6 +1102,23 @@ customer's account without the customer knowing.
   production, value only in the ops repo, never published or put in a message or the account's audit entries),
   checked under the account lock in every create path, staff included; a failed read fails the create (closed). Staff
   raise it per account with `platform.billing.manage` and a fresh step-up, audited in the account's log.
+- **The webmail's own sending refusal (2026-11-05).** Before every send (own and delegated) the BFF asks core
+  `billingSendBlock`: a restricted account's mailbox or a held one gets `403 billing_restricted` before anything is
+  submitted, charged or audited as sent; a failed check refuses (fail closed, rule 27). A delegated send is checked only
+  after the grant is confirmed, so it never tells a person without access anything about another mailbox's billing.
+  The mail server's `SEND_BLOCKED_PERMISSIONS` stays the second line.
+- **Catalogue drift refuses charges.** While the provider's prices, currencies, interval or tax behaviour disagree with
+  `plans.ts` (`job:billing-catalogue`, daily and at start; `billing_catalogue`), checkout and plan or add-on changes
+  answer 503 (audited denied `catalogue_drift`), so nobody is charged a price we don't publish; logged at `error` for
+  operations every run, audited when it appears or is fixed.
+- **Account deletion ends the subscription.** The request sets it to end at the period's end (the hourly timers retry a
+  failed call with their own idempotency intent per hour, and success is recorded only when a fresh read shows it);
+  removal voids the open invoices and ends it now first, and waits (audited `billing_pending`) while the provider
+  can't, so a deleted account is never left paying or collected later and a deletion is never lost to an outage.
+- **Staff dispute clears, re-sync and orphan dismissal** need `platform.billing.manage`, never run while acting as
+  someone, and the two that change what is kept (clearing, dismissing) need a fresh step-up; unknown ids are 404
+  before the step-up. A clear covers only the disputes the page showed (409 `changed` otherwise). A clear marks the disputes `cleared`, which no later provider read can undo (`latestDisputes`
+  by id); a new dispute still restricts.
 
 ## Sign-up proof-of-work (ADR-0031, 2026-11-05)
 
