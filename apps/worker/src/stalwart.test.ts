@@ -12,20 +12,33 @@ describe("worker Stalwart settings (ADR-0020 credential split)", () => {
     }
   });
 
-  it("runs the queue worker with the provisioning key only", () => {
+  it("runs the queue worker with the provisioning and training keys only", () => {
+    const keys = { ...prod, STALWART_PROVISIONING_KEY: "p", STALWART_TRAINING_KEY: "t" };
     expect(() => {
-      checkStalwartSettings("worker", { ...prod, STALWART_PROVISIONING_KEY: "p" });
+      checkStalwartSettings("worker", keys);
     }).not.toThrow();
     expect(() => {
       checkStalwartSettings("worker", prod);
     }).toThrow(/STALWART_PROVISIONING_KEY must be set in production/);
     expect(() => {
-      checkStalwartSettings("worker", { ...prod, STALWART_PROVISIONING_KEY: "p", STALWART_OPERATIONS_KEY: "o" });
+      checkStalwartSettings("worker", { ...prod, STALWART_PROVISIONING_KEY: "p" });
+    }).toThrow(/STALWART_TRAINING_KEY must be set in production/);
+    expect(() => {
+      checkStalwartSettings("worker", { ...keys, STALWART_OPERATIONS_KEY: "o" });
     }).toThrow(/STALWART_OPERATIONS_KEY must not be given to this process/);
     // The audit key belongs to the scheduler, not the queue worker.
     expect(() => {
-      checkStalwartSettings("worker", { ...prod, STALWART_PROVISIONING_KEY: "p", STALWART_AUDIT_KEY: "a" });
+      checkStalwartSettings("worker", { ...keys, STALWART_AUDIT_KEY: "a" });
     }).toThrow(/STALWART_AUDIT_KEY must not be given to this process/);
+    // The training key belongs to the queue worker only.
+    expect(() => {
+      checkStalwartSettings("scheduler", {
+        ...prod,
+        STALWART_PROVISIONING_KEY: "p",
+        STALWART_AUDIT_KEY: "a",
+        STALWART_TRAINING_KEY: "t",
+      });
+    }).toThrow(/STALWART_TRAINING_KEY must not be given to this process/);
     // Never the web app's mailbox password grant key, in any environment.
     expect(() => {
       checkStalwartSettings("worker", { STALWART_PROVISIONING_KEY: "p", MAILBOX_PASSWORD_GRANT_KEY: "g".repeat(40) });
@@ -53,6 +66,29 @@ describe("worker Stalwart settings (ADR-0020 credential split)", () => {
     expect(() => {
       checkStalwartSettings("job", { ...prod, STALWART_PROVISIONING_KEY: "p" });
     }).not.toThrow();
+    // A one-off job started in the worker container inherits the training key.
+    expect(() => {
+      checkStalwartSettings("job", { ...prod, STALWART_PROVISIONING_KEY: "p", STALWART_TRAINING_KEY: "t" });
+    }).not.toThrow();
+  });
+
+  it("gives the mail importer no Stalwart key at all", () => {
+    expect(() => {
+      checkStalwartSettings("importer", prod);
+    }).not.toThrow();
+    for (const k of [
+      "STALWART_PROVISIONING_KEY",
+      "STALWART_OPERATIONS_KEY",
+      "STALWART_AUDIT_KEY",
+      "STALWART_TRAINING_KEY",
+    ]) {
+      expect(() => {
+        checkStalwartSettings("importer", { ...prod, [k]: "k" });
+      }).toThrow(new RegExp(`${k} must not be given to this process`));
+    }
+    expect(() => {
+      checkStalwartSettings("importer", { ...prod, STALWART_DEV_ADMIN_USER: "admin" });
+    }).toThrow(/for development only/);
   });
 
   it("refuses the dev admin in production and the legacy key anywhere", () => {

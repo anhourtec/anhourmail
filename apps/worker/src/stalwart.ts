@@ -4,19 +4,24 @@ import {
   type StalwartCredentialRole,
   stalwartAudit,
   stalwartProvisioning,
+  stalwartTraining,
   verifyStalwartCredential,
 } from "@anhourmail/stalwart-client";
 
 /**
- * Which Stalwart credentials each worker-image process uses (ADR-0020 "Credential split"). The queue worker and
- * one-off jobs hold only the provisioning key (no owner access to any mailbox); the scheduler also holds the read-only
- * audit key for the hourly managed-script check, which one-off jobs may be given too. Nothing here ever holds the web
- * app's operations key.
+ * Which Stalwart credentials each worker-image process uses (ADR-0020 "Credential split"). The queue worker holds the
+ * provisioning key (no owner access to any mailbox) and the training key, which only finds and destroys the
+ * spam-training samples a mail import created (ADR-0030); one-off jobs hold the provisioning key; the scheduler also
+ * holds the read-only audit key for the hourly managed-script check, which one-off jobs may be given too. The mail
+ * importer holds none at all (it reaches the mail server's IMAPS port only). Nothing here ever holds the web app's
+ * operations key.
  */
 export const WORKER_CREDENTIALS = {
-  worker: { required: ["provisioning"], optional: [] },
+  worker: { required: ["provisioning", "training"], optional: [] },
   scheduler: { required: ["provisioning", "audit"], optional: [] },
-  job: { required: ["provisioning"], optional: ["audit"] },
+  // One-off jobs run in the worker or scheduler container and may inherit either's extra key (they use neither).
+  job: { required: ["provisioning"], optional: ["audit", "training"] },
+  importer: { required: [], optional: [] },
 } as const satisfies Record<
   string,
   { required: readonly StalwartCredentialRole[]; optional: readonly StalwartCredentialRole[] }
@@ -49,7 +54,8 @@ export function checkStalwartSettings(
  * (a provisioning key that can impersonate stops the worker). Skipped for the dev admin.
  */
 export async function verifyStalwartCredentials(kind: WorkerProcess): Promise<void> {
+  const clients = { provisioning: stalwartProvisioning, audit: stalwartAudit, training: stalwartTraining };
   for (const role of WORKER_CREDENTIALS[kind].required) {
-    await verifyStalwartCredential(role, role === "audit" ? stalwartAudit() : stalwartProvisioning());
+    await verifyStalwartCredential(role, clients[role]());
   }
 }
