@@ -3,7 +3,13 @@ import { randomUUID } from "node:crypto";
 
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, or, type SQL, sql } from "drizzle-orm";
 
-import { type AccessRepository, ConflictError, type Repositories, type UnitOfWork } from "@anhourmail/core";
+import {
+  type AccessRepository,
+  ConflictError,
+  DeadlockError,
+  type Repositories,
+  type UnitOfWork,
+} from "@anhourmail/core";
 import type { AccountRepository } from "@anhourmail/core/account";
 import type { AliasKind, AliasRepository, MailAlias } from "@anhourmail/core/aliases";
 import { PROFILE_FIELDS, type ProfileDetails, type ProfileField } from "@anhourmail/shared/profile";
@@ -1670,10 +1676,25 @@ const repositories = (x: Executor): Repositories => ({
 });
 
 /** One Postgres transaction per `run` (CLAUDE.md rule 46: the audit row commits with the change). */
+/** Postgres `deadlock_detected` (40P01), on the driver's error or the query error drizzle wraps it in. */
+export function isDeadlock(err: unknown): boolean {
+  for (let e: unknown = err, depth = 0; e instanceof Error && depth < 4; e = e.cause, depth += 1) {
+    if ((e as Error & { code?: unknown }).code === "40P01") return true;
+  }
+  return false;
+}
+
 export class PgUnitOfWork implements UnitOfWork {
   constructor(private readonly database: Db) {}
 
-  run<T>(fn: (repos: Repositories) => Promise<T>): Promise<T> {
-    return this.database.transaction((tx) => fn(repositories(tx)));
+  async run<T>(fn: (repos: Repositories) => Promise<T>): Promise<T> {
+    try {
+      return await this.database.transaction((tx) => fn(repositories(tx)));
+    } catch (err) {
+      // Backstop: lock order is the same everywhere (accounts in id order, then a login), but a deadlock Postgres
+      // breaks rolls this unit of work back whole; answer "try again" (409 `deadlock`) instead of a 500.
+      if (isDeadlock(err)) throw new DeadlockError();
+      throw err;
+    }
   }
 }
