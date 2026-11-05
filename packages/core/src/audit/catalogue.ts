@@ -157,6 +157,8 @@ export const AUDIT_ACTIONS = [
   "data.import_sync_stopped",
   "data.import_finished",
   "data.import_credentials_wiped",
+  "data.import_batch_created",
+  "data.contacts_imported",
   "data.deletion_requested",
   "data.deletion_cancelled",
   "data.deletion_started",

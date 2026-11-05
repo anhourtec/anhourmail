@@ -33,7 +33,7 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `trust` | `trust.tier_changed`, `trust.limits_changed`, `trust.restricted`, `trust.suspended`, `trust.unsuspended` |
 | `abuse` | `abuse.report_received`, `abuse.report_resolved` |
 | `staff` | `staff.role_granted`, `staff.role_revoked`, `staff.act_as_started`, `staff.act_as_renewed`, `staff.act_as_ended`, `staff.account_viewed`, `staff.credentials_reset` |
-| `data` | `data.export_requested`, `data.export_ready`, `data.export_downloaded`, `data.export_expired`, `data.mail_exported`, `data.import_started`, `data.import_paused`, `data.import_resumed`, `data.import_cancelled`, `data.import_blocked`, `data.import_sync_stopped`, `data.import_finished`, `data.import_credentials_wiped`, `data.deletion_requested`, `data.deletion_cancelled`, `data.deletion_started`, `data.deleted` |
+| `data` | `data.export_requested`, `data.export_ready`, `data.export_downloaded`, `data.export_expired`, `data.mail_exported`, `data.import_started`, `data.import_paused`, `data.import_resumed`, `data.import_cancelled`, `data.import_blocked`, `data.import_sync_stopped`, `data.import_finished`, `data.import_credentials_wiped`, `data.import_batch_created`, `data.contacts_imported`, `data.deletion_requested`, `data.deletion_cancelled`, `data.deletion_started`, `data.deleted` |
 | `platform` | `platform.settings_changed`, `platform.admin_bootstrapped`, `platform.secret_changed`, `platform.stalwart_upgraded`, `platform.provisioning_failed`, `platform.reconciler_drift`, `platform.mailboxes_requeued`, `platform.mail_rules_upgraded`, `platform.mailbox_purged`, `platform.audit_chain_broken` |
 | `audit` | `audit.exported` |
 | `shared_mailbox` | `shared_mailbox.created`, `shared_mailbox.deleted`, `shared_mailbox.member_added`, `shared_mailbox.member_removed` |
@@ -349,7 +349,15 @@ username, a secret, folder names, subjects or Message-IDs: `data.import_started`
 `provisioning` when the revoke job ran: meta `credentialRevoked`, `sealedCleared`; `gaveUp` with the
 `platform.provisioning_failed` alert when it gave up; system `import-expiry` with `leftover` for a terminal row that
 still held a secret). The runner's checkpoints and the training-sample clean-ups aren't audited (progress, not
-changes of intent); the clean-up's failures alert through `platform.provisioning_failed`.
+changes of intent); the clean-up's failures alert through `platform.provisioning_failed`. `data.import_batch_created` (the admin; target the
+batch; meta `rows`, `valid`, `invalid`, `batchId`; `denied` `act_as` / `step_up_required`; `failed` `bad_request` for a
+file that can't be read) is written with one `data.import_started` per started row (meta `batchId`) in the same unit of
+work; invalid rows are counted, never echoed. The summary email (`job:import-notify`) writes nothing: it only claims
+`notified_at`. `data.contacts_imported` — a contacts file (vCard or CSV) imported in the webmail (ADR-0030 §10): written
+in the mailbox's account log as the mailbox itself (a `system` actor named by its address, like `data.mail_exported`),
+with metadata `format`, `created`, `merged`, `duplicates`, `invalid` and `overCap` only — never names, addresses or
+other card content; recorded once writing started, including when it stopped part-way, and not for a file refused
+before anything was written.
 
 Data export and account deletion (ADR-0025; `packages/core/src/data`). Exports: `data.export_requested` (the
 requester; account exports in the account's log with the account as target, personal ones in the platform log with

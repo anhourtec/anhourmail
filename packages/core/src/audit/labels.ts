@@ -184,6 +184,8 @@ const EXPLICIT: Partial<Record<AuditAction, string>> = {
   "data.import_sync_stopped": "Import sync stopped",
   "data.import_finished": "Import finished",
   "data.import_credentials_wiped": "Import credentials removed",
+  "data.import_batch_created": "Mail import batch started",
+  "data.contacts_imported": "Contacts imported in the webmail",
   "data.deletion_requested": "Account deletion requested",
   "data.deletion_cancelled": "Account deletion cancelled",
   "data.deletion_started": "Account deletion started",
