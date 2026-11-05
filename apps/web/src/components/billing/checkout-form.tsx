@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 "use client";
 
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Check, ChevronDown } from "lucide-react";
 import { useId, useState } from "react";
 
 import {
@@ -11,6 +11,7 @@ import {
   MAX_EXTRA_MAILBOXES,
   MAX_STORAGE_BLOCKS,
   type PaidPlanId,
+  planHighlights,
   PLANS,
 } from "@anhourmail/shared/plans";
 
@@ -91,156 +92,223 @@ export function CheckoutForm({
     window.location.assign(url);
   }
 
+  const card = "rounded-2xl border bg-card p-5 shadow-sm sm:p-6";
+  const plusLines = planHighlights(PLANS.plus);
+
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
         void start();
       }}
-      className="flex max-w-3xl flex-col gap-5"
+      className="flex flex-col gap-5"
       noValidate
     >
       <fieldset className="flex flex-col gap-2">
-        <legend className="am-h4 mb-2">Plan</legend>
-        <div className="grid gap-3 sm:grid-cols-2">
+        <legend className="sr-only">Plan</legend>
+        <div className="grid items-stretch gap-4 md:grid-cols-2">
           {(["plus", "supporter"] as const).map((p) => {
             const facts = PLANS[p];
             const price = facts.price?.[currency] ?? 0;
+            const chosen = plan === p;
             return (
               <label
                 key={p}
-                className={`flex cursor-pointer flex-col gap-1 rounded-xl border p-4 transition-colors ${
-                  plan === p ? "border-primary bg-primary/5" : "hover:bg-accent"
+                className={`relative flex cursor-pointer flex-col gap-4 rounded-2xl border bg-card p-5 shadow-sm transition-shadow hover:shadow-md sm:p-6 ${
+                  chosen ? "bg-primary/[0.04] ring-2 ring-primary" : ""
                 }`}
               >
-                <span className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    name={`${id}-plan`}
-                    value={p}
-                    checked={plan === p}
-                    onChange={() => {
-                      setPlan(p);
-                      setError(null);
-                    }}
-                    className="accent-[rgb(var(--primary))]"
-                  />
-                  <span className="font-medium text-[15px]">{facts.name}</span>
+                <span className="flex items-start justify-between gap-3">
+                  <span className="flex items-center gap-2.5">
+                    <input
+                      type="radio"
+                      name={`${id}-plan`}
+                      value={p}
+                      checked={chosen}
+                      onChange={() => {
+                        setPlan(p);
+                        setError(null);
+                      }}
+                      className="size-4 accent-[rgb(var(--primary))]"
+                    />
+                    <span className="font-display font-medium text-[22px] leading-tight">{facts.name}</span>
+                  </span>
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 font-medium text-[13px] ${
+                      p === "plus" ? "bg-primary text-primary-foreground" : "border bg-background"
+                    }`}
+                  >
+                    {p === "plus" ? "Most people" : "Pay what you want"}
+                  </span>
                 </span>
-                <span className="am-num text-[14px]">
-                  {facts.payWhatYouWant ? "From " : ""}
-                  {formatPrice(price, currency)}/{BILLING.interval}
+                <span className="am-small min-h-[2.5rem]">{facts.tagline}</span>
+                <span className="flex items-baseline gap-1.5">
+                  {facts.payWhatYouWant && <span className="am-small">from</span>}
+                  <span className="am-num font-medium text-[32px] leading-none tracking-tight">
+                    {formatPrice(price, currency)}
+                  </span>
+                  <span className="am-small">/ {BILLING.interval}</span>
                 </span>
-                <span className="am-small">{facts.tagline}</span>
+                <span className="am-micro -mt-2">Per account, covers everyone in it</span>
+                <span className="flex flex-col gap-2.5 border-t pt-4">
+                  <span className="font-medium text-[14px]">
+                    {p === "plus" ? "What's included" : `Everything in ${PLANS.plus.name}, and:`}
+                  </span>
+                  <span role="list" className="flex flex-col gap-2.5">
+                    {(p === "plus" ? plusLines : planHighlights(facts).filter((l) => !plusLines.includes(l))).map(
+                      (line) => (
+                        <span role="listitem" key={line} className="flex items-center gap-2.5 text-[14px]">
+                          <span className="grid size-5 shrink-0 place-content-center rounded-full border border-primary/40 bg-primary/10">
+                            <Check className="size-3 text-primary" aria-hidden />
+                          </span>
+                          <span className="text-muted-foreground">{line}</span>
+                        </span>
+                      ),
+                    )}
+                  </span>
+                </span>
               </label>
             );
           })}
         </div>
       </fieldset>
 
-      <div className="flex flex-wrap gap-5">
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor={`${id}-currency`} className="am-h4">
-            Currency
-          </label>
-          {fixedCurrency ? (
-            <p id={`${id}-currency`} className="am-num flex h-10 items-center text-[15px]">
-              {fixedCurrency}
-              <span className="am-small ml-2">(this account pays in {fixedCurrency})</span>
-            </p>
-          ) : (
-            <select
-              id={`${id}-currency`}
-              value={currency}
-              onChange={(e) => {
-                const c = e.target.value as Currency;
-                setCurrency(c);
-                setAmount(String((PLANS.supporter.price?.[c] ?? 0) / 100));
-              }}
-              className={`${inputClass} w-32`}
-            >
-              {BILLING.currencies.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-        {plan === "supporter" && (
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor={`${id}-amount`} className="am-h4">
-              Supporter amount a {BILLING.interval}
-            </label>
-            <div className="flex items-center gap-2">
-              <input
-                id={`${id}-amount`}
-                inputMode="numeric"
-                value={amount}
-                onChange={(e) => {
-                  setAmount(e.target.value);
-                  setError(null);
-                }}
-                aria-describedby={`${id}-amount-hint`}
-                aria-invalid={amountProblem !== null}
-                className={`${inputClass} am-num w-32`}
-              />
-              <span className="am-num text-[15px]">{currency}</span>
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
+        <div className={`${card} flex flex-col gap-5`}>
+          <div className="flex flex-wrap gap-5">
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor={`${id}-currency`} className="am-h4">
+                Currency
+              </label>
+              {fixedCurrency ? (
+                <p id={`${id}-currency`} className="am-num flex h-10 items-center text-[15px]">
+                  {fixedCurrency}
+                  <span className="am-small ml-2">(this account pays in {fixedCurrency})</span>
+                </p>
+              ) : (
+                <div className="relative w-32">
+                  <select
+                    id={`${id}-currency`}
+                    value={currency}
+                    onChange={(e) => {
+                      const c = e.target.value as Currency;
+                      setCurrency(c);
+                      setAmount(String((PLANS.supporter.price?.[c] ?? 0) / 100));
+                    }}
+                    className={`${inputClass} am-num w-32 cursor-pointer appearance-none pr-10`}
+                  >
+                    {BILLING.currencies.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown
+                    className="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-muted-foreground"
+                    aria-hidden
+                  />
+                </div>
+              )}
             </div>
-            <span id={`${id}-amount-hint`} className={`am-micro ${amountProblem ? "text-destructive" : ""}`}>
-              {amountProblem ??
-                `At least ${formatPrice(minimum, currency)}, whole amounts only. Everything above Plus funds the free plan.`}
-            </span>
+            {plan === "supporter" && (
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor={`${id}-amount`} className="am-h4">
+                  Supporter amount a {BILLING.interval}
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    id={`${id}-amount`}
+                    inputMode="numeric"
+                    value={amount}
+                    onChange={(e) => {
+                      setAmount(e.target.value);
+                      setError(null);
+                    }}
+                    aria-describedby={`${id}-amount-hint`}
+                    aria-invalid={amountProblem !== null}
+                    className={`${inputClass} am-num w-32`}
+                  />
+                  <span className="am-num text-[15px]">{currency}</span>
+                </div>
+                <span id={`${id}-amount-hint`} className={`am-micro ${amountProblem ? "text-destructive" : ""}`}>
+                  {amountProblem ??
+                    `At least ${formatPrice(minimum, currency)}, whole amounts only. Everything above Plus funds the free plan.`}
+                </span>
+              </div>
+            )}
           </div>
-        )}
-      </div>
 
-      <div className="flex flex-col gap-3">
-        <p className="am-h4">Add-ons (optional)</p>
-        <Stepper
-          label={`Storage blocks (+${String(plus.storageBlockGb ?? 0)} GB each, ${formatPrice(blockMinor, currency)}/${BILLING.interval})`}
-          value={blocks}
-          max={MAX_STORAGE_BLOCKS}
-          onChange={setBlocks}
-        />
-        <Stepper
-          label={`Extra mailboxes beyond the ${String(plus.includedMailboxes)} included (${formatPrice(extraMinor, currency)}/${BILLING.interval} each)`}
-          value={extras}
-          max={MAX_EXTRA_MAILBOXES}
-          onChange={setExtras}
-        />
-      </div>
+          <div className="flex flex-col gap-3 border-t pt-5">
+            <p className="am-h4">Add-ons (optional)</p>
+            <Stepper
+              label={`Storage blocks (+${String(plus.storageBlockGb ?? 0)} GB each, ${formatPrice(blockMinor, currency)}/${BILLING.interval})`}
+              value={blocks}
+              max={MAX_STORAGE_BLOCKS}
+              onChange={setBlocks}
+            />
+            <Stepper
+              label={`Extra mailboxes beyond the ${String(plus.includedMailboxes)} included (${formatPrice(extraMinor, currency)}/${BILLING.interval} each)`}
+              value={extras}
+              max={MAX_EXTRA_MAILBOXES}
+              onChange={setExtras}
+            />
+          </div>
+        </div>
 
-      <div className="flex flex-col gap-1 rounded-xl border px-4 py-3">
-        <p className="flex flex-wrap items-baseline justify-between gap-2">
-          <span className="am-h4">First {BILLING.interval}</span>
-          <span className="am-num font-medium text-[17px]" data-testid="checkout-total">
-            {formatPrice(total, currency)}
-          </span>
-        </p>
-        <p className="am-micro">
-          Before tax, which the payment page adds for your address. Renews every {BILLING.interval}; there&apos;s no
-          trial ({PLANS.free.name} is the trial). You can ask for a refund within {BILLING.refundWindowDays} days of
-          paying.
-        </p>
+        <div className={`${card} flex flex-col gap-4 lg:sticky lg:top-20`}>
+          <p className="am-h4">Summary</p>
+          <dl className="flex flex-col gap-2 text-[14px]">
+            <div className="flex justify-between gap-3">
+              <dt>{PLANS[plan].name}</dt>
+              <dd className="am-num">{formatPrice(planMinor, currency)}</dd>
+            </div>
+            {blocks > 0 && (
+              <div className="flex justify-between gap-3">
+                <dt>
+                  Storage blocks × <span className="am-num">{blocks}</span>
+                </dt>
+                <dd className="am-num">{formatPrice(blocks * blockMinor, currency)}</dd>
+              </div>
+            )}
+            {extras > 0 && (
+              <div className="flex justify-between gap-3">
+                <dt>
+                  Extra mailboxes × <span className="am-num">{extras}</span>
+                </dt>
+                <dd className="am-num">{formatPrice(extras * extraMinor, currency)}</dd>
+              </div>
+            )}
+          </dl>
+          <p className="flex flex-wrap items-baseline justify-between gap-2 border-t pt-4">
+            <span className="am-h4">First {BILLING.interval}</span>
+            <span className="am-num font-medium text-[22px]" data-testid="checkout-total">
+              {formatPrice(total, currency)}
+            </span>
+          </p>
+          <p className="am-micro">
+            Before tax, which the payment page adds for your address. Renews every {BILLING.interval}; there&apos;s no
+            trial ({PLANS.free.name} is the trial). You can ask for a refund within {BILLING.refundWindowDays} days of
+            paying.
+          </p>
+          {pending && (
+            <p role="status" className="am-small">
+              A checkout was started in the last hour. Finish it on the payment page, or start a new one after{" "}
+              <span className="am-num">{timeFmt.format(new Date(pendingUntil))} UTC</span>. If you already paid, your
+              plan shows here within a minute.
+            </p>
+          )}
+          {error && (
+            <p role="alert" className="am-small text-destructive">
+              {error}
+            </p>
+          )}
+          <button type="submit" disabled={busy || pending} className={`${primaryButtonClass} w-full`}>
+            {busy ? "Opening the payment page…" : "Continue to payment"}
+            {!busy && <ArrowRight className="size-4" aria-hidden />}
+          </button>
+          <p className="am-micro text-center">You pay on the payment processor&apos;s secure page.</p>
+        </div>
       </div>
-
-      {pending && (
-        <p role="status" className="am-small">
-          A checkout was started in the last hour. Finish it on the payment page, or start a new one after{" "}
-          <span className="am-num">{timeFmt.format(new Date(pendingUntil))} UTC</span>. If you already paid, your plan
-          shows here within a minute.
-        </p>
-      )}
-      {error && (
-        <p role="alert" className="am-small text-destructive">
-          {error}
-        </p>
-      )}
-      <button type="submit" disabled={busy || pending} className={`${primaryButtonClass} w-fit`}>
-        {busy ? "Opening the payment page…" : "Continue to payment"}
-        {!busy && <ArrowRight className="size-4" aria-hidden />}
-      </button>
     </form>
   );
 }
