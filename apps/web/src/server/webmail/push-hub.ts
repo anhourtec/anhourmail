@@ -32,7 +32,13 @@ export type PushEvent =
   | { type: "ready" }
   | { type: "down" }
   | { type: "state"; changed: Partial<Record<PushType, string>> }
-  | { type: "end"; reason: "signedout" | "moved" | "shutdown" };
+  | { type: "end"; reason: EndReason };
+
+/**
+ * Why a stream ended: the session ended, shows another mailbox now, the process is stopping, or the session moved to
+ * a new id after its mailbox's own password change (the browser opens the stream again with the new cookie).
+ */
+export type EndReason = "signedout" | "moved" | "shutdown" | "renewed";
 
 /** The data types passed on: what the webmail asks for changes of. */
 export const PUSH_TYPES = ["Email", "Mailbox"] as const;
@@ -238,10 +244,14 @@ export class PushHub {
     };
   }
 
-  /** Ends every channel of a session (it signed out in this process); its streams get `end` ("signedout"). */
-  closeSession(sessionId: string): void {
+  /**
+   * Ends every channel of a session in this process: it signed out (its streams get `end` "signedout"), or it moved to
+   * a new id after its own password change ("renewed": the old id is gone and the channel's token revoked, so the
+   * browser opens a stream for the new id).
+   */
+  closeSession(sessionId: string, reason: "signedout" | "renewed" = "signedout"): void {
     const sessionKey = sessionKeyOf(sessionId);
-    for (const c of [...this.#channels.values()]) if (c.sessionKey === sessionKey) this.#end(c, "signedout");
+    for (const c of [...this.#channels.values()]) if (c.sessionKey === sessionKey) this.#end(c, reason);
   }
 
   /** Ends everything (process shutting down). */
@@ -367,7 +377,7 @@ export class PushHub {
     }
   }
 
-  #end(c: Channel, reason: "signedout" | "moved" | "shutdown"): void {
+  #end(c: Channel, reason: EndReason): void {
     if (c.ended) return;
     c.ended = true;
     this.#channels.delete(c.key);
