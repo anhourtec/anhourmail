@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MemoryUnitOfWork } from "@anhourmail/adapters/memory";
-import { ANONYMOUS, ForbiddenError, systemClock } from "@anhourmail/core";
+import { ANONYMOUS, DeadlockError, ForbiddenError, systemClock } from "@anhourmail/core";
 import { setLogSinkForTests } from "@anhourmail/server/log";
 import { memoryCounter } from "@anhourmail/server/rate-limit";
 import { memoryMailer } from "@anhourmail/adapters/mail";
@@ -127,6 +127,22 @@ describe("route()", () => {
     })(new Request("http://localhost:43200/api/x"), params);
     expect(boom.status).toBe(500);
     expect(JSON.stringify(await boom.json())).not.toContain("secret detail");
+  });
+
+  it("a broken deadlock is a 409 `deadlock` (try again) and a warning naming the component", async () => {
+    const lines: string[] = [];
+    setLogSinkForTests((line) => lines.push(line));
+    const res = await route(async () => {
+      throw new DeadlockError();
+    })(new Request("http://localhost:43200/api/x"), params);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({
+      error: { code: "deadlock", message: expect.stringMatching(/Try again/) as string },
+    });
+    const warned = lines
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .find((l) => l.msg === "database deadlock broken");
+    expect(warned).toMatchObject({ level: "warn", component: "http" });
   });
 
   it("reads an optional body: none (or whitespace) is null, JSON is parsed, malformed JSON is a 400", async () => {
