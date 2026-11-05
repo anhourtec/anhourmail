@@ -168,6 +168,8 @@ function trackDisputes(
   events: readonly PendingBillingEvent[],
   fresh: ReadonlyMap<string, DisputeOutcome>,
   now: Date,
+  /** Open or lost disputes the provider reports on the latest payment: tracked too, so staff see what they clear. */
+  reported: readonly { id: string; status: DisputeOutcome }[] = [],
 ): DisputeTracking {
   const rows = new Map(tracked.map((d) => [d.disputeId, { ...d }] as const));
   const before = new Map(tracked.map((d) => [d.disputeId, d.status] as const));
@@ -204,6 +206,9 @@ function trackDisputes(
   }
   for (const [id, status] of fresh) {
     if (rows.get(id)?.status === "open") set(id, status);
+  }
+  for (const d of reported) {
+    if (!rows.has(d.id) && (d.status === "open" || d.status === "lost")) set(d.id, d.status);
   }
   const all = [...rows.values()];
   const closed: DisputeTracking["closed"] = [];
@@ -288,12 +293,25 @@ export function deriveBilling(
   const sorted = [...events].sort(byCreated);
   const live = sub && isLiveSubStatus(sub.status) && sub.status !== "incomplete" ? sub : null;
 
-  const tracking = trackDisputes(previous.accountId, ctx.disputes ?? [], sorted, ctx.disputeStatuses ?? new Map(), now);
+  const tracking = trackDisputes(
+    previous.accountId,
+    ctx.disputes ?? [],
+    sorted,
+    ctx.disputeStatuses ?? new Map(),
+    now,
+    live?.latestDisputes ?? [],
+  );
   // Restricted while the provider reports a dispute on the latest payment, while any tracked dispute is open or lost,
-  // or, sticky, while one was before and none was won in this batch (a dispute whose event is still unresolved).
+  // or, sticky, while one was before and none was won in this batch (a dispute whose event is still unresolved). A
+  // dispute staff cleared never restricts again, even while the provider still reports it on the latest payment.
+  const cleared = new Set(tracking.all.filter((d) => d.status === "cleared").map((d) => d.disputeId));
+  const providerDisputed = live
+    ? live.latestDisputes !== undefined
+      ? live.latestDisputes.some((d) => (d.status === "open" || d.status === "lost") && !cleared.has(d.id))
+      : live.disputed || live.disputeLost
+    : false;
   const disputed =
-    (live?.disputed ?? false) ||
-    (live?.disputeLost ?? false) ||
+    providerDisputed ||
     tracking.all.some((d) => isRestrictingDispute(d.status)) ||
     (previous.disputedAt !== null && !tracking.lifted);
 

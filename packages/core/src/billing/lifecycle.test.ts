@@ -373,6 +373,50 @@ describe("deriveBilling: transitions", () => {
     expect(out.disputes).toEqual([]);
   });
 
+  it("a dispute staff cleared doesn't restrict again while the provider still reports it on the latest payment", () => {
+    const lostOnLatest = sub({ disputeLost: true, latestDisputes: [{ id: "dp_1", status: "lost" }] });
+    const afterClear = deriveBilling(paid({ state: "restricted", restrictedAt: T0 }), lostOnLatest, [], {
+      ...ctx(),
+      disputes: [tracked("dp_1", "cleared")],
+    });
+    expect(afterClear.next).toMatchObject({ state: "active", disputedAt: null, restrictedAt: null });
+    // Another dispute on the same payment, not cleared, still restricts.
+    const another = sub({
+      disputed: true,
+      latestDisputes: [
+        { id: "dp_1", status: "lost" },
+        { id: "dp_2", status: "open" },
+      ],
+    });
+    const second = deriveBilling(paid(), another, [], { ...ctx(), disputes: [tracked("dp_1", "cleared")] });
+    expect(second.next.state).toBe("restricted");
+    // Without the ids (an older provider answer) the flags alone decide, as before.
+    expect(
+      deriveBilling(paid(), sub({ disputeLost: true }), [], { ...ctx(), disputes: [tracked("dp_1", "cleared")] }).next
+        .state,
+    ).toBe("restricted");
+  });
+
+  it("open or lost disputes the provider reports on the latest payment are tracked (staff see what they clear)", () => {
+    const reported = sub({
+      disputed: true,
+      latestDisputes: [
+        { id: "dp_9", status: "open" },
+        { id: "dp_8", status: "won" },
+      ],
+    });
+    const out = deriveBilling(paid(), reported, [], ctx());
+    expect(out.next.state).toBe("restricted");
+    expect(out.disputes).toEqual([expect.objectContaining({ disputeId: "dp_9", status: "open" })]);
+    // Already tracked and cleared by staff (who also reset the sticky flag): left as it is.
+    const again = deriveBilling({ ...out.next, disputedAt: null }, reported, [], {
+      ...ctx(),
+      disputes: [tracked("dp_9", "cleared")],
+    });
+    expect(again.disputes).toEqual([]);
+    expect(again.next.state).toBe("active");
+  });
+
   it("the provider still reporting a dispute keeps it open despite a won close", () => {
     const { next } = deriveBilling(paid({ disputedAt: T0 }), sub({ disputed: true }), [closedAs("won")], ctx());
     expect(next.state).toBe("restricted");
