@@ -36,6 +36,12 @@ export const SUSPENSION_REASONS = {
   other: "A breach of our terms",
 } as const;
 export type SuspensionReason = keyof typeof SUSPENSION_REASONS;
+/**
+ * Reasons whose staff suspension also revokes the suspended mailboxes' app passwords, which ends mail apps already
+ * signed in with them (the mail server keeps such sessions open through a suspension otherwise). The person makes new
+ * ones after the suspension is lifted. Payment, legal and other suspensions leave them (they come back on a lift).
+ */
+export const SUSPENSION_REVOKES_APP_PASSWORDS: readonly SuspensionReason[] = ["spam", "abuse", "phishing"];
 export const isSuspensionReason = (v: unknown): v is SuspensionReason =>
   typeof v === "string" && Object.hasOwn(SUSPENSION_REASONS, v);
 
