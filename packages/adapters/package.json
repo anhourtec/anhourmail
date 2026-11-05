@@ -15,6 +15,7 @@
     "./mail": "./src/mail/index.ts",
     "./mail/layout": "./src/mail/layout.ts",
     "./mail/data-lifecycle": "./src/mail/data-lifecycle.ts",
+    "./mail/imports": "./src/mail/imports.ts",
     "./stalwart": "./src/stalwart/index.ts",
     "./dns": "./src/dns/index.ts",
     "./image": "./src/image/index.ts",
