@@ -70,7 +70,8 @@ test("a member imports their own mailbox from another server and sees it finish"
   await expect(page.getByRole("button", { name: "Cancel import" })).toHaveCount(0);
 
   // The list shows it finished.
-  await page.getByRole("link", { name: "Import mail" }).click();
+  // Back through the breadcrumb (the left navigation also links "Import mail" on wide screens).
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Import mail" }).click();
   const row = page.getByRole("row", { name: new RegExp(im.mailbox) });
   await expect(row.getByText("Finished")).toBeVisible();
 
