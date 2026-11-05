@@ -59,6 +59,9 @@ export function exportedEntry(e: AuditEntry) {
     target: e.target,
     ip: partialIp(e.ip),
     meta,
+    // Kept so an Owner can check their export against the chain. Unlike the console views (which blank the hashes for
+    // readers without full IPs and notes), this row leaves out requestId, userAgent and actor ids, which are part of
+    // the hash input, so the hashes can't be used to guess the full IP or a hidden meta value offline (run-70).
     prevHash: e.prevHash,
     hash: e.hash,
   };
