@@ -78,7 +78,9 @@ describe("left navigation sections", () => {
     const tree = navTree(actor([], [{ accountId: "a", role: "owner" }]), "a");
     const links = tree.flatMap((s) => s.items);
     expect(links.find((l) => l.label === "Mailboxes")?.href).toBe("/accounts/a/mailboxes");
-    expect(links.find((l) => l.label === "Billing")?.href).toBeUndefined();
+    expect(links.find((l) => l.label === "Billing")?.href).toBe("/accounts/a/billing");
+    const staff = navTree(actor(["global_admin"])).flatMap((s) => s.items);
+    expect(staff.find((l) => l.label === "Abuse queue")?.href).toBeUndefined();
   });
 
   it("gives staff a Platform section for their role, and no account sections without an account", () => {

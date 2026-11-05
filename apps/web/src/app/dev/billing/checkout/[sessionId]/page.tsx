@@ -11,7 +11,7 @@ export const metadata: Metadata = { title: "Fake checkout (dev)", robots: { inde
 
 /**
  * Dev only: the fake provider's checkout (ADR-0029 §3). "Pay" completes the session (the subscription and its first
- * invoice), "Decline card" leaves it open; the events go through the real webhook, and the worker's sync does the rest.
+ * invoice) and returns to the account's Billing page as the processor does; "Decline card" leaves it open; the events go through the real webhook, and the worker's sync does the rest.
  */
 export default async function FakeCheckoutPage({ params }: { params: Promise<{ sessionId: string }> }) {
   await connection();
@@ -45,7 +45,7 @@ export default async function FakeCheckoutPage({ params }: { params: Promise<{ s
             { action: "pay", label: "Pay", primary: true },
             { action: "decline", label: "Decline card" },
           ]}
-          after={{ pay: `/dev/billing/portal/${encodeURIComponent(view.customerId)}?checkout=done` }}
+          after={{ pay: `/accounts/${encodeURIComponent(view.accountId)}/billing?checkout=done` }}
         />
       ) : (
         <p className="am-small">This checkout is no longer open.</p>

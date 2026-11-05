@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { can, type UserActor } from "@anhourmail/core";
 import { listAliases } from "@anhourmail/core/aliases";
 import { avatarPath, ownAvatar } from "@anhourmail/core/avatars";
+import { accountBillingNotice } from "@anhourmail/core/billing";
 import { listDomains } from "@anhourmail/core/domains";
 import { listMailboxes } from "@anhourmail/core/mailboxes";
 import { listPeople } from "@anhourmail/core/people";
@@ -18,6 +19,7 @@ import { env } from "@/server/env";
 import { peopleActions } from "@/server/people-actions";
 
 import type { MenuAccount } from "./account-menu";
+import { BillingBanner } from "./billing/billing-banner";
 import { ConsoleChrome } from "./console-chrome";
 import { AccountDeletingNotice } from "./console/account-deleting-notice";
 import { AccountSuspendedNotice } from "./console/account-suspended-notice";
@@ -112,6 +114,8 @@ export async function ConsoleShell({
     current && actor.deletingAccountIds?.includes(current)
       ? await accountDeletionStatus(container().deps, actor, current)
       : null;
+  // Billing that needs attention (ADR-0029 §9): past due, sending paused, or the paid plan ended.
+  const billing = current && !suspendedNotice ? await accountBillingNotice(container().deps, actor, current) : null;
   return (
     <ConsoleChrome
       tree={navTree(actor, current)}
@@ -167,6 +171,7 @@ export async function ConsoleShell({
               settingsHref={deleting.canCancel ? `/accounts/${current}/settings` : null}
             />
           ) : null}
+          {current && billing ? <BillingBanner notice={billing} billingHref={`/accounts/${current}/billing`} /> : null}
           {children}
         </>
       )}

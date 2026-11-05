@@ -102,6 +102,7 @@ export const NAV: readonly NavItem[] = [
     scope: "account",
     section: "billing",
     phase: 5,
+    href: (accountId) => `/accounts/${accountId}/billing`,
   },
   {
     label: "Audit log",

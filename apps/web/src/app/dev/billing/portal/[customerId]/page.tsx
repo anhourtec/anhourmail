@@ -77,8 +77,11 @@ export default async function FakePortalPage({ params }: { params: Promise<{ cus
           { action: "close_dispute_lost", label: "Dispute lost" },
         ]}
       />
-      <Link href="/" className="w-fit font-medium text-primary underline underline-offset-2">
-        Back to the console
+      <Link
+        href={`/accounts/${encodeURIComponent(view.accountId)}/billing`}
+        className="w-fit font-medium text-primary underline underline-offset-2"
+      >
+        Back to Billing
       </Link>
     </main>
   );
