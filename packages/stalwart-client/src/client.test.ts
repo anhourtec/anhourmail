@@ -52,6 +52,18 @@ describe("StalwartTransport", () => {
     expect((s.calls[0]?.body as { using: string[] }).using).toContain("urn:stalwart:jmap");
   });
 
+  it("queryAll refuses a list that doesn't add up: short of the total, no total, or a capped limit", async () => {
+    const answer = (q: Record<string, unknown>) => fakeServer({ "x:Domain/query": () => q }).fetchImpl;
+    await expect(transport(answer({ ids: ["a", "b"], total: 3 })).queryAll("x:Domain")).rejects.toThrow(
+      /listed 2 of 3/,
+    );
+    await expect(transport(answer({ ids: ["a"] })).queryAll("x:Domain")).rejects.toThrow(/listed 1 of undefined/);
+    await expect(transport(answer({ ids: ["a"], total: 1, limit: 50 })).queryAll("x:Domain")).rejects.toThrow(
+      /capped the list at 50/,
+    );
+    expect(await transport(answer({ ids: ["a", "b", "a"], total: 2 })).queryAll("x:Domain")).toEqual(["a", "b"]);
+  });
+
   it("lists past the server's 500-object get limit with /query, then gets in pages of 500", async () => {
     const all = Array.from({ length: 1234 }, (_, i) => ({ id: `a${String(i)}`, name: `n${String(i)}` }));
     const s = fakeServer({
@@ -59,15 +71,19 @@ describe("StalwartTransport", () => {
       "x:Account/get": (args) => ({
         list: args.ids === null ? all.slice(0, 500) : all.filter((a) => (args.ids as string[]).includes(a.id)),
       }),
-      "x:Account/query": (args) => {
-        const position = Number(args.position);
-        return { ids: all.slice(position, position + Number(args.limit)).map((a) => a.id) };
-      },
+      // Like the real server, `position` paging would repeat the first page: one query for everything, with a total.
+      "x:Account/query": (args) =>
+        args.position === undefined
+          ? { ids: [...all.map((a) => a.id), "a0"], total: all.length }
+          : { ids: all.slice(0, Number(args.limit)).map((a) => a.id) },
     });
     const got = await transport(s.fetchImpl).getAll("x:Account", ["name"]);
     expect(got).toHaveLength(1234);
     const gets = s.calls.map((c) => (c.body as { methodCalls: [string, { ids: unknown }][] }).methodCalls[0]);
-    expect(gets.filter((m) => m?.[0] === "x:Account/query")).toHaveLength(3);
+    const queries = gets.filter((m) => m?.[0] === "x:Account/query");
+    expect(queries).toHaveLength(1);
+    expect(queries[0]?.[1]).toMatchObject({ calculateTotal: true, limit: 100_000 });
+    expect(queries[0]?.[1]).not.toHaveProperty("position");
     expect(
       gets
         .filter((m) => m?.[0] === "x:Account/get" && Array.isArray(m[1].ids))
