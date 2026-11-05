@@ -11,3 +11,5 @@ export * from "./lifecycle";
 export * from "./expiry";
 export * from "./folders";
 export * from "./runner";
+export * from "./batch";
+export * from "./notify";
