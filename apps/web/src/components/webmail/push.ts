@@ -9,7 +9,8 @@
  *
  * Read with `fetch`, not `EventSource`, so the answer's status is known: 401 → signed out (the app's own checks run the
  * sign-in flow), 400/403/409 → no push for this page (a mailbox shared with the person, or another mailbox active),
- * 429/503 or a network error → retried with backoff while the app polls.
+ * 429/503 or a network error → retried with backoff while the app polls. An `end` with reason `renewed` (the session
+ * moved to a new id after the mailbox's own password change) opens the stream again at once, with the new cookie.
  */
 
 /** New state names per data type, as the stream sends them. */
@@ -135,7 +136,13 @@ function browserEnv(): PushEnv {
  * Starts push for one mailbox (`key`, its JMAP account id) from `url`. Returns `stop`, which closes the stream (or
  * leaves the queue for the lock) and the channel.
  */
-export function startPush(url: string, key: string, handlers: PushHandlers, env: PushEnv = browserEnv()): () => void {
+export function startPush(
+  url: string,
+  key: string,
+  handlers: PushHandlers,
+  overrides: Partial<PushEnv> = {},
+): () => void {
+  const env: PushEnv = { ...browserEnv(), ...overrides };
   const life = new AbortController();
   /** Read through a function: the page can go away during any wait. */
   const aborted = () => life.signal.aborted;
@@ -272,8 +279,9 @@ export function startPush(url: string, key: string, handlers: PushHandlers, env:
       // Not for this page: a mailbox shared with the person (403), or the session shows another mailbox now.
       if (out.kind === "status" && out.status < 500 && out.status !== 429) break;
       if (out.kind === "end" && out.reason === "moved") break;
-      // The stream's planned end: open the next one soon. Anything else: back off.
-      if (out.kind === "closed") {
+      // The stream's planned end, or the session moved to a new id (its own password change): open the next one soon
+      // (with the new cookie). Anything else: back off.
+      if (out.kind === "closed" || (out.kind === "end" && out.reason === "renewed")) {
         failures = 0;
         await wait(250 + env.random() * 750);
       } else {
