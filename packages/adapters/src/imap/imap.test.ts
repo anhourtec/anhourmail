@@ -11,7 +11,14 @@ import { parseDevAllowList, type Resolver } from "@anhourmail/server/net-guard";
 import { IMPORT } from "@anhourmail/shared/import";
 
 import { baseOptions, CLIENT_INFO, connectFailure, openImapClient, sessionFailure, sourceTarget } from "./connect";
-import { destinationPath, foreignNamespaces, imapMailDestination, imapMailSource, toSourceFolder } from ".";
+import {
+  destinationPath,
+  foreignNamespaces,
+  imapMailDestination,
+  imapMailSource,
+  inForeignNamespace,
+  toSourceFolder,
+} from ".";
 
 type Recorded = Record<string, unknown> & { tls?: Record<string, unknown> };
 
@@ -285,5 +292,48 @@ describe("destination paths", () => {
     expect(foreignNamespaces({ namespaces: { personal: [], other: false, shared: false } })).toEqual([
       "Shared Folders",
     ]);
+  });
+});
+
+describe("destination folders", () => {
+  it("leaves out folders in other or shared namespaces, so no role or dedupe index uses a delegated folder", async () => {
+    class ListingClient {
+      usable = true;
+      capabilities = new Map<string, unknown>();
+      namespaces = { personal: [{ prefix: "", delimiter: "/" }], other: [{ prefix: "Other Users/", delimiter: "/" }] };
+      on() {
+        return this;
+      }
+      once() {
+        return this;
+      }
+      async connect() {
+        return undefined;
+      }
+      async list() {
+        return [
+          { path: "INBOX", specialUse: undefined },
+          { path: "Sent Items", specialUse: "\\Sent" },
+          { path: "Shared Folders/boss@example.org/Sent Items", specialUse: "\\Sent" },
+          { path: "Other Users/ann/Archive", specialUse: "\\Archive" },
+        ];
+      }
+      async logout() {
+        this.usable = false;
+      }
+      close() {
+        return undefined;
+      }
+    }
+    const dest = imapMailDestination({
+      endpoint: { host: "127.0.0.1", port: 993 },
+      servername: "imap.example.org",
+      clientClass: ListingClient as never,
+    });
+    const session = await dest.connect("me@example.org", "secret", signal());
+    expect((await session.folders()).map((f) => f.path)).toEqual(["INBOX", "Sent Items"]);
+    expect(inForeignNamespace("other users/ann", ["Other Users/"])).toBe(true);
+    expect(inForeignNamespace("Others", ["Other Users/"])).toBe(false);
+    await session.close();
   });
 });

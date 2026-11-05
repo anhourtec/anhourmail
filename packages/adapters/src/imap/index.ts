@@ -10,5 +10,11 @@ export {
   sessionFailure,
   sourceTarget,
 } from "./connect";
-export { destinationPath, foreignNamespaces, imapMailDestination, SHARED_FOLDERS_PREFIX } from "./destination";
+export {
+  destinationPath,
+  foreignNamespaces,
+  imapMailDestination,
+  inForeignNamespace,
+  SHARED_FOLDERS_PREFIX,
+} from "./destination";
 export { imapMailSource, toSourceFolder } from "./source";

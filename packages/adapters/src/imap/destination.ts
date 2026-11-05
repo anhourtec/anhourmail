@@ -42,13 +42,17 @@ export function destinationPath(path: string, foreignPrefixes: readonly string[]
   if (parts.length === 0 || parts.length > 32 || parts.some((p) => p === "" || p.length > 255 || /\p{Cc}/u.test(p))) {
     throw new ImportSessionError("refused");
   }
-  const lower = path.toLowerCase();
-  for (const prefix of foreignPrefixes) {
-    const p = prefix.replace(/[/.]+$/, "").toLowerCase();
-    if (p !== "" && (lower === p || lower.startsWith(`${p}${IMPORT_DELIMITER}`)))
-      throw new ImportSessionError("refused");
-  }
+  if (inForeignNamespace(path, foreignPrefixes)) throw new ImportSessionError("refused");
   return parts;
+}
+
+/** Whether `path` is under one of the other/shared namespace prefixes (ignoring case). */
+export function inForeignNamespace(path: string, foreignPrefixes: readonly string[]): boolean {
+  const lower = path.toLowerCase();
+  return foreignPrefixes.some((prefix) => {
+    const p = prefix.replace(/[/.]+$/, "").toLowerCase();
+    return p !== "" && (lower === p || lower.startsWith(`${p}${IMPORT_DELIMITER}`));
+  });
 }
 
 /** The namespaces the server reports for other users and shared folders, plus ours by name. */
@@ -76,7 +80,9 @@ class ImapDestinationSession implements DestinationSession {
 
   async folders(): Promise<DestinationFolder[]> {
     try {
-      const list = await this.client.list();
+      // Only the mailbox's own folders: a folder shared with it (another account's, or a delegated mailbox's) is never
+      // a role folder or part of the dedupe index of an import.
+      const list = (await this.client.list()).filter((f) => !inForeignNamespace(f.path, this.#foreign));
       this.#known = new Set(list.map((f) => f.path));
       return list.map((f) => ({ path: f.path, specialUse: f.specialUse ?? null }));
     } catch (err) {
