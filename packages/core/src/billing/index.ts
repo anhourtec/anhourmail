@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+export * from "./catalogue";
 export * from "./ceilings";
 export * from "./changes";
 export * from "./checkout";
+export * from "./deletion";
 export * from "./entitlements";
 export * from "./entity";
 export * from "./grants";
@@ -16,5 +18,7 @@ export * from "./lifecycle";
 export * from "./notice";
 export * from "./ports";
 export type * from "./repository";
+export * from "./send-block";
 export * from "./service";
+export * from "./staff";
 export * from "./sync";
