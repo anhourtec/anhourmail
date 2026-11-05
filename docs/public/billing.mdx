@@ -1,6 +1,6 @@
 ---
 title: Plans and billing
-description: Paid plans, storage and extra mailboxes, cancelling, refunds, invoices, what happens when a payment fails, and invite codes.
+description: Paid plans, storage and extra mailboxes, cancelling, refunds, invoices, what happens when a payment fails, deleting the account, and invite codes.
 ---
 
 <BillingStatusNote />
@@ -77,7 +77,8 @@ don't recognise) contact support.
 1. **Payment failed, retrying.** A renewal didn't go through. Our payment processor tries the card again over the
    following days and emails you. Nothing changes in the account; updating the card settles it sooner.
 2. **Sending paused.** If the retries run out, no mailbox in the account can send. Receiving, reading, mail apps and
-   export keep working. Pay the open invoice from Billing and sending comes back within a minute.
+   export keep working. In the webmail, **Send** says sending is paused and who can fix it. Pay the open invoice from
+   Billing and sending comes back within a minute.
 3. **Plan ended.** If it's still unpaid after <Value of="restrictedDays" /> days, the plan ends and the account
    moves to Free.
 
@@ -98,6 +99,15 @@ When a paid plan ends, the account moves to Free. What Free doesn't include is *
 
 On Billing, **Choose what stays on** lets an Owner or Billing Administrator pick the mailbox and aliases that stay
 on. Subscribing again (or redeeming a code) brings everything back at once.
+
+## Deleting the account
+
+When an Owner deletes the account, a paid plan stops renewing at once and ends when removal starts, after the waiting
+period; nothing more is charged and no refund is made (ask for the refund first if you're inside the window). If you
+cancel the deletion, choose **Undo the cancellation** on Billing to keep the plan renewing. Your invoices stay with our
+payment processor for tax records. See [Delete an account](/docs/export-and-deletion#delete-an-account).
+
+An account export includes the plan and billing state (never card or payment details).
 
 ## Invite codes
 

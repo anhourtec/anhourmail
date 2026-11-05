@@ -31,6 +31,8 @@ JSON and CSV files:
 - your domains with the DNS records they need;
 - mailboxes and aliases (their settings, not their mail);
 - the names of app passwords (never the passwords);
+- the account's plan and billing: its state, renewal or end date, add-ons and anything held on Free (never card or
+  payment details: invoices and receipts are under **Manage payment and invoices** on Billing);
 - the account's audit log, newest first. Each entry keeps its hash, so you can check the log wasn't altered.
 
 Anyone can export their own details the same way from **Your data** (in the menu under your name): your profile, the
@@ -55,10 +57,13 @@ What happens next:
 - **Straight away**, every mailbox in the account is suspended: nobody can sign in, send or receive, and mail sent to
   it is returned to the sender. Its mail is kept. Pending invites are cancelled, and everyone in the account gets an
   email. Nothing in the account can be changed while it waits.
+- **A paid plan stops renewing.** It stays as it is until the end of the period you paid for, with no refund (if you're
+  inside the refund window, ask for the refund on Billing first). Cancelling the deletion doesn't renew it again on its
+  own: choose **Undo the cancellation** on Billing.
 - **For <Value of="accountDeletionGraceDays" /> days**, any Owner can cancel in **Account settings**. Cancelling turns
   the mailboxes back on; a catch-all address that was on stays off until you turn it on again.
-- **After that**, the account, its mailboxes and all their mail, its aliases and masked aliases, and its domains are
-  removed for good. Free addresses at <Value of="productDomain" /> are never given to anyone else. Everyone who was in
+- **After that**, a paid plan still running is ended (nothing more is charged), then the account, its mailboxes and
+  all their mail, its aliases and masked aliases, and its domains are removed for good. Free addresses at <Value of="productDomain" /> are never given to anyone else. Everyone who was in
   the account gets an email when it's done.
 
 People keep their console sign-in and any other accounts they belong to. The account's activity log is kept for the
