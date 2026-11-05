@@ -4,6 +4,7 @@
 import { EllipsisVertical, House, type LucideIcon, Mail, X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { usePathname } from "next/navigation";
 
 import type { NavTreeSection } from "@/server/console-nav";
@@ -93,20 +94,24 @@ function PersonMenu({
           {trigger ?? <EllipsisVertical className="size-4" aria-hidden />}
         </button>
       </Tooltip>
-      {open && (
-        <div ref={panel} className="fixed z-50" style={pos ?? undefined}>
-          <PanelSurface>
-            <AccountMenu
-              user={user}
-              accounts={accounts}
-              siteUrl={siteUrl}
-              onNavigate={() => {
-                close(false);
-              }}
-            />
-          </PanelSurface>
-        </div>
-      )}
+      {/* Drawn at the end of the page, not inside the sidebar: the sidebar is its own layer, so page content (table
+          checkboxes, cards) painted above a menu nested in it. */}
+      {open &&
+        createPortal(
+          <div ref={panel} className="fixed z-50" style={pos ?? undefined}>
+            <PanelSurface>
+              <AccountMenu
+                user={user}
+                accounts={accounts}
+                siteUrl={siteUrl}
+                onNavigate={() => {
+                  close(false);
+                }}
+              />
+            </PanelSurface>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
