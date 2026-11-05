@@ -5,6 +5,7 @@ import { ACCOUNT_A, ACCOUNT_B, actAs, deps, fakeHasher, req, user } from "../__t
 import { authorize, can } from "../actor";
 import { AccountSuspendedError } from "../errors";
 import type { Mailbox, MailboxStatus } from "../mailboxes/entity";
+import type { Repositories } from "../ports";
 import { resumeMailbox } from "../mailboxes/service";
 import { sessionRefusalFor } from "../security/service";
 import {
@@ -70,6 +71,37 @@ function world() {
     { id: "s-m2", userId: "member-a", createdAt: now, lastActiveAt: now, expiresAt: now, ip: null, userAgent: null },
   );
   return d;
+}
+
+/**
+ * Records the locks each unit of work takes, in order (the in-memory locks are no-ops), and runs `onAccountLock` on
+ * each account lock (to change the world between a service's first read and its locks).
+ */
+function recordLocks(d: ReturnType<typeof deps>, onAccountLock: (id: string) => void = () => undefined): string[] {
+  const calls: string[] = [];
+  const run = d.uow.run.bind(d.uow);
+  d.uow.run = <T>(fn: (r: Repositories) => Promise<T>) =>
+    run((r) =>
+      fn({
+        ...r,
+        accounts: {
+          ...r.accounts,
+          lock: async (id: string) => {
+            calls.push(`account:${id}`);
+            onAccountLock(id);
+            await r.accounts.lock(id);
+          },
+        },
+        dataLifecycle: {
+          ...r.dataLifecycle,
+          lockLogin: async (userId: string) => {
+            calls.push(`login:${userId}`);
+            await r.dataLifecycle.lockLogin(userId);
+          },
+        },
+      }),
+    );
+  return calls;
 }
 
 const status = (d: ReturnType<typeof deps>, id: string) => d.uow.state.mailboxes.find((m) => m.id === id)?.status;
@@ -192,6 +224,29 @@ describe("suspendAccount", () => {
     expect(view.account?.note).toBe("secret");
     await expect(staffSuspensionView(d, member, ACCOUNT_A)).rejects.toMatchObject({ code: "forbidden" });
   });
+
+  it("the internal note shows to Global, Support and Trust & Safety Administrators; Billing Administrators get null", async () => {
+    const d = world();
+    await suspendAccount(d, GA, ACCOUNT_A, { reason: "spam", note: "account note" }, SESSION, req);
+    await suspendPerson(d, GA, "member-a", { reason: "abuse", note: "person note" }, SESSION, req);
+    const as = (role: "support_admin" | "trust_safety_admin" | "billing_admin") =>
+      staffSuspensionView(d, user({ id: `x-${role}`, platform: [role] }), ACCOUNT_A);
+    for (const role of ["support_admin", "trust_safety_admin"] as const) {
+      const reader = await as(role);
+      expect(reader.account?.note).toBe("account note");
+      expect(reader.people["member-a"]?.note).toBe("person note");
+    }
+    {
+      const view = await as("billing_admin");
+      expect(view.account).toMatchObject({ reason: "spam", reasonLabel: expect.any(String) as string, note: null });
+      expect(view.people["member-a"]).toMatchObject({ reason: "abuse", note: null });
+      expect(JSON.stringify(view)).not.toMatch(/account note|person note/);
+    }
+    // A Reports Reader can't open the account view at all.
+    await expect(
+      staffSuspensionView(d, user({ id: "rr", platform: ["reports_reader"] }), ACCOUNT_A),
+    ).rejects.toMatchObject({ code: "forbidden" });
+  });
 });
 
 describe("liftAccountSuspension", () => {
@@ -221,6 +276,90 @@ describe("liftAccountSuspension", () => {
   });
 });
 
+describe("app passwords on a staff suspension", () => {
+  const appPassword = (id: string, mailboxId: string) => ({
+    id,
+    accountId: ACCOUNT_A,
+    mailboxId,
+    name: "phone",
+    protocols: ["imap" as const],
+    credentialId: `c-${id}`,
+    credentialCreatedAt: new Date("2026-10-01T00:00:00Z"),
+    createdAt: new Date("2026-10-01T00:00:00Z"),
+    createdBy: null,
+    status: "active" as const,
+  });
+  const withAppPasswords = () => {
+    const d = world();
+    d.uow.state.appPasswords.push(
+      appPassword("11111111-0000-4000-8000-000000000001", M_PERSON),
+      appPassword("11111111-0000-4000-8000-000000000002", M_ACTIVE),
+    );
+    return d;
+  };
+  const statuses = (d: ReturnType<typeof deps>) => d.uow.state.appPasswords.map((a) => [a.mailboxId, a.status]);
+  const revokeJobs = (d: ReturnType<typeof deps>) =>
+    d.uow.state.jobs.filter((j) => j.kind === "app_password.revoke").map((j) => j.subjectId);
+
+  it("spam, abuse and phishing revoke the held mailboxes' app passwords (audited with the count)", async () => {
+    for (const reason of ["spam", "abuse", "phishing"] as const) {
+      const d = withAppPasswords();
+      await suspendPerson(d, GA, "member-a", { reason }, SESSION, req);
+      expect(statuses(d)).toEqual([
+        [M_PERSON, "revoking"],
+        [M_ACTIVE, "active"],
+      ]);
+      expect(revokeJobs(d)).toEqual([M_PERSON]);
+      const entries = d.uow.state.audit.filter((e) => e.action === "trust.suspended" && e.result === "success");
+      expect(entries.every((e) => e.meta.appPasswordsRevoked === 1)).toBe(true);
+    }
+    const d = withAppPasswords();
+    await suspendAccount(d, GA, ACCOUNT_A, { reason: "phishing" }, SESSION, req);
+    expect(revokeJobs(d).sort()).toEqual([M_ACTIVE, M_PERSON].sort());
+    expect(d.uow.state.audit.find((e) => e.scope === `account:${ACCOUNT_A}`)?.meta).toMatchObject({
+      appPasswordsRevoked: 2,
+    });
+  });
+
+  it("revokes them on mailboxes the account suspended itself or is deleting too (they'd come back with them)", async () => {
+    const d = withAppPasswords();
+    d.uow.state.appPasswords.push(
+      appPassword("11111111-0000-4000-8000-000000000003", M_OWN_SUSP),
+      appPassword("11111111-0000-4000-8000-000000000004", M_DELETING),
+    );
+    await suspendAccount(d, GA, ACCOUNT_A, { reason: "abuse" }, SESSION, req);
+    expect(d.uow.state.appPasswords.every((a) => a.status === "revoking")).toBe(true);
+    expect(revokeJobs(d).sort()).toEqual([M_ACTIVE, M_OWN_SUSP, M_PERSON, M_DELETING].sort());
+    // Their status and holds are left as they were: only usable mailboxes get the account's hold.
+    expect(status(d, M_OWN_SUSP)).toBe("suspended");
+    expect(status(d, M_DELETING)).toBe("deleting");
+    expect(d.uow.state.mailboxHolds.some((h) => h.mailboxId === M_OWN_SUSP || h.mailboxId === M_DELETING)).toBe(false);
+    expect(d.uow.state.audit.find((e) => e.scope === `account:${ACCOUNT_A}`)?.meta).toMatchObject({
+      appPasswordsRevoked: 4,
+    });
+  });
+
+  it("payment, legal and other keep them (they work again after a lift)", async () => {
+    for (const reason of ["payment", "legal", "other"] as const) {
+      const d = withAppPasswords();
+      await suspendAccount(d, GA, ACCOUNT_A, { reason }, SESSION, req);
+      expect(statuses(d).every(([, st]) => st === "active")).toBe(true);
+      expect(revokeJobs(d)).toEqual([]);
+      expect(JSON.stringify(d.uow.state.audit)).not.toContain("appPasswordsRevoked");
+    }
+  });
+
+  it("a mailbox already held by a payment suspension still loses them when an abuse suspension adds its hold", async () => {
+    const d = withAppPasswords();
+    await suspendAccount(d, GA, ACCOUNT_A, { reason: "payment" }, SESSION, req);
+    await suspendPerson(d, GA, "member-a", { reason: "abuse" }, SESSION, req);
+    expect(statuses(d)).toEqual([
+      [M_PERSON, "revoking"],
+      [M_ACTIVE, "active"],
+    ]);
+  });
+});
+
 describe("suspendPerson", () => {
   it("refuses sign-in, ends sessions, suspends their mailboxes in every account and audits each account", async () => {
     const d = world();
@@ -235,6 +374,79 @@ describe("suspendPerson", () => {
     const accountEntries = d.uow.state.audit.filter((e) => e.scope !== "platform");
     expect(JSON.stringify(accountEntries)).not.toContain("internal");
     expect(JSON.stringify(d.uow.state.audit)).not.toContain("member-a@example.test");
+  });
+
+  it("locks the accounts of their mailboxes in id order, then their login, before changing anything", async () => {
+    const d = world();
+    const second = d.uow.state.mailboxes.find((m) => m.id === M_OTHER);
+    if (!second) throw new Error("fixture");
+    second.userId = "member-a"; // a mailbox in ACCOUNT_B too (listed first by address)
+    const calls = recordLocks(d);
+    const out = await suspendPerson(d, GA, "member-a", { reason: "spam" }, SESSION, req);
+    expect(out.mailboxes).toBe(2);
+    expect(calls).toEqual([`account:${ACCOUNT_A}`, `account:${ACCOUNT_B}`, "login:member-a"]);
+    calls.length = 0;
+    await liftPersonSuspension(d, GA, "member-a", SESSION, req);
+    expect(calls).toEqual([`account:${ACCOUNT_A}`, `account:${ACCOUNT_B}`, "login:member-a"]);
+  });
+
+  it("someone with no mailbox still has their login locked", async () => {
+    const d = world();
+    const calls = recordLocks(d);
+    expect((await suspendPerson(d, GA, "admin-a", { reason: "spam" }, SESSION, req)).mailboxes).toBe(0);
+    expect(calls).toEqual(["login:admin-a"]);
+  });
+
+  it("is 409 and changes nothing when they get a mailbox in another account before the locks are held", async () => {
+    const d = world();
+    let once = true;
+    recordLocks(d, () => {
+      if (!once) return;
+      once = false;
+      d.uow.state.mailboxes.push(mb("bbbbbbbb-0000-4000-8000-000000000009", ACCOUNT_B, "member-a", "active"));
+    });
+    await expect(suspendPerson(d, GA, "member-a", { reason: "spam" }, SESSION, req)).rejects.toMatchObject({
+      code: "conflict",
+    });
+    expect(d.uow.state.suspended).toEqual([]);
+    expect(status(d, M_PERSON)).toBe("active");
+    expect(d.uow.state.mailboxHolds).toEqual([]);
+    expect(d.uow.state.sessions.filter((x) => x.userId === "member-a")).toHaveLength(2);
+    // Asked again once the other change is in (here it rolled back with the refused unit of work), both are suspended.
+    d.uow.state.mailboxes.push(mb("bbbbbbbb-0000-4000-8000-000000000009", ACCOUNT_B, "member-a", "active"));
+    expect((await suspendPerson(d, GA, "member-a", { reason: "spam" }, SESSION, req)).mailboxes).toBe(2);
+  });
+
+  it("two clicks at once suspend once: one 409, one success entry and one job per mailbox", async () => {
+    const d = world();
+    const results = await Promise.allSettled([
+      suspendPerson(d, GA, "member-a", { reason: "spam" }, SESSION, req),
+      suspendPerson(d, GA, "member-a", { reason: "spam" }, SESSION, req),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
+    const rejected = results.find((r) => r.status === "rejected");
+    expect(rejected?.reason).toMatchObject({ code: "conflict" });
+    const platform = d.uow.state.audit.filter((e) => e.scope === "platform" && e.action === "trust.suspended");
+    expect(platform.filter((e) => e.result === "success")).toHaveLength(1);
+    expect(d.uow.state.jobs.filter((j) => j.kind === "mailbox.ensure" && j.subjectId === M_PERSON)).toHaveLength(1);
+    const lifts = await Promise.allSettled([
+      liftPersonSuspension(d, GA, "member-a", SESSION, req),
+      liftPersonSuspension(d, GA, "member-a", SESSION, req),
+    ]);
+    expect(lifts.map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
+    expect(status(d, M_PERSON)).toBe("provisioning");
+  });
+
+  it("an account suspension racing a person lift keeps the mailbox suspended, whichever runs first", async () => {
+    for (const accountFirst of [true, false]) {
+      const d = world();
+      await suspendPerson(d, GA, "member-a", { reason: "spam" }, SESSION, req);
+      const account = () => suspendAccount(d, GA, ACCOUNT_A, { reason: "spam" }, SESSION, req);
+      const lift = () => liftPersonSuspension(d, GA, "member-a", SESSION, req);
+      await Promise.all(accountFirst ? [account(), lift()] : [lift(), account()]);
+      expect(status(d, M_PERSON)).toBe("suspended");
+      expect(d.uow.state.mailboxHolds.filter((h) => h.mailboxId === M_PERSON).map((h) => h.kind)).toEqual(["account"]);
+    }
   });
 
   it("refuses staff, yourself, unknown people and missing step-up", async () => {
