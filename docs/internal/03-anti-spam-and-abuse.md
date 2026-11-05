@@ -258,14 +258,28 @@ guard rail 17; code `packages/core/src/platform/suspension.ts`). Procedure:
    otherwise fine account (their sessions end, their console sign-in is refused, the mailboxes assigned to them stop,
    in any account). Staff and yourself can't be suspended, and nobody can suspend while acting as someone.
 3. Pick the reason category (spam, abuse, phishing or impersonation, payment, legal, other — what the customer sees)
-   and write the internal note: ticket or report reference, what you saw. The note never leaves staff views.
+   and write the internal note: ticket or report reference, what you saw. The note never leaves staff views, and
+   among staff only Global, Support and Trust & Safety Administrators see it (`platform.suspensionNotes.read`, roles.md
+   guard rail 17).
 4. Confirm with a fresh step-up. The customer is emailed the category and the appeal address (`SUPPORT_EMAIL`).
 5. Appeals arrive at `support@anhourtec.com`. To restore, open the account and **Lift suspension**: only the mailboxes
    the suspension stopped come back (within a minute or two); ones the customer had suspended stay suspended.
 
 Mail sent to a suspended mailbox is bounced (Stalwart `emailReceive` denied; `SUSPENDED_PERMISSIONS`). Nothing is
 deleted; closing an account after a suspension is a separate, later decision. The webmail refuses a suspended mailbox,
-or any mailbox of a suspended person, within 30 s, open sessions included (`packages/core/src/webmail/access.ts`).
+or any mailbox of a suspended person, within 30 s, open sessions included (`packages/core/src/webmail/access.ts`);
+Stalwart refuses a webmail token issued before the suspension at once. A mail app already signed in over IMAP keeps
+reading until it disconnects (Stalwart v0.16.27 doesn't end open IMAP sessions; new mail can't reach it and a new
+sign-in is refused; pinned in `packages/adapters/src/stalwart/suspension.int.test.ts`). A person suspension or lift
+locks the accounts of the person's mailboxes (in id order) and their login first, so it can't race an account
+suspension into leaving a mailbox active, and two clicks at once suspend once (the second answers 409). A mailbox
+added for a suspended person starts suspended with a `person` hold (lifting releases it). **Known gap:** a mail app
+already signed in to submission (465/587) with the mailbox password can keep handing mail to the queue after the
+suspension (v0.16.27; pinned in the same test). So a spam, abuse or phishing suspension also revokes the suspended
+mailboxes' app passwords (`SUSPENSION_REVOKES_APP_PASSWORDS`), which ends sessions signed in with them; the person
+makes new ones after a lift (the emails and public docs say so). For a password session that keeps sending, restart
+Stalwart (it ends every open session; 08-operations.md "Suspending an account or a person"). Cancelling the sender's
+queued mail (`x:QueuedMessage`) needs a key we don't have yet (research/stalwart.md).
 Stalwart refuses a suspended mailbox's right password like a wrong one, so the webmail sign-in says the mailbox is
 blocked only to a browser that signed in to it before; anyone else sees an ordinary failed sign-in, so the message
 can't be used to learn which addresses exist.
