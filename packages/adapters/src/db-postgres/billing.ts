@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 
 import {
   type AccountBilling,
@@ -361,6 +361,15 @@ const redeemable = (codeHash: string, email: string, now: Date) =>
   );
 
 /** Staff-made invite codes (ADR-0029 §8); redemption is one conditional update, so exactly one claimer wins. */
+/** A code claimed for a sign-up still in progress: redeemed, no person or account attached yet. */
+const pendingClaim = (id: string) =>
+  and(
+    eq(inviteCode.id, id),
+    isNotNull(inviteCode.redeemedAt),
+    isNull(inviteCode.redeemedBy),
+    isNull(inviteCode.redeemedAccountId),
+  );
+
 export class PgInviteCodeRepository implements InviteCodeRepository {
   constructor(private readonly x: Executor) {}
 
@@ -410,7 +419,7 @@ export class PgInviteCodeRepository implements InviteCodeRepository {
   async claim(input: {
     codeHash: string;
     email: string;
-    userId: string;
+    userId: string | null;
     accountId: string | null;
     now: Date;
   }): Promise<InviteCode | null> {
@@ -421,6 +430,26 @@ export class PgInviteCodeRepository implements InviteCodeRepository {
       .where(redeemable(input.codeHash, input.email, input.now))
       .returning();
     return r ? toCode(r) : null;
+  }
+
+  async attachClaim(input: { id: string; userId: string; accountId: string | null }): Promise<boolean> {
+    if (!isId(input.id) || (input.accountId !== null && !isId(input.accountId))) return false;
+    const rows = await this.x
+      .update(inviteCode)
+      .set({ redeemedBy: input.userId, redeemedAccountId: input.accountId })
+      .where(pendingClaim(input.id))
+      .returning({ id: inviteCode.id });
+    return rows.length > 0;
+  }
+
+  async releaseClaim(id: string): Promise<boolean> {
+    if (!isId(id)) return false;
+    const rows = await this.x
+      .update(inviteCode)
+      .set({ redeemedAt: null })
+      .where(pendingClaim(id))
+      .returning({ id: inviteCode.id });
+    return rows.length > 0;
   }
 
   async revoke(id: string, by: string, at: Date): Promise<boolean> {

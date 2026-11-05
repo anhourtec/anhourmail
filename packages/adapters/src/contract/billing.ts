@@ -471,6 +471,48 @@ export function describeBillingContract(name: string, factory: AdapterFactory): 
         await cleanup();
       }
     });
+
+    it("invite codes: a pending claim (sign-up in progress) is attached once or given back", async () => {
+      const { uow, cleanup, createUser } = await factory();
+      try {
+        const staff = await createUser(`staff-${randomUUID()}@example.test`);
+        const hash = randomUUID().replaceAll("-", "").repeat(2);
+        const code = await uow.run((r) => r.inviteCodes.create(codeInput(staff, hash)));
+        const claim = () =>
+          uow.run((r) =>
+            r.inviteCodes.claim({ codeHash: hash, email: "p@example.test", userId: null, accountId: null, now: T }),
+          );
+        expect(await claim()).toMatchObject({ id: code.id, redeemedAt: T, redeemedBy: null });
+        expect(await claim()).toBeNull(); // pending counts as used
+        expect(await uow.run((r) => r.inviteCodes.revoke(code.id, staff, T))).toBe(false);
+        // Given back: redeemable again.
+        expect(await uow.run((r) => r.inviteCodes.releaseClaim(code.id))).toBe(true);
+        expect(await uow.run((r) => r.inviteCodes.releaseClaim(code.id))).toBe(false);
+        expect(await claim()).not.toBeNull();
+        // Attached to the person the sign-up created: no longer pending, can't be given back.
+        const person = await createUser(`person-${randomUUID()}@example.test`);
+        expect(await uow.run((r) => r.inviteCodes.attachClaim({ id: code.id, userId: person, accountId: null }))).toBe(
+          true,
+        );
+        expect(await uow.run((r) => r.inviteCodes.attachClaim({ id: code.id, userId: person, accountId: null }))).toBe(
+          false,
+        );
+        expect(await uow.run((r) => r.inviteCodes.releaseClaim(code.id))).toBe(false);
+        expect(await uow.run((r) => r.inviteCodes.get(code.id))).toMatchObject({ redeemedBy: person, redeemedAt: T });
+        // A claim made for a known person is never pending.
+        const other = randomUUID().replaceAll("-", "").repeat(2);
+        const direct = await uow.run((r) => r.inviteCodes.create(codeInput(staff, other)));
+        await uow.run((r) =>
+          r.inviteCodes.claim({ codeHash: other, email: "p@example.test", userId: staff, accountId: null, now: T }),
+        );
+        expect(await uow.run((r) => r.inviteCodes.releaseClaim(direct.id))).toBe(false);
+        expect(
+          await uow.run((r) => r.inviteCodes.attachClaim({ id: direct.id, userId: person, accountId: null })),
+        ).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    });
   });
 }
 

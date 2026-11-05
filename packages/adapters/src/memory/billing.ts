@@ -212,6 +212,10 @@ const usable = (c: InviteCode, codeHash: string, email: string, now: Date) =>
   c.expiresAt > now &&
   (c.email === null || c.email === email.trim().toLowerCase());
 
+/** A code claimed for a sign-up still in progress (redeemed, nobody attached yet). */
+const pending = (id: string) => (c: InviteCode) =>
+  c.id === id && c.redeemedAt !== null && c.redeemedBy === null && c.redeemedAccountId === null;
+
 /** In-memory invite codes (ADR-0029 §8). Units of work run one at a time, so a claim is atomic. */
 export function memoryInviteCodes(s: State): InviteCodeRepository {
   return {
@@ -250,6 +254,18 @@ export function memoryInviteCodes(s: State): InviteCodeRepository {
       if (!c) return null;
       Object.assign(c, { redeemedAt: clone(now), redeemedBy: userId, redeemedAccountId: accountId });
       return clone(c);
+    },
+    attachClaim: async ({ id, userId, accountId }) => {
+      const c = s.inviteCodes.find(pending(id));
+      if (!c) return false;
+      Object.assign(c, { redeemedBy: userId, redeemedAccountId: accountId });
+      return true;
+    },
+    releaseClaim: async (id) => {
+      const c = s.inviteCodes.find(pending(id));
+      if (!c) return false;
+      c.redeemedAt = null;
+      return true;
     },
     revoke: async (id, by, at) => {
       const c = s.inviteCodes.find((x) => x.id === id && x.redeemedAt === null && x.revokedAt === null);

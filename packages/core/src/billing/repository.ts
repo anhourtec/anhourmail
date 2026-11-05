@@ -108,10 +108,21 @@ export type InviteCodeRepository = {
   claim(input: {
     codeHash: string;
     email: string;
-    userId: string;
+    /** Null claims it as pending for a sign-up whose person doesn't exist yet (`attachClaim` / `releaseClaim`). */
+    userId: string | null;
     accountId: string | null;
     now: Date;
   }): Promise<InviteCode | null>;
+  /**
+   * Attaches the person (and account) a pending claim was for, once the sign-up created them. False when the code isn't
+   * pending (never claimed, already attached, or another redemption's).
+   */
+  attachClaim(input: { id: string; userId: string; accountId: string | null }): Promise<boolean>;
+  /**
+   * Gives a pending claim back (the sign-up it was for didn't create an account): the code is redeemable again until it
+   * expires. False when it isn't pending.
+   */
+  releaseClaim(id: string): Promise<boolean>;
   /** Revokes an unused code. False when it was already redeemed or revoked, or doesn't exist. */
   revoke(id: string, by: string, at: Date): Promise<boolean>;
 };
