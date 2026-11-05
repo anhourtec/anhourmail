@@ -121,6 +121,16 @@ function world(clock = fixedClock(NOW)) {
     { userId: "member-a", sessionId: "s-member", expiresAt: new Date("2026-10-21T12:05:00Z") },
     { userId: "owner-b", sessionId: "s-b", expiresAt: new Date("2026-10-21T12:05:00Z") },
   );
+  // Their console sessions (a self-delete needs the one it runs in to still exist).
+  const at = new Date("2026-10-21T11:00:00Z");
+  const until = new Date("2099-01-01T00:00:00Z");
+  for (const [id, userId] of [
+    ["s-owner", "owner-a"],
+    ["s-member", "member-a"],
+    ["s-b", "owner-b"],
+  ] as const) {
+    s.sessions.push({ id, userId, createdAt: at, lastActiveAt: at, expiresAt: until, ip: null, userAgent: null });
+  }
   return d;
 }
 
@@ -779,6 +789,68 @@ describe("deleting one's own login", () => {
     ).rejects.toThrow(/changed/);
     expect(s.userEmails["owner-b"]).toBe("owner-b@example.test");
     expect(s.accounts.map((a) => a.id)).toContain(ACCOUNT_B);
+  });
+
+  it("locks the accounts in id order, then the login (the order a staff suspension takes)", async () => {
+    const d = world();
+    const s = d.uow.state;
+    s.mailboxes = s.mailboxes.filter((m) => m.accountId !== ACCOUNT_B);
+    s.memberships.push({ userId: "owner-b", accountId: ACCOUNT_A, role: "member" });
+    const calls: string[] = [];
+    const recording = {
+      ...d,
+      uow: {
+        run: <T>(fn: Parameters<typeof d.uow.run<T>>[0]) =>
+          d.uow.run((r) =>
+            fn({
+              ...r,
+              accounts: {
+                ...r.accounts,
+                lock: async (id: string) => {
+                  calls.push(`account:${id}`);
+                  await r.accounts.lock(id);
+                },
+              },
+              dataLifecycle: {
+                ...r.dataLifecycle,
+                lockLogin: async (userId: string) => {
+                  calls.push(`login:${userId}`);
+                  await r.dataLifecycle.lockLogin(userId);
+                },
+              },
+            }),
+          ),
+      },
+    };
+    const actor = user({
+      id: "owner-b",
+      account: [
+        [ACCOUNT_B, "owner"],
+        [ACCOUNT_A, "member"],
+      ],
+    });
+    await deleteOwnLogin(recording, actor, { confirmEmail: "owner-b@example.test" }, { sessionId: "s-b" }, req);
+    expect(calls).toEqual([...[ACCOUNT_A, ACCOUNT_B].sort().map((id) => `account:${id}`), "login:owner-b"]);
+  });
+
+  it("refused (409, audited) when staff suspended them or their session ended while it waited; nothing deleted", async () => {
+    const d = world();
+    const s = d.uow.state;
+    s.mailboxes = s.mailboxes.filter((m) => m.accountId !== ACCOUNT_B);
+    s.personSuspensions["owner-b"] = { reason: "abuse", note: null, at: new Date(0), byUserId: "ga" };
+    await expect(
+      deleteOwnLogin(d, ownerB, { confirmEmail: "owner-b@example.test" }, { sessionId: "s-b" }, req),
+    ).rejects.toThrow(/suspended/);
+    Reflect.deleteProperty(s.personSuspensions, "owner-b");
+    s.sessions = s.sessions.filter((x) => x.id !== "s-b");
+    await expect(
+      deleteOwnLogin(d, ownerB, { confirmEmail: "owner-b@example.test" }, { sessionId: "s-b" }, req),
+    ).rejects.toThrow(/session has ended/);
+    expect(s.userEmails["owner-b"]).toBe("owner-b@example.test");
+    expect(audits(d, "auth.login_deleted").map((e) => [e.result, e.errorCode])).toEqual([
+      ["denied", "suspended"],
+      ["denied", "session_ended"],
+    ]);
   });
 
   it("deletes the login, leaves shared accounts, takes empty sole-owner accounts with it; each log records it", async () => {
