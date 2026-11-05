@@ -242,3 +242,44 @@ test("holds after a lapse: the Billing page lists what's held and the Owner choo
   await expect(page.getByTestId("billing-holds")).not.toContainText(mine.other);
   await expect(page.getByRole("heading", { level: 2, name: "Subscribe again" })).toBeVisible();
 });
+
+test("the person's menu leads to Billing and the Usage tab shows the meters", async ({
+  page,
+  consoleErrors: _errors,
+}, info) => {
+  const { password, billing } = e2eUsers();
+  const mine = billing[info.project.name] ?? { accountId: "", owner: "", billingAdmin: "", member: "" };
+  await signIn(page, mine.owner, password);
+  await page.goto(`${urls.app}/accounts/${mine.accountId}/aliases`);
+
+  // Billing in the person's menu is the account's Billing page (it used to say "Soon").
+  await page.getByRole("button", { name: "Your account", exact: true }).click();
+  await page
+    .getByRole("menu", { name: "Your account" })
+    .getByRole("menuitem", { name: "Billing", exact: true })
+    .click();
+  await expect(page.getByRole("heading", { level: 1, name: "Billing" })).toBeVisible();
+
+  // The two Billing tabs.
+  const tabs = page.getByRole("navigation", { name: "Billing" });
+  await expect(tabs.getByRole("link", { name: "Plan and payments" })).toHaveAttribute("aria-current", "page");
+  await tabs.getByRole("link", { name: "Usage" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Usage" })).toBeVisible();
+  await expect(page.getByRole("meter", { name: "Mailboxes in use" })).toBeVisible();
+  await expect(page.getByRole("meter", { name: "Storage given to mailboxes" })).toBeVisible();
+  await page.getByRole("navigation", { name: "Billing" }).getByRole("link", { name: "Plan and payments" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Billing" })).toBeVisible();
+});
+
+// The 403 page logs its own 403 response, so this one doesn't watch the console (like the Member test above).
+test("a Member's menu has no Billing and the Usage page is the 403 page", async ({ page }, info) => {
+  const { password, billing } = e2eUsers();
+  const mine = billing[info.project.name] ?? { accountId: "", owner: "", billingAdmin: "", member: "" };
+  await signIn(page, mine.member, password);
+  await page.getByRole("button", { name: "Your account", exact: true }).click();
+  const menu = page.getByRole("menu", { name: "Your account" });
+  await expect(menu.getByRole("menuitem", { name: "Security" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Billing", exact: true })).toHaveCount(0);
+  await page.goto(`${urls.app}/accounts/${mine.accountId}/billing/usage`);
+  await expect(page.getByRole("heading", { level: 1, name: "Not part of your role" })).toBeVisible();
+});
