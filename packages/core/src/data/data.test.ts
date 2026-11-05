@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { ACCOUNT_A, ACCOUNT_B, actingStaff, deps, fixedClock, req, user } from "../__tests__/helpers";
 import { authorize, can } from "../actor";
+import { defaultBilling } from "../billing/lifecycle";
 import { AccountDeletingError } from "../errors";
 import type { Mailbox, MailboxStatus } from "../mailboxes/entity";
 import { purgeDueMailboxes } from "../mailboxes/service";
@@ -236,6 +237,7 @@ describe("data exports", () => {
       "aliases.json",
       "aliases.csv",
       "app-passwords.json",
+      "billing.json",
       "audit-log.json",
       "audit-log.csv",
     ]);
@@ -253,6 +255,50 @@ describe("data exports", () => {
       actor: { type: "system", email: "data-export" },
     });
     expect(await buildNextExport(d, archiver)).toBeNull();
+  });
+
+  it("billing.json: the plan, state, renewal and held items; never provider ids, card details or the ceiling", async () => {
+    const d = world();
+    const s = d.uow.state;
+    const at = new Date("2026-10-01T00:00:00Z");
+    const box = s.mailboxes.find((m) => m.accountId === ACCOUNT_A && m.address === "kid@acme.test");
+    s.billing = s.billing.filter((b) => b.accountId !== ACCOUNT_A);
+    s.billing.push({
+      ...defaultBilling(ACCOUNT_A, "free", at),
+      state: "lapsed",
+      lapsedAt: at,
+      providerCustomerId: "cus_secretish",
+      providerSubscriptionId: "sub_secretish",
+      lastInvoiceId: "in_secretish",
+      lastInvoiceStatus: "paid",
+      currency: "USD",
+      addressCeilingOverride: 4321,
+      selfServiceRefundAt: at,
+    });
+    s.planHolds.push({
+      id: "hold-1",
+      accountId: ACCOUNT_A,
+      subjectType: "mailbox",
+      subjectId: box?.id ?? "",
+      heldAt: at,
+      receiveUntil: new Date("2026-10-31T00:00:00Z"),
+    });
+    const archiver = fakeArchiver();
+    const v = await requestExport(d, owner, { kind: "account", accountId: ACCOUNT_A }, req);
+    await buildNextExport(d, archiver);
+    const files = archiver.packed.get(v.id);
+    const billing = JSON.parse(file(files, "billing.json")) as Record<string, unknown>;
+    expect(billing).toMatchObject({
+      plan: "free",
+      state: "lapsed",
+      currency: "USD",
+      lastInvoiceStatus: "paid",
+      selfServiceRefundUsedOn: at.toISOString(),
+      held: [{ kind: "mailbox", name: "kid@acme.test", receivingUntil: "2026-10-31T00:00:00.000Z" }],
+    });
+    const raw = file(files, "billing.json");
+    for (const hidden of ["cus_secretish", "sub_secretish", "in_secretish", "4321"]) expect(raw).not.toContain(hidden);
+    expect(file(files, "README.txt")).toContain("billing.json");
   });
 
   it("a personal export holds the person's own data only and never another person's mailbox", async () => {

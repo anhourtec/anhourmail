@@ -4,7 +4,10 @@ import { customerDomainRecords } from "@anhourmail/shared/dns";
 import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 
 import { partialIp } from "../audit/labels";
+import { entitlements } from "../billing/entitlements";
+import { defaultBilling, effectivePlan } from "../billing/lifecycle";
 import type { AuditEntry, AuditScope } from "../audit/types";
+import type { AccountBilling, PlanHold } from "../billing/entity";
 import type { Deps, Repositories } from "../ports";
 import type { ExportFile } from "./entity";
 
@@ -122,6 +125,47 @@ async function auditEntries(
 
 const readme = (lines: readonly string[]) => `${lines.join("\n")}\n`;
 
+/**
+ * `billing.json` (ADR-0029 §9): what the account's plan and billing state are, as the Billing page shows them. Never card
+ * details, addresses or tax ids (the payment processor holds them, and its invoices), never the provider's ids or keys,
+ * and not the account's address ceiling (an abuse limit, rule 33).
+ */
+function billingJson(
+  b: AccountBilling,
+  holds: readonly PlanHold[],
+  /** `mailbox:<id>`, `domain:<id>` or `alias:<id>` → its address or name. */
+  labels: ReadonlyMap<string, string>,
+) {
+  const e = entitlements(b);
+  return {
+    plan: effectivePlan(b),
+    state: b.state,
+    stateSince: b.stateSince,
+    source: b.planSource,
+    paidPlan: b.paidPlan,
+    currency: b.currency,
+    yearlyAmountMinor: b.planAmountMinor,
+    renewsOn: b.cancelAt === null ? b.currentPeriodEnd : null,
+    cancelsOn: b.cancelAt,
+    complimentaryUntil: b.compUntil,
+    addOns: {
+      renewal: { storageBlocks: b.storageBlocks, extraMailboxes: b.extraMailboxes },
+      inForce: { storageBlocks: e.storageBlocks, extraMailboxes: e.extraMailboxes },
+    },
+    sendingPausedSince: b.restrictedAt,
+    disputed: b.disputedAt !== null,
+    lapsedOn: b.lapsedAt,
+    lastInvoiceStatus: b.lastInvoiceStatus,
+    selfServiceRefundUsedOn: b.selfServiceRefundAt,
+    held: holds.map((h) => ({
+      kind: h.subjectType,
+      name: labels.get(`${h.subjectType}:${h.subjectId}`) ?? null,
+      heldSince: h.heldAt,
+      receivingUntil: h.receiveUntil,
+    })),
+  };
+}
+
 /** The files of one account's export (`account.export`). */
 export async function accountExportFiles(
   deps: Deps,
@@ -143,6 +187,8 @@ export async function accountExportFiles(
     await r.aliases.listByAccount(accountId),
   ];
   const deletion = await r.dataLifecycle.getDeletion(accountId);
+  const billing = (await r.billing.get(accountId)) ?? defaultBilling(accountId, account.plan, at);
+  const holds = await r.billing.holds(accountId);
   const emailOf = new Map(people.map((p) => [p.userId, p.email]));
   const addressOf = new Map(mailboxes.map((m) => [m.id, m.address]));
   const domainRows = [];
@@ -209,6 +255,8 @@ export async function accountExportFiles(
         "mailboxes.json/.csv mailboxes (settings only, no mail)",
         "aliases.json / .csv aliases and masked aliases",
         "app-passwords.json  app password names and protocols (never the passwords)",
+        "billing.json        plan, billing state, renewal, add-ons and held items (no card or payment details:",
+        "                    invoices and receipts are on the Billing page, Manage payment and invoices)",
         "audit-log.json/.csv the account's audit log, newest first; each entry keeps its hash so the chain can be checked",
         audit.truncated
           ? `                    (the ${String(maxAudit)} most recent entries; older ones stay readable in the console)`
@@ -263,6 +311,20 @@ export async function accountExportFiles(
       ),
     },
     { name: "app-passwords.json", data: json(appPasswords) },
+    {
+      name: "billing.json",
+      data: json(
+        billingJson(
+          billing,
+          holds,
+          new Map([
+            ...mailboxes.map((m) => [`mailbox:${m.id}`, m.address] as const),
+            ...domains.map((d) => [`domain:${d.id}`, d.name] as const),
+            ...aliases.map((a) => [`alias:${a.id}`, a.address] as const),
+          ]),
+        ),
+      ),
+    },
     { name: "audit-log.json", data: json(audit.entries.map(exportedEntry)) },
     { name: "audit-log.csv", data: auditCsv(audit.entries) },
   ].filter((f) => f.data !== "");
