@@ -51,6 +51,15 @@ import {
   WEBMAIL_SIGNATURES,
 } from "@anhourmail/shared";
 import { AVATAR } from "@anhourmail/shared/profile";
+import {
+  IMPORT,
+  IMPORT_BATCH_COLUMNS,
+  IMPORT_BATCH_REQUIRED,
+  IMPORT_BATCH_ROW_TEXT,
+  IMPORT_BLOCKED_TEXT,
+  IMPORT_SOURCE_PRESETS,
+  type ImportBatchColumn,
+} from "@anhourmail/shared/import";
 import { MAIL_RULES } from "@anhourmail/shared/mail-rules";
 import { ACCOUNT_SAFE_SENDERS, MAX_SENDER_ENTRIES } from "@anhourmail/shared/senders";
 import { WEBMAIL_TEMPLATES } from "@anhourmail/shared/templates";
@@ -170,6 +179,18 @@ const VALUES = {
   // Breached-password check (packages/shared/src/security.ts)
   breachedPasswordMessage: BREACHED_PASSWORD.message,
   stepUpMinutes: String(STEP_UP_MINUTES),
+  // Contacts import per file in the webmail (packages/shared/src/import.ts, ADR-0030 §10)
+  contactsImportMaxSize: `${String(Math.round(IMPORT.contactsMaxBytes / (1024 * 1024)))} MB`,
+  contactsImportMaxCards: IMPORT.contactsMaxCards.toLocaleString("en-CA"),
+  // Mail import (packages/shared/src/import.ts, ADR-0030): published limits, never capacity settings.
+  importMaxMessageSize: `${String(Math.round(IMPORT.maxMessageBytes / (1000 * 1000)))} MB`,
+  importConcurrency: String(IMPORT.perAccountConcurrency),
+  importSyncDays: String(IMPORT.syncWindowDays),
+  importSyncEveryMinutes: String(IMPORT.syncEveryMinutes),
+  importBatchMaxSize: `${String(IMPORT.batchMaxBytes / 1024)} KB`,
+  importPortTls: String(IMPORT.sourcePorts[0]),
+  importPortStartTls: String(IMPORT.sourcePorts[1]),
+  importDefaultPort: String(IMPORT.defaultSourcePort),
   // Where to write for help and to appeal a suspension (packages/shared/src/platform.ts)
   supportEmail: SUPPORT_EMAIL,
 } as const;
@@ -179,7 +200,13 @@ export type FactKey = keyof typeof VALUES;
 /** Inline fact, e.g. `<Value of="imapHost" />`. Hostnames render in mono. */
 export function Value({ of, copy = false }: { of: FactKey; copy?: boolean }) {
   const v = VALUES[of];
-  const mono = of.endsWith("Host") || of.endsWith("Url") || of === "productDomain" || of === "supportEmail";
+  const mono =
+    of.endsWith("Host") ||
+    of.endsWith("Url") ||
+    of.startsWith("importPort") ||
+    of === "importDefaultPort" ||
+    of === "productDomain" ||
+    of === "supportEmail";
   return (
     <span className="inline-flex items-center gap-0.5 align-baseline">
       {mono ? <code>{v}</code> : <span>{v}</span>}
@@ -357,6 +384,105 @@ export function SuspensionReasonList() {
     <ul>
       {Object.values(SUSPENSION_REASONS).map((label) => (
         <li key={label}>{label}</li>
+      ))}
+    </ul>
+  );
+}
+
+// ---- mail import (packages/shared/src/import.ts, ADR-0030) ----------------------------------------------------
+
+/**
+ * The old provider's IMAP settings for the console's provider choices, each copyable. `preset` shows one provider
+ * (its guide); without it, every named provider ("Other IMAP server" has no fixed host and is left out).
+ */
+export function ImportServerTable({ preset }: { preset?: string }) {
+  const rows = IMPORT_SOURCE_PRESETS.filter((p) => p.host !== null && (preset === undefined || p.id === preset));
+  return (
+    <div className="not-prose overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b text-left text-fd-muted-foreground">
+            <th className="py-2 pr-4 font-medium">Provider</th>
+            <th className="py-2 pr-4 font-medium">IMAP server</th>
+            <th className="py-2 pr-4 font-medium">Port</th>
+            <th className="py-2 pr-4 font-medium">User name</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((p) => (
+            <tr key={p.id} className="border-b last:border-0">
+              <td className="py-2 pr-4">{p.name}</td>
+              <Cell value={p.host ?? ""} label={`${p.name} IMAP server`} />
+              <Cell value={String(p.port)} label={`${p.name} IMAP port`} />
+              <td className="py-2 pr-4">{p.usernameHint}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="mt-2 text-fd-muted-foreground text-sm">
+        Choosing the provider in the console fills these in for you. The connection is always encrypted (TLS).
+      </p>
+    </div>
+  );
+}
+
+/** Why an import says "Needs you", and what fixes it, in the console's own words (`IMPORT_BLOCKED_TEXT`). */
+export function ImportBlockedList() {
+  return (
+    <ul>
+      {Object.entries(IMPORT_BLOCKED_TEXT).map(([reason, { title, fix }]) => (
+        <li key={reason}>
+          <strong>{title}.</strong> {fix}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+const BATCH_COLUMN_TEXT: Readonly<Record<ImportBatchColumn, string>> = {
+  mailbox: "The address of the mailbox here that the mail goes into. It must already exist in your account.",
+  source_host: "The old provider's IMAP server.",
+  source_port: `${String(IMPORT.sourcePorts[0])} (TLS) or ${String(IMPORT.sourcePorts[1])} (STARTTLS). Empty means ${String(IMPORT.defaultSourcePort)}.`,
+  source_username: "The user name for the old mailbox, usually its full email address.",
+  source_password: "An app password made at the old provider for this import.",
+  exclude_junk_trash: "Leave out Junk and Deleted items: yes or no. Empty means yes.",
+  sync: "Keep copying new mail until you stop it: yes or no. Empty means no.",
+};
+
+/** The columns of the admins' batch CSV (`IMPORT_BATCH_COLUMNS`), in the template's order. */
+export function ImportBatchColumnsTable() {
+  return (
+    <div className="not-prose overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b text-left text-fd-muted-foreground">
+            <th className="py-2 pr-4 font-medium">Column</th>
+            <th className="py-2 pr-4 font-medium">Needed</th>
+            <th className="py-2 pr-4 font-medium">What goes in it</th>
+          </tr>
+        </thead>
+        <tbody>
+          {IMPORT_BATCH_COLUMNS.map((c) => (
+            <tr key={c} className="border-b align-top last:border-0">
+              <td className="py-2 pr-4">
+                <code className="whitespace-nowrap">{c}</code>
+              </td>
+              <td className="py-2 pr-4">{IMPORT_BATCH_REQUIRED.includes(c) ? "Required" : "Optional"}</td>
+              <td className="py-2 pr-4 text-fd-muted-foreground">{BATCH_COLUMN_TEXT[c]}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Why a batch row didn't start, in the console's own words (`IMPORT_BATCH_ROW_TEXT`). */
+export function ImportBatchRowList() {
+  return (
+    <ul>
+      {Object.entries(IMPORT_BATCH_ROW_TEXT).map(([code, text]) => (
+        <li key={code}>{text}.</li>
       ))}
     </ul>
   );
