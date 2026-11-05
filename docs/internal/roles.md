@@ -338,7 +338,14 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
     sign-up-only code needs `platform.invites.manage` (Global, Support) and a code that comps a plan needs
     `platform.billing.manage` (Global, Billing; with a step-up); Trust & Safety and customers get **403**. The nav entry
     "Invite codes" shows for `platform.invites.manage`; Billing staff reach the page from Platform billing. No matrix
-    change.
+    change. The same staff also **clear disputes** (`POST …/accounts/:accountId/billing/disputes/clear` with the ids
+    shown, fresh step-up, 409 `changed` when they differ now; an open or lost dispute stops pausing sending for good), **re-sync now** (`POST …/billing/resync`, no
+    step-up: it only queues the account's sync) and **dismiss** an unmatched provider event
+    (`POST /api/platform/billing/orphans/:eventId/dismiss`, fresh step-up), all tier `sensitive`, refused while acting
+    as someone (**403**), unknown ids **404** before any step-up, audited by staff in the account's own log (the
+    dismissal in the platform log: the event has no account); every other staff role and every customer role **403**.
+    The webmail's send refusal for billing (`403 billing_restricted`, a restricted account or a held mailbox) applies
+    to every person who sends from the mailbox, its own or shared with them. No matrix change.
 
 22. **Account-wide Safe senders** (ADR-0032 §1; `packages/core/src/webmail/account-safe-senders.ts`): new permissions
     `safe_sender.read` (Owner, User Administrator, Read-only; staff acting read-only) and `safe_sender.manage` (Owner,

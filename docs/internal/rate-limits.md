@@ -100,6 +100,12 @@ after the proof-of-work and the sign-up tiers, never instead of them. Staff gran
 invite code creation and revocation (`/api/platform/accounts/:accountId/billing/{grant,refund}`,
 `/api/platform/invite-codes`) are `sensitive`.
 
+The rest of slice 12 (ADR-0029 §9): staff clearing disputes, re-sync now and dismissing an unmatched provider event
+(`POST /api/platform/accounts/:accountId/billing/disputes/clear`, `…/billing/resync`,
+`POST /api/platform/billing/orphans/:eventId/dismiss`) are `sensitive` (each re-sync costs a provider read). The
+webmail's billing send refusal (`403 billing_restricted`) is a check inside `POST /api/webmail/send`, which keeps its
+`sending` tier; a refused send is never charged to the trust-tier quotas.
+
 Sign-up (ADR-0031): the request first spends the route's `auth` tier, then must carry an accepted proof-of-work and a
 well-formed body; then `signupAttempt` is counted, then the account tiers `signup`, `signupDay`, `signupNetwork`,
 `signupNetworkDay`, `signupNetwork56Day` and `signupNetwork48Day` are taken in that order (the first one used up
