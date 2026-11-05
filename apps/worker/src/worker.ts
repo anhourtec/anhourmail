@@ -6,8 +6,10 @@
  */
 import { writeFileSync } from "node:fs";
 
+import { stalwartImportTrainingSamples } from "@anhourmail/adapters/stalwart";
 import { runNextJob } from "@anhourmail/core/provisioning";
 import { log } from "@anhourmail/server/log";
+import { SPAM_SAMPLE_HOLD_DEFAULT_MS, stalwartTraining } from "@anhourmail/stalwart-client";
 
 import { runtime } from "./runtime";
 import { verifyStalwartCredentials } from "./stalwart";
@@ -26,8 +28,14 @@ process.on("SIGINT", () => {
 });
 
 const { deps, mail, billing, close } = runtime("worker");
-// The provisioning key must be exactly its documented set (no `impersonate`): refuse to start otherwise.
+// The provisioning key must be exactly its documented set (no `impersonate`), and the training key exactly
+// spam-training samples: refuse to start otherwise.
 await verifyStalwartCredentials("worker");
+// Removes the spam-training samples a mail import's APPENDs created (ADR-0030); `STALWART_SPAM_SAMPLE_HOLD_MS` is the
+// mail server's `holdSamplesFor` (default 180 days), which a sample's expiry is measured from.
+const hold = Number(process.env.STALWART_SPAM_SAMPLE_HOLD_MS ?? SPAM_SAMPLE_HOLD_DEFAULT_MS);
+if (!Number.isInteger(hold) || hold <= 0) throw new Error("STALWART_SPAM_SAMPLE_HOLD_MS must be a whole number of ms");
+const trainingSamples = stalwartImportTrainingSamples(stalwartTraining(), { holdMs: hold });
 const beat = () => {
   writeFileSync(HEARTBEAT, new Date().toISOString());
 };
@@ -37,7 +45,7 @@ l.info("worker started");
 
 while (!stopping()) {
   try {
-    const job = await runNextJob(deps, mail, { billing: billing() });
+    const job = await runNextJob(deps, mail, { billing: billing(), trainingSamples });
     if (job?.lockLost) {
       // This run's claim went stale and another worker took the job over: its outcome was discarded.
       l.warn("job lock lost", { jobId: job.id, kind: job.kind, attempt: job.attempts });
