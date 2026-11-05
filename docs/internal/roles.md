@@ -329,7 +329,7 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
     Administrators and Members get **403** (the add body is never read for them), other accounts and another account's
     entry id **404**, staff acting as someone **403**. Console page **Mail → Safe senders** (403 page without
     `safe_sender.read`). People see the list read-only in webmail Settings (a webmail session, not a role).
-23. **Mail import** (ADR-0030 §13; services and routes built 2026-11-05, slice 6; console pages come with slice 10):
+23. **Mail import** (ADR-0030 §13; services and routes built 2026-11-05, slice 6; console pages and the CSV batch, slices 10–11):
     new permissions
     `mailbox.import.own` (every role but the Auditor) starts, sees and controls imports into **mailboxes whose person is
     them**; `mailbox.import.any` ★ (Owner, User Administrator) does the same for any mailbox in the account — an Owner's
@@ -344,6 +344,13 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
     `GET …/imports/:importId`, `POST …/imports/:importId/{pause,resume,cancel,stop-sync}`; someone without `.any` sees
     only their own mailboxes' imports and another person's import id is **404**; control actions on a finished import
     are **409** `import_finished`. Suspending or deleting a mailbox and "Make this a user" cancel its import.
+    The admins' CSV batch (slice 11) needs `mailbox.import.any` (route guard and service), a fresh step-up and no act-as:
+    `POST /api/accounts/:accountId/imports/batch`, `GET /api/accounts/:accountId/import-batches/:batchId` and its
+    `/report` (CSV); another account's batch id is **404**; a row for an Owner's or admin's mailbox by a User
+    Administrator is reported as `forbidden` (the row, not the request). Console pages: `/accounts/:id/import` (list),
+    `/import/new`, `/import/:importId` (layout `mailbox.import.own`, a real 403 page for the Auditor) and
+    `/import/batch/new`, `/import/batch/:batchId` (layout `mailbox.import.any`, 403 for everyone else). The nav entry
+    "Import mail" (next to App passwords, `mailbox.import.own`) is a separate change to `console-nav.ts`.
 
 ## Webmail
 

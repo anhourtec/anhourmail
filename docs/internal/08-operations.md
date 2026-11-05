@@ -75,6 +75,7 @@ own process. One-off jobs run in the worker image with `npm run -w @anhourmail/w
 | `job:account-deletion` | Every 10 minutes   | — (database only)              | Accounts past their deletion grace period (ADR-0025): one idempotent step per run — mailboxes to `deleting` (the purge removes them), domains released, then the account row; emails everyone who was in it. Never before the grace period ends; a staff-suspended account waits. |
 | `job:storage-usage`    | Every 10 minutes   | Provisioning                   | Reads each mailbox's `usedDiskQuota` (with its name, nothing else) in batches of 100 and records it on the mailbox row for the console. Logs `failedBatches` as a warning; those mailboxes keep their last good value.                                                            |
 | `job:import-expiry`    | Hourly             | — (database only)              | Mail import sweep (ADR-0030): terminal imports still holding a secret, username or folder name are wiped and their revoke queued; paused or blocked ones past their credential fail (`expired`); syncs past their window complete. Audited `data.import_*`.                       |
+| `job:import-notify`    | Every minute       | — (database + mailer)          | Mail import summary (ADR-0030 §16): each ended import is claimed (`notified_at`) and its email sent to the person who started it and, for an admin-started one, the mailbox's person; counts per folder role only. Cancelled imports are claimed without an email. Not audited.   |
 | `job:quota-cap`        | Once, on deploy    | Provisioning                   | Brings each account's mailbox quotas within its pooled storage: scales them down in proportion, never below the mail held (rounded up); queues `mailbox.ensure`; audited. Logs `keptAbovePoolAccountIds`, `unmeasured` (re-run).                                                  |
 | `job:mailbox-backfill` | Once, on deploy    | —                              | Queues `mailbox.ensure` for every active mailbox (customer Sieve lock).                                                                                                                                                                                                           |
 | `job:bootstrap-admin`  | Once, first deploy | —                              | Creates the first Global Administrator and emails a set-password link (deploy/README.md "First platform administrator"); audited `platform.admin_bootstrapped`.                                                                                                                   |
@@ -178,6 +179,18 @@ gives it back. Heartbeat: `find /tmp/importer-heartbeat -mmin -2`.
   The per-minute service-account check now expects `svc-train` too.
 - **Kill and restart are safe:** a killed importer's imports are picked up by any importer once the lease runs out
   (≤ `IMPORT_LEASE_SECONDS`) and resume from their checkpoints; its training-sample window is covered then.
+- **Console and emails (slices 10–11):** people start and watch imports on the console's Import mail page; admins
+  can upload a CSV for up to `MAX_MAILBOXES` mailboxes at once. The scheduler's `job:import-notify` sends the summary
+  email (needs `MAIL_TRANSPORT_URL`, `MAIL_FROM`, `APP_URL`, like `job:data-export`). A failed send is logged by
+  error name and not retried; the console still shows the result.
+- **Support questions:** "it says Needs you" — the import page names the reason and the fix (`IMPORT_BLOCKED_TEXT`);
+  a refused source sign-in is never retried by us (so the provider doesn't lock the account). "It ended" with
+  `expired` — it waited past its destination credential (7 days, 14 with sync); start a new one, nothing is copied twice.
+  Folder names are gone from finished imports by design; we can't tell anyone what was in which folder afterwards.
+- **Dev:** the demo seed's `import-source@dev.test` is the old provider (Other IMAP server, `127.0.0.1`, 993); the
+  scheduler isn't part of `npm run dev`, so run `npm run --workspace @anhourmail/worker job:import-notify` to send
+  summaries (they land in Mailpit). A `npm run dev` started before the import routes existed must be restarted (seen
+  2026-11-05: its web server answered 500 on every route using the new import tiers until restarted).
 - **Alerts:** `platform.provisioning_failed` for `mail_import.credential_revoke` (with `data.import_credentials_wiped`
   in the account's log; the credential still expires on its own) and for `mail_import.training_cleanup`.
 
