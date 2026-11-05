@@ -1,6 +1,6 @@
 # 02 — Mail infrastructure
 
-Last updated: 2026-11-04 (the webmail tells the sender about unknown local recipients); 2026-10-31 (no file storage on customer mailboxes; the provisioning key's set narrows); 2026-10-30 (internal-mail marker and the inbound-headers script; send-on-behalf tag expiry, ADR-0026 slice 13). Research: `research/stalwart.md`, `research/deliverability.md`.
+Last updated: 2026-11-05 (mail import: the IMAP-only import credential, IMAP probes, the training key and the run-65 fixes, ADR-0030); 2026-11-04 (the webmail tells the sender about unknown local recipients); 2026-10-31 (no file storage on customer mailboxes; the provisioning key's set narrows); 2026-10-30 (internal-mail marker and the inbound-headers script; send-on-behalf tag expiry, ADR-0026 slice 13). Research: `research/stalwart.md`, `research/deliverability.md`.
 
 ## URL and hostname map
 
