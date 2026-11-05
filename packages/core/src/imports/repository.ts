@@ -50,11 +50,13 @@ export type MailImportRepository = {
    * skipping any other runner's row, while fewer than `perAccount` imports of its account and fewer than `global`
    * overall hold a live lease (checked under one lock, so two runners can't both take the last slot). Sets a fresh
    * lease (`token`, `at + leaseMs`); a `queued` import becomes `running` with `started_at`. Null when nothing is due.
+   * `abandonedLeaseUntil` is the lease it had before when that was never given back (its runner died mid-slice), else
+   * null.
    */
   claim(
     at: Date,
     opts: { token: string; leaseMs: number; perAccount: number; global: number },
-  ): Promise<MailImport | null>;
+  ): Promise<(MailImport & { abandonedLeaseUntil: Date | null }) | null>;
   /** Extends the lease; false when the token is no longer the import's (lost lease, ended, cancelled). */
   renewLease(id: string, token: string, until: Date): Promise<boolean>;
   /** A runner's progress write, only while it holds the lease (and the import is live). */
@@ -79,6 +81,17 @@ export type MailImportRepository = {
   pastCredential(at: Date, limit: number): Promise<MailImport[]>;
   /** `syncing` imports whose sync window ended at or before `at` (oldest first). */
   pastSyncWindow(at: Date, limit: number): Promise<MailImport[]>;
+
+  /**
+   * A person's trust tier (`user_profile.trust_tier`; `new` for an unknown or deleted login), for the importer's
+   * per-import message cap by the tier of whoever started it (configuration, ADR-0030 update 2026-11-05).
+   */
+  trustTier(userId: string | null): Promise<string>;
+  /**
+   * Messages copied (`messages_done`) by the mailbox's imports created at or after `since`, `exceptId` left out: the
+   * per-mailbox message cap over a rolling window (ADR-0030 update, SA-65-05), so restarting an import can't reset it.
+   */
+  messagesCopiedInto(mailboxId: string, since: Date, exceptId: string): Promise<number>;
 
   /** Terminal imports nobody has been told about yet, oldest first. */
   unnotified(limit: number): Promise<MailImport[]>;

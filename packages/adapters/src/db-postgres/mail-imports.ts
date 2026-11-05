@@ -27,7 +27,7 @@ import {
 } from "@anhourmail/shared/import";
 
 import type { Executor } from "./client";
-import { mailImport, mailImportBatch, mailImportFolder } from "./schema";
+import { mailImport, mailImportBatch, mailImportFolder, userProfile } from "./schema";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isId = (v: string) => UUID.test(v);
@@ -265,7 +265,7 @@ export class PgMailImportRepository implements MailImportRepository {
   async claim(
     at: Date,
     opts: { token: string; leaseMs: number; perAccount: number; global: number },
-  ): Promise<MailImport | null> {
+  ): Promise<(MailImport & { abandonedLeaseUntil: Date | null }) | null> {
     // Its own transaction (a savepoint inside a unit of work), so the lock below is always transaction-scoped and is
     // released with the claim, even when the caller runs on the pool rather than in a unit of work.
     return this.x.transaction(async (tx) => {
@@ -279,7 +279,7 @@ export class PgMailImportRepository implements MailImportRepository {
       if ((held?.n ?? 0) >= opts.global) return null;
       const busyAccount = sql`(select count(*) from ${mailImport} as other where other.account_id = ${mailImport.accountId} and other.status not in ('completed', 'cancelled', 'failed') and other.lease_until is not null and other.lease_until > ${at}) >= ${opts.perAccount}`;
       const [due] = await this.x
-        .select({ id: mailImport.id })
+        .select({ id: mailImport.id, leaseUntil: mailImport.leaseUntil })
         .from(mailImport)
         .where(
           and(
@@ -310,7 +310,9 @@ export class PgMailImportRepository implements MailImportRepository {
           ),
         )
         .returning();
-      return r ? toImport(r) : null;
+      const claimed = r ? toImport(r) : null;
+      // A lease that was never given back: the runner that held it died mid-slice.
+      return claimed ? { ...claimed, abandonedLeaseUntil: due.leaseUntil } : null;
     });
   }
 
@@ -440,6 +442,31 @@ export class PgMailImportRepository implements MailImportRepository {
       .orderBy(asc(mailImport.syncUntil), asc(mailImport.id))
       .limit(limit);
     return toImports(rows);
+  }
+
+  async messagesCopiedInto(mailboxId: string, since: Date, exceptId: string): Promise<number> {
+    if (!isId(mailboxId)) return 0;
+    const [row] = await this.x
+      .select({ n: sql<number>`coalesce(sum(${mailImport.messagesDone}), 0)::int` })
+      .from(mailImport)
+      .where(
+        and(
+          eq(mailImport.mailboxId, mailboxId),
+          sql`${mailImport.id} <> ${isId(exceptId) ? exceptId : "00000000-0000-0000-0000-000000000000"}`,
+          sql`${mailImport.createdAt} >= ${since}`,
+        ),
+      );
+    return row?.n ?? 0;
+  }
+
+  async trustTier(userId: string | null): Promise<string> {
+    if (userId === null) return "new";
+    const [row] = await this.x
+      .select({ tier: userProfile.trustTier })
+      .from(userProfile)
+      .where(eq(userProfile.userId, userId))
+      .limit(1);
+    return row?.tier ?? "new";
   }
 
   async unnotified(limit: number): Promise<MailImport[]> {

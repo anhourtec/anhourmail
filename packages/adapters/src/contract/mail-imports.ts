@@ -421,5 +421,38 @@ export function describeMailImportContract(name: string, factory: AdapterFactory
         await f.cleanup();
       }
     });
+
+    it("sums what a mailbox's imports copied in a window, leaving one out", async () => {
+      const f = await factory();
+      try {
+        const T = moment();
+        const a = await mailbox(f);
+        const first = newImport(a.accountId, a.mailboxId, T);
+        await f.uow.run((r) => r.imports.insert(first));
+        await f.uow.run((r) => r.imports.update(first.id, { messagesDone: 5 }));
+        await f.uow.run((r) => r.imports.end(first.id, { status: "completed", at: T }));
+        const second = newImport(a.accountId, a.mailboxId, new Date(T.getTime() + 1000));
+        await f.uow.run((r) => r.imports.insert(second));
+        await f.uow.run((r) => r.imports.update(second.id, { messagesDone: 2 }));
+        const since = new Date(T.getTime() - 1000);
+        expect(await f.uow.run((r) => r.imports.messagesCopiedInto(a.mailboxId, since, second.id))).toBe(5);
+        expect(await f.uow.run((r) => r.imports.messagesCopiedInto(a.mailboxId, since, first.id))).toBe(2);
+        const later = new Date(T.getTime() + 500);
+        expect(await f.uow.run((r) => r.imports.messagesCopiedInto(a.mailboxId, later, second.id))).toBe(0);
+        await f.uow.run((r) => r.imports.end(second.id, { status: "cancelled", at: T }));
+      } finally {
+        await f.cleanup();
+      }
+    });
+
+    it("answers new as the trust tier of an unknown or missing login", async () => {
+      const f = await factory();
+      try {
+        expect(await f.uow.run((r) => r.imports.trustTier(null))).toBe("new");
+        expect(await f.uow.run((r) => r.imports.trustTier(`nobody-${randomUUID()}`))).toBe("new");
+      } finally {
+        await f.cleanup();
+      }
+    });
   });
 }

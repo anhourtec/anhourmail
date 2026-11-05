@@ -18,6 +18,8 @@ type State = {
   mailImportBatches: MailImportBatch[];
   mailboxes: { id: string; accountId: string }[];
   accounts: { id: string }[];
+  /** Trust tiers by user id (tests set them; everyone else is `new`). */
+  trustTiers?: Record<string, string>;
 };
 
 const clone = <T>(v: T): T => structuredClone(v);
@@ -145,11 +147,12 @@ export function memoryMailImports(s: State): MailImportRepository {
         .sort((a, b) => a.runAfter.getTime() - b.runAfter.getTime() || a.createdAt.getTime() - b.createdAt.getTime());
       const i = due[0];
       if (!i) return null;
+      const abandonedLeaseUntil = i.leaseUntil;
       i.leaseToken = opts.token;
       i.leaseUntil = new Date(at.getTime() + opts.leaseMs);
       if (i.status === "queued") i.status = "running";
       i.startedAt ??= at;
-      return clone(i);
+      return { ...clone(i), abandonedLeaseUntil };
     },
     renewLease: async (id, token, until) => {
       const i = find(id);
@@ -224,6 +227,11 @@ export function memoryMailImports(s: State): MailImportRepository {
           .sort((a, b) => (a.syncUntil?.getTime() ?? 0) - (b.syncUntil?.getTime() ?? 0) || a.id.localeCompare(b.id))
           .slice(0, limit),
       ),
+    messagesCopiedInto: async (mailboxId, since, exceptId) =>
+      rows()
+        .filter((i) => i.mailboxId === mailboxId && i.id !== exceptId && i.createdAt.getTime() >= since.getTime())
+        .reduce((n, i) => n + i.messagesDone, 0),
+    trustTier: async (userId) => (userId === null ? undefined : s.trustTiers?.[userId]) ?? "new",
     unnotified: async (limit) =>
       clone(
         rows()

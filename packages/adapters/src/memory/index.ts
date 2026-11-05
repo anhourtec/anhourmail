@@ -171,6 +171,8 @@ export type MemoryState = {
   mailImports: MailImport[];
   mailImportFolders: (MailImportFolder & { createdAt: Date })[];
   mailImportBatches: MailImportBatch[];
+  /** People's trust tiers by user id, when a test sets them (Postgres: `user_profile.trust_tier`; else `new`). */
+  trustTiers?: Record<string, string>;
 };
 
 export const emptyState = (): MemoryState => ({
