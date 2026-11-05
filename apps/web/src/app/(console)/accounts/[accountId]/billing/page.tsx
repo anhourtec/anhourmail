@@ -187,7 +187,7 @@ export default async function BillingPage({
       ? plan.tagline
       : price !== null
         ? `For the plan, before tax and add-ons. Billed every ${BILLING.interval}.`
-        : PLAN_SOURCE_LABELS[o.planSource];
+        : "Given to this account, with nothing to pay.";
 
   return (
     <>
