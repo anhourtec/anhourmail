@@ -76,7 +76,7 @@ export async function loginDeletionPlan(deps: Deps, actor: Actor): Promise<Login
 }
 
 type Session = { sessionId: string | null };
-type Refusal = "act_as" | "step_up_required" | LoginDeletionBlocker;
+type Refusal = "act_as" | "step_up_required" | "suspended" | "session_ended" | LoginDeletionBlocker;
 
 const BLOCKED: Record<LoginDeletionBlocker, string> = {
   staff: "Staff logins can't be deleted here. Ask a Global Administrator to remove your platform role first.",
@@ -121,16 +121,24 @@ export async function deleteOwnLogin(
       ) {
         return { result: "step_up_required", denied: { code: "step_up_required" } };
       }
-      // The login first (no new membership can appear for this person until the end), then each account; then the
-      // memberships again: one that appeared before the lock means the plan would be stale, so ask to try again.
-      await repos.dataLifecycle.lockLogin(actor.userId);
+      // Each account in id order, then the login — the order every path that locks a person's accounts and login takes
+      // (a staff suspension's `lockPerson`), so the two can't deadlock. Once the login is locked no new membership can
+      // appear for this person; the memberships again: one that appeared before the lock means the plan would be stale.
       const before = (await repos.access.memberships(actor.userId)).map((m) => m.accountId).sort();
       for (const id of before) await repos.accounts.lock(id);
+      await repos.dataLifecycle.lockLogin(actor.userId);
       const after = (await repos.access.memberships(actor.userId)).map((m) => m.accountId).sort();
       if (before.join(",") !== after.join(",")) throw new ConflictError("Your accounts changed. Try again.");
       const plan = await planFor(repos, actor.userId);
       const first = plan.blockers[0];
       if (first) return { result: first.reason, denied: { code: first.reason } };
+      // Staff suspended them, or this session ended (a suspension ends every session), while the request waited: a
+      // suspended login stays for the appeal and the record, so it isn't deleted.
+      if (await repos.suspensions.person(actor.userId)) return { result: "suspended", denied: { code: "suspended" } };
+      const live = await repos.security.sessions(actor.userId, deps.clock.now());
+      if (!live.some((x) => x.id === session.sessionId)) {
+        return { result: "session_ended", denied: { code: "session_ended" } };
+      }
       const also: AuditAlso[] = [];
       for (const a of plan.accountsLeft) {
         // The grants they hold there go on record in that account's log before the membership takes them (ADR-0026).
@@ -162,6 +170,8 @@ export async function deleteOwnLogin(
   );
   if (out === "act_as") throw new ForbiddenError("Logins can't be deleted while acting as someone.");
   if (out === "step_up_required") throw new StepUpRequiredError();
+  if (out === "suspended") throw new ConflictError("Your login is suspended by Anhourtec and can't be deleted now.");
+  if (out === "session_ended") throw new ConflictError("This session has ended. Sign in again, then try again.");
   if (typeof out === "string") throw new ConflictError(BLOCKED[out]);
   return out;
 }
