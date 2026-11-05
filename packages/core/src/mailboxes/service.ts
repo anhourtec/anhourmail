@@ -31,6 +31,7 @@ import {
   ValidationError,
 } from "../errors";
 import { dropMailboxGrants } from "../delegation/cascade";
+import { cancelMailboxImport } from "../imports/lifecycle";
 import { type AuditAlso, authorizeAudited, mutation, type MutationOutcome } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 import { BreachedPasswordError, passwordBreached } from "../security/breached-passwords";
@@ -716,7 +717,9 @@ export async function suspendMailbox(
     }
     const next = await moveTo(deps, repos, m, "suspended", null);
     const catchAllOff = await turnOffCatchAllFor(deps, repos, m.id);
-    return { next, meta: { from: m.status, ...(catchAllOff.length > 0 ? { catchAllOff } : {}) } };
+    // A running mail import stops with it (ADR-0030 §13): its credential can't sign in to a suspended mailbox anyway.
+    const also = await cancelMailboxImport(repos, m.id, "mailbox_suspended", deps.clock.now());
+    return { next, meta: { from: m.status, ...(catchAllOff.length > 0 ? { catchAllOff } : {}) }, also };
   });
 }
 
@@ -765,6 +768,7 @@ export async function deleteMailbox(
     const aliases = (await repos.aliases.listByAccount(accountId)).filter((a) => a.mailboxId === m.id).length;
     const catchAllOff = await turnOffCatchAllFor(deps, repos, m.id);
     const also = await dropMailboxGrants(repos, accountId, m);
+    also.push(...(await cancelMailboxImport(repos, m.id, "mailbox_deleted", deps.clock.now())));
     return {
       next,
       meta: {

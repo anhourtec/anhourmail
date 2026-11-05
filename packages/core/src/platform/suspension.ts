@@ -6,9 +6,10 @@ import { type Actor, authorize } from "../actor";
 import type { AuditAction } from "../audit/catalogue";
 import { maskEmail } from "../audit/record";
 import { turnOffCatchAllFor } from "../domains/catch-all";
+import { cancelMailboxImport } from "../imports/lifecycle";
 import { ConflictError, ForbiddenError, NotFoundError, StepUpRequiredError, ValidationError } from "../errors";
 import type { Mailbox, MailboxStatus } from "../mailboxes/entity";
-import { authorizeAudited, mutation, type MutationOutcome } from "../mutation";
+import { type AuditAlso, authorizeAudited, mutation, type MutationOutcome } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 import type { MailboxHoldKind, SuspensionRecord } from "./repository";
 
@@ -61,11 +62,16 @@ export function parseSuspendInput(input: SuspendInput): { reason: SuspensionReas
 /** The plain-words label for a reason category (what the customer sees). */
 export const reasonLabel = (reason: SuspensionReason): string => SUSPENSION_REASONS[reason];
 
-/** Suspends the usable mailboxes among `list` (or adds this hold to one another suspension already holds). */
+/**
+ * Suspends the usable mailboxes among `list` (or adds this hold to one another suspension already holds). A mail import
+ * into one it suspends ends with it (ADR-0030 §13; reason `mailbox_suspended`): `also` has the `data.import_cancelled`
+ * entries for the caller's audit.
+ */
 export async function holdMailboxes(deps: Deps, repos: Repositories, list: readonly Mailbox[], kind: MailboxHoldKind) {
   const holds = await repos.suspensions.holds(list.map((m) => m.id));
   let suspended = 0;
   const catchAllOff: string[] = [];
+  const also: AuditAlso[] = [];
   for (const m of list) {
     if (USABLE.includes(m.status)) {
       if (!(await repos.mailboxes.transition(m.id, [m.status], "suspended", null))) {
@@ -74,13 +80,14 @@ export async function holdMailboxes(deps: Deps, repos: Repositories, list: reado
       await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: m.id, runAfter: deps.clock.now() });
       await repos.suspensions.addHold(m.id, kind);
       catchAllOff.push(...(await turnOffCatchAllFor(deps, repos, m.id)));
+      also.push(...(await cancelMailboxImport(repos, m.id, "mailbox_suspended", deps.clock.now())));
       suspended += 1;
     } else if (m.status === "suspended" && holds.some((h) => h.mailboxId === m.id)) {
       // Already held by the other kind of suspension: both must be lifted before it resumes.
       await repos.suspensions.addHold(m.id, kind);
     }
   }
-  return { suspended, catchAllOff };
+  return { suspended, catchAllOff, also };
 }
 
 /** Removes this hold from `list`; mailboxes with no hold left are resumed (the worker restores access). */
@@ -214,6 +221,7 @@ export async function suspendAccount(
         meta,
         // The platform log keeps the internal note; the account's own log (above) never does.
         copies: [{ accountId: null, meta: { ...meta, internalNote: note } }],
+        also: held.also,
       };
     },
   );
@@ -334,6 +342,7 @@ export async function suspendPerson(
           ...(held.catchAllOff.length > 0 ? { catchAllOff: held.catchAllOff } : {}),
         },
         copies,
+        also: held.also,
       };
     },
   );

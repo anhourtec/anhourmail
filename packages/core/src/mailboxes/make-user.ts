@@ -4,6 +4,7 @@ import type { AccountRole } from "@anhourmail/shared/rbac";
 
 import type { Actor } from "../actor";
 import { dropGrantsNotByOwners, dropOwnGrants } from "../delegation/cascade";
+import { cancelMailboxImport } from "../imports/lifecycle";
 import { ConflictError, ForbiddenError, NotFoundError, StepUpRequiredError, ValidationError } from "../errors";
 import { mutation, type MutationOutcome } from "../mutation";
 import { displayName, isAccountRole, loginNames, profileDetails } from "../people/entity";
@@ -147,6 +148,8 @@ export async function makeMailboxUser(
         await repos.provisioning.enqueue({ kind: "app_password.revoke", subjectId: m.id, runAfter: now });
       }
       await repos.provisioning.enqueue({ kind: "mailbox.password", subjectId: m.id, runAfter: now });
+      // A mail import someone started into the shared address stops: the mailbox belongs to this person now.
+      also.push(...(await cancelMailboxImport(repos, m.id, "mailbox_handover", now)));
       // The person's name becomes the mail server account's description (its sender name).
       await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: m.id, runAfter: now });
       return {

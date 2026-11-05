@@ -469,6 +469,7 @@ export async function removeMember(
         if (!released) continue;
         mailboxesSignedOut += 1;
         appPasswordsRevoked += released.appPasswordsRevoked;
+        also.push(...released.also);
       }
       let delegated = 0;
       if (delegateTo && actor.kind === "user") {

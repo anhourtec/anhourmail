@@ -112,6 +112,7 @@ export async function convertMailboxToShared(
         also = applied.also;
         grants = applied.granted;
       }
+      also = [...also, ...released.also];
       const former = members.find((p) => p.userId === formerUserId);
       return {
         result: { mailbox: await viewOf(repos, accountId, { ...m, userId: null, mustChangePassword: false }), grants },

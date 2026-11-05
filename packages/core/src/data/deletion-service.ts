@@ -157,6 +157,7 @@ export async function requestAccountDeletion(
         meta,
         // Staff see pending deletions in the platform log too.
         copies: [{ accountId: null, meta }],
+        also: held.also,
       };
     },
   );

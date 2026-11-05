@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { generateMailboxPassword } from "@anhourmail/shared/security";
 
+import { cancelMailboxImport } from "../imports/lifecycle";
+import type { AuditAlso } from "../mutation";
 import { mailboxNameOf } from "../people/names";
 import type { Deps, Repositories } from "../ports";
 import type { Mailbox } from "./entity";
@@ -18,7 +20,10 @@ import { hashMailboxPassword, type PasswordHasher } from "./password-hash";
  *   OAuth token derived from the old one. Not a first-sign-in change (nobody signs in with it). A mailbox being deleted
  *   (or not yet on the mail server) keeps it waiting for a restore, which applies it before the mailbox comes back on;
  * - the mailbox's app passwords are revoked (`app_password.revoke`): they don't depend on the password, and they are
- *   credentials the person holds.
+ *   credentials the person holds;
+ * - a mail import into it ends (`cancelled`, reason `mailbox_released`, secrets wiped, its credential's revoke queued;
+ *   ADR-0030): it was started for the person, and a cut-over sync would otherwise keep copying for its whole window.
+ *   The `data.import_cancelled` entry comes back in `also` for the caller's audit.
  *
  * The generated password is never returned, stored, logged or audited (rule 23).
  */
@@ -28,7 +33,7 @@ export async function releaseMailboxOwner(
   hasher: PasswordHasher,
   m: Mailbox,
   userId: string,
-): Promise<{ appPasswordsRevoked: number } | null> {
+): Promise<{ appPasswordsRevoked: number; also: AuditAlso[] } | null> {
   // Its sender name followed the person: it keeps that name as its own (a shared mailbox has no person to follow), so
   // nothing changes on the mail server.
   const name = await mailboxNameOf(repos, m);
@@ -47,5 +52,6 @@ export async function releaseMailboxOwner(
   if (moved.length > 0) {
     await repos.provisioning.enqueue({ kind: "app_password.revoke", subjectId: m.id, runAfter: now });
   }
-  return { appPasswordsRevoked: moved.length };
+  const also = await cancelMailboxImport(repos, m.id, "mailbox_released", now);
+  return { appPasswordsRevoked: moved.length, also };
 }
