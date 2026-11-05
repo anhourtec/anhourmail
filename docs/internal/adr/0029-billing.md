@@ -813,3 +813,64 @@ the dev fake's pages and `POST /api/dev/billing/simulate`, and the hourly `job:b
   (quantity, `period.end`, the price under `pricing.price_details.price`, the proration flag under
   `parent.subscription_item_details.proration`), and that a renewal invoice bills the quantities in force at the cycle,
   not ones changed afterwards.
+
+## Update (2026-11-05): slices 11–13 built
+
+The console Billing page and banners (slice 11), Platform billing with staff grants, the staff refund and invite codes
+(slice 12), and the public billing guide, pricing copy and changelog (slice 13) are built and tested. `BILLING.status`
+stays `planned`. Choices made while building, within this decision:
+
+- **When paid plans can be bought.** Billing on (`BILLING_PROVIDER` not `off`) **and** either `BILLING.status` is
+  `open` or the provider is a test setup (the dev fake, or the processor with test keys on pre-staging)
+  (`billingOffered` / `paidPlansOffered`, `apps/web/src/server/billing.ts`). The same rule is enforced on the server
+  (review run-67 N3): `billingContext()` sets `BillingContext.paidPlansOpen`, and checkout, change previews and
+  changes answer 503 `billing_unavailable` (audited denied `not_open`) while it is false; the portal, cancel, undo and
+  refunds keep working for anyone who already pays. So production with live keys shows "Paid plans open soon" and
+  takes no payment, page or API, until the launch change flips `BILLING.status`. A test setup says so on the page.
+- **Redeem a code is shown even while paid plans aren't offered** (it isn't a purchase; beta waves need it), to
+  Owners and Billing Administrators on Free or lapsed accounts.
+- **Abandoned checkouts:** returning on the cancel URL does **not** clear `checkout_pending` (the provider's session
+  stays payable until it expires, and two paid sessions would be two subscriptions, which the sync refuses). The page
+  shows when a new checkout can start (`checkoutPendingUntil`, new in the overview) and disables "Continue to payment"
+  from the first click (F3). After `?checkout=done` it refreshes every few seconds for up to a minute until the plan
+  shows. The dev fake checkout's "Pay" now returns to the Billing page as the processor does.
+- **Banners** (`accountBillingNotice`): `past_due` to `billing.read` roles only; `restricted` and `lapsed` to everyone
+  in the account (their own sending stopped), with the Billing link only for those who can see Billing and "who can fix
+  it" for the rest; act-as sees them read-only.
+- **Every change is confirmed:** add-ons and plan changes go preview → explicit confirmation carrying the amount
+  (`confirmAmountMinor`); a moved amount is shown again (409 `confirmation_required`). Cancel, undo and refund ask
+  first, then the step-up. The refund copy states the one-self-service-refund rule.
+- **Staff grants and comps change our state directly**, in one unit of work under the account lock, through the
+  sync's derivation and effects (`applyDerivation`, extracted from `syncAccountBilling`), so they work with billing
+  off. A grant with days is `plan_source = comp` (lapses at its end via `billing.timers`); without days it is `staff`.
+  Grants never replace a live subscription (409 `already_subscribed`). Ending a grant drops to Free with holds. New
+  audit actions: `billing.staff_plan_granted`, `billing.staff_plan_revoked`, `billing.comp_redeemed`,
+  `platform.invite_code_created`, `platform.invite_code_revoked`, `platform.invite_code_redeemed`.
+- **Staff refund** refunds the latest paid invoice of the live subscription in full (any age, any billing reason),
+  optionally ending the subscription now; refused while disputed or already refunded; doesn't use the account's
+  self-service refund. An ended subscription's invoices are refunded in the processor's dashboard (the port reads only
+  the live subscription); the sync records such refunds (`source: provider`).
+- **Invite code routes:** the outer route gate is `platform.accounts.read` (every staff role but Reports Reader), then
+  the service requires `platform.invites.manage` for a sign-up-only code or `platform.billing.manage` (+ step-up) for a
+  comp code (§8), so one route serves both without a matrix change. Billing staff reach the Invite codes page from
+  Platform billing (the nav entry follows `platform.invites.manage`).
+- **Sign-up with a code** (as fixed after review run-67 N1, N2). The code goes in the `x-sign-up-code` header. With
+  `SIGNUP_MODE=closed` the sign-up page and the proof-of-work challenge open only for a link carrying something shaped
+  like a code; the sign-up endpoint answers 404 without one. With a code, the proof-of-work and every sign-up tier run
+  first; then the code is counted (`inviteCodeRedeemIp`, fail closed) and **claimed atomically before the identity
+  layer creates anyone** (`claimSignUpCode`: redeemed, nobody attached yet — new repository methods `attachClaim` and
+  `releaseClaim`, no migration). The claim is the admission: it rides to the identity layer's user-create hook
+  (`admitSignUp`), which refuses every new user while closed without one, so a concurrent Billing redemption, a
+  revocation, an expiry or a slow request can never let a second account in. If the identity layer creates no one,
+  the claim is given back (`platform.invite_code_released`) and the code works again; once the person exists the claim
+  is completed (`completeSignUpCode`: person and account attached, an unbound comp applied) outside account
+  provisioning's own error handling. A claim left by a crash between the two stays used (staff issue another).
+- **Bound codes never start a plan on an unconfirmed email** (run-67 N2, the simpler of the two options): at sign-up a
+  code bound to an email that also gives a plan is refused with the usual 404, and such a code can't be created to
+  open sign-up too ("make a sign-up code and a plan code, or leave it unbound"); it is redeemed on Billing → Redeem a
+  code, which requires the confirmed console email. A bound sign-up-only code still admits its own address at sign-up
+  (claimed for it; possession of the code sent there is what admits). Deferring a comp until `afterEmailVerification`
+  with a lapsing pending claim was judged disproportionate for v1.
+- **Not built in these slices:** clearing a lost dispute and re-sync from Platform billing, dismissing orphans, the
+  account-deletion hook, `billing.json` in the export, catalogue-drift refusals, the webmail's
+  `403 billing_restricted`, and demo billing states in the seed.
