@@ -434,6 +434,17 @@ describe("PushHub", () => {
     expect(hub.stats()).toEqual({ channels: 0, streams: 0, up: 0 });
   });
 
+  it("closeSession after a password change ends the old id's channels as renewed", () => {
+    const { hub, upstreams, listen } = setup();
+    const a = listen();
+    hub.subscribe(SID, T, a.fn);
+    hub.closeSession(SID, "renewed");
+    // The browser opens a stream for the new id; nothing of the old one (or its revoked token) stays open.
+    expect(a.events).toEqual([{ type: "end", reason: "renewed" }]);
+    expect(upstreams[0]?.closed).toBe(true);
+    expect(hub.stats()).toEqual({ channels: 0, streams: 0, up: 0 });
+  });
+
   it("a listener that throws doesn't stop the others", () => {
     const { hub, upstreams, listen } = setup();
     const ok = listen();
