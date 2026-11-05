@@ -7,6 +7,7 @@ import {
   allRecipientsLocalExpression,
   applySenderIdentityPolicy,
   INBOUND_HEADERS_SCRIPT,
+  IMPORT_MARKER_HEADER,
   INBOUND_HEADERS_SIEVE,
   INTERNAL_MAIL_HEADER,
   SENDER_IDENTITY_DATA_SCRIPT_EXPRESSION,
@@ -62,10 +63,21 @@ describe("sender identity policy", () => {
     });
   });
 
-  it("inbound script removes the internal-mail marker and nothing else", () => {
+  it("inbound script removes the internal-mail and mail import markers and nothing else", () => {
     expect(INBOUND_HEADERS_SIEVE).toMatch(/^require \["editheader"\];/);
     const actions = INBOUND_HEADERS_SIEVE.split("\n").filter((l) => l.trim() !== "" && !l.startsWith("#"));
-    expect(actions).toEqual(['require ["editheader"];', `deleteheader "${INTERNAL_MAIL_HEADER}";`]);
+    expect(actions).toEqual([
+      'require ["editheader"];',
+      `deleteheader "${INTERNAL_MAIL_HEADER}";`,
+      `deleteheader "${IMPORT_MARKER_HEADER}";`,
+    ]);
+    expect(IMPORT_MARKER_HEADER).toBe("X-AnhourMail-Imported");
+  });
+
+  it("removes a submitted mail import marker, with or without a key (SA-66-01)", () => {
+    for (const script of [SENDER_IDENTITY_SIEVE, senderIdentitySieve({ onBehalfKey: KEY })]) {
+      expect(script).toContain(`deleteheader "${IMPORT_MARKER_HEADER}";`);
+    }
   });
 
   it("is idempotent when the scripts are already current, and repairs drifted ones", async () => {

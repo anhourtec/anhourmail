@@ -119,6 +119,7 @@ export {
 export {
   applySenderIdentityPolicy,
   INBOUND_HEADERS_SCRIPT,
+  IMPORT_MARKER_HEADER,
   INBOUND_HEADERS_SIEVE,
   allRecipientsLocalExpression,
   INTERNAL_MAIL_HEADER,

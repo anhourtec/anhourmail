@@ -44,12 +44,21 @@ export const SENDER_ON_BEHALF_EXPIRES_HEADER = "X-AnhourMail-On-Behalf-Expires";
  */
 export const INTERNAL_MAIL_HEADER = "X-AnhourMail-Internal";
 
+/**
+ * The mail import marker (ADR-0030 §5): our importer prepends it to every message it APPENDs, and the webmail shows a
+ * copy whose first header is exactly this (with an import id) as imported, with the old provider's results. Mail
+ * never legitimately arrives over SMTP with it, so both scripts remove it (run-66 SA-66-01): from submissions here and
+ * from everything arriving from outside. (Must equal `IMPORT_MARKER_HEADER` in `@anhourmail/shared/import`.)
+ */
+export const IMPORT_MARKER_HEADER = "X-AnhourMail-Imported";
+
 /** The system script run at DATA for unauthenticated sessions (port 25): removes headers only our server may add. */
 export const INBOUND_HEADERS_SCRIPT = "inbound-headers";
 
 /**
- * Removes the internal-mail marker from mail arriving from outside, so a copy of one from a genuine message (or a
- * made-up one) never reaches a mailbox. Nothing else is touched: inbound checks and their results are unaffected.
+ * Removes the internal-mail marker and the mail import marker from mail arriving from outside, so a copy of either from
+ * a genuine message (or a made-up one) never reaches a mailbox. Nothing else is touched: inbound checks and their
+ * results are unaffected.
  */
 export const INBOUND_HEADERS_SIEVE = `require ["editheader"];
 
@@ -57,6 +66,9 @@ export const INBOUND_HEADERS_SIEVE = `require ["editheader"];
 # (MtaStageData.script). Only our own server adds this header, to mail an account submitted here; never accept one
 # from outside.
 deleteheader "${INTERNAL_MAIL_HEADER}";
+
+# The mail import marker is added only by our importer, over IMAP (ADR-0030); a copy arriving by SMTP is a forgery.
+deleteheader "${IMPORT_MARKER_HEADER}";
 `;
 
 const ON_BEHALF_KEY = /^[0-9a-f]{64}$/;
@@ -189,6 +201,9 @@ deleteheader "${SENDER_ON_BEHALF_EXPIRES_HEADER}";
 # Stalwart stamps no Authentication-Results on authenticated submissions, so any such header here was written by
 # the sender and could claim checks our server never ran (RFC 8601 section 5). Remove them all.
 deleteheader "Authentication-Results";
+
+# The mail import marker is added only by our importer, over IMAP (ADR-0030): a submitted one is a forgery.
+deleteheader "${IMPORT_MARKER_HEADER}";
 
 # The internal-mail marker is ours alone: whatever the client sent is removed${key === undefined ? " (no key, so none is added)." : ", then ours is added."}
 deleteheader "${INTERNAL_MAIL_HEADER}";
