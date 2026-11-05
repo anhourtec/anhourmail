@@ -10,6 +10,7 @@ export * from "./held";
 export * from "./holds";
 export * from "./ingest";
 export * from "./invite-codes";
+export * from "./invite-service";
 export * from "./lapse";
 export * from "./lifecycle";
 export * from "./notice";
