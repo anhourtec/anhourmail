@@ -6,6 +6,7 @@ import type {
   BillingDispute,
   BillingEvent,
   BillingRepository,
+  CatalogueStatus,
   HoldSubject,
   InviteCode,
   InviteCodeRepository,
@@ -21,6 +22,7 @@ type State = {
   billingDisputes: BillingDispute[];
   planHolds: PlanHold[];
   inviteCodes: InviteCode[];
+  billingCatalogue: CatalogueStatus | null;
 };
 
 const clone = <T>(v: T): T => structuredClone(v);
@@ -201,6 +203,12 @@ export function memoryBilling(s: State): BillingRepository {
       const n = s.planHolds.filter((h) => h.accountId === accountId).length;
       s.planHolds = s.planHolds.filter((h) => h.accountId !== accountId);
       return n;
+    },
+
+    catalogue: async () => clone(s.billingCatalogue),
+
+    saveCatalogue: async (status) => {
+      s.billingCatalogue = clone(status);
     },
   };
 }

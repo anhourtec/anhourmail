@@ -5,6 +5,8 @@
  */
 import type { Currency, PaidPlanId } from "@anhourmail/shared/plans";
 
+import type { CatalogueDrift } from "./ports";
+
 export const BILLING_STATES = ["free", "active", "past_due", "restricted", "lapsed"] as const;
 /**
  * An account's billing state (ADR-0029 §5), separate from staff suspension (`customer_account.status`) and from trust.
@@ -155,3 +157,15 @@ export type InviteCode = {
 };
 
 export type InviteCodeStatus = "active" | "redeemed" | "revoked" | "expired";
+
+/**
+ * The last check of the provider's catalogue against `plans.ts` (Postgres `billing_catalogue`, one row; ADR-0029 §2).
+ * While `drift` isn't empty, new checkouts and plan or add-on changes are refused; existing subscriptions keep syncing.
+ */
+export type CatalogueStatus = {
+  checkedAt: Date;
+  /** Every way the provider disagreed with the facts at the last check; empty = in sync. */
+  drift: CatalogueDrift[];
+  /** When the current drift was first seen (null while in sync). */
+  driftSince: Date | null;
+};

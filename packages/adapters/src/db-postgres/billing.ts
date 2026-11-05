@@ -11,6 +11,9 @@ import {
   type BillingEventStatus,
   type BillingRepository,
   type BillingState,
+  CATALOGUE_ITEMS,
+  type CatalogueItem,
+  type CatalogueStatus,
   DISPUTE_STATUSES,
   type HoldSubject,
   HOLD_SUBJECTS,
@@ -26,7 +29,7 @@ import {
 import { BILLING, type Currency, isPaidPlan, type PaidPlanId } from "@anhourmail/shared/plans";
 
 import type { Executor } from "./client";
-import { accountBilling, billingDispute, billingEvent, inviteCode, planHold } from "./schema";
+import { accountBilling, billingCatalogue, billingDispute, billingEvent, inviteCode, planHold } from "./schema";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isId = (v: string) => UUID.test(v);
@@ -327,6 +330,30 @@ export class PgBillingRepository implements BillingRepository {
     if (!isId(accountId)) return 0;
     const rows = await this.x.delete(planHold).where(eq(planHold.accountId, accountId)).returning({ id: planHold.id });
     return rows.length;
+  }
+
+  async catalogue(): Promise<CatalogueStatus | null> {
+    const [r] = await this.x.select().from(billingCatalogue).where(eq(billingCatalogue.id, 1));
+    if (!r) return null;
+    return {
+      checkedAt: r.checkedAt,
+      // An item this release doesn't know (written by a newer one) still counts as drift: never read as in sync.
+      drift: r.drift.map((d) => ({ item: oneOf<CatalogueItem>(CATALOGUE_ITEMS, d.item, "plus"), problem: d.problem })),
+      driftSince: r.driftSince,
+    };
+  }
+
+  async saveCatalogue(status: CatalogueStatus): Promise<void> {
+    const values = {
+      checkedAt: status.checkedAt,
+      drift: status.drift.map((d) => ({ item: d.item, problem: d.problem })),
+      driftSince: status.driftSince,
+      updatedAt: new Date(),
+    };
+    await this.x
+      .insert(billingCatalogue)
+      .values({ id: 1, ...values })
+      .onConflictDoUpdate({ target: billingCatalogue.id, set: values });
   }
 }
 

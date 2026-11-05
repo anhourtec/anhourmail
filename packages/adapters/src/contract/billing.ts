@@ -335,6 +335,23 @@ export function describeBillingContract(name: string, factory: AdapterFactory): 
       }
     });
 
+    it("the catalogue check: none before the first, one row replaced as a whole, drift read back", async () => {
+      const { uow, cleanup } = await factory();
+      try {
+        const drift = [
+          { item: "plus" as const, problem: "USD amount 1000, plans.ts says 900" },
+          { item: "storage_block" as const, problem: "tax behaviour inclusive, expected exclusive" },
+        ];
+        await uow.run((r) => r.billing.saveCatalogue({ checkedAt: at(1), drift, driftSince: at(1) }));
+        expect(await uow.run((r) => r.billing.catalogue())).toEqual({ checkedAt: at(1), drift, driftSince: at(1) });
+        // Back in sync: the drift is gone (and a database shared with dev is left refusing nothing).
+        await uow.run((r) => r.billing.saveCatalogue({ checkedAt: at(2), drift: [], driftSince: null }));
+        expect(await uow.run((r) => r.billing.catalogue())).toEqual({ checkedAt: at(2), drift: [], driftSince: null });
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("an account's billing rows go with it; invite codes keep their history", async () => {
       const { uow, cleanup, createUser } = await factory();
       try {

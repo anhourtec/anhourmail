@@ -62,6 +62,7 @@ import {
   type AccountBilling,
   type BillingDispute,
   type BillingEvent,
+  type CatalogueStatus,
   defaultBilling,
   type InviteCode,
   type PlanHold,
@@ -167,6 +168,8 @@ export type MemoryState = {
   billingDisputes: BillingDispute[];
   planHolds: PlanHold[];
   inviteCodes: InviteCode[];
+  /** The last check of the provider's catalogue (Postgres: `billing_catalogue`, one row). */
+  billingCatalogue: CatalogueStatus | null;
   /** Mail imports, their folders and admins' batches (Postgres: `mail_import*`, ADR-0030 §12). */
   mailImports: MailImport[];
   mailImportFolders: (MailImportFolder & { createdAt: Date })[];
@@ -226,6 +229,7 @@ export const emptyState = (): MemoryState => ({
   billingDisputes: [],
   planHolds: [],
   inviteCodes: [],
+  billingCatalogue: null,
   mailImports: [],
   mailImportFolders: [],
   mailImportBatches: [],

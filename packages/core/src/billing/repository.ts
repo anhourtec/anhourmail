@@ -7,6 +7,7 @@ import type {
   BillingEvent,
   BillingEventStatus,
   BillingState,
+  CatalogueStatus,
   HoldSubject,
   InviteCode,
   PlanHold,
@@ -79,6 +80,11 @@ export type BillingRepository = {
   replaceHolds(accountId: string, holds: readonly PlanHoldInput[], at: Date): Promise<void>;
   /** Deletes every hold of the account (upgrade). Returns how many. */
   clearHolds(accountId: string): Promise<number>;
+
+  /** The last catalogue check (platform-wide, one row), or null before the first one. */
+  catalogue(): Promise<CatalogueStatus | null>;
+  /** Replaces the last catalogue check. */
+  saveCatalogue(status: CatalogueStatus): Promise<void>;
 };
 
 /**
