@@ -46,8 +46,18 @@ export class ValidationError extends DomainError {
 }
 
 export class ConflictError extends DomainError {
-  constructor(message: string) {
-    super(message, "conflict");
+  constructor(message: string, code = "conflict") {
+    super(message, code);
+  }
+}
+
+/**
+ * Postgres broke a deadlock and rolled this unit of work back (adapter `PgUnitOfWork`): HTTP 409 like any conflict ("try
+ * again"), with its own code so the failed audit entry and the route's log line show what happened.
+ */
+export class DeadlockError extends ConflictError {
+  constructor() {
+    super("Something else changed at the same moment. Try again.", "deadlock");
   }
 }
 
