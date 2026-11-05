@@ -799,6 +799,22 @@ differs from the text above:
   value (a 5 MB soft-break file parses in well under a second); the no-address duplicate check uses a set of
   full-name + phone-digit keys kept current as cards are created or merged, one lookup per phone instead of a scan.
 
+**Update (2026-11-05): spam-training samples outlive their account.** Destroying a mail server account on v0.16.27
+leaves its `x:SpamTrainingSample`s (each with the message's sender, subject and a copy, held `holdSamplesFor`, 180
+days by default): the dev server held 1,134 samples, 1,133 of them for 248 account ids that no longer exist. The
+mailbox purge (`purgeDueMailboxes`, the only path that destroys a mail server account: mailbox deletion, account
+deletion and leavers all end there) now queues `mailbox.training_purge` with the destroyed account's id and the
+destroy time, in the purge's own unit of work; the worker's training key removes every sample of that id made before
+then (spam and ham; `samplesMadeBefore`, two minutes' slack), so a later account given the same id keeps its own.
+Not audited on success, like `mail_import.training_cleanup`; a give-up is `platform.provisioning_failed`. The import
+clean-up's "by account id in a window" stays correct. Two findings on the way: account ids are **not** reused after a
+destroy (verified with throwaway accounts: each new one got the next id), and `x:SpamTrainingSample/query` with
+`position` paging **repeats pages** (1,132 samples read in pages of 500 gave 632 distinct ids), so samples are now
+listed with one query whose total is checked — that, not id reuse, was why the integration tests saw each sample
+twice. The fault affects every object (accounts and domains too), so the client's generic list uses the same checked
+query (`StalwartTransport.queryAll`). The samples from before this change are removed with `npm run ops:training-orphans`
+(08-operations.md "Orphaned spam-training samples").
+
 ## Questions for the maintainer (defaults this ADR builds)
 
 1. **OAuth sources are deferred**, so business mailboxes at the largest provider that refuses password IMAP can't be
