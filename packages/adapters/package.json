@@ -12,6 +12,7 @@
     "./contract": "./src/contract/index.ts",
     "./auth": "./src/auth/index.ts",
     "./breached-passwords": "./src/breached-passwords/index.ts",
+    "./disposable-email": "./src/disposable-email/index.ts",
     "./mail": "./src/mail/index.ts",
     "./mail/layout": "./src/mail/layout.ts",
     "./mail/data-lifecycle": "./src/mail/data-lifecycle.ts",
