@@ -111,3 +111,12 @@ the bootstrap or a Global Administrator) are the next piece.
 There will be no SMS/OTP provider (maintainer decision 2026-10-29). Sign-up is gated by a self-hosted proof-of-work and
 fail-closed sign-up limits per client address and per network (ADR-0031); email confirmation stays. The free address
 claim itself is unchanged: it is bounded by the number of accounts, which is what the new gate limits.
+
+## Update (2026-11-06): the email is confirmed at sign-up
+
+The maintainer moved email confirmation from "before the first free address" to sign-up itself: better-auth's
+`requireEmailVerification` is on, sign-up creates the login without signing in, and a sign-in with the right password
+but an unconfirmed address is refused (`EMAIL_NOT_VERIFIED`, audited as `auth.sign_in_failed` `email_not_verified`)
+with a fresh link sent. Logins we create (invites, Add a user, staff) are confirmed already. The `email_unverified`
+gate in §5 stays as defence in depth (sessions that existed before the change). Disposable addresses are refused at
+sign-up too (ADR-0033).
