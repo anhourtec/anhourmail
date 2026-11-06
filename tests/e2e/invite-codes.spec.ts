@@ -8,7 +8,7 @@
  */
 import type { Page } from "@playwright/test";
 
-import { e2eUsers, expect, homeHeading, openNav, signIn, signOut, test, urls } from "./fixtures";
+import { confirmSignUp, e2eUsers, expect, openNav, signIn, signOut, test, urls } from "./fixtures";
 
 /** Confirms the password step-up when the server asks for one (a confirmation counts for a few minutes). */
 async function confirmIfAsked(page: Page, password: string) {
@@ -59,7 +59,7 @@ test("a staff comp code redeemed at sign-up gives the new account Plus", async (
   await page.getByLabel("Email").fill(`${who}@e2e.test`);
   await page.getByLabel("Password", { exact: true }).fill(`${u.password}-code`);
   await page.getByRole("button", { name: "Create account" }).click();
-  await expect(homeHeading(page)).toBeVisible();
+  await confirmSignUp(page, `${who}@e2e.test`, `${u.password}-code`);
 
   await (await openNav(page)).getByRole("link", { name: "Billing" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Billing" })).toBeVisible();

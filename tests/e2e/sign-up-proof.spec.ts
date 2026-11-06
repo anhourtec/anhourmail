@@ -3,7 +3,7 @@
  * Sign-up proof-of-work (ADR-0031): the page solves a challenge in a Web Worker with no action from the person, the
  * sign-up carries the proof and succeeds, and the same proof sent again — or a forged one — is refused.
  */
-import { e2eUsers, expect, homeHeading, test, urls } from "./fixtures";
+import { e2eUsers, expect, test, urls } from "./fixtures";
 
 const CHECK = '[data-testid="sign-up-check"]';
 
@@ -30,7 +30,8 @@ test("sign-up solves the automatic check in the browser and creates the account;
   const proof = request.headers()["x-sign-up-proof"] ?? "";
   expect(challenge).toMatch(/^v1\.\d+\.\d+\./);
   expect(proof).toMatch(/^\d+$/);
-  await expect(homeHeading(page)).toBeVisible();
+  // Created: nobody is signed in until the address is confirmed (2026-11-06).
+  await expect(page.getByRole("heading", { name: "Check your email", level: 2 })).toBeVisible();
 
   // The same proof again (another address, so only the proof can be what refuses it): spent.
   const replay = (c: string, p: string, email: string) =>

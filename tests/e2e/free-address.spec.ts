@@ -9,10 +9,9 @@
 import type { Page } from "@playwright/test";
 
 import {
+  confirmSignUp,
   e2eUsers,
   expect,
-  homeHeading,
-  linkFromMail,
   openNav,
   panel,
   signIn,
@@ -30,7 +29,8 @@ async function signUp(page: Page, who: string, email: string, password: string) 
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Create account" }).click();
-  await expect(homeHeading(page)).toBeVisible({ timeout: SIGN_IN_TIMEOUT });
+  // The address is confirmed before the first sign-in (2026-11-06).
+  await confirmSignUp(page, email, password);
 }
 
 /** The platform domain the console offers (read from the card, so the test follows `PLATFORM_DOMAIN`). */
@@ -48,7 +48,6 @@ async function freeDomain(page: Page): Promise<string> {
 test("sign up, confirm the email, claim a free address and sign in to the webmail with it", async ({
   page,
   browser,
-  request,
   consoleErrors,
 }, testInfo) => {
   test.setTimeout(120_000); // waits on the provisioning worker
@@ -58,17 +57,9 @@ test("sign up, confirm the email, claim a free address and sign in to the webmai
   const name = `${u.run}-${testInfo.project.name}`.slice(0, 32);
   await signUp(page, who, email, `${u.password}-free`);
 
-  // Before confirming: the claim panel says so and won't create anything.
+  // Confirmed at sign-up, so the claim panel is open straight away.
   const domain = await freeDomain(page);
-  await page.getByRole("link", { name: "Choose your address" }).first().click();
   const claim = panel(page, `Get your free @${domain} address`);
-  await expect(claim.getByText("Confirm your email address first.")).toBeVisible();
-  await expect(claim.getByRole("button", { name: "Get this address" })).toBeDisabled();
-
-  // The link sent at sign-up confirms it.
-  const link = await linkFromMail(request, email, /https?:\/\/\S+\/api\/auth\/verify-email\?\S+/);
-  await page.goto(link);
-  await expect(page.getByRole("heading", { name: "Email address confirmed", level: 1 })).toBeVisible();
 
   // Claim from the home page: availability is checked as you type; a short name breaks the rule.
   await page.goto(urls.app);

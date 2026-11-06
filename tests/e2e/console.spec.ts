@@ -2,7 +2,7 @@
 import {
   e2eUsers,
   expect,
-  homeHeading,
+  confirmSignUp,
   linkFromMail,
   openNav,
   openSearch,
@@ -72,7 +72,7 @@ test("webmail origin serves the webmail", async ({ page }) => {
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
 });
 
-test("sign-up creates a personal Free account and lands on the console as its Owner", async ({
+test("sign-up creates a personal Free account; once the email is confirmed it signs in as its Owner", async ({
   page,
   consoleErrors,
 }, testInfo) => {
@@ -87,11 +87,52 @@ test("sign-up creates a personal Free account and lands on the console as its Ow
   await page.getByLabel("Password", { exact: true }).fill(`${u.password}-signup`);
   await expect(page.getByText("By creating an account, you agree to our")).toBeVisible();
   await page.getByRole("button", { name: "Create account" }).click();
-  await expect(homeHeading(page)).toBeVisible();
+  await confirmSignUp(page, `${who}-signup@e2e.test`, `${u.password}-signup`);
   await expect(page.getByRole("heading", { name: `${who} Signup` })).toBeVisible();
   const nav = await openNav(page);
   await expect(nav.locator(`[data-nav="audit.read"]`)).toBeVisible();
   expect(consoleErrors).toEqual([]);
+});
+
+// The refused sign-in answers 403, which the browser logs: this test doesn't watch the console.
+test("signing in before the email is confirmed is refused and sends a fresh link that then works", async ({
+  page,
+}, testInfo) => {
+  const u = e2eUsers();
+  const who = `${u.run}-${testInfo.project.name}-early`;
+  const email = `${who}@e2e.test`;
+  await page.goto(`${urls.app}/sign-up`);
+  await page.getByLabel("First name").fill(who);
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(`${u.password}-early`);
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.getByRole("heading", { name: "Check your email", level: 2 })).toBeVisible();
+  await page.getByRole("link", { name: "Go to sign in" }).click();
+  await expect(page).toHaveURL(/\/sign-in$/);
+  await page.getByLabel("Email", { exact: true }).fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(`${u.password}-early`);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.getByText(/^Confirm your email address first\. We've sent a new link/)).toBeVisible();
+  await expect(page).toHaveURL(/\/sign-in$/);
+  // A link (the first or the fresh one) confirms the address; then the password signs in.
+  const link = await linkFromMail(page.request, email, /https?:\/\/\S+\/api\/auth\/verify-email\?\S+/);
+  await page.goto(link);
+  await expect(page.getByRole("heading", { name: "Email address confirmed", level: 1 })).toBeVisible();
+  await page.getByRole("link", { name: "Sign in" }).click();
+  await signIn(page, email, `${u.password}-early`);
+});
+
+test("sign-up refuses a temporary, disposable inbox and says so", async ({ page }, testInfo) => {
+  const u = e2eUsers();
+  const who = `${u.run}-${testInfo.project.name}-burner`;
+  await page.goto(`${urls.app}/sign-up`);
+  await page.getByLabel("First name").fill(who);
+  await page.getByLabel("Email").fill(`${who}@mailinator.com`);
+  await page.getByLabel("Password", { exact: true }).fill(`${u.password}-burner`);
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.getByText("Use a permanent email address.", { exact: false })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Check your email" })).toHaveCount(0);
+  await expect(page).toHaveURL(/\/sign-up$/);
 });
 
 test("sign-up refuses a password seen in a data breach, says so, and stays on the form", async ({ page }, testInfo) => {
@@ -142,7 +183,7 @@ test("password reset: the emailed link sets a new password that then signs in", 
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password", { exact: true }).fill(`${u.password}-old`);
   await page.getByRole("button", { name: "Create account" }).click();
-  await expect(homeHeading(page)).toBeVisible();
+  await confirmSignUp(page, email, `${u.password}-old`);
   await signOut(page);
   await expect(page).toHaveURL(/\/sign-in$/);
 

@@ -134,6 +134,20 @@ export async function signIn(page: Page, email: string, password: string): Promi
   await expect(homeHeading(page)).toBeVisible({ timeout: SIGN_IN_TIMEOUT });
 }
 
+/**
+ * After "Create account" (2026-11-06: the address is confirmed before the first sign-in): the form says to check the
+ * inbox, the emailed link confirms the address, then the password signs in and lands on the console.
+ */
+export async function confirmSignUp(page: Page, email: string, password: string): Promise<void> {
+  await expect(page.getByRole("heading", { name: "Check your email", level: 2 })).toBeVisible({
+    timeout: SIGN_IN_TIMEOUT,
+  });
+  const link = await linkFromMail(page.request, email, /https?:\/\/\S+\/api\/auth\/verify-email\?\S+/);
+  await page.goto(link);
+  await expect(page.getByRole("heading", { name: "Email address confirmed", level: 1 })).toBeVisible();
+  await signIn(page, email, password);
+}
+
 /** The open flyout details panel (a modal dialog), by its name. */
 export const panel = (page: Page, name: string | RegExp) =>
   page.getByRole("dialog", typeof name === "string" ? { name, exact: true } : { name });
