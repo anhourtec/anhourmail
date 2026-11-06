@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 "use client";
 
-import { Check, Copy, Download, ShieldCheck, Smartphone } from "lucide-react";
+import { Check, Copy, Download, KeyRound, LockKeyhole, ScanLine, ShieldCheck, Smartphone } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { type SyntheticEvent, useId, useMemo, useState } from "react";
 
@@ -41,6 +41,47 @@ function message(code: string, fallback: string): string {
 function secretOf(uri: string): string {
   const secret = new URL(uri).searchParams.get("secret") ?? "";
   return secret.match(/.{1,4}/g)?.join(" ") ?? secret;
+}
+
+/**
+ * "Works with any authenticator app": three neutral app tiles (no product names or marks, CLAUDE.md rule 53) that read
+ * as "an app on your phone" at a glance.
+ */
+function AuthenticatorApps() {
+  const tile = "inline-flex size-9 items-center justify-center rounded-[10px] shadow-sm";
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <div className="flex items-center gap-2" aria-hidden>
+        <span className={`${tile} bg-primary text-primary-foreground`}>
+          <ShieldCheck className="size-5" />
+        </span>
+        <span className={`${tile} border bg-background text-primary`}>
+          <LockKeyhole className="size-5" />
+        </span>
+        <span className={`${tile} bg-foreground text-background`}>
+          <KeyRound className="size-5" />
+        </span>
+      </div>
+      <p className="am-micro max-w-48 text-center">
+        Works with any authenticator app that shows {TOTP.digits}-digit codes.
+      </p>
+    </div>
+  );
+}
+
+/** A numbered step of the set-up (a circle with the number, a title, and what to do). */
+function SetupStep({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
+  return (
+    <li className="flex gap-3">
+      <span className="am-num inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-primary/40 bg-primary/10 text-[13px] text-primary">
+        {n}
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-2 pt-0.5">
+        <span className="font-medium text-[15px]">{title}</span>
+        {children}
+      </div>
+    </li>
+  );
 }
 
 /** The set-up QR code, drawn here (no image service ever sees the secret). */
@@ -269,34 +310,51 @@ export function TwoFactorSettings({
           }}
           className="flex flex-col gap-4"
         >
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
-            <SetupQr uri={mode.uri} />
-            <div className="flex min-w-0 flex-col gap-3">
-              <p className="am-small">
-                1. Scan this code with your authenticator app. Can&apos;t scan? Add an account by hand with this key:
-              </p>
-              <CopyValue value={secretOf(mode.uri)} label="set-up key" />
-              <label htmlFor={`${id}-code`} className="am-small">
-                2. Enter the {TOTP.digits}-digit code the app shows:
-              </label>
-              <input
-                id={`${id}-code`}
-                name="code"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength={TOTP.digits}
-                placeholder="123456"
-                required
-                className={`${inputClass} max-w-48 font-mono tracking-wider`}
-              />
-              {alert}
-              <div className="flex flex-wrap gap-2">
-                <button type="submit" disabled={pending} className={primaryButtonClass}>
-                  {pending ? "Checking…" : "Turn on"}
-                </button>
-                {cancel}
+          <div className="grid gap-6 rounded-2xl border bg-card p-5 shadow-sm sm:grid-cols-[auto_minmax(0,1fr)] sm:p-6">
+            <div className="flex flex-col items-center gap-4">
+              <div className="rounded-xl border bg-muted/40 p-3">
+                <SetupQr uri={mode.uri} />
               </div>
+              <AuthenticatorApps />
             </div>
+            <ol className="flex min-w-0 flex-col gap-5">
+              <SetupStep n={1} title="Open your authenticator app">
+                <p className="am-small flex items-start gap-2">
+                  <Smartphone className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+                  On your phone or computer. If you don&apos;t have one yet, install any authenticator app from your app
+                  store.
+                </p>
+              </SetupStep>
+              <SetupStep n={2} title="Scan the code">
+                <p className="am-small flex items-start gap-2">
+                  <ScanLine className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+                  Add an account in the app and point your camera at the code. Can&apos;t scan? Enter this key by hand:
+                </p>
+                <CopyValue value={secretOf(mode.uri)} label="set-up key" />
+              </SetupStep>
+              <SetupStep n={3} title="Type the code">
+                <label htmlFor={`${id}-code`} className="am-small">
+                  Enter the {TOTP.digits}-digit code the app shows for AnhourMail:
+                </label>
+                <input
+                  id={`${id}-code`}
+                  name="code"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={TOTP.digits}
+                  placeholder="123456"
+                  required
+                  className={`${inputClass} am-num max-w-48 text-center text-[18px] tracking-[0.3em]`}
+                />
+                {alert}
+                <div className="flex flex-wrap gap-2">
+                  <button type="submit" disabled={pending} className={primaryButtonClass}>
+                    {pending ? "Checking…" : "Turn on"}
+                  </button>
+                  {cancel}
+                </div>
+              </SetupStep>
+            </ol>
           </div>
         </form>
       )}
