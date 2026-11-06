@@ -78,6 +78,8 @@ const STATUS: Record<string, number> = {
   mailbox_unavailable: 409,
   import_running: 409,
   import_finished: 409,
+  // A temporary-inbox address (ADR-0033) for sign-up, an invite or a forwarding target.
+  disposable_email: 422,
 };
 
 export type RouteOptions = {

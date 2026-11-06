@@ -4,12 +4,14 @@ import "server-only";
 import { createBillingProvider } from "@anhourmail/adapters/billing";
 import { createMailer, type Mailer } from "@anhourmail/adapters/mail";
 import { devResolver, systemResolver } from "@anhourmail/adapters/dns";
+import { disposableEmailCheck, dnsMailServerLookup } from "@anhourmail/adapters/disposable-email";
 import { db, devDomainClaims, PgUnitOfWork } from "@anhourmail/adapters/postgres";
 import { type Deps, systemClock } from "@anhourmail/core";
 import { type BillingProvider, DEV_ADDRESS_CEILING } from "@anhourmail/core/billing";
 import type { DnsResolver } from "@anhourmail/core/domains";
 import type { PasswordHasher } from "@anhourmail/core/mailboxes";
-import type { BreachedPasswords } from "@anhourmail/core/security";
+import type { BreachedPasswords, DisposableEmailCheck } from "@anhourmail/core/security";
+import { log } from "@anhourmail/server/log";
 import { type OneTimeStore, redisOneTime } from "@anhourmail/server/one-time";
 import { type Counter, redisCounter, redisUncount, type Uncount } from "@anhourmail/server/rate-limit";
 import { redis } from "@anhourmail/server/redis";
@@ -36,6 +38,11 @@ export type Container = {
   passwords: PasswordHasher;
   /** New console passwords (sign-up, reset, invite logins) are checked with the same breached-password check. */
   breaches: BreachedPasswords;
+  /**
+   * Temporary-inbox addresses (ADR-0033): checked at sign-up, for people invites and forwarding targets. Unset in
+   * tests that don't need it: nothing is refused.
+   */
+  disposable?: DisposableEmailCheck;
   /**
    * The billing provider (ADR-0029 §3): null when billing is off. Absent in tests that don't set one (= off).
    */
@@ -67,6 +74,18 @@ export function container(): Container {
         : devResolver(systemResolver(), (name) => devDomainClaims(db(), name), platform()),
     passwords: mailboxPasswords(env().MAILBOX_PASSWORD_GRANT_KEY, breaches),
     breaches,
+    disposable: disposableEmailCheck({
+      log,
+      lookup: dnsMailServerLookup(),
+      cache: {
+        get: (key) => redis().get(key),
+        set: async (key, value, ttlSec) => {
+          await redis().set(key, value, "EX", ttlSec);
+        },
+      },
+      extraDomains: env().DISPOSABLE_EXTRA_DOMAINS,
+      allowDomains: env().DISPOSABLE_ALLOW_DOMAINS,
+    }),
     // The env check refused a bad configuration at boot (env.ts); the fake keeps its state in Redis (dev and tests).
     billing: createBillingProvider({
       env: { ...process.env, NODE_ENV: env().NODE_ENV },

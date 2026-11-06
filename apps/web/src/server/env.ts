@@ -86,6 +86,10 @@ const schema = z.object({
   // 07-security.md "Breached-password check"): on | off | fake (dev/CI: a fixed list, no network). Unset = on, except
   // under NODE_ENV=test (off). Production refuses `fake`.
   BREACHED_PASSWORD_CHECK: z.enum(["on", "off", "fake"]).optional(),
+  // Disposable email (ADR-0033): extra domains to refuse, and domains to accept despite the list (a false positive
+  // until the next list update). Comma- or space-separated.
+  DISPOSABLE_EXTRA_DOMAINS: z.string().max(20_000).optional(),
+  DISPOSABLE_ALLOW_DOMAINS: z.string().max(20_000).optional(),
   // Mailboxes + aliases + masked aliases one account may hold (ADR-0029 §7): an abuse ceiling, never published (rule 33;
   // the production value lives in the private ops repo). Required in production; unset elsewhere = the dev default.
   ACCOUNT_ADDRESS_CEILING: z.preprocess(
