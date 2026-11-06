@@ -92,6 +92,10 @@ export const LIMITS = {
   staffSuspend: { limit: 30, windowSec: 3600, by: "caller", failMode: "closed" },
   // "Send the confirmation link again": each call emails the person's sign-in address.
   emailVerification: { limit: 5, windowSec: 3600, by: "caller", failMode: "closed" },
+  // Confirmation emails per address, however they're asked for (sign-up, a sign-in with the right password but an
+  // unconfirmed address, "send the link again"): someone who signed up with another person's address can't use
+  // repeated sign-ins to flood it. Keyed by a hash of the address; fail closed (nothing is sent).
+  emailVerificationAddress: { limit: 5, windowSec: 86_400, by: "caller", failMode: "closed" },
   // Each call emails an outside address (forwarding confirmation); a per-mailbox daily cap applies in the service.
   forwardingVerify: { limit: 10, windowSec: 3600, by: "caller", failMode: "closed" },
   // Mailbox delegation (ADR-0026 §9): a batch of grants and revokes on a mailbox's three lists, and "Convert to shared

@@ -35,6 +35,7 @@ import {
 } from "../mail/system-email";
 import { platform } from "../platform";
 
+import { confirmationEmailAllowed } from "./confirmation-cap";
 import { admittedSignUpCode, completeAdmittedCode } from "./sign-up-code";
 
 /**
@@ -288,10 +289,18 @@ export function auth(): Auth {
         });
       },
       emailVerification: {
+        // Confirmed before the first sign-in (maintainer decision 2026-11-06): sign-up never signs in by itself.
+        required: true,
         expiresInSec: EMAIL_VERIFICATION_HOURS * 3600,
         // At sign-up and from the console's "send the link again". The link is ours: the auth endpoint on this
         // origin, landing on a fixed page (never a URL from the request). Delivery failures are logged, not shown.
         send: async ({ email, token }) => {
+          // At most a few links per address a day, whoever asks (security review 2026-11-06).
+          const allowed = await confirmationEmailAllowed(container().counter, email);
+          if (allowed !== "allowed") {
+            log.warn("email confirmation not sent", { component: "auth", reason: allowed });
+            return;
+          }
           const url = `${e.APP_URL.replace(/\/$/, "")}/api/auth/verify-email?token=${encodeURIComponent(token)}&callbackURL=${encodeURIComponent(EMAIL_VERIFIED_PATH)}`;
           await container()
             .mailer.send(

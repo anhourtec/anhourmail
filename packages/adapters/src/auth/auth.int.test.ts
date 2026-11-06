@@ -1432,3 +1432,79 @@ describe("sign-in fails closed when the second-step check breaks (security-audit
     }
   });
 });
+
+describe("the email address is confirmed before the first sign-in (2026-11-06)", () => {
+  const sent: { email: string; token: string }[] = [];
+  const confirmAuth = createAuth({
+    db,
+    secret: randomBytes(32).toString("base64url"),
+    baseURL: ORIGIN,
+    trustedOrigins: [ORIGIN],
+    secureCookies: false,
+    signUp: "open",
+    sendPasswordReset: async () => undefined,
+    sealer: createKeyRing([{ id: "int", key: randomBytes(32) }]),
+    relyingParty: { id: "localhost", name: "AnhourMail", origin: ORIGIN },
+    trustProxy: false,
+    security: {
+      onEvent: async () => undefined,
+      removalRefusal: async () => null,
+      factors: async () => ({ totp: false, passkeys: 0 }),
+      factorAdded: async () => undefined,
+      codes: { claim: async () => true },
+      strikes: memoryStrikes(),
+      passwordChanged: async () => undefined,
+      sessionRefusal: async () => null,
+    },
+    breachedPasswords: memoryBreachedPasswords(),
+    emailVerification: {
+      required: true,
+      expiresInSec: 3600,
+      send: async ({ email, token }) => {
+        sent.push({ email, token });
+      },
+      onVerified: async () => undefined,
+    },
+  });
+
+  it("signs nobody in at sign-up, refuses sign-in until the link is followed, and sends a fresh link only for the right password", async () => {
+    const email = `confirm-${randomUUID().slice(0, 8)}@int.test`;
+    const password = "a long passphrase for confirming";
+    const c = client(confirmAuth);
+    try {
+      const up = await c("POST", "/sign-up/email", { email, password, name: "Confirm", firstName: "Confirm" });
+      expect(up.status).toBe(200);
+      expect(up.json?.token ?? null).toBeNull();
+      expect((await c("GET", "/get-session")).json).toBeNull();
+      expect(sent.filter((s) => s.email === email)).toHaveLength(1);
+
+      // Wrong password: the usual answer, and no link.
+      expect((await c("POST", "/sign-in/email", { email, password: "not the password" })).status).toBe(401);
+      expect(sent.filter((s) => s.email === email)).toHaveLength(1);
+      // Right password, unconfirmed: refused, and a fresh link is on its way.
+      const early = await c("POST", "/sign-in/email", { email, password });
+      expect(early.status).toBe(403);
+      expect(early.json?.code).toBe("EMAIL_NOT_VERIFIED");
+      expect((await c("GET", "/get-session")).json).toBeNull();
+      const links = sent.filter((s) => s.email === email);
+      expect(links).toHaveLength(2);
+
+      // Signing up again with the same address answers the same and creates nothing.
+      const again = await c("POST", "/sign-up/email", { email, password, name: "Again", firstName: "Again" });
+      expect(again.status).toBe(200);
+      expect(await db.select().from(schema.authUser).where(eq(schema.authUser.email, email))).toHaveLength(1);
+
+      // Following the newest link confirms the address (and signs nobody in); then the password signs in.
+      const token = links.at(-1)?.token ?? "";
+      const verify = await confirmAuth.handler(new Request(`${ORIGIN}/api/auth/verify-email?token=${token}`));
+      expect(verify.status).toBeLessThan(400);
+      const [row] = await db.select().from(schema.authUser).where(eq(schema.authUser.email, email));
+      expect(row?.emailVerified).toBe(true);
+      const signedIn = await c("POST", "/sign-in/email", { email, password });
+      expect(signedIn.status).toBe(200);
+      expect((await c("GET", "/get-session")).json).not.toBeNull();
+    } finally {
+      await db.delete(schema.authUser).where(eq(schema.authUser.email, email));
+    }
+  });
+});

@@ -69,11 +69,19 @@ export type AuthOptions = {
   /** After a successful reset (audit, notifications). */
   onPasswordReset?: (user: { id: string; email: string }) => Promise<void>;
   /**
-   * Confirming the sign-in address (a free platform address needs it; ADR-0021): sends the link with this token, at
-   * sign-up and when the person asks again from the console (`sendEmailVerification`). The caller builds the link
+   * Confirming the sign-in address (ADR-0021; required before the first sign-in since 2026-11-06): sends the link with
+   * this token at sign-up, on a sign-in refused for an unconfirmed address, and when the person asks again from the
+   * console (`sendEmailVerification`). The caller builds the link
    * (fixed landing page, never one from the request). Unset = no confirmation emails.
    */
   emailVerification?: {
+    /**
+     * The address must be confirmed before the first sign-in (2026-11-06): sign-up creates the login and sends the link
+     * without signing anyone in, and signing in with the right password but an unconfirmed address is refused
+     * (403 `EMAIL_NOT_VERIFIED`) with a fresh link sent. Logins we create ourselves (invites, Add a user, staff) are
+     * confirmed already. Unset or false = the old behaviour (signed in at once, confirmed later).
+     */
+    required?: boolean;
     /** Seconds a link works. */
     expiresInSec: number;
     send: (input: { email: string; name: string; token: string }) => Promise<void>;
@@ -128,9 +136,13 @@ export function createAuth(opts: AuthOptions) {
         })(options),
         opts.sealer,
       ),
+    // The library's own logger writes outside ours (no redaction): warnings and errors only, so its info lines — one
+    // names the address of a sign-up for an existing account — never reach the logs (rules 12, 24).
+    logger: { level: "warn" },
     emailAndPassword: {
       enabled: true,
       disableSignUp: opts.signUp === "closed" && opts.admitSignUp === undefined,
+      requireEmailVerification: opts.emailVerification?.required === true,
       minPasswordLength: CONSOLE_PASSWORD.min,
       maxPasswordLength: CONSOLE_PASSWORD.max,
       // Salted argon2id (OWASP baseline) instead of the library default (docs/internal/07-security.md).
@@ -158,7 +170,9 @@ export function createAuth(opts: AuthOptions) {
       ? {
           emailVerification: {
             sendOnSignUp: true,
-            sendOnSignIn: false,
+            // Required confirmation: a sign-in with the right password but an unconfirmed address gets a fresh link.
+            // Whoever registered the address knows the password, so the app caps links per address (`send`).
+            sendOnSignIn: opts.emailVerification.required === true,
             // Confirming an address never signs anyone in: the link only flips `emailVerified`.
             autoSignInAfterVerification: false,
             expiresIn: opts.emailVerification.expiresInSec,
