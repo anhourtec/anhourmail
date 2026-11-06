@@ -115,6 +115,13 @@ export const EXTRA_COMPONENTS = [
     note: "SIL Open Font License 1.1. Self-hosted, no third-party font requests.",
   },
   {
+    name: "disposable-email-domains (data)",
+    version: "vendored snapshot (commit in packages/adapters/src/disposable-email/data.generated.ts)",
+    license: "CC0-1.0",
+    url: "https://github.com/disposable-email-domains/disposable-email-domains",
+    note: "Public domain dedication. The list of temporary-inbox domains refused at sign-up, invites and forwarding (ADR-0033).",
+  },
+  {
     name: "Stalwart mail server (container image)",
     version: "v0.16.27",
     license: "AGPL-3.0-only",

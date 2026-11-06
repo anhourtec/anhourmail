@@ -19,6 +19,12 @@ export const CREDITS: readonly Credit[] = [
     url: "https://vercel.com/font",
   },
   {
+    name: "disposable-email-domains (data)",
+    version: "vendored snapshot (commit in packages/adapters/src/disposable-email/data.generated.ts)",
+    license: "CC0-1.0",
+    url: "https://github.com/disposable-email-domains/disposable-email-domains",
+  },
+  {
     name: "Stalwart mail server (container image)",
     version: "v0.16.27",
     license: "AGPL-3.0-only",

@@ -15,6 +15,7 @@
   ],
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "disposable:update": "tsx scripts/disposable-email-update.ts",
     "dev:site": "npm run dev --workspace @anhourmail/site",
     "dev:docs": "npm run dev --workspace @anhourmail/docs",
     "dev:worker": "npm run dev --workspace @anhourmail/worker",
