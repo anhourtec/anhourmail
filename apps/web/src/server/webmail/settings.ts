@@ -36,6 +36,7 @@ import {
 import { cleanSignature, identitySignature, textAsHtml } from "./signature-html";
 import { cleanTemplate } from "./template-html";
 import { isJmapId } from "./view";
+import type { DisposableEmailCheck } from "@anhourmail/core/security";
 
 /**
  * Webmail settings (docs/internal/05-webmail.md "Settings"): the one place that joins the control plane
@@ -211,6 +212,8 @@ export class WebmailSettings {
       webmailUrl: string;
       /** The deployment's public site host, for the footer of the confirmation email. */
       siteHost: string;
+      /** Temporary-inbox forwarding targets are refused (ADR-0033); absent: no check. */
+      disposable?: DisposableEmailCheck;
     },
   ) {}
 
@@ -721,7 +724,12 @@ export class WebmailSettings {
     const identities = await this.d.mail.identities(sessionId);
     const out = await this.d.settings.requestForwarding(
       address,
-      { target, ownAddresses: identities.map((i) => i.email), tier: sendingTier(address) },
+      {
+        target,
+        ownAddresses: identities.map((i) => i.email),
+        tier: sendingTier(address),
+        ...(this.d.disposable ? { disposable: this.d.disposable } : {}),
+      },
       req,
     );
     // The old target is no longer confirmed: rewrite the script whenever it has a redirect (Forwarding, or a rule that

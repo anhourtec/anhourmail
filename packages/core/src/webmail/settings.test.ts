@@ -5,6 +5,7 @@ import { DEFAULT_PREFERENCES } from "@anhourmail/shared/webmail";
 
 import { ACCOUNT_A, ACCOUNT_B, deps, fixedClock, req } from "../__tests__/helpers";
 import type { Mailbox } from "../mailboxes/entity";
+import type { DisposableEmailCheck } from "../security/disposable-email";
 import { FORWARDING_EMAILS_PER_DAY, forwardingAddress, WebmailSettingsService } from "./settings-service";
 
 const MB_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -106,6 +107,23 @@ describe("forwarding confirmation", () => {
     await svc.removeForwarding("sam@a.test", req);
     expect(await svc.forwarding("sam@a.test")).toBeNull();
     expect(d.uow.state.audit.at(-1)).toMatchObject({ action: "forwarding.changed", meta: { enabled: false } });
+  });
+
+  it("refuses a temporary-inbox target (422) and writes nothing", async () => {
+    const { d, svc } = setup();
+    const disposable: DisposableEmailCheck = {
+      check: (address) =>
+        Promise.resolve(
+          address.toLowerCase().endsWith("@burner.test") ? { disposable: true, via: "listed" } : { disposable: false },
+        ),
+    };
+    const own = { ownAddresses: ["hi@a.test"], tier: "new" as const, disposable };
+    await expect(svc.requestForwarding("sam@a.test", { ...own, target: "Me@Burner.test" }, req)).rejects.toMatchObject({
+      code: "disposable_email",
+    });
+    expect(d.uow.state.forwardingTargets).toEqual([]);
+    const ok = await svc.requestForwarding("sam@a.test", { ...own, target: "me@example.org" }, req);
+    expect(ok.target).toBe("me@example.org");
   });
 
   it("refuses loops, paused senders, junk tokens, expired links and too many emails", async () => {

@@ -298,6 +298,7 @@ export function webmailSettings(): WebmailSettings {
     accountSafe: async (address) => (await accountSafeSendersForMailbox(container().deps, address))?.entries ?? [],
     webmailUrl: env().WEBMAIL_URL,
     siteHost: platform().hosts.site,
+    ...(container().disposable ? { disposable: container().disposable } : {}),
   });
   return settingsInstance;
 }

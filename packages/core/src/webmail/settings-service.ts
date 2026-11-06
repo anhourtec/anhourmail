@@ -10,6 +10,7 @@ import { mutation } from "../mutation";
 import type { Deps, RequestMeta } from "../ports";
 import { hashToken, isTokenShaped, newToken } from "../tokens";
 import type { ForwardingStatus, ForwardingTarget, WebmailMailbox } from "./settings-repository";
+import { assertNotDisposable, type DisposableEmailCheck } from "../security/disposable-email";
 
 /**
  * Webmail settings that live in the control plane (docs/internal/05-webmail.md "Settings"): a mailbox's display
@@ -108,12 +109,18 @@ export class WebmailSettingsService {
 
   /**
    * Starts (or restarts) confirmation of a forwarding target and returns the one-time token for the email. Refuses
-   * the mailbox's own addresses (a loop), a paused sender (restricted tier) and more than
+   * the mailbox's own addresses (a loop), a paused sender (restricted tier), a temporary-inbox address and more than
    * `FORWARDING_EMAILS_PER_DAY` confirmation emails a day. Replaces any earlier target, which stops working at once.
    */
   async requestForwarding(
     address: string,
-    input: { target: unknown; ownAddresses: readonly string[]; tier: TrustTier },
+    input: {
+      target: unknown;
+      ownAddresses: readonly string[];
+      tier: TrustTier;
+      /** Temporary-inbox targets are refused (ADR-0033); unset = no check. */
+      disposable?: DisposableEmailCheck;
+    },
     req: RequestMeta,
   ): Promise<{ token: string; target: string; expiresAt: Date }> {
     const target = forwardingAddress(input.target);
@@ -124,6 +131,7 @@ export class WebmailSettingsService {
     if (input.tier === "restricted") {
       throw new ValidationError("Forwarding is paused while sending from this mailbox is paused.");
     }
+    await assertNotDisposable(input.disposable, target);
     const now = this.deps.clock.now();
     const token = newToken();
     const expiresAt = new Date(now.getTime() + FORWARDING_LINK_HOURS * 3_600_000);
