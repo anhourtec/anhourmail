@@ -1,6 +1,6 @@
 # 07 — Security
 
-Last updated: 2026-11-05 ("Sign-up proof-of-work", "Mail rules", "Invite codes", "Mail import" sections; the run-62 billing fixes, the deletion hook, drift and webmail refusals; reset token before the breach lookup, capped range answer, suspension app passwords, self-delete lock order; T7 without phone verification); 2026-11-04 ("Billing webhook, sync and access states", ADR-0029 slices 5–7; "Webmail push": the push stream and upstream sockets); 2026-10-31 ("Image proxy": Safe senders and own Sent mail load without asking, checked on the server for a verified From, ADR-0027; "Webmail first view on the device and server timing"; "Sign-in factors": password first, passkeys only the second step, step-up by password, ADR-0028; "App passwords": no file storage on customer mailboxes; "Forwarding guard"; "Authentication results in the webmail": the internal-mail marker; "Delegation": sending as and on behalf of a delegated mailbox, the tag never stored and its five-minute expiry, slice 13; opening delegated mailboxes in the webmail and the gate; delegation grants and Convert to shared mailbox, ADR-0026; leavers lose mailbox sign-in; data export and account deletion; staff support access; profile photos).
+Last updated: 2026-11-06 ("Email confirmed before the first sign-in"; "Disposable email addresses", ADR-0033); 2026-11-05 ("Sign-up proof-of-work", "Mail rules", "Invite codes", "Mail import" sections; the run-62 billing fixes, the deletion hook, drift and webmail refusals; reset token before the breach lookup, capped range answer, suspension app passwords, self-delete lock order; T7 without phone verification); 2026-11-04 ("Billing webhook, sync and access states", ADR-0029 slices 5–7; "Webmail push": the push stream and upstream sockets); 2026-10-31 ("Image proxy": Safe senders and own Sent mail load without asking, checked on the server for a verified From, ADR-0027; "Webmail first view on the device and server timing"; "Sign-in factors": password first, passkeys only the second step, step-up by password, ADR-0028; "App passwords": no file storage on customer mailboxes; "Forwarding guard"; "Authentication results in the webmail": the internal-mail marker; "Delegation": sending as and on behalf of a delegated mailbox, the tag never stored and its five-minute expiry, slice 13; opening delegated mailboxes in the webmail and the gate; delegation grants and Convert to shared mailbox, ADR-0026; leavers lose mailbox sign-in; data export and account deletion; staff support access; profile photos).
 
 ## Threat model
 
@@ -61,6 +61,26 @@ algorithm — argon2id**.
 
 Never: plaintext, reversible encryption, unsalted or fast hashes (MD5/SHA-x) for passwords; never log or audit
 password material (redaction list).
+
+## Email confirmed before the first sign-in
+
+Since 2026-11-06 (ADR-0021 update): `requireEmailVerification` is on. Sign-up creates the login and emails the link
+without signing in; a sign-in with the right password but an unconfirmed address is refused (403 `EMAIL_NOT_VERIFIED`)
+and a fresh link is sent — only after the password is checked. Whoever signed up with an address knows that password,
+so confirmation emails are capped per address (`emailVerificationAddress`, 5 a day, fail closed). Sign-up answers an
+address already in use with the same status and shape as a new one; timing and name-rule differences may still tell
+them apart (each probe costs a proof-of-work and the attempts tier), so it limits enumeration rather than ruling it
+out. The sign-up limits and invite codes count only a real new login (`signUpCreatedLogin`). The link only flips
+`emailVerified`; it never signs anyone in. Logins created by invites, Add a user and staff are confirmed at creation.
+The per-feature `email_unverified` gates stay for sessions from before the change.
+
+## Disposable email addresses
+
+ADR-0033 and `03-anti-spam-and-abuse.md`. Server-side only (the browser asks no third party). The adapter
+(`packages/adapters/src/disposable-email/`) checks the domain list locally, then resolves the domain's MX hosts and
+their IPv4 addresses through the system resolvers with a 1.5 s budget; it never sends the address anywhere, and logs
+the domain only (never the local part). Fails open on DNS errors, like the breached-password check. Shared providers
+(`shared-hosts.ts`) never count on the mail-server step, so a Gmail or Workspace address is judged by the list alone.
 
 ## Breached-password check
 

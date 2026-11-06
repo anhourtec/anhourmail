@@ -1,6 +1,6 @@
 # 03 — Anti-spam and abuse
 
-Last updated: 2026-11-05 (sign-up proof-of-work and sign-up limits built, ADR-0031; suspension note readers, open sessions after a suspension and their mitigations); 2026-11-04 (the webmail reads `deliveryStatus` after a send). 2026-10-30. Research: `research/deliverability.md` §6–8, `research/market-and-legal.md` §4.
+Last updated: 2026-11-06 (disposable email addresses refused, ADR-0033); 2026-11-05 (sign-up proof-of-work and sign-up limits built, ADR-0031; suspension note readers, open sessions after a suspension and their mitigations); 2026-11-04 (the webmail reads `deliveryStatus` after a send). 2026-10-30. Research: `research/deliverability.md` §6–8, `research/market-and-legal.md` §4.
 
 Outbound abuse is the priority. One spammer on a shared IP hurts every user's inbox placement, and under CASL a host that knowingly helps spammers can be liable.
 
@@ -57,6 +57,18 @@ Abuse logic can be open. Thresholds come from config (`ABUSE_*` env, supplied in
 - **Admin lock** (built 2026-10-29): an alias an account administrator turns off can't be turned back on, or deleted
   and re-added, by its own person (403 `alias_admin_locked`); an administrator lifts it (`roles.md` guard rail 18).
   It gives an account's admins a way to stop one person's abused address without taking the mailbox away.
+
+## Disposable email addresses (ADR-0033, built 2026-11-06)
+
+Temporary-inbox addresses are refused at console sign-up, for people invites and as a webmail forwarding target
+(`422 disposable_email`, one message everywhere). Two checks: the domain or a parent domain is on the vendored CC0
+list (`disposable-email-domains`, ~10,000 domains) or the deployment's `DISPOSABLE_EXTRA_DOMAINS`; or the domain's
+mail servers resolve to an address on the vendored list of disposable mail servers (addresses that receive for at
+least five listed domains, shared providers excluded — this catches a service's new domains before any list does).
+`DISPOSABLE_ALLOW_DOMAINS` overrides a false positive. The DNS step fails open (1.5 s budget, cached a day in Redis);
+email confirmation still follows. Sign-up refusals are audited like the others (`auth.sign_up_refused`, reason
+`listed` or `mail_server`). The data is rebuilt with `npm run disposable:update` (monthly; review the diff).
+Existing accounts' addresses are not checked yet.
 
 ## Outbound
 
