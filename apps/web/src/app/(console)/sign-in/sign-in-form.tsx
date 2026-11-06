@@ -6,7 +6,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type SyntheticEvent, useState } from "react";
 
-import { isSecondStepMethod, type SecondStepMethod, TOTP, TRUSTED_DEVICE_DAYS } from "@anhourmail/shared/security";
+import {
+  EMAIL_VERIFICATION_HOURS,
+  isSecondStepMethod,
+  type SecondStepMethod,
+  TOTP,
+  TRUSTED_DEVICE_DAYS,
+} from "@anhourmail/shared/security";
 
 import { PasswordInput } from "@/components/password-input";
 import { assertPasskey, authCall, passkeyError, passkeysSupported } from "@/components/security/webauthn";
@@ -108,9 +114,12 @@ export function SignInForm({ next = "/" }: { next?: string }) {
     setError(
       res.status === 429
         ? "Too many attempts. Wait a minute and try again."
-        : res.code === "network" || res.code === "SIGN_IN_METHOD_REQUIRED"
-          ? res.message
-          : "Email or password is wrong.",
+        : res.code === "EMAIL_NOT_VERIFIED"
+          ? // Right password, address not confirmed yet: the identity layer has just sent a fresh link.
+            `Confirm your email address first. We've sent a new link to that address; open it, then sign in. It works for ${String(EMAIL_VERIFICATION_HOURS)} hours.`
+          : res.code === "network" || res.code === "SIGN_IN_METHOD_REQUIRED"
+            ? res.message
+            : "Email or password is wrong.",
     );
   }
 

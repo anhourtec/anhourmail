@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 "use client";
 
-import { useRouter } from "next/navigation";
+import { MailCheck } from "lucide-react";
+import Link from "next/link";
 import { type SyntheticEvent, useState } from "react";
 
 import { POW_HEADERS, SIGN_UP_CODE_HEADER, SIGN_UP_REFUSAL } from "@anhourmail/shared/proof-of-work";
-import { BREACHED_PASSWORD } from "@anhourmail/shared/security";
+import { BREACHED_PASSWORD, DISPOSABLE_EMAIL, EMAIL_VERIFICATION_HOURS } from "@anhourmail/shared/security";
 
 import { useHydrated } from "@/components/use-hydrated";
 
 import { PasswordInput } from "@/components/password-input";
+import { primaryButtonClass } from "@/components/ui-classes";
 
 import { ProofStatus } from "./proof-status";
 import { useSignUpProof } from "./use-sign-up-proof";
@@ -34,7 +36,6 @@ export function SignUpForm({
   /** Sign-up is closed: only an invite code lets someone in. */
   codeRequired?: boolean;
 } = {}) {
-  const router = useRouter();
   const [code, setCode] = useState(inviteCode ?? "");
   const [showCode, setShowCode] = useState(codeRequired || inviteCode !== null);
   const [firstName, setFirstName] = useState("");
@@ -43,6 +44,8 @@ export function SignUpForm({
   const [displayEdited, setDisplayEdited] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  /** The address the confirmation link went to, once the account exists (nobody is signed in until it's confirmed). */
+  const [sentTo, setSentTo] = useState<string | null>(null);
   const hydrated = useHydrated();
   const pow = useSignUpProof(hydrated, code.trim() === "" ? null : code.trim());
 
@@ -91,8 +94,8 @@ export function SignUpForm({
           }),
         });
         if (res.ok) {
-          router.replace("/");
-          router.refresh();
+          // Sign-up never signs in (2026-11-06): the address is confirmed first, from the link we just sent.
+          setSentTo(email);
           return;
         }
         // The identity layer answers `{ code, message }`; the sign-up gate and the route `{ error: { code, message } }`.
@@ -112,6 +115,8 @@ export function SignUpForm({
           setError("That invite code isn't valid. Check it, or ask whoever sent it.");
         } else if (gate === SIGN_UP_REFUSAL.attempts) {
           setError("Too many sign-up attempts from your network. Try again later.");
+        } else if (gate === SIGN_UP_REFUSAL.disposableEmail) {
+          setError(DISPOSABLE_EMAIL.message);
         } else if (gate === SIGN_UP_REFUSAL.limited) {
           setError("Too many accounts were created from your network recently. Try again later.");
         } else if (res.status === 429) setError("Too many attempts. Wait a minute and try again.");
@@ -136,6 +141,28 @@ export function SignUpForm({
   function onSubmit(e: SyntheticEvent<HTMLFormElement>) {
     e.preventDefault();
     void submit(new FormData(e.currentTarget));
+  }
+
+  if (sentTo !== null) {
+    return (
+      <section aria-labelledby="sign-up-sent" className="flex flex-col gap-3 rounded-xl border bg-muted/30 p-5">
+        <MailCheck className="size-6 text-primary" aria-hidden />
+        <h2 id="sign-up-sent" className="am-h3">
+          Check your email
+        </h2>
+        <p className="am-small text-foreground" role="status">
+          We sent a confirmation link to <span className="font-mono break-all">{sentTo}</span>. Open it to confirm your
+          address, then sign in. The link works for {EMAIL_VERIFICATION_HOURS} hours.
+        </p>
+        <p className="am-small">
+          Nothing there? Check your spam folder. Signing in with your new password sends a fresh link. If you already
+          have an account with this address, just sign in.
+        </p>
+        <Link href="/sign-in" className={`${primaryButtonClass} w-fit`}>
+          Go to sign in
+        </Link>
+      </section>
+    );
   }
 
   return (
