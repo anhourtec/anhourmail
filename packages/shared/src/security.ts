@@ -116,6 +116,17 @@ export const BREACHED_PASSWORD = {
   timeoutMs: 2000,
 } as const;
 
+/**
+ * Disposable email addresses (ADR-0033): temporary-inbox services' addresses are refused at sign-up, for people
+ * invites and as a forwarding target, with this message and error code (HTTP 422). The mail-server lookup behind the
+ * check gives up after `timeoutMs` and lets the address through (the domain list still applies).
+ */
+export const DISPOSABLE_EMAIL = {
+  code: "disposable_email",
+  message: "Use a permanent email address. Temporary and disposable inboxes can't be used here.",
+  timeoutMs: 1500,
+} as const;
+
 // --- mailbox passwords (webmail and mail apps; docs/internal/07-security.md "Mailbox passwords") ------------------
 
 /**
