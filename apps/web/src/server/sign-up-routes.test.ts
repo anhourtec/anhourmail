@@ -32,6 +32,8 @@ import { POST as challengeRoute } from "@/app/api/sign-up/challenge/route";
 import { admittedSignUpCode } from "./auth/sign-up-code";
 import { setContainerForTests } from "./container";
 import { env, resetEnvForTests } from "./env";
+import { fakeDisposableEmailCheck } from "@anhourmail/adapters/disposable-email";
+import { DISPOSABLE_EMAIL } from "@anhourmail/shared/security";
 
 const reached = vi.fn();
 /** What the stubbed identity layer answers sign-ups with (200: account created; 422: e.g. the address is in use). */
@@ -68,6 +70,7 @@ function useContainer() {
     dns: { lookup: async () => [] },
     passwords: { hash: async () => "x", breaches },
     breaches,
+    disposable: fakeDisposableEmailCheck(["burner.test"]),
   });
 }
 
@@ -283,6 +286,37 @@ describe("POST /api/auth/sign-up/email behind the gate", () => {
     expect((await signUp("203.0.113.3", await solved("203.0.113.3"))).status).toBe(429);
     expect((await signUp("198.51.100.3", await solved("198.51.100.3"))).status).toBe(200);
     expect(refusals()).toEqual([["sign_up_limited", "network_hour", "203.0.113.3"]]);
+  });
+
+  it("refuses a temporary-inbox address (422) before the account tiers, audited once per network", async () => {
+    vi.stubEnv("SIGNUP_LIMIT_ADDRESS_HOUR", "1");
+    resetEnvForTests();
+    const burner = JSON.stringify({ ...FORM, email: "someone@mail.burner.test" });
+    for (let i = 0; i < 3; i++) {
+      const res = await signUp(IP, await solved(), burner);
+      expect(res.status).toBe(422);
+      expect(((await res.json()) as { error: { code: string; message: string } }).error).toEqual({
+        code: "disposable_email",
+        message: DISPOSABLE_EMAIL.message,
+      });
+    }
+    expect(reached).not.toHaveBeenCalled();
+    expect(refusals()).toEqual([["disposable_email", "listed", IP]]);
+    // The refusals took no account slot: a permanent address still gets through.
+    expect((await signUp(IP, await solved())).status).toBe(200);
+  });
+
+  it("an address already in use answers 200 like a new one, but gives its account slots back", async () => {
+    vi.stubEnv("SIGNUP_LIMIT_ADDRESS_HOUR", "1");
+    resetEnvForTests();
+    // The identity layer's generic answer for an existing address: a made-up id that isn't a login.
+    answer = async () => Response.json({ token: null, user: { id: "made-up-id", email: FORM.email } });
+    for (let i = 0; i < 3; i++) expect((await signUp(IP, await solved())).status).toBe(200);
+    // A real new login (the id exists) takes the slot.
+    answer = async () => Response.json({ token: null, user: { id: "real", email: FORM.email } });
+    uow.state.userEmails.real = FORM.email;
+    expect((await signUp(IP, await solved())).status).toBe(200);
+    expect((await signUp(IP, await solved())).status).toBe(429);
   });
 
   it("doesn't count requests without a valid proof against the limits", async () => {

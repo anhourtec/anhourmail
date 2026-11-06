@@ -16,10 +16,12 @@ import {
   type SignUpRefusal,
   verifyProof,
 } from "@anhourmail/core/sign-up";
+import { disposableVerdict } from "@anhourmail/core/security";
 import { log } from "@anhourmail/server/log";
 import type { OneTimeStore } from "@anhourmail/server/one-time";
 import { checkRateLimit, LIMITS, type LimitName, type RateLimitResult } from "@anhourmail/server/rate-limit";
 import { POW_BITS, POW_HEADERS, SIGN_UP_REFUSAL } from "@anhourmail/shared/proof-of-work";
+import { DISPOSABLE_EMAIL } from "@anhourmail/shared/security";
 
 import { container } from "../container";
 import { type Env, env } from "../env";
@@ -30,7 +32,8 @@ import { type Env, env } from "../env";
  * 1. a proof-of-work solved in the browser, checked and spent once;
  * 2. the request's shape (strings of sane length; the identity layer validates the values);
  * 3. the attempts tier (per address, an IPv6 client per /64), counted for every attempt that got this far;
- * 4. the account tiers (per address and per network), taken now and given back by `settle` unless the identity layer
+ * 4. a temporary-inbox address is refused (ADR-0033; the domain list, then the domain's mail servers, failing open);
+ * 5. the account tiers (per address and per network), taken now and given back by `settle` unless the identity layer
  *    created the account — so failed sign-ups (an address already in use, a refused password or name) never use up a
  *    shared network's allowance. Taking before and giving back after means concurrent sign-ups can't overshoot.
  *
@@ -110,25 +113,28 @@ async function audit(r: SignUpRefusal, meta: RequestMeta, once: OneTimeStore): P
 const str = (v: unknown, min: number, max: number): boolean =>
   typeof v === "string" && v.length >= min && v.length <= max;
 
-/** The sign-up request's shape: a JSON object with an email address, a password and a name (strings, sane lengths). */
-async function wellFormed(req: Request): Promise<boolean> {
+/**
+ * The sign-up request's shape: a JSON object with an email address, a password and a name (strings, sane lengths).
+ * Returns the email address when the shape is right (for the disposable-address check), null otherwise.
+ */
+async function wellFormed(req: Request): Promise<string | null> {
   const text = await req.clone().text();
-  if (text.length > MAX_BODY) return false;
+  if (text.length > MAX_BODY) return null;
   let body: unknown;
   try {
     body = JSON.parse(text);
   } catch {
-    return false;
+    return null;
   }
-  if (typeof body !== "object" || body === null || Array.isArray(body)) return false;
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
   const b = body as Record<string, unknown>;
-  return (
-    str(b.email, 3, 320) &&
+  return str(b.email, 3, 320) &&
     typeof b.email === "string" &&
     /^[^\s@]+@[^\s@]+$/.test(b.email) &&
     str(b.password, 1, 1024) &&
     str(b.name, 1, 300)
-  );
+    ? b.email
+    : null;
 }
 
 /** Gives the taken account tiers back. A failed give-back leaves them counted (the safe side) and is logged. */
@@ -181,7 +187,8 @@ export async function signUpGate(req: Request, meta: RequestMeta, now = new Date
     };
   }
 
-  if (!(await wellFormed(req))) {
+  const email = await wellFormed(req);
+  if (email === null) {
     log.warn("sign-up refused", { component: "sign-up", code: "bad_request", reason: "shape" });
     return { refused: refusal("bad_request", "Check your details and try again.", 400) };
   }
@@ -201,6 +208,20 @@ export async function signUpGate(req: Request, meta: RequestMeta, now = new Date
     log.warn("sign-up refused", { component: "sign-up", code: SIGN_UP_REFUSAL.attempts, reason: "attempts_hour" });
     await audit({ code: "sign_up_attempts", reason: "attempts_hour" }, meta, once);
     return { refused: withRetry(refusal(SIGN_UP_REFUSAL.attempts, ATTEMPTS_MESSAGE, 429), attempts) };
+  }
+
+  // A temporary-inbox address (ADR-0033): refused before the account tiers, so it never takes an account slot. The log
+  // line carries the domain only; the audit entry (once per network an hour) carries how it was recognised.
+  const disposable = await disposableVerdict(container().disposable, email);
+  if (disposable.disposable) {
+    log.warn("sign-up refused", {
+      component: "sign-up",
+      code: SIGN_UP_REFUSAL.disposableEmail,
+      reason: disposable.via,
+      domain: email.slice(email.lastIndexOf("@") + 1).toLowerCase(),
+    });
+    await audit({ code: "disposable_email", reason: disposable.via }, meta, once);
+    return { refused: refusal(SIGN_UP_REFUSAL.disposableEmail, DISPOSABLE_EMAIL.message, 422) };
   }
 
   const taken: string[] = [];
@@ -234,4 +255,25 @@ const LIMITED_MESSAGE = "Too many accounts were created from your network recent
 function withRetry(res: Response, rl: RateLimitResult): Response {
   if (rl.headers["Retry-After"]) res.headers.set("Retry-After", rl.headers["Retry-After"]);
   return res;
+}
+
+/**
+ * Whether a successful sign-up answer created a login. With the address confirmed before the first sign-in, the identity
+ * layer answers an address already in use exactly like a new one (no enumeration), with a made-up user id: the answer
+ * created a login only when its id is the real login for that address. Anything unreadable counts as created (the safe
+ * side: the account tiers stay counted and an invite code stays spent).
+ */
+export async function signUpCreatedLogin(res: Response): Promise<boolean> {
+  if (!res.ok) return false;
+  try {
+    const body = (await res.clone().json()) as { user?: { id?: unknown; email?: unknown } } | null;
+    const id = body?.user?.id;
+    const email = body?.user?.email;
+    if (typeof id !== "string" || typeof email !== "string") return true;
+    const login = await container().deps.uow.run((r) => r.people.userByEmail(email.trim().toLowerCase()));
+    return login?.id === id;
+  } catch (err) {
+    log.warn("sign-up outcome unreadable", { component: "sign-up", err });
+    return true;
+  }
 }

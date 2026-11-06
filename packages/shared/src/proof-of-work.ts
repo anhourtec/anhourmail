@@ -43,6 +43,8 @@ export const SIGN_UP_REFUSAL = {
   limited: "sign_up_limited",
   /** The invite code can't be used (unknown, used, expired, revoked, another email's): one answer for all (ADR-0029). */
   inviteCode: "invite_code_invalid",
+  /** A temporary-inbox address (ADR-0033); the same code and message as everywhere else the check refuses. */
+  disposableEmail: "disposable_email",
 } as const;
 
 /**

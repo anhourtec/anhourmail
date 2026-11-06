@@ -11,7 +11,7 @@ import {
   signUpCodeOf,
   withSignUpCode,
 } from "@/server/auth/sign-up-code";
-import { signUpGate } from "@/server/auth/sign-up-gate";
+import { signUpCreatedLogin, signUpGate } from "@/server/auth/sign-up-gate";
 import { route } from "@/server/http/route";
 
 /**
@@ -54,7 +54,8 @@ const byTier = (method: "GET" | "POST") => {
             const res = claim
               ? await withSignUpCode(claim, () => handlers()[method](req))
               : await handlers()[method](req);
-            created = res.ok;
+            // A duplicate address answers 200 too (no enumeration): only a real new login counts as created.
+            created = await signUpCreatedLogin(res);
             return res;
           } finally {
             await gate.settle(created);

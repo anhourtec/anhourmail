@@ -12,6 +12,7 @@ export const REFUSAL_AUDIT_WINDOW_MS = 3600_000;
 export type SignUpRefusal =
   | { code: "proof_of_work"; reason: string }
   | { code: "sign_up_attempts"; reason: "attempts_hour" }
+  | { code: "disposable_email"; reason: "listed" | "mail_server" }
   | {
       code: "sign_up_limited";
       reason: "address_hour" | "address_day" | "network_hour" | "network_day" | "network56_day" | "network48_day";
