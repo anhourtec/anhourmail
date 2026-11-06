@@ -10,7 +10,7 @@ const str = (v: string | string[] | undefined) => (typeof v === "string" ? v : "
 
 /**
  * Invite someone by email (`member.manage`; roles other than Member need an Owner). The link goes out by email only:
- * the response carries the invite, never its token.
+ * the response carries the invite, never its token. A temporary-inbox address is refused (422, ADR-0033).
  */
 export const POST = route(
   async ({ req, meta }, params) => {
@@ -22,6 +22,7 @@ export const POST = route(
       str(params.accountId),
       { email: body.email, role: body.role },
       meta,
+      container().disposable,
     );
     const emailSent = actor.kind === "user" ? await sendInviteEmail(sent, actor) : false;
     return ok({ invite: sent.invite, emailSent }, 201);

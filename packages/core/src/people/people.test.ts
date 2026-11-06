@@ -38,6 +38,7 @@ import {
   resendInvite,
   revokeInvite,
 } from "./service";
+import { type DisposableEmailCheck, DisposableEmailError } from "../security/disposable-email";
 
 const fakeHash = async (pw: string) => `hashed:${String(pw.length)}`;
 
@@ -212,6 +213,35 @@ describe("invitePerson", () => {
     const a = s.accounts.find((x) => x.id === ACCOUNT_A);
     if (a) a.plan = "free";
     await expect(invitePerson(d, owner, ACCOUNT_A, { email: "y@a.test" }, req)).rejects.toThrow("one person");
+  });
+
+  it("refuses a temporary-inbox address (422) only after the permission checks", async () => {
+    const { d, s, as } = world();
+    const asked: string[] = [];
+    const burner: DisposableEmailCheck = {
+      check(address) {
+        asked.push(address);
+        return Promise.resolve(
+          address.endsWith("@burner.test") ? { disposable: true, via: "listed" } : { disposable: false },
+        );
+      },
+    };
+    // Out of scope and missing permission answer first, even for a disposable address.
+    await expect(invitePerson(d, as("owner-b"), ACCOUNT_A, { email: "x@burner.test" }, req, burner)).rejects.toThrow(
+      NotFoundError,
+    );
+    await expect(invitePerson(d, as("kid"), ACCOUNT_A, { email: "x@burner.test" }, req, burner)).rejects.toThrow(
+      ForbiddenError,
+    );
+    const err = await invitePerson(d, as("owner"), ACCOUNT_A, { email: " X@burner.test " }, req, burner).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(DisposableEmailError);
+    expect((err as DisposableEmailError).code).toBe("disposable_email");
+    expect(s.invites).toEqual([]);
+    expect(asked).toContain("X@burner.test");
+    const ok = await invitePerson(d, as("owner"), ACCOUNT_A, { email: "real@a.test" }, req, burner);
+    expect(ok.invite.email).toBe("real@a.test");
   });
 
   it("doesn't count expired invites against the ceiling", async () => {

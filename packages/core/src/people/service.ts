@@ -21,6 +21,7 @@ import { releaseMailboxOwner } from "../mailboxes/release";
 import { mutation } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 import { assertNotBreached, type BreachedPasswords } from "../security/breached-passwords";
+import { type DisposableEmailCheck, DisposableEmailError, disposableVerdict } from "../security/disposable-email";
 import { hashToken, isTokenShaped, newToken } from "../tokens";
 import { checkPassword, type Invite, isAccountRole, loginNames, type MemberRecord, normaliseEmail } from "./entity";
 
@@ -184,7 +185,8 @@ const ROLE_DENIED = "Only an owner can invite, change or remove someone with tha
 
 /**
  * Invites someone by email (`member.manage`; any role but Member needs `account.admins.manage`). The route emails the
- * link; resending issues a new one. Refused for people already in the account or already invited.
+ * link; resending issues a new one. Refused for people already in the account or already invited, and for a
+ * temporary-inbox address (`disposable`, ADR-0033).
  */
 export async function invitePerson(
   deps: Deps,
@@ -192,7 +194,10 @@ export async function invitePerson(
   accountId: string,
   input: { email?: unknown; role?: unknown },
   req: RequestMeta,
+  disposable?: DisposableEmailCheck,
 ): Promise<SentInvite> {
+  // Looked up before the transaction (DNS never holds it open); refused only after the permission checks below.
+  const verdict = await disposableVerdict(disposable, typeof input.email === "string" ? input.email.trim() : null);
   const out = await mutation<SentInvite | null>(
     deps,
     actor,
@@ -203,6 +208,7 @@ export async function invitePerson(
       if (!isAccountRole(role)) throw new ValidationError("Choose a role.");
       if (!mayTouch(actor, accountId, role)) return { result: null, meta: { role }, denied: { code: "forbidden" } };
       const email = normaliseEmail(input.email);
+      if (verdict.disposable) throw new DisposableEmailError();
       await repos.accounts.lock(accountId); // the people ceiling and "one invite per address" hold under races
       const now = deps.clock.now();
       if ((await repos.people.list(accountId)).some((m) => m.email === email)) {
