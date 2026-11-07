@@ -1,6 +1,6 @@
 # 09 — Roadmap
 
-Last updated: 2026-11-05 (Phase 5 billing and mail/contacts import built, ADR-0029 and ADR-0030; sign-up proof-of-work, ADR-0031, and webmail settings part 2, ADR-0032, built; product gaps for a beta all built; Phase 6 not started; Phase 3 delegation status corrected); 2026-11-04 (billing ADR-0029 slices 1–7 built; webmail push sync built); 2026-11-04 (mail and contacts import designed, ADR-0030; webmail first load: inside the page, IndexedDB first-view copy, `Server-Timing`; names as one source and the file-storage lockdown deployed at 6545a16; Safe senders load images and own Sent mail loads its images, ADR-0027 built). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
+Last updated: 2026-11-07 (pre-staging status: 9e506fc deployed, cf19232 next; disposable-address guard and confirmation at sign-up, ADR-0033); 2026-11-05 (Phase 5 billing and mail/contacts import built, ADR-0029 and ADR-0030; sign-up proof-of-work, ADR-0031, and webmail settings part 2, ADR-0032, built; product gaps for a beta all built; Phase 6 not started; Phase 3 delegation status corrected); 2026-11-04 (billing ADR-0029 slices 1–7 built; webmail push sync built); 2026-11-04 (mail and contacts import designed, ADR-0030; webmail first load: inside the page, IndexedDB first-view copy, `Server-Timing`; names as one source and the file-storage lockdown deployed at 6545a16; Safe senders load images and own Sent mail loads its images, ADR-0027 built). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
 
 ## Path to production (as of 2026-11-05)
 
@@ -181,7 +181,7 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
 ## Phase 3 — Control plane
 
 - better-auth (email + password, TOTP, WebAuthn security keys/passkeys, recovery codes; admins can require a passkey), accounts, memberships and roles, act-as, domains with guided DNS and live per-record verification, mailboxes, aliases, catch-all, masked aliases (ADR-0009), app passwords (issued by the control plane, scoped per protocol; ADR-0020), quotas, audit UI, Security activity page, data export and account deletion. Collaboration (Plus/Supporter): shared mailboxes/groups, static distribution lists with members-only posting, full-access delegation, forwarding (`10-collaboration.md`).
-- **Status (2026-11-05):** built (pre-staging last deployed at 6545a16 on 2026-10-31; later work waits for the next deploy) — domains (DKIM TXT keys, unverified
+- **Status (2026-11-07):** built (on pre-staging: 9e506fc since 2026-11-05; cf19232, with the disposable-address guard and confirmation at sign-up, pushed for the next deploy) — domains (DKIM TXT keys, unverified
   domains expire and release their name), mailboxes (lifecycle, passwords, display names, quotas inside the account's
   storage pool with measured usage), Add a user (mailbox, person and role in one step, first-sign-in password change),
   shared addresses and Make this a user, editable profiles, aliases and masked aliases, people/invites/roles, audit
@@ -190,14 +190,14 @@ capture (Mailpit accepts everything; an unknown local recipient produced no DSN 
   staff support access (act-as, read-only, ADR-0023, 2026-10-29), data export and account deletion (ADR-0025, 2026-10-29).
   Also built 2026-10-29: alias admin lock, free-tier alias limits (10 at a time, 10 new a year; paid 400 per
   mailbox), provisioning claim tokens. Leavers' mailboxes to shared and delegation (Full access, Send as, Send on
-  behalf) built 2026-10-30 (ADR-0026). Free sign-up proof-of-work check built 2026-11-05 (ADR-0031; no SMS). Not
+  behalf) built 2026-10-30 (ADR-0026). Free sign-up proof-of-work check built 2026-11-05 (ADR-0031; no SMS). Disposable email addresses refused at sign-up, invites and forwarding (ADR-0033) and the sign-in address confirmed before the first sign-in, 2026-11-06. Not
   built: groups and members-only distribution lists (`10-collaboration.md`).
 - **Exit:** RBAC harness covers every route × role; cross-account tests return 404; audit entries asserted for every mutation; a custom domain goes from add to active in ≤ 15 min in staging; a non-member can neither post to a members-only list nor send with a shared mailbox's From (integration tests); the reconciler reports ACL/membership drift.
 
 ## Phase 4 — Webmail v1 on JMAP
 
 - `05-webmail.md` v1 scope, BFF proxy and push fan-out, sanitiser + sandbox, image proxy. Folders: nested, favourites, archive (Archive folder created at provisioning), empty Trash/Junk, BFF-enforced depth/count limits; one signature per identity (sanitised, mirrored to JMAP Identity).
-- **Status (2026-11-05):** built (pre-staging last deployed at 6545a16 on 2026-10-31; later work waits for the next deploy) — sign in (blocked and suspended
+- **Status (2026-11-07):** built (on pre-staging: 9e506fc since 2026-11-05; cf19232, with the disposable-address guard and confirmation at sign-up, pushed for the next deploy) — sign in (blocked and suspended
   mailboxes told why, first-sign-in password change), read (all body types, sandboxed; whole conversations; original
   message with authentication results), compose/send/undo in rich text or plain text (sanitised HTML sent as
   multipart/alternative, quoted replies), actions, restore from Trash, search, several mailboxes, contacts, automatic
