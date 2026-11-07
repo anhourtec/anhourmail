@@ -91,21 +91,21 @@ Never use 3000, 5432, 6379, 1025, 8025, 8080 or other common ports in dev. Check
 ## Where we are and what's next
 
 Pre-staging has run on one VM since 2026-10-23 from the private ops repository (`anhourmail-ops`, following the
-local-only `deploy.md`); it was last deployed on 2026-10-31 at 6545a16 (names as one source, mail-server file storage switched off for
-customers, delegation's webmail side, the forwarding guard, the SEO pass). Pushed since, for the next deploy:
-password-first console sign-in with a passkey second step and password-only step-up (ADR-0028), the faster webmail
-first load, and safe senders loading images with own Sent mail loading images (ADR-0027); built after that
-(2026-11-04 to 2026-11-05), also for the next deploy: the rest of the product gaps, billing and mail and contacts
-import. The work plan stops before Phase 6, which has not started. The next phases, in order, with exit criteria, are in `docs/internal/09-roadmap.md` "Path to production":
+local-only `deploy.md`). Release 9fa7dab went out on 2026-11-05 (deploy.md Part 6c: the product gaps, billing in
+Stripe test mode, mail and contacts import), then 9e506fc (the billing page redesign); on 2026-11-06 it ran 9e506fc
+with ops 976c791 (the importer gate's TLS check fixed, smoke 176/0). Pushed for the next deploy, cf19232 (deploy.md
+Part 6d, no migrations): disposable email addresses refused (ADR-0033), the email address confirmed at sign-up before
+the first sign-in, and the authenticator set-up in numbered steps. The work plan stops before Phase 6, which has not
+started. The next phases, in order, with exit criteria, are in `docs/internal/09-roadmap.md` "Path to production":
 
 1. pre-staging on one VM (real DNS, certificates, rDNS, external mail, backups and a restore drill);
 2. product gaps a beta needs (all built: webmail session handoff, data export and deletion, act-as, image proxy,
    leavers mailbox delegation, names as one source, free sign-up with proof-of-work instead of SMS/OTP (ADR-0031),
    push sync, webmail settings part 2 (ADR-0032));
-3. billing, plus mail and contacts import (migration) (built for local dev: billing, ADR-0029, stays `planned` until
-   launch, so paid plans aren't open; mail import over IMAP with app passwords and vCard/CSV contacts import, ADR-0030;
-   open: the live test-mode billing suite run with test keys, the importer's ops deploy gate, and the maintainer
-   decisions on pricing and the ADRs' open questions);
+3. billing, plus mail and contacts import (migration) (built and on pre-staging since 2026-11-05: billing, ADR-0029,
+   in Stripe test mode, stays `planned` until launch, so paid plans aren't open; mail import over IMAP with app
+   passwords and vCard/CSV contacts import, ADR-0030, its ops deploy gate passing; open: the maintainer's test-mode
+   checkout, portal and real-import checks, and the maintainer decisions on pricing and the ADRs' open questions);
 4. abuse controls, monitoring and backups;
 5. production host (app VM + mail VM), warm-up and dogfood;
 6. closed beta, then launch.
@@ -412,3 +412,4 @@ an app container direct access to Stalwart's management listener.
 | 2026-10-31 | Nishchayjeet Singh (Nish) | "Where we are and what's next": pre-staging deployed at 6545a16 (names, file storage lockdown)                                     |
 | 2026-11-01 | Nishchayjeet Singh (Nish) | "Where we are and what's next": password-first sign-in, faster webmail, safe-sender images pushed                                  |
 | 2026-11-05 | Nishchayjeet Singh (Nish) | "Where we are and what's next": product gaps all built; billing and mail/contacts import built, billing still `planned`            |
+| 2026-11-07 | Nishchayjeet Singh (Nish) | "Where we are and what's next": pre-staging at 9e506fc (Part 6c done); cf19232 (disposable guard, confirm at sign-up) next         |
