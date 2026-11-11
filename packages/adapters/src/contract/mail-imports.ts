@@ -444,15 +444,5 @@ export function describeMailImportContract(name: string, factory: AdapterFactory
         await f.cleanup();
       }
     });
-
-    it("answers new as the trust tier of an unknown or missing login", async () => {
-      const f = await factory();
-      try {
-        expect(await f.uow.run((r) => r.imports.trustTier(null))).toBe("new");
-        expect(await f.uow.run((r) => r.imports.trustTier(`nobody-${randomUUID()}`))).toBe("new");
-      } finally {
-        await f.cleanup();
-      }
-    });
   });
 }

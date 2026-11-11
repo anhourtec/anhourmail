@@ -354,12 +354,43 @@ describe("runImportSlice", () => {
     expect((await runNextImportSlice(t.d, t.ports(), config()))?.outcome).toBe("completed");
   });
 
-  it("stops at the per-import message cap for the starter's trust tier", async () => {
+  it("stops at the message cap for the destination mailbox's tier (a new account by default)", async () => {
     const t = await setup();
-    t.s.trustTiers = { member: "new" };
     const out = await runNextImportSlice(t.d, t.ports(), config({ messageCap: (tier) => (tier === "new" ? 2 : null) }));
     expect(out).toMatchObject({ outcome: "completed", reason: "message_cap", appended: 2 });
     expect(t.row()).toMatchObject({ status: "completed", errorCode: "message_cap", messagesDone: 2 });
+  });
+
+  it("caps by the account's tier, and by restricted while staff restrict the mailbox (ADR-0034 step B)", async () => {
+    const tiers: string[] = [];
+    const cap = (tier: string) => {
+      tiers.push(tier);
+      return tier === "restricted" ? 0 : null;
+    };
+    const standard = await setup();
+    standard.s.trust.push({
+      accountId: ACCOUNT_A,
+      tier: "standard",
+      since: standard.clock.now(),
+      source: "billing",
+      reason: null,
+      note: null,
+      setBy: null,
+      lastRestrictedAt: null,
+    });
+    const free = await runNextImportSlice(standard.d, standard.ports(), config({ messageCap: cap }));
+    expect(free?.outcome === "completed" ? free.reason : null).not.toBe("message_cap");
+    const held = await setup();
+    held.s.mailboxRestrictions.push({
+      mailboxId: MBX_MEMBER,
+      at: held.clock.now(),
+      reason: "spam",
+      note: null,
+      byUserId: null,
+    });
+    const out = await runNextImportSlice(held.d, held.ports(), config({ messageCap: cap }));
+    expect(out).toMatchObject({ outcome: "completed", reason: "message_cap", appended: 0 });
+    expect(tiers).toEqual(["standard", "restricted"]);
   });
 
   it("counts the cap per mailbox over 30 days, so a new import can't get around it", async () => {

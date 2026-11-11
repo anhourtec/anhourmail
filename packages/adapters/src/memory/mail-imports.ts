@@ -18,8 +18,6 @@ type State = {
   mailImportBatches: MailImportBatch[];
   mailboxes: { id: string; accountId: string }[];
   accounts: { id: string }[];
-  /** Trust tiers by user id (tests set them; everyone else is `new`). */
-  trustTiers?: Record<string, string>;
 };
 
 const clone = <T>(v: T): T => structuredClone(v);
@@ -231,7 +229,6 @@ export function memoryMailImports(s: State): MailImportRepository {
       rows()
         .filter((i) => i.mailboxId === mailboxId && i.id !== exceptId && i.createdAt.getTime() >= since.getTime())
         .reduce((n, i) => n + i.messagesDone, 0),
-    trustTier: async (userId) => (userId === null ? undefined : s.trustTiers?.[userId]) ?? "new",
     unnotified: async (limit) =>
       clone(
         rows()

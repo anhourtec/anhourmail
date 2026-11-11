@@ -83,11 +83,6 @@ export type MailImportRepository = {
   pastSyncWindow(at: Date, limit: number): Promise<MailImport[]>;
 
   /**
-   * A person's trust tier (`user_profile.trust_tier`; `new` for an unknown or deleted login), for the importer's
-   * per-import message cap by the tier of whoever started it (configuration, ADR-0030 update 2026-11-05).
-   */
-  trustTier(userId: string | null): Promise<string>;
-  /**
    * Messages copied (`messages_done`) by the mailbox's imports created at or after `since`, `exceptId` left out: the
    * per-mailbox message cap over a rolling window (ADR-0030 update, SA-65-05), so restarting an import can't reset it.
    */

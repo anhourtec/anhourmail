@@ -33,6 +33,7 @@ import type { Actor } from "../actor";
 import type { Mailbox } from "../mailboxes/entity";
 import { recordSystemChanges, type SystemChange } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
+import { mailboxTier } from "../trust/standing";
 import { dedupeKey, importMarkerLine } from "./dedupe";
 import type { MailImport, MailImportFolder, MailImportPatch } from "./entity";
 import { isJunkDestination, planFolders } from "./folders";
@@ -71,8 +72,8 @@ export type RunnerConfig = {
   /** Re-check the mailbox can still take mail every this many messages. */
   gateEveryMessages: number;
   /**
-   * Most messages imports may copy into one mailbox in `CAP_WINDOW_MS` when started by someone of this trust tier
-   * (configuration; null: no cap).
+   * Most messages imports may copy into one mailbox in `CAP_WINDOW_MS` when the mailbox has this effective trust tier
+   * (its account's, `restricted` while staff restrict it; ADR-0034 step B) (configuration; null: no cap).
    */
   messageCap: (tier: string) => number | null;
   /** Consecutive transient failures before an import waits for the person. */
@@ -384,7 +385,8 @@ export async function runImportSlice(
       return await finish("failed", "secret_unreadable");
     }
 
-    const tier = await deps.uow.run((r) => r.imports.trustTier(claim.requestedBy));
+    // The destination mailbox's effective tier (its account's, restricted while staff restrict it; ADR-0034 step B).
+    const tier = await deps.uow.run((r) => mailboxTier(r, claim.accountId, claim.mailboxId));
     const tierCap = config.messageCap(tier);
     // What the mailbox's other imports of the window copied already counts against it (SA-65-05).
     const copiedElsewhere =

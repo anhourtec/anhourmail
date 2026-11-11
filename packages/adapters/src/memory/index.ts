@@ -175,8 +175,6 @@ export type MemoryState = {
   mailImports: MailImport[];
   mailImportFolders: (MailImportFolder & { createdAt: Date })[];
   mailImportBatches: MailImportBatch[];
-  /** People's trust tiers by user id, when a test sets them (Postgres: `user_profile.trust_tier`; else `new`). */
-  trustTiers?: Record<string, string>;
   /** Accounts' trust tiers (Postgres: columns on `customer_account`, ADR-0034); no row reads as `new`/`default`. */
   trust: MemoryTrustRow[];
   /** Mailboxes' sending restrictions (Postgres: `mailbox.sending_restricted_*`). */

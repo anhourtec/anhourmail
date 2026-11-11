@@ -27,7 +27,7 @@ import {
 } from "@anhourmail/shared/import";
 
 import type { Executor } from "./client";
-import { mailImport, mailImportBatch, mailImportFolder, userProfile } from "./schema";
+import { mailImport, mailImportBatch, mailImportFolder } from "./schema";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isId = (v: string) => UUID.test(v);
@@ -457,16 +457,6 @@ export class PgMailImportRepository implements MailImportRepository {
         ),
       );
     return row?.n ?? 0;
-  }
-
-  async trustTier(userId: string | null): Promise<string> {
-    if (userId === null) return "new";
-    const [row] = await this.x
-      .select({ tier: userProfile.trustTier })
-      .from(userProfile)
-      .where(eq(userProfile.userId, userId))
-      .limit(1);
-    return row?.tier ?? "new";
   }
 
   async unnotified(limit: number): Promise<MailImport[]> {
