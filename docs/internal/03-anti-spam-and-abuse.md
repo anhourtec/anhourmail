@@ -1,6 +1,6 @@
 # 03 — Anti-spam and abuse
 
-Last updated: 2026-11-11 (second security review F4 and F8: a `new` account's automatic replies paused, billing promotes only on a real charge; second security review: restrictions always land, a finite abuse ban; slices 16–18 built;
+Last updated: 2026-11-11 (second security review F4 and F8: a `new` account's automatic replies paused, billing promotes only on a real charge; slices 19–20: the restriction email and the demo seed per tier; second security review: restrictions always land, a finite abuse ban; slices 16–18 built;
 the relay hold: `new` and `restricted` mailboxes send to hosted addresses only on SMTP and public JMAP alike; billing's promotion taken back on refunds, disputes and early plan ends; slices 12–15 built; trust tiers ADR-0034 slices 1–11 built; trust tiers designed, ADR-0034: stored on the account, `new`-tier external hold, mail-server gates); 2026-11-06 (disposable email addresses refused, ADR-0033); 2026-11-05 (sign-up proof-of-work and sign-up limits built, ADR-0031; suspension note readers, open sessions after a suspension and their mitigations); 2026-11-04 (the webmail reads `deliveryStatus` after a send). 2026-10-30. Research: `research/deliverability.md` §6–8, `research/market-and-legal.md` §4.
 
 Outbound abuse is the priority. One spammer on a shared IP hurts every user's inbox placement, and under CASL a host that knowingly helps spammers can be liable.
@@ -94,12 +94,13 @@ Stalwart); `restricted` is `send_blocked`. **Both are also on the mail server's 
 public JMAP past every webmail check. Now the mail server refuses outside recipients for listed accounts on every
 authenticated path (`550 5.1.2`), and `mailbox.ensure` lists a mailbox fail-closed (it can't send at all until the hold
 is in force). Every authenticated sender is also capped on Stalwart at the `standard`
-numbers. Built so far (2026-11-11, slices 1–18): the stored tier, `smtp_blocked` / `send_blocked` applied on the mail
+numbers. Built so far (2026-11-11, slices 1–20): the stored tier, `smtp_blocked` / `send_blocked` applied on the mail
 server, staff changes and mailbox restrictions in the trust service and their routes, promotion by payment and by the
 hourly job, the importer cap, the webmail's outside-recipient hold and per-tier limits, the managed scripts' pause of
-forwarding and replies, the mail-server ceiling, the relay hold, and the console, staff and webmail screens. Not yet:
-the restriction email, the demo seed per tier and the last docs (slices 19–21). Until those are built, the table below
-and "Free-tier risk" describe the target.
+forwarding and replies, the mail-server ceiling, the relay hold, the console, staff and webmail screens, the restriction
+email to the account's Owners and administrators (at most one per account per day) and the demo seed per tier. Not
+yet: `trusted` (needs per-tier numbers on the mail server), automatic restriction by detection, and dropping
+`user_profile.trust_tier` (migration C).
 
 **A restriction always lands (second security review, 2026-11-11).** A `mailbox.ensure` that would tighten a mailbox
 never gives up (it retries and alerts), the reconciler re-checks failed mailboxes and reloads the hold list before it

@@ -1,7 +1,8 @@
 # ADR-0034: Trust tiers stored on the customer account and enforced on every sending path
 
-**Status:** Accepted 2026-11-11 (building: slices 1–18 built, review findings 2, 3, 5, 6 addressed, the relay hold
-closes public JMAP for `new`, second review's F1, F2, F3, F4, F5, F8 addressed; first Phase 6 slice)
+**Status:** Accepted 2026-11-11 (building: slices 1–20 built, review findings 2, 3, 5, 6 addressed, the relay hold
+closes public JMAP for `new`, second review's F1, F2, F3, F4, F5, F8 addressed; open: slice 22 (migration C),
+`trusted`; first Phase 6 slice)
 
 ## Context
 
@@ -655,3 +656,33 @@ a trial (`trialing` maps to `active`), a comp and a staff grant all promoted. De
   public docs say so, with the refund window from `packages/shared` (already published on the pricing page).
 - Tests: `realChargePaid` cases and the four attack scenarios in `sync.test.ts` (a 100 %-off code, a credit-paid
   invoice, an add-on after a refund, a trial), plus a real renewal that does promote.
+
+## Update 2026-11-11: build slices 19–20 (the restriction email, the demo seed)
+
+**Slice 19, the restriction email (§5 "Email").** When staff restrict an account, or one of its mailboxes, its Owners
+and administrators (the services' existing `notify`: Owner, Domain, User and Billing Administrators) get a
+transactional email from the platform's no-reply sender (rule 62): what was paused (the account, or the named mailbox),
+the reason category in plain words, that receiving and reading keep working and forwarding and automatic replies are
+paused too, and the appeal address (`SUPPORT_EMAIL`). Never the staff note, a threshold, a signal or mail content.
+
+- **At most one per account per day:** the trust service checks the account's audit log for a
+  `trust.restriction_notice_sent` in the last `RESTRICTION_NOTICE_EVERY_MS` (24 h) under the account lock; when there is
+  one, `notify` is empty. Otherwise it records `trust.restriction_notice_sent` (meta `restricted`, `reason`,
+  `reasonCategory`, `notified` — a count) with `also` in the restriction's own unit of work. Durable and transactional,
+  so a Redis outage neither repeats nor drops it; an account restricted, lifted and restricted again the same day is
+  told once.
+- **Sent by the routes** after the commit (`sendRestrictionNotices`, `apps/web/src/server/mail/restriction-email.ts`),
+  like the suspension notices; a failed send is logged by error name only and the change still answers 200.
+- **Billing never restricts:** a refund, a dispute or an early plan end takes billing's promotion back to `new` (and a
+  dispute marks the account), but no billing path sets `restricted`, so no billing change sends this email. The
+  billing banner and the billing emails cover those cases.
+- Pinned by unit tests (the service, the routes) and `restriction-email.int.test.ts` (the notice lands in Mailpit, once).
+
+**Slice 20, the demo seed.** `npm run db:seed -- --demo` now resets one account per tier state on every run
+(`TRUST_DEMO`, `RESTRICTED_MAILBOX` in `scripts/seed/people.ts`, `scripts/seed/trust.ts`): Free user at `new` (source
+`staff`, so the hourly promotion job leaves it), Demo Family, Demo Group and Supporter at `standard` (source
+`automatic`), a new "Restricted sending" account restricted for spam, and a new "Restricted mailbox" account at
+`standard` whose one mailbox is restricted for abuse. Each mailbox's `mailbox.ensure` is queued so the mail server
+follows; the staff restrictions appear in each account's own log; `credentials.md` lists every state. The Trust &
+Safety Administrator was already seeded (`trust@anhourtec.test`). Before this, a fresh `dev:reset` left every demo
+account at `new` (only migration 0044's backfill had made the existing ones `standard`).
