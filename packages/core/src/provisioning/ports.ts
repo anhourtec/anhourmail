@@ -208,6 +208,12 @@ export type MailServer = {
    * refused; null without the hold credential. Absent on fakes that don't model it.
    */
   reloadRelayHold?(): Promise<boolean | null>;
+  /**
+   * What differs from the expected automatic bans, by name (`banPolicyDrift` in `@anhourmail/stalwart-client`): a
+   * permanent or different abuse-ban period, private ranges on the allow-list where they aren't allowed. Null when this
+   * credential can't read them. Absent on fakes that don't model it.
+   */
+  banPolicyDrift?(policy: { abuseBanPeriodMs: number; allowPrivateAllowedIps: boolean }): Promise<string[] | null>;
 };
 
 /** A mailbox's access as the mail server holds it (`accessOf` in `@anhourmail/stalwart-client`). */

@@ -943,6 +943,30 @@ describe("sending access and the sending ceiling on the mail server (ADR-0034 §
     expect(d.uow.state.jobs.map((j) => j.subjectId)).toEqual(["m1"]);
   });
 
+  it("reports the automatic bans' drift by name when asked (report only); unreadable is not counted", async () => {
+    const { d } = setup();
+    const { mail } = accessServer();
+    await mail.ensureDomain("example.test");
+    let answer: string[] | null = ["abuse-ban-period", "allowed-ip-private"];
+    const asked: unknown[] = [];
+    mail.banPolicyDrift = async (policy) => {
+      asked.push(policy);
+      return answer;
+    };
+    const policy = { abuseBanPeriodMs: 3_600_000, allowPrivateAllowedIps: false };
+    // Not asked for: not checked.
+    expect((await reconcile(d, mail)).banPolicyMismatch).toBeNull();
+    expect(asked).toEqual([]);
+    const report = await reconcile(d, mail, { banPolicy: policy });
+    expect(report.banPolicyMismatch).toEqual(["abuse-ban-period", "allowed-ip-private"]);
+    expect(report.clean).toBe(false);
+    expect(asked).toEqual([policy]);
+    expect(d.uow.state.jobs).toEqual([]);
+    expect(d.uow.state.audit.at(-1)?.meta).toMatchObject({ banPolicyMismatches: 2 });
+    answer = null;
+    expect(await reconcile(d, mail, { banPolicy: policy })).toMatchObject({ banPolicyMismatch: null, clean: true });
+  });
+
   it("reloads the relay hold's list before anything else, and counts a failed reload as drift", async () => {
     const { d } = setup();
     const { mail } = accessServer();

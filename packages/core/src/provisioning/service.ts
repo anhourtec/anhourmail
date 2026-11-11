@@ -637,6 +637,12 @@ export type DriftReport = {
    * failed (drift: a key stored but not loaded doesn't hold), null when not attempted (no hold credential).
    */
   relayHoldReloaded: boolean | null;
+  /**
+   * What differs from the expected automatic bans (`opts.banPolicy`), by name: `abuse-ban-period` (permanent or not the
+   * configured period), `allowed-ip-private` (production's allow-list exempts private addresses). Reported only; the
+   * deploy's bootstrap applies them. Null when not asked for or the credential can't read them.
+   */
+  banPolicyMismatch: string[] | null;
   clean: boolean;
 };
 
@@ -649,7 +655,11 @@ export type DriftReport = {
 export async function reconcile(
   deps: Deps,
   mail: MailServer,
-  opts: { ignoreDomains?: readonly string[] } = {},
+  opts: {
+    ignoreDomains?: readonly string[];
+    /** The automatic bans the deployment wants (absent: not checked). */
+    banPolicy?: { abuseBanPeriodMs: number; allowPrivateAllowedIps: boolean };
+  } = {},
 ): Promise<DriftReport> {
   const ignore = new Set(opts.ignoreDomains ?? []);
   const domainOf = (address: string) => address.split("@")[1] ?? "";
@@ -707,6 +717,7 @@ export async function reconcile(
     sendingPolicyMismatch: null,
     relayHoldMismatch: null,
     relayHoldReloaded,
+    banPolicyMismatch: null,
     clean: true,
   };
   // Settled states only: a provisioning or failed mailbox has a job (or an error) of its own.
@@ -759,6 +770,8 @@ export async function reconcile(
       if (!requeue.includes(w.id)) requeue.push(w.id);
     }
   }
+  // The automatic bans (a finite abuse ban, no private ranges exempt in production): report only.
+  report.banPolicyMismatch = opts.banPolicy && mail.banPolicyDrift ? await mail.banPolicyDrift(opts.banPolicy) : null;
   // The ceiling for every authenticated sender: report only.
   report.sendingPolicyMismatch = mail.sendingPolicyDrift
     ? await mail.sendingPolicyDrift(standardSendingPolicy(deps.platform.domain))
@@ -813,7 +826,8 @@ export async function reconcile(
           report.relayHoldMismatch.extra.length +
           (report.relayHoldMismatch.policyInPlace ? 0 : 1)
         : 0) +
-      (report.relayHoldReloaded === false ? 1 : 0) ===
+      (report.relayHoldReloaded === false ? 1 : 0) +
+      (report.banPolicyMismatch?.length ?? 0) ===
     0;
 
   if (!report.clean) {
@@ -848,6 +862,7 @@ export async function reconcile(
             relayHoldExtra: report.relayHoldMismatch?.extra.length ?? 0,
             relayHoldPolicyMissing: report.relayHoldMismatch?.policyInPlace === false ? 1 : 0,
             relayHoldReloadFailed: report.relayHoldReloaded === false ? 1 : 0,
+            banPolicyMismatches: report.banPolicyMismatch?.length ?? 0,
             requeued: requeue.length,
           },
         };

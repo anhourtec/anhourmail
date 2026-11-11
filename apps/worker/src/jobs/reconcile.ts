@@ -9,7 +9,12 @@ import { reconcileAppPasswords } from "@anhourmail/core/app-passwords";
 import { reconcile } from "@anhourmail/core/provisioning";
 import { reconcileManagedScripts, trustedAuthservIds } from "@anhourmail/core/webmail";
 import { log } from "@anhourmail/server/log";
-import { hasStalwartCredential, stalwartAudit, stalwartProvisioning } from "@anhourmail/stalwart-client";
+import {
+  abuseBanPeriodFromEnv,
+  hasStalwartCredential,
+  stalwartAudit,
+  stalwartProvisioning,
+} from "@anhourmail/stalwart-client";
 
 import { workerPlatform } from "../platform";
 import { runtime } from "../runtime";
@@ -21,7 +26,18 @@ const ignoreDomains = (process.env.RECONCILE_IGNORE_DOMAINS ?? "")
   .filter(Boolean);
 
 const { deps, mail, close } = runtime();
-const report = await reconcile(deps, mail, { ignoreDomains });
+// The automatic bans the deployment wants (STALWART_ABUSE_BAN_PERIOD_MS; the scheduler refuses to start in production
+// without it): a finite abuse ban, and in production no private range on the allow-list. Unset outside production:
+// not checked.
+const abuseBanPeriodMs = abuseBanPeriodFromEnv(process.env);
+const report = await reconcile(deps, mail, {
+  ignoreDomains,
+  ...(abuseBanPeriodMs === null
+    ? {}
+    : {
+        banPolicy: { abuseBanPeriodMs, allowPrivateAllowedIps: process.env.NODE_ENV !== "production" },
+      }),
+});
 l.at(report.clean ? "info" : "warn", "reconcile finished", {
   clean: report.clean,
   missingDomains: report.missingOnMailServer.domains.length,
@@ -34,6 +50,8 @@ l.at(report.clean ? "info" : "warn", "reconcile finished", {
   // Sending access per mailbox (re-queued) and the ceiling for every authenticated sender (report only; ADR-0034 §4).
   accessMismatches: report.accessMismatch.length,
   sendingPolicyMismatch: report.sendingPolicyMismatch?.join(",") ?? "not checked",
+  // A finite abuse ban and no private allow-list entries in production (report only; the bootstrap applies them).
+  banPolicyMismatch: report.banPolicyMismatch?.join(",") ?? "not checked",
   // The relay hold (ADR-0034 update "relay hold"): counts only, never addresses. Needs the hold key.
   relayHold: report.relayHoldMismatch
     ? {

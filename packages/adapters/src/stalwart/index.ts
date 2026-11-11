@@ -16,6 +16,7 @@ import { MANAGED_SIEVE_SCRIPT } from "@anhourmail/shared/webmail";
 import {
   accessOf,
   accountTrainingSamples,
+  banPolicyDrift,
   destroyTrainingSamples,
   holdMismatch,
   importSamples,
@@ -474,6 +475,15 @@ export function stalwartMailServer(mgmt: StalwartManagement, opts: { hold?: Stal
         return true;
       } catch {
         return false;
+      }
+    },
+    // Read only; a key without `sysSecurityGet` / `sysAllowedIpGet` answers `forbidden`: not checked.
+    async banPolicyDrift(policy) {
+      try {
+        return await banPolicyDrift(mgmt, policy);
+      } catch (err) {
+        if (isForbidden(err)) return null;
+        throw err;
       }
     },
     // Read only; a key without `sysMtaInboundThrottleGet` / `sysMtaStageRcptGet` answers `forbidden`: not checked.
