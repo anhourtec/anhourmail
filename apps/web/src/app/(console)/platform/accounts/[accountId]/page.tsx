@@ -8,6 +8,8 @@ import { accountAvatars, avatarPath } from "@anhourmail/core/avatars";
 import { platformAccountBilling } from "@anhourmail/core/billing";
 import { GB } from "@anhourmail/core/mailboxes";
 import { staffSuspensionView, viewAccount } from "@anhourmail/core/platform";
+import { staffAccountTrust } from "@anhourmail/core/trust";
+import { SUSPENSION_REASONS } from "@anhourmail/shared/platform";
 import { PLANS } from "@anhourmail/shared/plans";
 import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 import { requestIdFrom } from "@anhourmail/server/request-context";
@@ -24,6 +26,8 @@ import { AccountBillingPanel } from "@/components/platform/account-billing-panel
 import { ActAsStart } from "@/components/platform/act-as";
 import { StaffCreateAddress } from "@/components/platform/staff-create-address";
 import { SuspensionControl } from "@/components/platform/suspension-control";
+import { TrustCard } from "@/components/platform/trust-card";
+import { MailboxSendingControl } from "@/components/platform/trust-controls";
 import { requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
 import { billingContext } from "@/server/billing";
@@ -38,6 +42,33 @@ const DOMAIN_STATUS: Record<string, { text: string; tone: Tone }> = {
   active: { text: "Active", tone: "success" },
   removing: { text: "Removing", tone: "warning" },
 };
+
+/** A mailbox's own sending restriction (ADR-0034 §6) in the Mailboxes tab, with Restrict sending / Lift for staff who may. */
+function MailboxSending({
+  restriction,
+  control,
+}: {
+  restriction: { at: Date; reason: keyof typeof SUSPENSION_REASONS; note?: string | null } | null;
+  control: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col items-start gap-1.5">
+      {restriction ? (
+        <>
+          <StatusText tone="danger">Restricted</StatusText>
+          <p className="am-micro">
+            {SUSPENSION_REASONS[restriction.reason]} · since{" "}
+            <span className="am-num">{dateFmt.format(restriction.at)}</span>
+          </p>
+          {restriction.note && <p className="am-micro break-words">Internal note: {restriction.note}</p>}
+        </>
+      ) : (
+        <StatusText tone="neutral">Account&apos;s tier</StatusText>
+      )}
+      {control}
+    </div>
+  );
+}
 
 export default async function CustomerAccountPage({
   params,
@@ -80,6 +111,12 @@ export default async function CustomerAccountPage({
   const billing = can(actor, "platform.billing.manage")
     ? await platformAccountBilling(container().deps, billingContext(), actor, accountId)
     : null;
+  // Trust (ADR-0034 §5): every staff role that reads accounts sees the tier (the internal notes only with
+  // `platform.suspensionNotes.read`); Global and Trust & Safety Administrators change it. Not while acting as someone.
+  const trust = actor.actingAs === undefined ? await staffAccountTrust(container().deps, actor, accountId) : null;
+  const canTrust = trust !== null && can(actor, "platform.trust.manage");
+  const restrictionOf = (mailboxId: string) =>
+    trust?.mailboxes.find((x) => x.mailboxId === mailboxId)?.restriction ?? null;
 
   const peopleTab = (
     <>
@@ -207,21 +244,49 @@ export default async function CustomerAccountPage({
               <th scope="col" className={listClass.th}>
                 Status
               </th>
+              {trust && (
+                <th scope="col" className={`${listClass.th} hidden md:table-cell`}>
+                  Sending
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
-            {mailboxes.map((m) => (
-              <tr key={m.id} className={listClass.row}>
-                <td className={`${listClass.td} font-mono font-medium text-[14px] break-all`}>{m.address}</td>
-                <td className={`${listClass.td} am-num hidden sm:table-cell`}>{m.quotaBytes / GB} GB</td>
-                <td className={listClass.td}>
-                  <MailboxStatus status={m.status} applyFailed={m.applyFailed} />
-                  {m.status === "deleting" && m.purgeAfter !== null && (
-                    <p className="am-small mt-1">Restorable until {dateFmt.format(m.purgeAfter)}</p>
-                  )}
-                </td>
-              </tr>
-            ))}
+            {mailboxes.map((m) => {
+              // The mailbox's own sending restriction and, for staff who may, Restrict sending / Lift: in its own column
+              // on wide screens, under the address on small ones.
+              const sending = trust ? (
+                <MailboxSending
+                  restriction={restrictionOf(m.id)}
+                  control={
+                    canTrust && m.status !== "deleting" ? (
+                      <MailboxSendingControl
+                        accountId={summary.id}
+                        mailboxId={m.id}
+                        address={m.address}
+                        restricted={restrictionOf(m.id) !== null}
+                      />
+                    ) : null
+                  }
+                />
+              ) : null;
+              return (
+                <tr key={m.id} className={listClass.row}>
+                  <td className={listClass.td}>
+                    <span className="font-mono font-medium text-[14px] break-all">{m.address}</span>
+                    {sending && <div className="mt-2 md:hidden">{sending}</div>}
+                  </td>
+                  <td className={`${listClass.td} am-num hidden sm:table-cell`}>{m.quotaBytes / GB} GB</td>
+                  <td className={listClass.td}>
+                    <MailboxStatus status={m.status} applyFailed={m.applyFailed} />
+                    {m.status === "deleting" && m.purgeAfter !== null && (
+                      <p className="am-small mt-1">Restorable until {dateFmt.format(m.purgeAfter)}</p>
+                    )}
+                  </td>
+                  {sending && <td className={`${listClass.td} hidden md:table-cell`}>{sending}</td>}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -280,6 +345,7 @@ export default async function CustomerAccountPage({
           <CopyValue value={summary.id} label="account id" />
         </Field>
       </FieldGrid>
+      {trust && <TrustCard accountId={summary.id} accountName={summary.name} view={trust} canChange={canTrust} />}
       <DetailTabs
         label="Account details"
         initial={typeof tab === "string" ? tab : null}
