@@ -1,7 +1,7 @@
 # ADR-0034: Trust tiers stored on the customer account and enforced on every sending path
 
 **Status:** Accepted 2026-11-11 (building: slices 1–18 built, review findings 2, 3, 5, 6 addressed, the relay hold
-closes public JMAP for `new`; first Phase 6 slice)
+closes public JMAP for `new`, second review's F1, F2, F3, F5 addressed; first Phase 6 slice)
 
 ## Context
 
@@ -535,3 +535,78 @@ differ from §5 or that it left open:
   console card for `account.read` holders, with the appeal address on both.
 - **`App passwords`** reads each own mailbox's effective tier (`sendingStanding`) for its notice; the Mail apps page
   §5 named is that page.
+
+## Update 2026-11-11: second security review (findings F1, F2, F3, F5)
+
+A second security-reviewer pass found four issues in the relay hold and the managed-script pause; the coordinator's
+decisions are built as follows, with one premise disproved by a probe. F4 and F8 are handled separately.
+
+**F1: the webmail's mail-server requests carried no client address.** Only OAuth sign-in and refresh sent
+X-Forwarded-For; the concern was that a held mailbox's refused outside recipients over JMAP would count against the
+web container's address (35 a day, permanent) and ban the webmail for everyone, hidden in dev by the allow-list.
+
+- **The probe disproved that premise** (`ban-attribution.int.test.ts`, opt-in; `research/stalwart.md` "Which address
+  a refusal counts against"). A JMAP submission runs as a local SMTP session from 127.0.0.1, which Stalwart always
+  allows, so its refused recipients (relay refused, unknown hosted address) count towards **no** ban: not the web
+  container's, not the visitor's, not the recipient's. Verified with the dev allow-list off and the rate at 2. So the
+  relay-hold update's residual "such a send … counts towards the visitor's abuse ban" was wrong: it counts towards
+  nothing. Failed sign-ins on `/jmap` do count, against the X-Forwarded-For address; a malformed bearer token doesn't.
+  Recipients refused in a real SMTP session (mail apps) still count per client address and per recipient.
+- **Built anyway, because the rest of the HTTP counting still lands on the BFF's address:** the webmail forwards the
+  visitor's trusted address on every request to the mail server (JMAP calls, session reads, uploads, downloads, the
+  push socket), through `withClientAddress` in `@anhourmail/jmap-client/client-address` and `currentClientAddress()`
+  in the web app (`route()`'s address, or the page request's headers under `TRUST_PROXY`). Stalwart's anonymous rate
+  limit on each first use of a token and its failed sign-in ban then count per visitor.
+- **Held until applied:** the webmail treats a mailbox as held while the `mailbox.ensure` queued for its account's last
+  tier change hasn't succeeded (`SendingStanding.heldOnServer`, from `ProvisioningRepository.progressSince`, read once
+  per send with the tier). A send in that window is refused as `sending_held` instead of going out with its outside
+  recipients refused one by one. Unrelated ensures queued later (an alias, a backfill) don't hold a mailbox whose
+  change has applied. Not covered: a mailbox restriction lifted by staff (it carries no timestamp); its few seconds are
+  refused per recipient by the mail server. At the deploy that adds the hold, standard mailboxes with no ensure since
+  migration 0044 read held until their `job:mailbox-backfill` ensure runs (minutes, fail safe).
+- **A finite abuse ban in production:** `applyAbuseBanPeriod(mgmt, ms)` (`x:Security.abuseBanPeriod`, the only field it
+  writes; Stalwart's default is null, permanent) with the value from `STALWART_ABUSE_BAN_PERIOD_MS` (required in
+  production by `abuseBanPeriodFromEnv` and the scheduler's start-up check; `.env.example` carries a one-hour dev
+  value; the dev plan applies it when set). The deploy's bootstrap calls it, plus `assertNoPrivateAllowedIps`.
+- **No private ranges on production's allow-list:** `privateAllowedIps` flags any `x:AllowedIp` entry that overlaps RFC
+  1918, unique-local or link-local ranges (an IPv4-mapped IPv6 address included); the bootstrap refuses to go on and the
+  reconciler reports `banPolicyMismatch` (`allowed-ip-private`, and `abuse-ban-period` when the server's period isn't
+  the configured one). The reconciler's key can't read `x:Security` or `x:AllowedIp` yet, so it reports "not checked"
+  until the ops follow-up gives a reading key `sysSecurityGet` and `sysAllowedIpGet`.
+- **Integration run without the dev allow-list:** the ten webmail suites (50 tests, the JMAP send to an unknown hosted
+  address included) passed with every `x:AllowedIp` entry removed, and no address was banned; the entries were put back.
+
+**F2: a failed `mailbox.ensure` left a restricted or demoted mailbox open**, and the reconciler's access and relay-hold
+checks skipped `failed` mailboxes. Now an ensure that may have left the account looser than wanted never gives up:
+`ensureMailbox` throws `EnsureIncompleteError` with `looserThanWanted` (true: it can still send, relay or sign in where
+it shouldn't; false: at least as strict as wanted; null: the account couldn't be read), and the runner keeps retrying
+when it is true, or unknown while the run asked for a restriction, hold or suspension of an existing account — at most
+`TIGHTEN_RETRY_MAX_MS` (5 minutes) apart, the mailbox's status untouched, `ProcessedJob.overdue` on every run past
+`MAX_ATTEMPTS`, which the worker logs at error level as `mailbox_restriction_overdue` (ids only) for alerting.
+Loosening ensures give up as before. The reconciler compares failed mailboxes that have a mail-server id
+(`accessMismatch`, `relayHoldMismatch`) and re-queues them; failed ones never created there still have their own job.
+A suspension or deletion whose ensure keeps failing is now one of these: it keeps retrying instead of being marked.
+
+**F3: a hold key stored but not loaded was invisible.** The held path of `ensureMailbox` now reloads the list on every
+run (coalesced; the pre-hold tightening still only when it's needed, so a held mailbox's access doesn't flap); the
+reconciler runs `ReloadLookupStores` first (`MailServer.reloadRelayHold`; a failure is drift,
+`relayHoldReloadFailed`); and `RelayHoldList.remove` reloads after destroying a lookup key it wrote itself, so another
+process's reload in between can never leave it loaded (and throws if that reload fails). The lookup-by-create stays:
+reading the whole namespace instead would cost every non-held mailbox's ensure a page of every held address. Pinned
+with fakes (a reload elsewhere between the create and the destroy) and on the real server (a key written without a
+reload relays until the reconciler's reload, then holds; the next ensure clears it).
+
+**F5: the Sieve sending pause was best effort.** The reconciler (audit key) now returns the accounts behind
+`unpausedSending` (ids only, never logged or audited) and the reconcile job adds each to the web app's signal set every
+run; and the web app runs a catch-up pass every five minutes (`startSendingPauseCatchUp`) over every account whose tier
+changed or that was restricted, the account or a mailbox, since its last pass (`TrustRepository.changedSince`, two
+minutes of overlap for clock skew), retrying accounts a pass couldn't finish. Together these close this ADR's open item
+"a tier change made outside the web app that restricts … reaches scripts only at the next web start-up or save": any
+worker-made change, the later detection job included, reaches the scripts within about five minutes without a signal
+of its own, and within seconds when the signal arrives. Only the signal depends on Redis (fail open); the catch-up
+pass reads Postgres.
+
+**Ops follow-ups (private repository)** are in `08-operations.md` "Trust tiers": the abuse-ban period and the bootstrap
+checks, the hold key's proxy rules (now spelled out per method), NGINX setting X-Forwarded-For on every location that
+proxies to Stalwart, `REDIS_URL` for the scheduler too, the alert on `mailbox_restriction_overdue`, reading
+permissions for the reconciler's ban check, and the smoke checks.
