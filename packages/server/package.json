@@ -14,7 +14,8 @@
     "./keyring": "./src/keyring.ts",
     "./net-guard": "./src/net-guard.ts",
     "./one-time": "./src/one-time.ts",
-    "./zip": "./src/zip.ts"
+    "./zip": "./src/zip.ts",
+    "./account-signals": "./src/account-signals.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
