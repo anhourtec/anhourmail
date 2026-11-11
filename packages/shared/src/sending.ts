@@ -50,6 +50,37 @@ export const TRUST_TIERS: Readonly<Record<TrustTier, TierInfo>> = {
   },
 };
 
+/** Every tier, strictest first (the order `stricterTier` uses). */
+export const TRUST_TIER_ORDER = ["restricted", "new", "standard", "trusted"] as const satisfies readonly TrustTier[];
+
+export const isTrustTier = (v: unknown): v is TrustTier => typeof v === "string" && Object.hasOwn(TRUST_TIERS, v);
+
+/**
+ * The stricter of two tiers: a mailbox's own sending restriction over its account's tier, or the two mailboxes of a
+ * delegated send (ADR-0026 §6, ADR-0034 §1).
+ */
+export function stricterTier(a: TrustTier, b: TrustTier): TrustTier {
+  return TRUST_TIER_ORDER.indexOf(a) <= TRUST_TIER_ORDER.indexOf(b) ? a : b;
+}
+
+/**
+ * How an account got its tier (ADR-0034 §1–2): `default` (never changed), `automatic` (the promotion job, or staff
+ * handing it back to the job), `billing` (a paid plan), `staff` (set by hand; the job and billing leave it alone).
+ */
+export const TRUST_TIER_SOURCES = ["default", "automatic", "billing", "staff"] as const;
+export type TrustTierSource = (typeof TRUST_TIER_SOURCES)[number];
+export const isTrustTierSource = (v: unknown): v is TrustTierSource =>
+  typeof v === "string" && (TRUST_TIER_SOURCES as readonly string[]).includes(v);
+
+/**
+ * The tiers staff may set (ADR-0034 §2). `trusted` is reserved: nothing reaches it until the mail server holds per-tier
+ * numbers, so setting it is refused (`tier_unavailable`); its published limits stay on the site.
+ */
+export const STAFF_SETTABLE_TRUST_TIERS = ["new", "standard", "restricted"] as const satisfies readonly TrustTier[];
+export type StaffSettableTrustTier = (typeof STAFF_SETTABLE_TRUST_TIERS)[number];
+export const isStaffSettableTrustTier = (v: unknown): v is StaffSettableTrustTier =>
+  typeof v === "string" && (STAFF_SETTABLE_TRUST_TIERS as readonly string[]).includes(v);
+
 /**
  * Bulk and newsletter mail (decision 2026-10-21): never on the base plans; available only through the paid
  * "Newsletters and bulk sending" add-on (planned), which sends from a separate domain and IP pool, requires
