@@ -1,6 +1,6 @@
 # 05 — Webmail
 
-Last updated: 2026-11-05 (the own password change is sent alone and push ends the old id with `renewed`, so the page stays signed in; settings part 2, ADR-0032: mail rules, templates and the account-wide Safe senders; the composer shows a billing send refusal, `403 billing_restricted`, ADR-0029; imported copies never count as own Sent mail; contacts import, ADR-0030 §10: vCard 2.1–4.0 and CSV with a column-mapping step, merge by email that only fills empty fields, 5 MB and 5,000 cards per file, `data.contacts_imported`; Show original and the reader's details mark imported mail, its results the old provider's); 2026-11-04 (push sync: one upstream JMAP WebSocket per session and mailbox, fanned out over our own event stream, tabs sharing one stream, a 5-minute safety check and the 30-second check when push is down; shared mailboxes keep polling); 2026-11-04 (undo from a shared mailbox is stateless: it carries the send's sealed ticket, the end of the hold asks the mail server whether it was undone, and report reads pass the delegation gate; handoff item 21); 2026-11-04 (delivery problems: the send and a check after the undo hold read the submission's `deliveryStatus` and name the recipients the mail server refused, `POST /api/webmail/send/status`; handoff item 14); 2026-10-31 (remote images, ADR-0027: Safe senders load their images when the From is verified, in every Reading mode, checked on the server with a per-process cache and a Redis rules version; "Always for" / "Stop loading" change Safe senders from the message; the person's own Sent mail loads by itself; old fingerprints read-only; managed-script writes are compare-and-swap; first load: session, folders and the opened view's first window in one answer, streamed inside the page for the person's own mailbox, `GET /api/webmail/bootstrap` otherwise; this browser's copy of the first view painted at once; `Server-Timing` on the webmail API; customer mailboxes have no file storage; remote images: the person's own mail in Sent loads once with no unverified line or remember choice; sender name = the one source in the control plane, identities renamed to it; mailboxes shared with you: no "Shared with you" list or in-place switch in the UI — they open only with Open another mailbox, in a tab named after the mailbox, with Your mailbox in its account menu; no banner; a session left on a shared mailbox goes back to the own one; the account menu tidied (maintainer decision); forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
+Last updated: 2026-11-11 (trust tiers, ADR-0034 slice 12: every send reads the stored tier uncached — `403 sending_paused` while restricted, `403 sending_held` for a new account's outside recipients with `trust.send_held`, `429 sending_limit`, 503 when the tier, the hosted-domain check or the counters can't be read; forwarding and rules to an outside target `422 sending_held` while new; the managed script pauses the redirects and replies the tier doesn't allow, written by saves and by the web app after a tier change and at start-up); 2026-11-05 (the own password change is sent alone and push ends the old id with `renewed`, so the page stays signed in; settings part 2, ADR-0032: mail rules, templates and the account-wide Safe senders; the composer shows a billing send refusal, `403 billing_restricted`, ADR-0029; imported copies never count as own Sent mail; contacts import, ADR-0030 §10: vCard 2.1–4.0 and CSV with a column-mapping step, merge by email that only fills empty fields, 5 MB and 5,000 cards per file, `data.contacts_imported`; Show original and the reader's details mark imported mail, its results the old provider's); 2026-11-04 (push sync: one upstream JMAP WebSocket per session and mailbox, fanned out over our own event stream, tabs sharing one stream, a 5-minute safety check and the 30-second check when push is down; shared mailboxes keep polling); 2026-11-04 (undo from a shared mailbox is stateless: it carries the send's sealed ticket, the end of the hold asks the mail server whether it was undone, and report reads pass the delegation gate; handoff item 21); 2026-11-04 (delivery problems: the send and a check after the undo hold read the submission's `deliveryStatus` and name the recipients the mail server refused, `POST /api/webmail/send/status`; handoff item 14); 2026-10-31 (remote images, ADR-0027: Safe senders load their images when the From is verified, in every Reading mode, checked on the server with a per-process cache and a Redis rules version; "Always for" / "Stop loading" change Safe senders from the message; the person's own Sent mail loads by itself; old fingerprints read-only; managed-script writes are compare-and-swap; first load: session, folders and the opened view's first window in one answer, streamed inside the page for the person's own mailbox, `GET /api/webmail/bootstrap` otherwise; this browser's copy of the first view painted at once; `Server-Timing` on the webmail API; customer mailboxes have no file storage; remote images: the person's own mail in Sent loads once with no unverified line or remember choice; sender name = the one source in the control plane, identities renamed to it; mailboxes shared with you: no "Shared with you" list or in-place switch in the UI — they open only with Open another mailbox, in a tab named after the mailbox, with Your mailbox in its account menu; no banner; a session left on a shared mailbox goes back to the own one; the account menu tidied (maintainer decision); forwarding skips mail our server found failing DMARC; mailboxes shared with you: writing from a shared mailbox's view — New email, replies and forwards From that mailbox through an own-mailbox pin, New email off with why for Read and manage only; remote images: mail submitted here counts as verified through the internal-mail marker; mailboxes shared with you: the webmail UI — Shared with you, Open another mailbox in a tab pinned to its mailbox, the From picker, "on behalf of" in the reader, ADR-0026 slice 14; remote images: once or always for a verified sender, and why an unverified one is asked again; mailboxes shared with you: the delegation BFF and sending as or on behalf of them, ADR-0026 slices 11–13; profile photos; remote images: the image proxy, "Load images", per-sender and Reading settings; reading: conversations, message menu, Show original page, restore; auto refresh, chime and
 notifications; quoted replies; compose image placeholders; first-sign-in password step; sign-in links not pre-filled).
 
 **Status (2026-10-22): slice 1 is built** — webmail sign-in (OAuth code flow + PKCE, tokens sealed server-side), the
@@ -107,16 +107,23 @@ frame-ancestors 'none'` unless the route sets its own sandboxing one). `next.con
   the draft and checks: in Drafts with `$draft`, exactly one From equal to the chosen identity, 1..max recipients,
   size ≤ 30 MB. It submits with an explicit envelope (MAIL FROM = the identity; RCPT TO = To + Cc + Bcc) held for
   `UNDO_SECONDS`, moving the message to Sent on success. Stalwart's sender rules (ADR-0019) also apply.
-- **Billing (ADR-0029 §5, 2026-11-05).** Before the draft is read, the BFF asks core `billingSendBlock` for the mailbox
-  (and, sending from a shared mailbox, for it and the person's own, after the grant is confirmed and before the send is
-  audited): a restricted account's mailbox or a held one is answered `403 billing_restricted` with why and who can fix
-  it, which the composer shows; a failed check refuses (fail closed). Nothing is submitted or charged to the quotas.
-  The mail server refuses the same mailboxes on every protocol (`SEND_BLOCKED_PERMISSIONS`).
-- **Trust tiers (rule 27, security review run-15):** the tier comes from one helper, `sendingTier()` — `new` for
-  every mailbox until tiers are stored per account; `restricted` refuses sending. Sending is charged per rolling
-  hour and day, one unit per recipient (03-anti-spam-and-abuse.md), in sliding windows per mailbox and per webmail
-  session, atomically and failing closed (`SlidingQuotaStore`). The whole send runs against one mailbox: every
-  server-built call refuses if the active mailbox changes meanwhile.
+- **Billing and trust tier, read for every send (ADR-0029 §5, ADR-0034 §3, 2026-11-11).** Before the draft is read,
+  the BFF reads the mailbox's standing uncached (`WebmailDeps.trust.standing` → core `sendingStanding`: its effective
+  tier and billing's block; sending from a shared mailbox, for it and the person's own, after the grant is confirmed
+  and before the send is audited). A billing block is `403 billing_restricted` with why and who can fix it; tier
+  `restricted` (the account's, or a staff restriction of the mailbox) is `403 sending_paused`; an address the control
+  plane doesn't hold reads `restricted`. With tier `new`, a draft with any recipient outside the addresses we host
+  (platform domains and verified customer domains, core `outsideAddresses`) is `403 sending_held` ("New accounts can
+  send to addresses hosted on AnhourMail for now…") and recorded `trust.send_held` (a count of outside recipients,
+  never an address; at most once per mailbox per hour, core `recordSendHeld`); a delegated send is held when either
+  mailbox is new and takes the stricter tier's limits. Any failed read refuses with 503 (fail closed, rule 27).
+  Nothing is submitted or charged to the quotas. The mail server refuses restricted and billing-blocked mailboxes on
+  every protocol (`SEND_BLOCKED_PERMISSIONS`) and new ones' SMTP AUTH (`smtp_blocked`).
+- **Limits:** the tier's published numbers (`TRUST_TIERS`, `tierLimits` / `delegatedLimits` in `compose.ts`).
+  Sending is charged per rolling hour and day, one unit per recipient (03-anti-spam-and-abuse.md), in sliding windows
+  per mailbox and per webmail session, atomically and failing closed (`SlidingQuotaStore`; used up → `429
+sending_limit`, store down → 503). The whole send runs against one mailbox: every server-built call refuses if the
+  active mailbox changes meanwhile.
 - **Only BFF drafts can be sent.** Drafts the BFF builds carry the `$am-composed` keyword; the proxy refuses setting
   `$draft`, adding to Drafts, or touching that keyword, and `send` and draft replacement require it, so no message
   can be promoted into a sendable draft through the proxy.
@@ -422,12 +429,15 @@ only" rules are written into the script (≤ 1,000 addresses, within Stalwart's 
 after webmail contact changes (CardDAV changes at the next save).
 
 **Forwarding is confirmed by the target.** `POST /api/webmail/settings/forwarding` refuses the mailbox's own
-addresses (loops), a `restricted` sender (`sendingTier()`), and more than 5 confirmation emails per mailbox per
+addresses (loops), a `restricted` sender, a `new` sender's outside target (`422 sending_held`, ADR-0034 §3), and more
+than 5 confirmation emails per mailbox per
 24 h (the counter is read `FOR UPDATE`; plus the fail-closed `forwardingVerify` tier); it stores only the token's
 sha256 and emails a link (with the mailbox address **masked**) to `/forwarding/confirm/<token>` (72 h). Opening the
 page changes nothing; its button posts the token (link scanners can't confirm) and the page shows the full mailbox
 address. Only then can the owner turn forwarding on; asking for another address turns forwarding to the old one off
-at once. Enabling forwarding or automatic replies is refused while the tier is `restricted`. Every writer reads the
+at once. Enabling forwarding or automatic replies is refused while the tier is `restricted`; while it is `new`,
+turning forwarding on or saving a rule that forwards is `422 sending_held` when the confirmed target is outside
+(automatic replies stay: one reply per sender per period, to people who wrote first). Every writer reads the
 session once and refuses on an `X-Webmail-Account` pin mismatch before any lookup. **`WebmailService.saveMailRules`
 itself** keeps a redirect only when it equals the control-plane confirmed target (`confirmedForward` dep), so every
 caller — the settings writers and the contacts refresh — goes through the same filter, and the script comment is
@@ -442,8 +452,15 @@ so two first requests can't both pass the cap. Stalwart's `maxNumberRedirects` i
 - Untrusted-Sieve interpreter hardening (disable unused capabilities, cap outgoing messages per run) is **lower
   priority now that no customer can write Sieve or VacationResponse**; the exact v0.16 setting-object names still need discovery from the
   running server before changing the dev plan and production settings (don't guess).
-- When trust tiers become stored, a mailbox turning `restricted` should actively switch its forwarding and
-  automatic replies off (today they're only refused at change time).
+- ~~When trust tiers become stored, a mailbox turning `restricted` should actively switch its forwarding and automatic
+  replies off.~~ Done 2026-11-11 (ADR-0034 update "Forwarding and automatic replies under a tier"): the mail server's
+  send block doesn't stop Sieve, so the managed script itself pauses what the tier doesn't allow — every `redirect`
+  and `vacation` while `restricted`, redirects outside while `new` — by wrapping each command in `if false { … }`
+  after a fixed marker (core `sending-pause.ts`; the settings line keeps what the person set, so lifting the tier
+  gives the exact script back). Written by every save (`saveMailRules`) and, for scripts nobody saves, by the web app
+  (`sending-pause-apply.ts`: after a staff tier change and at start-up, compare-and-swap). The reconciler counts a
+  script that still sends against its tier (`unpausedSending`). Settings still show the person's own choices while
+  paused (the UI note is slice 18).
 
 **API (webmail origin, `webmail` guard, account pinned with `X-Webmail-Account` on every change).**
 
