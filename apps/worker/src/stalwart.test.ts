@@ -64,9 +64,25 @@ describe("worker Stalwart settings (ADR-0020 credential split)", () => {
     expect(() => {
       checkStalwartSettings("scheduler", { ...prod, STALWART_PROVISIONING_KEY: "p", STALWART_AUDIT_KEY: "a" });
     }).toThrow(/STALWART_HOLD_KEY must be set in production/);
-    const both = { ...prod, STALWART_PROVISIONING_KEY: "p", STALWART_AUDIT_KEY: "a", STALWART_HOLD_KEY: "h" };
+    const both = {
+      ...prod,
+      STALWART_PROVISIONING_KEY: "p",
+      STALWART_AUDIT_KEY: "a",
+      STALWART_HOLD_KEY: "h",
+      STALWART_ABUSE_BAN_PERIOD_MS: "86400000",
+    };
     expect(() => {
       checkStalwartSettings("scheduler", both);
+    }).not.toThrow();
+    // The abuse-ban period its reconciler compares with: required in production, a whole number of ms anywhere.
+    expect(() => {
+      checkStalwartSettings("scheduler", { ...both, STALWART_ABUSE_BAN_PERIOD_MS: undefined });
+    }).toThrow(/STALWART_ABUSE_BAN_PERIOD_MS must be set in production/);
+    expect(() => {
+      checkStalwartSettings("scheduler", { STALWART_PROVISIONING_KEY: "p", STALWART_ABUSE_BAN_PERIOD_MS: "1d" });
+    }).toThrow(/abuse ban period/);
+    expect(() => {
+      checkStalwartSettings("scheduler", { STALWART_PROVISIONING_KEY: "p" });
     }).not.toThrow();
     expect(() => {
       checkStalwartSettings("job", both);

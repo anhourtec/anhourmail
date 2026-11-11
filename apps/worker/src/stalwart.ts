@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import {
+  abuseBanPeriodFromEnv,
   credentialEnvProblems,
   type StalwartCredentialRole,
   stalwartAudit,
@@ -47,6 +48,15 @@ export function checkStalwartSettings(
   // the mail server's script only. Refused everywhere, dev included (dev derives it; nothing to set).
   if ((env.SENDER_DELEGATION_KEY ?? "") !== "") {
     problems.push("SENDER_DELEGATION_KEY must not be given to this process (web app and mail server only)");
+  }
+  // The scheduler's reconciler checks the mail server's abuse-ban period against this value (the deploy's bootstrap
+  // applies it): required in production, a whole number of milliseconds wherever it is set.
+  if (kind === "scheduler") {
+    try {
+      abuseBanPeriodFromEnv(env);
+    } catch (err) {
+      problems.push(err instanceof Error ? err.message : String(err));
+    }
   }
   if (problems.length > 0) throw new Error(`Worker configuration refused: ${problems.join("; ")}`);
 }
