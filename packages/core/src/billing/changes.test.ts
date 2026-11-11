@@ -367,10 +367,17 @@ describe("self-service refund", () => {
       withinWindow: true,
       staff: false,
     });
+    // Pay → standard → refund → new, at once, recorded by the system (finding 2 of the ADR-0034 slices 1–11 review).
+    expect(await w.d.uow.run((r) => r.trust.get(ACCOUNT_A))).toMatchObject({ tier: "new", source: "default" });
+    const lost = w.d.uow.state.audit.filter((e) => e.action === "trust.tier_changed").at(-1);
+    expect(lost?.meta).toMatchObject({ fromTier: "standard", toTier: "new", cause: "refund" });
+    expect(lost?.actor).toMatchObject({ type: "system", email: "billing-refund" });
+    expect(lost?.requestId).toBe(req.requestId);
     await w.sync();
     const b = await w.row();
     expect(["lapsed", "free"]).toContain(b.state);
     expect(b.paidPlan).toBeNull();
+    expect((await w.d.uow.run((r) => r.trust.get(ACCOUNT_A)))?.tier).toBe("new");
     // A second press: nothing to refund any more.
     await expect(refundSubscription(w.d, w.ctx, owner, ACCOUNT_A, SESSION, req)).rejects.toMatchObject({
       code: "not_subscribed",

@@ -287,6 +287,22 @@ async function tierAfterBilling(
   return d.next.state === "active" && paid ? promoteForPayment(deps, r, accountId) : [];
 }
 
+const REFUND = { kind: "system", name: "billing-refund" } as const;
+
+/**
+ * A refund made in the console (the customer's self-service one or staff's) takes billing's promotion back at once,
+ * inside the refund's unit of work under the account lock, recorded `trust.tier_changed` by the system (security
+ * review of ADR-0034 slices 1–11, finding 2). The sync that follows finds nothing more to take back.
+ */
+export async function takePromotionForRefund(
+  deps: Deps,
+  r: Repositories,
+  accountId: string,
+  req: RequestMeta,
+): Promise<void> {
+  await recordSystemChanges(deps, r, REFUND, req, await revokeBillingPromotion(deps, r, accountId, "refund"));
+}
+
 /**
  * Syncs one account's billing with the provider (job `billing.sync`, subject = account id). Idempotent: a second run
  * with nothing new writes only `last_synced_at`. Events that arrive while it runs stay queued for the next run (their

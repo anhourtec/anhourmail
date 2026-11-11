@@ -220,6 +220,12 @@ describe("staffRefund", () => {
     });
     expect((await w.row()).selfServiceRefundAt).toBeNull();
     expect(w.s.jobs.some((j) => j.kind === "billing.sync" && j.subjectId === ACCOUNT_A)).toBe(true);
+    // Billing's promotion goes with the refund (finding 2 of the ADR-0034 slices 1–11 review), by the system.
+    expect(await w.d.uow.run((r) => r.trust.get(ACCOUNT_A))).toMatchObject({ tier: "new", source: "default" });
+    expect(w.inAccount("trust.tier_changed").at(-1)).toMatchObject({
+      actor: { type: "system", email: "billing-refund" },
+      meta: { toTier: "new", cause: "refund" },
+    });
     // The same invoice again: already refunded.
     await expect(staffRefund(w.d, w.ctx, billingStaff, ACCOUNT_A, {}, SESSION, req)).rejects.toMatchObject({
       code: "refund_not_eligible",

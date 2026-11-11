@@ -55,6 +55,7 @@ import {
   requireStepUp,
   unavailable,
 } from "./guards";
+import { takePromotionForRefund } from "./sync";
 import {
   type BillingProvider,
   isLiveSubStatus,
@@ -468,7 +469,8 @@ const refundedButLive = (inv: ProviderInvoice | null, now: Date): inv is Provide
  * §9). Read fresh from the provider: the latest invoice must be the first or a renewal one, paid at most 14 days ago,
  * not refunded yet, and no dispute may be open (409 `refund_not_eligible` with the reason otherwise; staff handle the
  * rest). Refunds it in full (the provider reverses the tax) and ends the subscription now; the sync then lapses the
- * account (holds, never deletion). Audited `billing.refunded` (amount, currency, within the window, not staff).
+ * account (holds, never deletion). A trust tier billing gave goes back to `new` at once (ADR-0034, finding 2). Audited
+ * `billing.refunded` (amount, currency, within the window, not staff).
  */
 export async function refundSubscription(
   deps: Deps,
@@ -548,6 +550,7 @@ export async function refundSubscription(
     const at = deps.clock.now();
     const current = await billingOf(r, accountId, at);
     if (current) await r.billing.save({ ...current, selfServiceRefundAt: at, updatedAt: at });
+    await takePromotionForRefund(deps, r, accountId, req);
     await r.provisioning.enqueue({ kind: "billing.sync", subjectId: accountId, runAfter: at });
     return {
       result: refunded,

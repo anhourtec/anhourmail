@@ -36,7 +36,7 @@ import {
 } from "./guards";
 import { computeHolds } from "./holds";
 import { type BillingChange, deriveBilling, effectivePlan, type StateReason } from "./lifecycle";
-import { applyDerivation, holdResources } from "./sync";
+import { applyDerivation, holdResources, takePromotionForRefund } from "./sync";
 
 const DAY_MS = 86_400_000;
 const isId = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
@@ -299,8 +299,9 @@ export async function applyCompInUnit(
  * the 14-day window, an add-on charge, or an account that already had its self-service refund (ADR-0029 §9) — and,
  * when asked, end the subscription now (the sync then lapses the account, holding, never deleting). Refused while a
  * dispute is open (the issuer already returned the money) and for an invoice already refunded (409
- * `refund_not_eligible`). Fresh step-up; never while acting as someone. Audited `billing.refunded` with `staff: true` in
- * the account's log (rule 49) and the platform log; it doesn't use up the account's self-service refund.
+ * `refund_not_eligible`). Fresh step-up; never while acting as someone. A trust tier billing gave goes back to `new` at
+ * once (ADR-0034, finding 2; staff may set the tier afterwards). Audited `billing.refunded` with `staff: true` in the
+ * account's log (rule 49) and the platform log; it doesn't use up the account's self-service refund.
  */
 export async function staffRefund(
   deps: Deps,
@@ -340,6 +341,8 @@ export async function staffRefund(
     );
   }
   return mutation(deps, actor, req, spec, async (r) => {
+    await r.accounts.lock(accountId);
+    await takePromotionForRefund(deps, r, accountId, req);
     await r.provisioning.enqueue({ kind: "billing.sync", subjectId: accountId, runAfter: deps.clock.now() });
     const meta = {
       invoiceId: inv.id,
