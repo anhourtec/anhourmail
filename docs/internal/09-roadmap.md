@@ -1,6 +1,6 @@
 # 09 — Roadmap
 
-Last updated: 2026-11-07 (pre-staging status: 9e506fc deployed, cf19232 next; disposable-address guard and confirmation at sign-up, ADR-0033); 2026-11-05 (Phase 5 billing and mail/contacts import built, ADR-0029 and ADR-0030; sign-up proof-of-work, ADR-0031, and webmail settings part 2, ADR-0032, built; product gaps for a beta all built; Phase 6 not started; Phase 3 delegation status corrected); 2026-11-04 (billing ADR-0029 slices 1–7 built; webmail push sync built); 2026-11-04 (mail and contacts import designed, ADR-0030; webmail first load: inside the page, IndexedDB first-view copy, `Server-Timing`; names as one source and the file-storage lockdown deployed at 6545a16; Safe senders load images and own Sent mail loads its images, ADR-0027 built). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
+Last updated: 2026-11-11 (Phase 6 started: trust tiers, ADR-0034 slices 1–11 built); 2026-11-07 (pre-staging status: 9e506fc deployed, cf19232 next; disposable-address guard and confirmation at sign-up, ADR-0033); 2026-11-05 (Phase 5 billing and mail/contacts import built, ADR-0029 and ADR-0030; sign-up proof-of-work, ADR-0031, and webmail settings part 2, ADR-0032, built; product gaps for a beta all built; Phase 6 not started; Phase 3 delegation status corrected); 2026-11-04 (billing ADR-0029 slices 1–7 built; webmail push sync built); 2026-11-04 (mail and contacts import designed, ADR-0030; webmail first load: inside the page, IndexedDB first-view copy, `Server-Timing`; names as one source and the file-storage lockdown deployed at 6545a16; Safe senders load images and own Sent mail loads its images, ADR-0027 built). Each phase ends with its exit criteria met, the full test suite green (rule 37), docs current, and a handoff entry.
 
 ## Path to production (as of 2026-11-05)
 
@@ -266,8 +266,11 @@ the importer runs nowhere until the ops deploy gate is in place (`08-operations.
 
 ## Phase 6 — Abuse controls, monitoring, backups
 
-- **Status (2026-11-05):** not started (the manual staff suspension and the sign-up limits exist; everything below
-  is still to build).
+- **Status (2026-11-11):** started with trust tiers (ADR-0034): slices 1–11 built (stored on the account, applied on
+  the mail server through `mailbox.ensure` with `smtp_blocked` for `new`, the trust service, billing promotion,
+  importer cap, hourly `job:trust-promote`); the webmail hold, mail-server ceiling, routes, UI, seed and docs (slices
+  12–21) are next. The manual staff suspension and the sign-up limits existed before; everything else below is still
+  to build.
 - Encryption at rest for the provider layer: LUKS on the mail volume (key off-disk), client-side encrypted off-server backups, DNSSEC + DANE on `mx1`, MTA-STS `enforce` after clean TLS-RPT (ADR-0016).
 - Trust tiers enforced end to end, outbound counters fail-closed, Stalwart throttles pushed from the control plane, detection signals, abuse queue, `abuse@` workflow, FBL ingestion, monitoring and alerts, backups + first restore drill.
 - Staff spam/abuse metrics per account on Platform → account (outbound volume, bounces, complaints, blocklist hits),
