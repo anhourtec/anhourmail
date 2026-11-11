@@ -130,6 +130,10 @@ version. CI builds all three on every push (`.cicd/build.sh`).
     the management proxy must allow this key only the `anhourmail-relay-hold` namespace, plain (non-glob) keys and
     that one action. The worker refuses to apply a held mailbox without it (it stays unable to send), so issue it
     before deploying the worker that needs it.
+- `STALWART_ABUSE_BAN_PERIOD_MS` — how long Stalwart bans an address for recipients refused in SMTP sessions
+  (`x:Security.abuseBanPeriod`; Stalwart's default is permanent). The Stalwart bootstrap applies it
+  (`applyAbuseBanPeriod`) and refuses a private range on the allow-list (`assertNoPrivateAllowedIps`); the scheduler
+  needs it too (its reconciler compares) and refuses to start in production without it.
 
   Each process refuses to start in production without its own key or with any other key, the dev admin
   (`STALWART_DEV_ADMIN_*`) or the old `STALWART_API_KEY`; at start (web: before first use) each key is compared with

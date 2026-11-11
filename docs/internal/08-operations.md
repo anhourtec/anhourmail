@@ -1,6 +1,9 @@
 # 08 — Operations
 
-Last updated: 2026-11-11 (the relay hold: the hold key, its proxy rules, fail-closed `mailbox.ensure`, smoke checks over 587 and public `/jmap`; the worker's tier-change signal to the web app needs `REDIS_URL`; the Sieve pause under a tier, the mail server's sending ceiling and its ops follow-ups, ADR-0034 slices 12–13; `job:trust-promote` and its `TRUST_PROMOTE_*` settings, trust tiers and their deploy note, ADR-0034); 2026-11-05 (the mail importer and its deploy gate, import pages and notify job, orphaned spam-training samples clean-up, the emergency session kill; no phone verification, ADR-0031); 2026-11-04 (webmail push through NGINX: buffering off, read timeout, caps); 2026-10-31 (file storage lockdown deploy step); 2026-10-30 (data export and account deletion jobs, ADR-0025).
+Last updated: 2026-11-11 (second security review: tightening ensures never give up and alert, the reconciler
+reloads the hold list first and compares failed mailboxes, a finite abuse-ban period and no private allow-list
+entries, X-Forwarded-For on every Stalwart location, the hold key's proxy rules per method, the scheduler's
+`REDIS_URL` and the web app's catch-up pass; the relay hold: the hold key, its proxy rules, fail-closed `mailbox.ensure`, smoke checks over 587 and public `/jmap`; the worker's tier-change signal to the web app needs `REDIS_URL`; the Sieve pause under a tier, the mail server's sending ceiling and its ops follow-ups, ADR-0034 slices 12–13; `job:trust-promote` and its `TRUST_PROMOTE_*` settings, trust tiers and their deploy note, ADR-0034); 2026-11-05 (the mail importer and its deploy gate, import pages and notify job, orphaned spam-training samples clean-up, the emergency session kill; no phone verification, ADR-0031); 2026-11-04 (webmail push through NGINX: buffering off, read timeout, caps); 2026-10-31 (file storage lockdown deploy step); 2026-10-30 (data export and account deletion jobs, ADR-0025).
 
 ## Environments
 
@@ -228,12 +231,15 @@ tier on every send.
 pauses the managed script's redirects and replies the tier doesn't allow (all of them while `restricted`, outside
 redirects while `new`) after a staff change and about 30 s after each start (after the rules upgrade and the account
 Safe senders pass; logged `sending pause applied at start-up`, counts only, at most once a day while no tier changed).
-The reconciler counts a script that still sends against its tier (`unpausedSending` in `platform.reconciler_drift`); if
-it stays above 0, restart the web app to run the pass again. A tier the worker's billing sync moves (a payment's
-promotion, or billing taking it back on a refund, a dispute or an early plan end) reaches the scripts through a Redis
-signal the web app polls every 15 s (log `sending pause signals taken`), so **the worker needs `REDIS_URL`** (the same
-Redis as the web app); without it the worker logs a warning at start and the scripts follow at the web app's next
-start.
+A tier the worker's billing sync moves (a payment's promotion, or billing taking it back on a refund, a dispute or an
+early plan end) reaches the scripts through a Redis signal the web app polls every 15 s (log `sending pause signals
+taken`), so **the worker needs `REDIS_URL`** (the same Redis as the web app). The reconciler counts a script that still
+sends against its tier (`unpausedSending` in `platform.reconciler_drift`) and signals its account the same way every
+run (log `sending pause signalled to the web app`), so **the scheduler needs `REDIS_URL` too**. Whatever happens to a
+signal, the web app runs a catch-up pass every five minutes over every account whose tier changed or that was
+restricted since its last pass, whoever changed it (log `sending pause catch-up pass`, counts only; `unfinished` above 0
+is retried on the next pass). If `unpausedSending` stays above 0 for more than two reconciler runs, look at the web
+app's logs for those passes.
 
 **The mail server's sending ceiling.** Every authenticated sender is limited on the mail server to the `standard`
 tier's published numbers (messages per hour and per day, recipients per message), the platform's system accounts
@@ -249,29 +255,67 @@ mailboxes are on a lookup list the mail server reads in `allowRelaying`, so outs
 Relay not allowed.`) on SMTP and on public JMAP alike, while mail to hosted addresses goes through. The worker writes
 the list in `mailbox.ensure` with the hold key; a held mailbox whose job can't finish (hold key missing or refused,
 reload refused, relaying policy without the hold: last error "the mail server's relaying policy has no relay hold")
-stays **unable to send at all** (`send_blocked`; a new mailbox isn't created yet) and retries, then fails as any job does — check the key and the
-bootstrap's policy, then re-run the job. The reconciler reports `relayHoldMissing`, `relayHoldExtra` and
-`relayHoldPolicyMissing` in `platform.reconciler_drift` and re-queues our mailboxes; a missing policy is the
-bootstrap's to fix (re-deploy or run it). In dev the forwarder's address is exempt from Stalwart's automatic bans
-(dev plan); production never is.
+stays **unable to send at all** (`send_blocked`; a new mailbox isn't created yet) and retries — check the key and the
+bootstrap's policy. **A `mailbox.ensure` that would tighten a mailbox (a hold, a restriction, a demotion, a suspension)
+never gives up:** past the normal five attempts it keeps retrying at most five minutes apart and every run logs
+`mailbox restriction not applied yet: still retrying` at error level with `alert: "mailbox_restriction_overdue"`, the job
+and mailbox ids; alert on it (it means a restriction hasn't reached the mail server). Loosening ensures still give up
+(`platform.provisioning_failed`); the reconciler compares failed mailboxes the mail server has and re-queues them. The
+reconciler first reloads the hold list (`relayHoldReloadFailed` when it can't), then reports `relayHoldMissing`,
+`relayHoldExtra` and `relayHoldPolicyMissing` in `platform.reconciler_drift` and re-queues our mailboxes; a missing
+policy is the bootstrap's to fix (re-deploy or run it). In dev the forwarder's address is exempt from Stalwart's
+automatic bans (dev plan); production never is.
+
+**Automatic bans.** Stalwart bans an address from every protocol after 35 recipients refused in SMTP sessions in a UTC
+day (per client address and per recipient), and after repeated failed sign-ins; a JMAP submission's refused recipients
+never count (they run as a local session). The ban is permanent unless `abuseBanPeriod` is set, so production sets
+it: `STALWART_ABUSE_BAN_PERIOD_MS` (the scheduler refuses to start in production without it). The webmail sends each
+visitor's address (X-Forwarded-For) on every request to the mail server, so failed sign-ins and the per-client rate
+limit never land on the web container. The allow-list (`x:AllowedIp`) exempts an address from every ban: production's
+must hold no private range. The reconciler reports `banPolicyMismatch` (`abuse-ban-period`, `allowed-ip-private`) once
+its key can read them. To lift a ban by hand: `x:BlockedIp/set { destroy }` then `x:Action` `ReloadBlockedIps`; a
+counter that is over keeps re-banning until the UTC day ends.
 
 **Ops follow-ups (private repository) for trust tiers:**
 
 - **Hold key first** (before deploying a worker or scheduler that needs it; both refuse to start in production
   without it): create `svc-hold` and its key (`ensureServiceAccount` / `issueServiceKey`, role `hold`; set exactly
   `HOLD_KEY_PERMISSIONS`) and set `STALWART_HOLD_KEY` in the worker's and scheduler's environment only.
-- **Management proxy rules for the hold key:** `x:MemoryLookupKey/set` create only with
-  `namespace: "anhourmail-relay-hold"`, `isGlobPattern: false` and a key that is a plain lower-case address;
-  `destroy` only of ids in that namespace (look them up first); `x:MemoryLookupKey/get` and `/query` filtered to that
-  namespace; `x:Action/set` create of `ReloadLookupStores` only; `x:MtaStageRcpt/get`. Nothing else. The permissions
-  cover the spam filter's lists too (`trusted-domains`, …), so this rule is what keeps the key from them.
+- **Management proxy rules for the hold key** (security review, 2026-11-11). Its permissions cover every lookup
+  namespace, the spam filter's lists included (`trusted-domains`, `blocked-domains`, `spam-traps`, `url-redirectors`),
+  so these rules are what keep it to the hold:
+  - `POST /jmap` only, and only from the worker's and the scheduler's networks.
+  - Every method call in a batch is inspected; any method not listed here fails the whole batch. No result references
+    (`#`-prefixed arguments) and no `update` anywhere.
+  - `x:MemoryLookupKey/set` `create`: `namespace` exactly `anhourmail-relay-hold`, `isGlobPattern: false` given
+    explicitly, `key` a plain lower-case address. Refuse the platform's system addresses (`no-reply`, `postmaster`, the
+    reporting addresses, `svc-*` on the platform domain) and every `anhourtec.com` staff address.
+  - `x:MemoryLookupKey/set` `destroy`: the proxy looks each id up with its own credential and allows it only when the
+    key is in the hold namespace.
+  - `x:MemoryLookupKey/query`: the filter is exactly `{ "namespace": "anhourmail-relay-hold" }`. `x:MemoryLookupKey/get`:
+    results from any other namespace are stripped from the answer.
+  - `x:Action/set` `create`: exactly `{"@type": "ReloadLookupStores"}`.
+  - `x:MtaStageRcpt/get`: `ids` exactly `["singleton"]`.
+  - Smoke checks for the proxy: a create in another namespace (e.g. `trusted-domains`), a destroy of a key in another
+    namespace and a query of another namespace are each refused.
 - The bootstrap's `applySendingPolicy` now also writes `x:MtaStageRcpt.allowRelaying` (the hold first, then the
   default): its credential's `x:MtaStageRcpt/set` allow-list entry must accept `allowRelaying`.
-- NGINX on the public `imap.` host **sets** `X-Forwarded-For` to the address it saw (`$remote_addr`) on `/jmap` and
-  `/dav/*`, replacing anything the client sent (never `$proxy_add_x_forwarded_for`): Stalwart trusts the header
-  (`useXForwarded`), and each refused outside recipient counts towards its permanent abuse ban of that address (35 a
-  day). Passed on as sent, a held account could aim those refusals, and failed sign-ins, at someone else's address;
-  not set at all, they would ban NGINX itself.
+- NGINX **sets** `X-Forwarded-For` to the address it saw (`proxy_set_header X-Forwarded-For $remote_addr;`) on every
+  location that proxies to Stalwart (today `/jmap` and `/dav/*` on the public `imap.` host, `deploy/README.md`, and
+  any added later), replacing anything the client sent (never `$proxy_add_x_forwarded_for`): Stalwart
+  trusts the header (`useXForwarded`) for its failed sign-in ban and per-client rate limits. Passed on as sent, anyone
+  could aim failed sign-ins at someone else's address or dodge their own; not set at all, they would ban NGINX itself.
+  The web app's own requests reach Stalwart directly on the internal network and carry the visitor's address the web
+  app derived from NGINX's header (`TRUST_PROXY=true`). Stalwart's HTTP listener must stay reachable from NGINX and the
+  web app only.
+- **Abuse-ban period and allow-list in the bootstrap:** set `STALWART_ABUSE_BAN_PERIOD_MS` (production value in the ops
+  environment; the maintainer picks it, e.g. a day) for the bootstrap and the scheduler; the bootstrap calls
+  `applyAbuseBanPeriod(mgmt, abuseBanPeriodFromEnv(env))` and `assertNoPrivateAllowedIps(mgmt)` on every deploy, then
+  `ReloadSettings`; its credential needs `x:Security/get`, `/set` (singleton, `abuseBanPeriod` only) and
+  `x:AllowedIp/get` through the management proxy. The reconciler's ban check needs `sysSecurityGet` and
+  `sysAllowedIpGet` on the key it runs with (a key change with a rotation, like the ceiling check's); until then it
+  logs `banPolicyMismatch: not checked`.
+- **Alert** on `mailbox_restriction_overdue` (worker log, error level).
 - After the deploy run `job:mailbox-backfill` so every existing `new` and `restricted` mailbox is listed at once (until
   its next `mailbox.ensure`, a `new` mailbox can still send outside over public JMAP).
 - Smoke checks for a held mailbox (a fresh free account): SMTP AUTH on 587 answers `550 5.7.1`; over public `/jmap`
@@ -289,8 +333,11 @@ bootstrap's to fix (re-deploy or run it). In dev the forwarder's address is exem
   `x:MtaInboundThrottle/get` and `x:MtaStageRcpt/get` for that key. Until then the check is skipped and logged.
 - Smoke check after deploy: a `new` mailbox's SMTP AUTH on 587 answers `550 5.7.1`; the two throttles exist with the
   standard numbers.
-- The worker container gets `REDIS_URL` (the tier-change signal to the web app; no warning `no REDIS_URL` in its start
-  log).
+- The worker and scheduler containers get `REDIS_URL` (the tier-change and reconciler signals to the web app; no
+  warning `no REDIS_URL` in the worker's start log or `sending pause not signalled` in the reconciler's).
+- Smoke checks for the bans: `x:Security.abuseBanPeriod` equals `STALWART_ABUSE_BAN_PERIOD_MS`; `x:AllowedIp` holds no
+  private range; a wrong webmail password from a test client's address bans that address, not the web container's
+  (then lift it).
 
 **Deploy note for the first release with tiers:** at deploy every mailbox of a `new` account becomes SMTP-held and
 relay-held the next time its `mailbox.ensure` runs (run `job:mailbox-backfill` to apply it to all at once); accounts the 0044 backfill
