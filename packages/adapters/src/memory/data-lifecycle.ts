@@ -38,6 +38,8 @@ export function memoryDataLifecycle(s: MemoryState): DataLifecycleRepository {
     s.actAsSessions = s.actAsSessions.filter((a) => a.accountId !== accountId);
     s.accountSuspensions = without(s.accountSuspensions, accountId);
     s.billing = s.billing.filter((b) => b.accountId !== accountId);
+    s.trust = s.trust.filter((t) => t.accountId !== accountId);
+    s.mailboxRestrictions = s.mailboxRestrictions.filter((r) => !mailboxIds.has(r.mailboxId));
     s.billingEvents = s.billingEvents.filter((e) => e.accountId !== accountId);
     s.billingDisputes = s.billingDisputes.filter((d) => d.accountId !== accountId);
     s.planHolds = s.planHolds.filter((h) => h.accountId !== accountId);

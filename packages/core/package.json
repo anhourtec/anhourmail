@@ -23,7 +23,8 @@
     "./imports": "./src/imports/index.ts",
     "./webmail": "./src/webmail/index.ts",
     "./people": "./src/people/index.ts",
-    "./platform": "./src/platform/index.ts"
+    "./platform": "./src/platform/index.ts",
+    "./trust": "./src/trust/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

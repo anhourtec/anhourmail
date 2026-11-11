@@ -71,6 +71,7 @@ import { memoryBilling, memoryInviteCodes } from "./billing";
 import { memoryDataLifecycle, type MemoryExportRow } from "./data-lifecycle";
 import { memoryDelegation } from "./delegation";
 import { memoryMailImports } from "./mail-imports";
+import { memoryTrust, type MemoryMailboxRestriction, type MemoryTrustRow } from "./trust";
 
 /**
  * In-memory adapter for unit tests (ADR-0008). Same contract as Postgres (src/contract): `run` is atomic —
@@ -176,6 +177,10 @@ export type MemoryState = {
   mailImportBatches: MailImportBatch[];
   /** People's trust tiers by user id, when a test sets them (Postgres: `user_profile.trust_tier`; else `new`). */
   trustTiers?: Record<string, string>;
+  /** Accounts' trust tiers (Postgres: columns on `customer_account`, ADR-0034); no row reads as `new`/`default`. */
+  trust: MemoryTrustRow[];
+  /** Mailboxes' sending restrictions (Postgres: `mailbox.sending_restricted_*`). */
+  mailboxRestrictions: MemoryMailboxRestriction[];
 };
 
 export const emptyState = (): MemoryState => ({
@@ -233,6 +238,8 @@ export const emptyState = (): MemoryState => ({
   mailImports: [],
   mailImportFolders: [],
   mailImportBatches: [],
+  trust: [],
+  mailboxRestrictions: [],
 });
 
 const EPOCH = new Date(0);
@@ -494,6 +501,16 @@ function repositories(s: MemoryState): Repositories {
         provisioned: m.stalwartId !== null,
       })),
     }),
+    hostedDomains: async (names) => {
+      const wanted = new Set(names.map((n) => n.toLowerCase()));
+      return [
+        ...new Set(
+          s.domains
+            .filter((d) => d.status === "active" && wanted.has(d.name.toLowerCase()))
+            .map((d) => d.name.toLowerCase()),
+        ),
+      ];
+    },
   };
 
   const domains: DomainRepository = {
@@ -1266,6 +1283,7 @@ function repositories(s: MemoryState): Repositories {
     billing: memoryBilling(s),
     inviteCodes: memoryInviteCodes(s),
     imports: memoryMailImports(s),
+    trust: memoryTrust(s),
     suspensions,
     webmailSettings,
     appPasswords,

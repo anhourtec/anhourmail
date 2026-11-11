@@ -68,6 +68,7 @@ import { PgDataLifecycleRepository } from "./data-lifecycle";
 import { PgBillingRepository, PgInviteCodeRepository } from "./billing";
 import { PgDelegationRepository } from "./delegation";
 import { PgMailImportRepository } from "./mail-imports";
+import { PgTrustRepository } from "./trust";
 import { isUniqueViolation } from "./errors";
 import {
   accountBilling,
@@ -626,6 +627,16 @@ class PgMailDirectoryRepository implements MailDirectoryRepository {
         provisioned: m.stalwartId !== null,
       })),
     };
+  }
+
+  async hostedDomains(domains: readonly string[]): Promise<string[]> {
+    const wanted = [...new Set(domains.map((d) => d.toLowerCase()))];
+    if (wanted.length === 0) return [];
+    const rows = await this.x
+      .selectDistinct({ name: sql<string>`lower(${customerDomain.name})` })
+      .from(customerDomain)
+      .where(and(eq(customerDomain.status, "active"), inArray(sql`lower(${customerDomain.name})`, wanted)));
+    return rows.map((r) => r.name);
   }
 }
 
@@ -1673,6 +1684,7 @@ const repositories = (x: Executor): Repositories => ({
   appPasswords: new PgAppPasswordRepository(x),
   catchAll: new PgCatchAllRepository(x),
   imports: new PgMailImportRepository(x),
+  trust: new PgTrustRepository(x),
 });
 
 /** One Postgres transaction per `run` (CLAUDE.md rule 46: the audit row commits with the change). */

@@ -73,6 +73,11 @@ export type MailDirectoryRepository = {
    * mailbox (for the reconciler, which decides what each status means).
    */
   desired(): Promise<{ domains: string[]; mailboxes: DesiredMailbox[] }>;
+  /**
+   * Which of these domain names (any case) are verified customer domains (`active`), lowercased. Platform domains come
+   * from configuration, not from here (core `hostedDomains`).
+   */
+  hostedDomains(domains: readonly string[]): Promise<string[]>;
 };
 
 /**

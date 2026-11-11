@@ -23,6 +23,7 @@ import type {
 } from "./platform/repository";
 import type { MailDirectoryRepository, ProvisioningRepository } from "./provisioning/ports";
 import type { SecurityRepository } from "./security/repository";
+import type { TrustRepository } from "./trust/repository";
 import type { WebmailSettingsRepository } from "./webmail/settings-repository";
 
 /** Everything a service can touch inside one transaction. Adapters implement it (memory, postgres). */
@@ -54,6 +55,7 @@ export type Repositories = {
   billing: BillingRepository;
   inviteCodes: InviteCodeRepository;
   imports: MailImportRepository;
+  trust: TrustRepository;
 };
 
 /**
