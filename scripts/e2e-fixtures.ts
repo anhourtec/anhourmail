@@ -34,6 +34,7 @@ if (mode === "create") {
     ["globalAdmin", { platform: "global_admin" }],
     ["reportsReader", { platform: "reports_reader" }],
     ["supportAdmin", { platform: "support_admin" }],
+    ["trustSafetyAdmin", { platform: "trust_safety_admin" }],
     ["owner", { account: "owner" }],
     ["member", { account: "member" }],
     ["userAdmin", { account: "user_admin" }],
@@ -79,6 +80,10 @@ if (mode === "create") {
   const suspension: Record<string, { accountName: string; owner: string; member: string }> = {};
   const firstSignIn: Record<string, { owner: string; domain: string }> = {};
   const avatars: Record<string, { person: string; mailbox: string; mailboxPassword: string }> = {};
+  const trust: Record<
+    string,
+    { accountId: string; accountName: string; owner: string; member: string; mailbox: string; mailboxPassword: string }
+  > = {};
   const names: Record<string, { person: string; mailbox: string; mailboxPassword: string }> = {};
   const aliasLimits: Record<string, { owner: string; mailbox: string; day: string }> = {};
   const billing: Record<string, { accountId: string; owner: string; billingAdmin: string; member: string }> = {};
@@ -283,6 +288,50 @@ if (mode === "create") {
       quotaBytes: 50 * 1024 * 1024,
     });
     avatars[project] = { person: avPerson.email, mailbox: `me@${avDomain}`, mailboxPassword: avPassword };
+    // Trust tiers journey (ADR-0034): a Free account per project at the `new` tier (the column's default) whose Owner
+    // has a mailbox of their own on the mail server, and a Member; staff restrict it and give it back.
+    const [trAccount] = await db
+      .insert(schema.customerAccount)
+      .values({ name: `${run} Trust ${project}`, plan: "free" })
+      .returning();
+    if (!trAccount) throw new Error("trust account not created");
+    const trOwner = await addLogin(`tr-${project}-owner`);
+    const trMember = await addLogin(`tr-${project}-member`);
+    await db.insert(schema.accountMembership).values([
+      { accountId: trAccount.id, userId: trOwner.id, role: "owner" },
+      { accountId: trAccount.id, userId: trMember.id, role: "member" },
+    ]);
+    const trDomain = `${run}-tr-${project}.test`;
+    const trPassword = `${randomBytes(12).toString("base64url")}-E2e`;
+    await db.insert(schema.customerDomain).values({
+      accountId: trAccount.id,
+      name: trDomain,
+      status: "active",
+      verifyToken: `${run}-tr-${project}`,
+      stalwartId: await mgmt.upsertDomain({ name: trDomain }),
+    });
+    await db.insert(schema.mailbox).values({
+      accountId: trAccount.id,
+      userId: trOwner.id,
+      address: `me@${trDomain}`,
+      stalwartId: await mgmt.upsertUser({
+        name: "me",
+        domain: trDomain,
+        password: await hashPassword(trPassword),
+        quotaBytes: 50 * 1024 * 1024,
+        suspended: false,
+      }),
+      status: "active",
+      quotaBytes: 50 * 1024 * 1024,
+    });
+    trust[project] = {
+      accountId: trAccount.id,
+      accountName: trAccount.name,
+      owner: trOwner.email,
+      member: trMember.email,
+      mailbox: `me@${trDomain}`,
+      mailboxPassword: trPassword,
+    };
     // Names journey (rule 61): a person (Owner of their own account) whose own mailbox follows their name, so a name
     // changed on the console Profile shows as the webmail's sender name and back.
     const [nmAccount] = await db
@@ -620,6 +669,7 @@ if (mode === "create") {
         actAs,
         firstSignIn,
         avatars,
+        trust,
         names,
         data,
         aliasLimits,

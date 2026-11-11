@@ -7,7 +7,10 @@ export type E2eUsers = {
   run: string;
   password: string;
   accountName: string;
-  users: Record<"globalAdmin" | "reportsReader" | "supportAdmin" | "owner" | "member" | "userAdmin", string>;
+  users: Record<
+    "globalAdmin" | "reportsReader" | "supportAdmin" | "trustSafetyAdmin" | "owner" | "member" | "userAdmin",
+    string
+  >;
   /** A mailbox of this run's own (fresh mail-server allowance per run) for webmail send/receive journeys. */
   recipient: { address: string; password: string };
   /** Per browser project: logins for the sign-in security journeys (their own account for the requirement). */
@@ -23,6 +26,14 @@ export type E2eUsers = {
   firstSignIn: Record<string, { owner: string; domain: string }>;
   /** Per browser project: the profile photos journey's person and their own mailbox (on the mail server). */
   avatars: Record<string, { person: string; mailbox: string; mailboxPassword: string }>;
+  /**
+   * Per browser project: the trust tiers journey's Free account (ADR-0034) at the `new` tier: its id and name, its Owner
+   * with their own mailbox on the mail server (address and password), and a Member.
+   */
+  trust: Record<
+    string,
+    { accountId: string; accountName: string; owner: string; member: string; mailbox: string; mailboxPassword: string }
+  >;
   /** Per browser project: the names journey's person and their own mailbox, which follows their name (rule 61). */
   names: Record<string, { person: string; mailbox: string; mailboxPassword: string }>;
   /** Per browser project: the data export and deletion journey's account (Owner, Member) and a login that leaves. */
