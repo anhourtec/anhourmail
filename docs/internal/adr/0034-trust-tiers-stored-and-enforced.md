@@ -1,6 +1,7 @@
 # ADR-0034: Trust tiers stored on the customer account and enforced on every sending path
 
-**Status:** Accepted 2026-11-11 (building: slices 1–15 built; first Phase 6 slice)
+**Status:** Accepted 2026-11-11 (building: slices 1–15 built, review findings 2, 3, 5, 6 addressed; first Phase 6
+slice)
 
 ## Context
 
@@ -396,3 +397,46 @@ commit. The RBAC registry lists the four routes; `roles.md` guard rail 24; the m
   every other console read, so the account id is checked against the caller's memberships (another account's id 404).
 - **The restriction email** (§5 "Email") isn't sent by these routes yet; the services already return who to tell
   (`notify`), and build slice 19 adds the template and sends it.
+
+## Update 2026-11-11: security review of slices 1–11 (findings 2, 3, 5, 6)
+
+A security-reviewer pass over slices 1–11 found four issues in the promotion and restriction logic; the coordinator's
+decisions are built as follows. §2 "Promotion is sticky: a later downgrade to Free leaves `standard`" is replaced by
+the rule below.
+
+- **Finding 2 (high): pay → `standard` → refund kept `standard`**, and a stolen card's dispute paused billing but never
+  marked the account, so once the dispute cleared or the plan lapsed the account was `standard` and could be promoted
+  again. Now billing takes its own promotion back (`revokeBillingPromotion` in `trust/service.ts`): a tier whose
+  source is `billing` goes back to `new` (source `default`), its mailboxes queued for `mailbox.ensure`, audited
+  `trust.tier_changed` (meta `cause` `refund`, `dispute` or `plan_ended`) by the system, never touching a staff-set,
+  automatic or restricted tier. It runs on a refund (the console's self-service and staff refunds in their own unit
+  of work, actor `billing-refund`; a refund made at the provider in the sync), on any dispute open or lost (the sync,
+  which also moves `last_restricted_at` to when the account was first disputed, so neither the job nor billing ever
+  promotes it again, whatever the dispute's outcome; staff can still set `standard`), and when the paid plan ends
+  (cancelled, lapsed, a comp or grant ended) within `BILLING.refundWindowDays` of the promotion. A plan that ran past
+  the window keeps `standard` when it ends. Billing now promotes only when the account **enters `active` or pays a new
+  invoice** (no longer on every derivation that leaves it `active`), so a refund that leaves the subscription live
+  isn't undone by the next sync. The managed scripts follow: the console routes (refunds, grants, comp redemption)
+  schedule the sending pause after they commit, and a billing sync in the worker that moves a tier signals the web
+  app through a Redis set (`@anhourmail/server/account-signals`, polled every 15 s by `startSendingPauseSignals`; a
+  lost signal is caught by the start-up pass). The worker needs `REDIS_URL` for the signal (it warns at start without
+  it).
+- **Finding 3 (medium, accepted): comp codes and staff grants reach `standard` without `platform.trust.manage`.**
+  Accepted as a staff vouch: both need `platform.billing.manage` ★ and a fresh step-up, and codes are single use.
+  Decision on revocation: a grant or comp that ends (staff end it, or it runs out) within the refund window of the
+  promotion takes it back, like a payment that ends that early; one that ran longer keeps `standard`. Recorded in
+  `roles.md` guard rail 24.
+- **Finding 5 (low): suspension and promotion could interleave.** A person's suspension marked the accounts they
+  belong to without locking them, and `promoteEstablished` didn't re-check a member's suspension, the owners'
+  confirmed email or the held count under its lock. Now `suspendPerson` locks every account of the person (their
+  mailboxes' and their memberships', in id order) before any write (409 when one is added meanwhile), and
+  `promoteEstablished` asks `TrustRepository.qualifiesForPromotion` (the same conditions as `promotionCandidates`, for
+  one account) after taking the lock. Pinned on Postgres in `packages/adapters/src/db-postgres/trust-race.int.test.ts`.
+- **Finding 6 (low):** `promoteForPayment` now needs the account `active` (a suspended account isn't promoted by
+  paying, a comp or a grant); a mailbox with `sending_restricted_at` set always reads as restricted in both adapters
+  (`storedRestriction`; a reason the code no longer knows reads as `other`, where Postgres used to read no
+  restriction); and the log redaction list gains backstop keys for staff notes (`trustNote`,
+  `sendingRestrictedNote`, `suspensionNote`, `staffNote`), chosen not to touch `internalNote`, which the staff
+  suspension's platform audit entry keeps on purpose (audit meta shares the list).
+
+Out of scope here (a separate mail-infra batch): the public-JMAP route around `smtp_blocked` and a relay hold.
