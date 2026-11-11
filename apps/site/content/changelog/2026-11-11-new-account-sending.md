@@ -6,8 +6,12 @@ summary: A new account sends to addresses hosted on AnhourMail, from the webmail
 
 - **Sending from a new account.** From the first minute a new account can send to addresses hosted on AnhourMail.
   Sending elsewhere, and from mail apps over SMTP, opens automatically once the account is established, and straight
-  away on a paid plan. The webmail says so before anything is sent; a mail app that sends over JMAP gets outside
-  recipients back as not delivered. See [Sending limits](/docs/sending-limits#new-accounts).
+  away when you pay for a plan (a free trial, a code or a gift waits like a free account; a refund, a dispute or the
+  plan ending soon after takes it back). The webmail says so before anything is sent; a mail app that sends over JMAP
+  gets outside recipients back as not delivered. See [Sending limits](/docs/sending-limits#new-accounts).
+- **Automatic replies wait for an established account.** While an account is new its automatic replies, like
+  forwarding outside AnhourMail, are paused. You can set them up now; they start on their own once the account is
+  established. See [Automatic replies](/docs/webmail-settings#automatic-replies).
 - **See your sending level.** The console's home page has a **Sending** card for each account, with its level and
   limits, and the webmail shows the open mailbox's level under **Settings → Account → Sending**. While the account is
   new, both say what opens later; **App passwords** says that mail apps can't send yet.
