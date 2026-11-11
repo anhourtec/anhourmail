@@ -3,6 +3,7 @@
  * Billing end to end on the compose stack (ADR-0029 §4–5, slices 5–6): signed provider events (the fake provider, real
  * signature scheme) are ingested into Postgres once each, `billing.sync` runs as a queue job and reconciles the account,
  * and `mailbox.ensure` applies the result on the real pinned Stalwart with the production provisioning key: a
+ * new free account's mailbox can't send from mail apps until paying promotes it to standard (ADR-0034 §2–3); a
  * restricted account's mailbox is refused on 465 and 587 and for JMAP submission, still signs in and reads over IMAP
  * and still receives; paying restores sending. A provider outage changes nothing.
  *
@@ -286,10 +287,9 @@ async function inboundRcpt(): Promise<string> {
 
 describe("billing on the stack: webhook → billing_event → billing.sync → mailbox.ensure on Stalwart", () => {
   it("records each event once, syncs, restricts sending on every protocol, keeps reading and receiving, restores", async () => {
-    // Mail apps send over SMTP only from a standard account (ADR-0034 §3); the tests below need them to.
     const [account] = await db
       .insert(schema.customerAccount)
-      .values({ name: `billing ${tag}`, plan: "free", trustTier: "standard", trustTierSource: "staff" })
+      .values({ name: `billing ${tag}`, plan: "free" })
       .returning();
     if (!account) throw new Error("account not created");
     accountId = account.id;
@@ -312,7 +312,9 @@ describe("billing on the stack: webhook → billing_event → billing.sync → m
     await enqueueProvisioning(deps, { kind: "domain.ensure", subjectId: d.id });
     await enqueueProvisioning(deps, { kind: "mailbox.ensure", subjectId: m.id });
     await drain(d.id, m.id);
-    expect(authOk(await submit(port("STALWART_SUBMISSIONS_PORT", 465), "implicit"))).toBe(true);
+    // A new free account: mail apps can't send over SMTP until it is promoted (ADR-0034 §3).
+    expect((await mgmt.listUsers()).find((u) => u.address === address)?.access).toBe("smtp_blocked");
+    expect(authRefused(await submit(port("STALWART_SUBMISSIONS_PORT", 465), "implicit"))).toBe(true);
     const stalwartId = (await db.select().from(schema.mailbox).where(eq(schema.mailbox.id, m.id)))[0]?.stalwartId;
     if (!stalwartId) throw new Error("mailbox not on the mail server");
     // An app password for mail apps (IMAP, SMTP, JMAP), issued as the console does (operations key).
@@ -323,7 +325,7 @@ describe("billing on the stack: webhook → billing_event → billing.sync → m
         protocols: ["imap", "smtp", "jmap"],
       })
     ).secret;
-    expect(authOk(await submit(port("STALWART_SUBMISSIONS_PORT", 465), "implicit", appPassword))).toBe(true);
+    expect(authRefused(await submit(port("STALWART_SUBMISSIONS_PORT", 465), "implicit", appPassword))).toBe(true);
     // Forwarding and an automatic reply in the mailbox's Sieve script (set up with the dev admin; the console writes
     // the managed script with the operations key).
     await mgmt.putSieveScript(
@@ -366,9 +368,13 @@ describe("billing on the stack: webhook → billing_event → billing.sync → m
     expect(rows).toHaveLength(3);
     await drain(accountId);
     expect(await billingState()).toBe("active");
-    expect(
-      (await db.select().from(schema.customerAccount).where(eq(schema.customerAccount.id, accountId)))[0]?.plan,
-    ).toBe("plus");
+    const paid = (await db.select().from(schema.customerAccount).where(eq(schema.customerAccount.id, accountId)))[0];
+    expect(paid).toMatchObject({ plan: "plus", trustTier: "standard", trustTierSource: "billing" });
+    // Paying promoted it to standard in the sync's unit of work and queued its mailbox: mail apps may send now.
+    await drain(mailboxId);
+    expect((await mgmt.listUsers()).find((u) => u.address === address)?.access).toBe("active");
+    expect(authOk(await submit(port("STALWART_SUBMISSIONS_PORT", 465), "implicit"))).toBe(true);
+    expect(authOk(await submit(port("STALWART_SUBMISSIONS_PORT", 465), "implicit", appPassword))).toBe(true);
 
     // An outage at the provider: the sync throws before writing anything (as a job, the queue retries it later).
     const down: BillingProvider = {

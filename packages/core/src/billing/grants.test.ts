@@ -110,6 +110,12 @@ describe("grantStaffPlan / endStaffPlan", () => {
     expect(w.inAccount("billing.state_changed")[0]?.meta).toMatchObject({ toState: "active", reason: "comp_started" });
     expect(w.inAccount("billing.plan_changed")[0]?.meta).toMatchObject({ fromPlan: "free", toPlan: "plus" });
     expect(w.inPlatform("billing.staff_plan_granted")).toHaveLength(1);
+    // A comp makes the account paid, so it is promoted to standard at once (ADR-0034 §2), by the staff member's request.
+    expect(await w.d.uow.run((r) => r.trust.get(ACCOUNT_A))).toMatchObject({ tier: "standard", source: "billing" });
+    expect(w.inAccount("trust.tier_changed")[0]).toMatchObject({
+      result: "success",
+      meta: { fromTier: "new", toTier: "standard", source: "billing" },
+    });
   });
 
   it("grants with no end date as a staff grant; ending it drops to Free and holds what doesn't fit", async () => {
@@ -123,6 +129,8 @@ describe("grantStaffPlan / endStaffPlan", () => {
     expect(w.s.mailboxes).toHaveLength(2); // nothing deleted
     expect(w.inAccount("billing.staff_plan_revoked")[0]?.meta).toMatchObject({ source: "staff", toState: "lapsed" });
     expect(w.inAccount("billing.plan_changed").at(-1)?.meta).toMatchObject({ fromPlan: "supporter", toPlan: "free" });
+    // Ending the grant keeps the promotion (sticky).
+    expect((await w.d.uow.run((r) => r.trust.get(ACCOUNT_A)))?.tier).toBe("standard");
   });
 
   it("a grant on a lapsed account lifts every hold", async () => {

@@ -11,6 +11,7 @@
 import { onPlatformDomain } from "../mailboxes/platform";
 import { recordSystemChanges, type SystemChange } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
+import { promoteForPayment } from "../trust/service";
 
 import type { AccountBilling, BillingEvent, PlanHold } from "./entity";
 import { computeHolds, type HoldResources } from "./holds";
@@ -243,7 +244,10 @@ export async function applyDerivation(
       }
     }
   }
-  return [...auditOf(accountId, d.next, d.changes, held), ...revoked];
+  // A paying account sends as standard at once (ADR-0034 §2): `new` → `standard`, source billing, its mailboxes queued.
+  // Sticky (a later downgrade keeps it); a staff-set, restricted or once-restricted account is left alone.
+  const promoted = d.next.state === "active" ? await promoteForPayment(deps, r, accountId) : [];
+  return [...auditOf(accountId, d.next, d.changes, held), ...revoked, ...promoted];
 }
 
 /**

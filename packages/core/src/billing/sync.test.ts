@@ -170,15 +170,56 @@ describe("billing.sync", () => {
       "billing.plan_changed:success",
       "billing.addons_changed:success",
       "billing.payment_succeeded:success",
+      "trust.tier_changed:success",
     ]);
     const state = w.d.uow.state.audit.find((e) => e.action === "billing.state_changed");
     expect(state?.meta).toEqual({ fromState: "free", toState: "active", reason: "checkout_paid" });
     expect(state?.actor).toMatchObject({ type: "system", email: "billing-sync" });
-    // Becoming paid touches no mailbox access: no mail-server work.
-    expect(w.d.uow.state.jobs.filter((j) => j.kind === "mailbox.ensure")).toEqual([]);
+    // Paying promotes the new account to standard at once (ADR-0034 §2), in the same unit of work, by the sync.
+    const tier = w.d.uow.state.audit.find((e) => e.action === "trust.tier_changed");
+    expect(tier?.meta).toEqual({ fromTier: "new", toTier: "standard", source: "billing", mailboxesQueued: 2 });
+    expect(tier?.actor).toMatchObject({ type: "system", email: "billing-sync" });
+    expect(await w.d.uow.run((r) => r.trust.get(w.accountId))).toMatchObject({ tier: "standard", source: "billing" });
+    // Its mailboxes are queued so the mail server lets mail apps send.
+    expect(w.d.uow.state.jobs.filter((j) => j.kind === "mailbox.ensure")).toHaveLength(2);
     // A second run with nothing new changes nothing and audits nothing.
     await syncAccountBilling(w.d, w.provider, w.accountId);
-    expect(w.audit()).toHaveLength(4);
+    expect(w.audit()).toHaveLength(5);
+  });
+
+  it("paying leaves a staff-set or restricted tier alone, and a lapse never lowers a promoted one", async () => {
+    for (const row of [
+      { tier: "new" as const, source: "staff" as const },
+      { tier: "restricted" as const, source: "staff" as const },
+    ]) {
+      const w = await world();
+      w.d.uow.state.trust.push({
+        accountId: w.accountId,
+        ...row,
+        since: w.d.clock.now(),
+        reason: null,
+        note: null,
+        setBy: "ga",
+        lastRestrictedAt: null,
+      });
+      await w.subscribe();
+      await w.deliver();
+      await syncAccountBilling(w.d, w.provider, w.accountId);
+      expect((await w.billing())?.state).toBe("active");
+      expect((await w.d.uow.run((r) => r.trust.get(w.accountId)))?.tier).toBe(row.tier);
+      expect(w.audit()).not.toContain("trust.tier_changed:success");
+    }
+    const w = await world();
+    await w.subscribe();
+    await w.deliver();
+    await syncAccountBilling(w.d, w.provider, w.accountId);
+    const sub = await w.provider.getSubscription(w.customerId);
+    await w.provider.cancel({ subscriptionId: sub?.subscriptionId ?? "", when: "period_end", intentId: randomUUID() });
+    await w.provider.advanceClock(366);
+    await w.deliver();
+    await syncAccountBilling(w.d, w.provider, w.accountId);
+    expect((await w.billing())?.state).toBe("lapsed");
+    expect((await w.d.uow.run((r) => r.trust.get(w.accountId)))?.tier).toBe("standard");
   });
 
   it("past due → retries exhausted → restricted: every mailbox's access is re-applied; paying lifts it", async () => {
