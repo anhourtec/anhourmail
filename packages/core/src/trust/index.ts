@@ -3,3 +3,4 @@ export * from "./entity";
 export type * from "./repository";
 export * from "./standing";
 export * from "./access";
+export * from "./service";
