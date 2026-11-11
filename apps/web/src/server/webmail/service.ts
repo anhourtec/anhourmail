@@ -3118,7 +3118,11 @@ export class WebmailService {
     try {
       return await this.#d.trust.standing(address);
     } catch (err) {
-      log.warn("webmail sending standing unavailable", { component: "webmail", err });
+      // The error's name only: a failed query's text can carry its parameters (the address).
+      log.warn("webmail sending standing unavailable", {
+        component: "webmail",
+        error: err instanceof Error ? err.name : "unknown",
+      });
       throw new WebmailUnavailableError("sending is unavailable right now");
     }
   }
@@ -3147,7 +3151,11 @@ export class WebmailService {
     try {
       return await this.#d.trust.outside(addresses);
     } catch (err) {
-      log.warn("webmail hosted-domain check unavailable", { component: "webmail", err });
+      // The error's name only: a failed query's text can carry its parameters (recipients' domains, rule 24).
+      log.warn("webmail hosted-domain check unavailable", {
+        component: "webmail",
+        error: err instanceof Error ? err.name : "unknown",
+      });
       throw new WebmailUnavailableError("sending is unavailable right now");
     }
   }
