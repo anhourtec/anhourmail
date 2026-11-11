@@ -1,6 +1,6 @@
 # ADR-0034: Trust tiers stored on the customer account and enforced on every sending path
 
-**Status:** Accepted 2026-11-11 (building: slices 1–13 built; first Phase 6 slice)
+**Status:** Accepted 2026-11-11 (building: slices 1–15 built; first Phase 6 slice)
 
 ## Context
 
@@ -382,3 +382,17 @@ Built: `applySendingPolicy` / `sendingPolicyDrift` (`packages/stalwart-client/sr
   where the key can read (the dev admin, a future key); until the ops follow-up, the reconciler logs it as skipped and
   the deploy's bootstrap is what keeps the ceiling in place. The reconciler's `accessMismatch` compares settled
   `active` mailboxes only (a suspended one is compared by the suspension check).
+
+## Update 2026-11-11: build slices 14–15
+
+Built: `PUT /api/platform/accounts/:accountId/trust`, `PUT /api/platform/accounts/:accountId/mailboxes/:mailboxId/sending`
+(tier `staffTrust`, 30 / h, fail closed), the staff read `GET /api/platform/accounts/:accountId/trust`
+(`platform.accounts.read`; notes with `platform.suspensionNotes.read`) and the customer read; `tier_unavailable` → 422.
+Both changes schedule the managed-script pause (update "forwarding and automatic replies under a tier") after they
+commit. The RBAC registry lists the four routes; `roles.md` guard rail 24; the matrix keeps its grants and only
+`platform.trust.manage`'s description changed. Two details differ from §2 and §5 as written:
+
+- **The customer read is account-scoped:** `GET /api/accounts/:accountId/sending` (not `/api/account/sending`), like
+  every other console read, so the account id is checked against the caller's memberships (another account's id 404).
+- **The restriction email** (§5 "Email") isn't sent by these routes yet; the services already return who to tell
+  (`notify`), and build slice 19 adds the template and sends it.
