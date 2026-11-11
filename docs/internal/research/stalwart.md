@@ -338,6 +338,17 @@ the reload `sysActionCreate`, which also allows every other `x:Action` (pause th
 service keys holds them today. Avoid `key_get(…) || 100` as a value expression: an unlisted account got a cap of 1.
 Whether Sieve can read lookup keys after `ReloadLookupStores` (ADR-0026 P9 tried only `ReloadSettings`) is untested.
 
+**The ceiling as built (ADR-0034 slice 13, 2026-11-11; `packages/adapters/src/stalwart/sending-ceiling.int.test.ts`):**
+two `authenticatedAs` throttles with the standard tier's numbers (50 / h, 200 / day) and `match` `!is_empty(authenticated_as)
+&& !(authenticated_as == '<system account>' || …)`, and `maxRecipients` `if <same> then 50 else 100`. A customer's 51st
+MAIL FROM in an hour got `452 4.4.5`, its 51st RCPT `455 4.5.3`; an exempt `no-reply@` sent 51 MAIL FROMs and 51 RCPTs.
+Expression functions: `is_empty` exists; `starts_with` / `ends_with` aren't named anywhere in `GET /api/schema`, so
+the exemption names whole addresses. Writes: a throttle's `description` can't be updated (`notUpdated`, even to the
+same value), and an update writes only the fields it names (a partial `rate` update works), so a changed throttle is
+destroyed and created again. Reads need `sysMtaInboundThrottleGet` and `sysMtaStageRcptGet` (the schema's permissions
+are `sysMtaInboundThrottle{Get,Create,Update,Destroy,Query}` and `sysMtaStageRcpt{Get,Update}`); the provisioning key
+holds none of them (`forbidden`).
+
 ### App passwords (verified on the pinned v0.16.27, 2026-10-22)
 
 Throwaway `apppw-probe.test` domain and accounts, destroyed afterwards (ADR-0020):

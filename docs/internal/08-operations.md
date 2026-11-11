@@ -1,6 +1,6 @@
 # 08 — Operations
 
-Last updated: 2026-11-11 (`job:trust-promote` and its `TRUST_PROMOTE_*` settings, trust tiers and their deploy note, ADR-0034); 2026-11-05 (the mail importer and its deploy gate, import pages and notify job, orphaned spam-training samples clean-up, the emergency session kill; no phone verification, ADR-0031); 2026-11-04 (webmail push through NGINX: buffering off, read timeout, caps); 2026-10-31 (file storage lockdown deploy step); 2026-10-30 (data export and account deletion jobs, ADR-0025).
+Last updated: 2026-11-11 (the Sieve pause under a tier, the mail server's sending ceiling and its ops follow-ups, ADR-0034 slices 12–13; `job:trust-promote` and its `TRUST_PROMOTE_*` settings, trust tiers and their deploy note, ADR-0034); 2026-11-05 (the mail importer and its deploy gate, import pages and notify job, orphaned spam-training samples clean-up, the emergency session kill; no phone verification, ADR-0031); 2026-11-04 (webmail push through NGINX: buffering off, read timeout, caps); 2026-10-31 (file storage lockdown deploy step); 2026-10-30 (data export and account deletion jobs, ADR-0025).
 
 ## Environments
 
@@ -223,6 +223,35 @@ this repository). Staff change a tier or restrict one mailbox through the trust 
 Administrators, step-up; the console routes come with a later slice). A tier change re-applies every usable mailbox
 of the account through `mailbox.ensure`, so the mail server follows within a few worker cycles; the webmail reads the
 tier on every send.
+
+**Forwarding and automatic replies under a tier.** The send block doesn't stop a mailbox's Sieve, so the web app
+pauses the managed script's redirects and replies the tier doesn't allow (all of them while `restricted`, outside
+redirects while `new`) after a staff change and about 30 s after each start (after the rules upgrade and the account
+Safe senders pass; logged `sending pause applied at start-up`, counts only, at most once a day while no tier changed).
+The reconciler counts a script that still sends against its tier (`unpausedSending` in `platform.reconciler_drift`); if
+it stays above 0, restart the web app to run the pass again.
+
+**The mail server's sending ceiling.** Every authenticated sender is limited on the mail server to the `standard`
+tier's published numbers (messages per hour and per day, recipients per message), the platform's system accounts
+(`no-reply`, `postmaster`, the reporting addresses) excepted so transactional mail is never throttled
+(`applySendingPolicy` in `packages/stalwart-client/src/sending.ts`, numbers from `standardSendingPolicy` in
+`packages/shared/src/sending.ts`). Dev applies it in the dev plan (`npm run db:seed`). Over it a mail app gets
+`452 4.4.5` at MAIL FROM, a webmail send is refused by the mail server, and the 51st recipient `455 4.5.3`. The hourly
+reconciler checks it (`sendingPolicyMismatch`) and logs "sending ceiling check skipped" while its key can't read the
+throttles.
+
+**Ops follow-ups (private repository) for trust tiers:**
+
+- The deploy's bootstrap calls `applySendingPolicy(mgmt, standardSendingPolicy(PLATFORM_DOMAIN))` on every deploy (it
+  reloads settings itself when it changed something); the bootstrap credential needs `x:MtaInboundThrottle/get`,
+  `/set` (create and destroy: a changed throttle is replaced whole, its description can't be updated) and
+  `x:MtaStageRcpt/get`, `/set` (singleton update) through the management proxy.
+- The reconciler's check needs `sysMtaInboundThrottleGet` and `sysMtaStageRcptGet` on the key it runs with (today the
+  worker's provisioning key, which lacks them: keys are `Replace`-typed with exactly their set, so this is a key change
+  with a rotation, and the start-up scope check must expect the new set); the management proxy must allow
+  `x:MtaInboundThrottle/get` and `x:MtaStageRcpt/get` for that key. Until then the check is skipped and logged.
+- Smoke check after deploy: a `new` mailbox's SMTP AUTH on 587 answers `550 5.7.1`; the two throttles exist with the
+  standard numbers.
 
 **Deploy note for the first release with tiers:** at deploy every mailbox of a `new` account becomes SMTP-held the next
 time its `mailbox.ensure` runs (run `job:mailbox-backfill` to apply it to all at once); accounts the 0044 backfill
