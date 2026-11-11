@@ -8,6 +8,7 @@ import {
   abuseBanPeriodFromEnv,
   applyAbuseBanPeriod,
   assertNoPrivateAllowedIps,
+  banPolicyDrift,
   overlapsPrivateNetwork,
   parseNetwork,
   privateAllowedIps,
@@ -109,5 +110,23 @@ describe("private ranges on the allow-list", () => {
     const dev = fake({ allowed: ["10.0.0.0/8", "203.0.113.7", "172.16.0.0/12"] });
     expect(await privateAllowedIps(dev.mgmt)).toEqual(["10.0.0.0/8", "172.16.0.0/12"]);
     await expect(assertNoPrivateAllowedIps(dev.mgmt)).rejects.toThrow(/2 entries/);
+  });
+});
+
+describe("ban policy drift", () => {
+  it("names a permanent or different abuse-ban period and private allow-list entries (production)", async () => {
+    const hour = 3_600_000;
+    expect(
+      await banPolicyDrift(fake({ period: hour }).mgmt, { abuseBanPeriodMs: hour, allowPrivateAllowedIps: false }),
+    ).toEqual([]);
+    expect(await banPolicyDrift(fake().mgmt, { abuseBanPeriodMs: hour, allowPrivateAllowedIps: false })).toEqual([
+      "abuse-ban-period",
+    ]);
+    const dev = fake({ period: hour, allowed: ["172.16.0.0/12"] });
+    expect(await banPolicyDrift(dev.mgmt, { abuseBanPeriodMs: hour, allowPrivateAllowedIps: false })).toEqual([
+      "allowed-ip-private",
+    ]);
+    // Development allows its forwarder's ranges.
+    expect(await banPolicyDrift(dev.mgmt, { abuseBanPeriodMs: hour, allowPrivateAllowedIps: true })).toEqual([]);
   });
 });

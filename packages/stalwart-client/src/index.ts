@@ -156,6 +156,8 @@ export {
   abuseBanPeriodFromEnv,
   applyAbuseBanPeriod,
   assertNoPrivateAllowedIps,
+  type BanPolicy,
+  banPolicyDrift,
   overlapsPrivateNetwork,
   parseNetwork,
   PRIVATE_NETWORKS,

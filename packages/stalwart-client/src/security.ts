@@ -165,3 +165,18 @@ export async function assertNoPrivateAllowedIps(mgmt: StalwartManagement): Promi
     );
   }
 }
+
+/** What the reconciler expects of the bans: the abuse-ban period, and whether private allow-list entries are fine. */
+export type BanPolicy = { abuseBanPeriodMs: number; allowPrivateAllowedIps: boolean };
+
+/**
+ * What differs from `policy`, by name (empty: in line): `abuse-ban-period` when the server's period isn't the one
+ * configured (a permanent ban included), `allowed-ip-private` when the allow-list reaches into a private range and
+ * that isn't allowed (production). Read only; needs `sysSecurityGet` and `sysAllowedIpGet`.
+ */
+export async function banPolicyDrift(mgmt: StalwartManagement, policy: BanPolicy): Promise<string[]> {
+  const out: string[] = [];
+  if ((await abuseBanPeriod(mgmt)) !== policy.abuseBanPeriodMs) out.push("abuse-ban-period");
+  if (!policy.allowPrivateAllowedIps && (await privateAllowedIps(mgmt)).length > 0) out.push("allowed-ip-private");
+  return out;
+}
