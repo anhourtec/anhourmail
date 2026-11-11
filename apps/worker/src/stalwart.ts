@@ -3,6 +3,7 @@ import {
   credentialEnvProblems,
   type StalwartCredentialRole,
   stalwartAudit,
+  stalwartHold,
   stalwartProvisioning,
   stalwartTraining,
   verifyStalwartCredential,
@@ -12,15 +13,16 @@ import {
  * Which Stalwart credentials each worker-image process uses (ADR-0020 "Credential split"). The queue worker holds the
  * provisioning key (no owner access to any mailbox) and the training key, which only finds and destroys the
  * spam-training samples a mail import created (ADR-0030); one-off jobs hold the provisioning key; the scheduler also
- * holds the read-only audit key for the hourly managed-script check, which one-off jobs may be given too. The mail
- * importer holds none at all (it reaches the mail server's IMAPS port only). Nothing here ever holds the web app's
+ * holds the read-only audit key for the hourly managed-script check, which one-off jobs may be given too. The queue
+ * worker and the scheduler also hold the hold key (the relay hold's list and its reload, ADR-0034 update "relay hold"):
+ * the worker writes the list in `mailbox.ensure`, the scheduler's reconciler reads it. The mail importer holds none at all (it reaches the mail server's IMAPS port only). Nothing here ever holds the web app's
  * operations key.
  */
 export const WORKER_CREDENTIALS = {
-  worker: { required: ["provisioning", "training"], optional: [] },
-  scheduler: { required: ["provisioning", "audit"], optional: [] },
-  // One-off jobs run in the worker or scheduler container and may inherit either's extra key (they use neither).
-  job: { required: ["provisioning"], optional: ["audit", "training"] },
+  worker: { required: ["provisioning", "training", "hold"], optional: [] },
+  scheduler: { required: ["provisioning", "audit", "hold"], optional: [] },
+  // One-off jobs run in the worker or scheduler container and may inherit either's extra keys (they use none of them).
+  job: { required: ["provisioning"], optional: ["audit", "training", "hold"] },
   importer: { required: [], optional: [] },
 } as const satisfies Record<
   string,
@@ -54,7 +56,12 @@ export function checkStalwartSettings(
  * (a provisioning key that can impersonate stops the worker). Skipped for the dev admin.
  */
 export async function verifyStalwartCredentials(kind: WorkerProcess): Promise<void> {
-  const clients = { provisioning: stalwartProvisioning, audit: stalwartAudit, training: stalwartTraining };
+  const clients = {
+    provisioning: stalwartProvisioning,
+    audit: stalwartAudit,
+    training: stalwartTraining,
+    hold: stalwartHold,
+  };
   for (const role of WORKER_CREDENTIALS[kind].required) {
     await verifyStalwartCredential(role, clients[role]());
   }

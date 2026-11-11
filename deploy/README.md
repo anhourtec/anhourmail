@@ -123,6 +123,13 @@ version. CI builds all three on every push (`.cicd/build.sh`).
     samples a mail import's APPENDs created (`impersonate` + `sysSpamTrainingSample{Get,Query,Destroy}`, nothing else;
     ADR-0030). The management proxy should allow it only those calls. Set `STALWART_SPAM_SAMPLE_HOLD_MS` on the worker
     if Stalwart's `holdSamplesFor` isn't the default 180 days.
+  - `STALWART_HOLD_KEY` (account `svc-hold`) — **worker and scheduler only**: the relay hold's list (new and
+    restricted mailboxes may send only to addresses the server hosts, on SMTP and JMAP; ADR-0034): writes and reads
+    `x:MemoryLookupKey`, runs `ReloadLookupStores` (and no other action: Stalwart checks a permission per action type)
+    and reads `x:MtaStageRcpt`. The lookup-key permission covers every namespace, the spam filter's lists included, so
+    the management proxy must allow this key only the `anhourmail-relay-hold` namespace, plain (non-glob) keys and
+    that one action. The worker refuses to apply a held mailbox without it (it stays unable to send), so issue it
+    before deploying the worker that needs it.
 
   Each process refuses to start in production without its own key or with any other key, the dev admin
   (`STALWART_DEV_ADMIN_*`) or the old `STALWART_API_KEY`; at start (web: before first use) each key is compared with

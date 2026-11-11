@@ -8,15 +8,16 @@ import type { BillingProvider } from "@anhourmail/core/billing";
 import type { DnsResolver } from "@anhourmail/core/domains";
 import type { MailServer } from "@anhourmail/core/provisioning";
 import { redis } from "@anhourmail/server/redis";
-import { stalwartProvisioning } from "@anhourmail/stalwart-client";
+import { hasStalwartCredential, stalwartHold, stalwartProvisioning } from "@anhourmail/stalwart-client";
 
 import { checkBillingSettings } from "./billing";
 import { workerPlatform } from "./platform";
 import { checkStalwartSettings, type WorkerProcess } from "./stalwart";
 
 /**
- * Composition root for worker processes (ADR-0008): Postgres unit of work, Stalwart mail server (the provisioning key
- * only — ADR-0020 "Credential split"), DNS, and the billing provider (ADR-0029; null when billing is off, built on
+ * Composition root for worker processes (ADR-0008): Postgres unit of work, Stalwart mail server (the provisioning key,
+ * plus the hold key for the relay hold's list where the process has it — ADR-0020 "Credential split", ADR-0034 update
+ * "relay hold"), DNS, and the billing provider (ADR-0029; null when billing is off, built on
  * first use). `kind` says which process this is, for the Stalwart settings check.
  */
 export function runtime(kind: WorkerProcess = "job"): {
@@ -35,7 +36,9 @@ export function runtime(kind: WorkerProcess = "job"): {
   let billing: BillingProvider | null | undefined;
   return {
     deps: { uow: new PgUnitOfWork(db), clock: systemClock, platform },
-    mail: stalwartMailServer(stalwartProvisioning()),
+    // Without the hold key a held mailbox's `mailbox.ensure` fails (and retries) rather than leave it open; only the queue
+    // worker runs that job, and it must have the key (`WORKER_CREDENTIALS`).
+    mail: stalwartMailServer(stalwartProvisioning(), hasStalwartCredential("hold") ? { hold: stalwartHold() } : {}),
     // Development answers for `.test` names (devResolver); production always asks real DNS.
     dns:
       process.env.NODE_ENV === "production"

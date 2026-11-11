@@ -12,8 +12,8 @@ describe("worker Stalwart settings (ADR-0020 credential split)", () => {
     }
   });
 
-  it("runs the queue worker with the provisioning and training keys only", () => {
-    const keys = { ...prod, STALWART_PROVISIONING_KEY: "p", STALWART_TRAINING_KEY: "t" };
+  it("runs the queue worker with the provisioning, training and hold keys only", () => {
+    const keys = { ...prod, STALWART_PROVISIONING_KEY: "p", STALWART_TRAINING_KEY: "t", STALWART_HOLD_KEY: "h" };
     expect(() => {
       checkStalwartSettings("worker", keys);
     }).not.toThrow();
@@ -21,8 +21,12 @@ describe("worker Stalwart settings (ADR-0020 credential split)", () => {
       checkStalwartSettings("worker", prod);
     }).toThrow(/STALWART_PROVISIONING_KEY must be set in production/);
     expect(() => {
-      checkStalwartSettings("worker", { ...prod, STALWART_PROVISIONING_KEY: "p" });
+      checkStalwartSettings("worker", { ...prod, STALWART_PROVISIONING_KEY: "p", STALWART_HOLD_KEY: "h" });
     }).toThrow(/STALWART_TRAINING_KEY must be set in production/);
+    // The relay hold's list (ADR-0034): `mailbox.ensure` can't apply a held mailbox without it.
+    expect(() => {
+      checkStalwartSettings("worker", { ...prod, STALWART_PROVISIONING_KEY: "p", STALWART_TRAINING_KEY: "t" });
+    }).toThrow(/STALWART_HOLD_KEY must be set in production/);
     expect(() => {
       checkStalwartSettings("worker", { ...keys, STALWART_OPERATIONS_KEY: "o" });
     }).toThrow(/STALWART_OPERATIONS_KEY must not be given to this process/);
@@ -36,6 +40,7 @@ describe("worker Stalwart settings (ADR-0020 credential split)", () => {
         ...prod,
         STALWART_PROVISIONING_KEY: "p",
         STALWART_AUDIT_KEY: "a",
+        STALWART_HOLD_KEY: "h",
         STALWART_TRAINING_KEY: "t",
       });
     }).toThrow(/STALWART_TRAINING_KEY must not be given to this process/);
@@ -52,11 +57,14 @@ describe("worker Stalwart settings (ADR-0020 credential split)", () => {
     }).toThrow(/SENDER_DELEGATION_KEY must not be given/);
   });
 
-  it("requires the audit key on the scheduler and allows it on one-off jobs", () => {
+  it("requires the audit and hold keys on the scheduler and allows them on one-off jobs", () => {
     expect(() => {
-      checkStalwartSettings("scheduler", { ...prod, STALWART_PROVISIONING_KEY: "p" });
+      checkStalwartSettings("scheduler", { ...prod, STALWART_PROVISIONING_KEY: "p", STALWART_HOLD_KEY: "h" });
     }).toThrow(/STALWART_AUDIT_KEY must be set in production/);
-    const both = { ...prod, STALWART_PROVISIONING_KEY: "p", STALWART_AUDIT_KEY: "a" };
+    expect(() => {
+      checkStalwartSettings("scheduler", { ...prod, STALWART_PROVISIONING_KEY: "p", STALWART_AUDIT_KEY: "a" });
+    }).toThrow(/STALWART_HOLD_KEY must be set in production/);
+    const both = { ...prod, STALWART_PROVISIONING_KEY: "p", STALWART_AUDIT_KEY: "a", STALWART_HOLD_KEY: "h" };
     expect(() => {
       checkStalwartSettings("scheduler", both);
     }).not.toThrow();
@@ -81,6 +89,7 @@ describe("worker Stalwart settings (ADR-0020 credential split)", () => {
       "STALWART_OPERATIONS_KEY",
       "STALWART_AUDIT_KEY",
       "STALWART_TRAINING_KEY",
+      "STALWART_HOLD_KEY",
     ]) {
       expect(() => {
         checkStalwartSettings("importer", { ...prod, [k]: "k" });

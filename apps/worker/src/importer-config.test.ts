@@ -32,6 +32,7 @@ describe("importerConfig", () => {
       "STALWART_OPERATIONS_KEY",
       "STALWART_AUDIT_KEY",
       "STALWART_TRAINING_KEY",
+      "STALWART_HOLD_KEY",
       "STALWART_DEV_ADMIN_USER",
       "STALWART_URL",
       "REDIS_URL",
