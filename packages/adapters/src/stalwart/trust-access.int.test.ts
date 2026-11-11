@@ -2,9 +2,11 @@
 /**
  * Trust tiers through provisioning on the compose stack (ADR-0034 build slice 7): `mailbox.ensure` runs as a queue job
  * against Postgres and applies `mailboxSendAccess` on the real pinned Stalwart with the production provisioning key.
- * A mailbox of a `new` account is held from SMTP submission (465 and 587 refuse AUTH) while its webmail submission over
- * JMAP still delivers; `standard` opens SMTP; staff's restriction of that one mailbox stops every kind of sending and
- * lifting it gives the account's access back.
+ * A mailbox of a `new` account is held from SMTP submission (465 and 587 refuse AUTH) and is on the relay hold, so its
+ * JMAP submission still delivers to hosted addresses while an outside recipient is refused (`550 5.1.2`), with the
+ * password and with a `jmap` app password (the public JMAP route); `standard` opens SMTP and outside recipients;
+ * staff's restriction of that one mailbox stops every kind of sending and lifting it gives the account's access back.
+ * The hold is applied fail-closed: with the relaying policy missing, a new held mailbox isn't created until it is back.
  *
  * Refusals for a missing permission don't count as failed sign-ins (verified), so the shared dev forwarder is never
  * brought near its ban limit; JMAP goes from this test's own documentation-range client address.
@@ -17,7 +19,12 @@ import { afterAll, describe, expect, it } from "vitest";
 import { systemClock } from "@anhourmail/core";
 import { enqueueProvisioning, runNextJob } from "@anhourmail/core/provisioning";
 import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
-import { StalwartManagement, StalwartTransport } from "@anhourmail/stalwart-client";
+import {
+  desiredRelaying,
+  RELAY_HOLD_NAMESPACE,
+  StalwartManagement,
+  StalwartTransport,
+} from "@anhourmail/stalwart-client";
 
 import { hashPassword } from "../auth/password";
 import { createDb, schema } from "../db-postgres/client";
@@ -41,11 +48,17 @@ const mgmt = new StalwartManagement(
 );
 const tag = randomUUID().slice(0, 8);
 const keys = await issueTestKeys(mgmt, stalwartUrl, `svc-trust-${tag}.test`);
-const mail = stalwartMailServer(keys.provisioning);
+const mail = stalwartMailServer(keys.provisioning, { hold: keys.hold });
 const domain = `trust-${tag}.test`;
 const address = `held@${domain}`;
+const lateAddress = `late@${domain}`;
 const password = randomBytes(18).toString("base64url");
-const clientAddress = `203.0.113.${String(1 + Math.floor(Math.random() * 254))}`;
+/** A fresh documentation-range address per JMAP request: refused recipients count towards the client's abuse ban. */
+let clientSeq = Math.floor(Math.random() * 200);
+const nextClient = () => `203.0.113.${String(1 + (clientSeq++ % 254))}`;
+const MAILPIT = `http://localhost:${process.env.MAILPIT_UI_PORT ?? "43026"}`;
+const outside = (label: string) => `${label}-${tag}@ext-${tag}.test`;
+const RELAY_REFUSED = "550 5.1.2 Relay not allowed.";
 const port = (k: string, d: number) => Number(process.env[k] ?? d);
 const P465 = port("STALWART_SUBMISSIONS_PORT", 465);
 const P587 = port("STALWART_SUBMISSION_PORT", 587);
@@ -90,12 +103,16 @@ async function authReply(p: number): Promise<string> {
 const REFUSED = /^550 5\.7\.1 /;
 const ACCEPTED = /^235 /;
 
-/** Saves a draft to the mailbox itself (a hosted address) and submits it over JMAP, as the webmail BFF does. */
-async function jmapSend(subject: string): Promise<string> {
+/**
+ * Saves a draft to `to` (default: the mailbox itself, a hosted address) and submits it over JMAP, as the webmail BFF
+ * does, signed in with `secret` (the password, or an app password). `submitted` once created for a hosted recipient;
+ * for an outside one the recipient's `smtpReply` from `deliveryStatus`.
+ */
+async function jmapSend(subject: string, to = address, secret = password): Promise<string> {
   const headers = {
-    Authorization: `Basic ${Buffer.from(`${address}:${password}`).toString("base64")}`,
+    Authorization: `Basic ${Buffer.from(`${address}:${secret}`).toString("base64")}`,
     "Content-Type": "application/json",
-    "X-Forwarded-For": clientAddress,
+    "X-Forwarded-For": nextClient(),
   };
   const session = (await (await fetch(`${stalwartUrl}/jmap/session`, { headers })).json()) as {
     primaryAccounts: Record<string, string>;
@@ -123,7 +140,7 @@ async function jmapSend(subject: string): Promise<string> {
           e: {
             mailboxIds: { [drafts ?? ""]: true },
             from: [{ email: address }],
-            to: [{ email: address }],
+            to: [{ email: to }],
             subject,
             bodyValues: { b: { value: "hello" } },
             textBody: [{ partId: "b", type: "text/plain" }],
@@ -137,7 +154,50 @@ async function jmapSend(subject: string): Promise<string> {
   const sub = res[1];
   if (sub?.[0] === "error") return `error:${String(sub[1].type)}`;
   const refused = (sub?.[1].notCreated as Record<string, { type: string }> | undefined)?.s;
-  return refused ? `refused:${refused.type}` : "submitted";
+  if (refused) return `refused:${refused.type}`;
+  if (to === address) return "submitted";
+  const id = (sub?.[1].created as Record<string, { id: string }> | undefined)?.s?.id ?? "";
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    const [got] = await call([
+      ["EmailSubmission/get", { accountId: jmapAccount, ids: [id], properties: ["deliveryStatus"] }, "g"],
+    ]);
+    const status = (got?.[1].list as { deliveryStatus?: Record<string, { smtpReply: string }> | null }[])[0]
+      ?.deliveryStatus;
+    if (status && Object.keys(status).length > 0) {
+      return Object.values(status)
+        .map((st) => st.smtpReply)
+        .join(" | ");
+    }
+  }
+  return "no delivery status";
+}
+
+/** Mailpit messages to `to` (dev and CI only; nothing leaves the machine), polled up to `ms`. */
+async function caughtFor(to: string, ms: number): Promise<number> {
+  const until = Date.now() + ms;
+  for (;;) {
+    const r = await fetch(`${MAILPIT}/api/v1/search?query=${encodeURIComponent(`to:"${to}"`)}`);
+    const found = ((await r.json()) as { messages?: unknown[] }).messages ?? [];
+    if (found.length > 0 || Date.now() > until) return found.length;
+    await new Promise((res) => setTimeout(res, 500));
+  }
+}
+
+/** Whether the mailbox's address is on the mail server's relay hold list. */
+async function listed(): Promise<boolean> {
+  const keys = await mgmt.transport.getAll<{ id: string; namespace: string; key: string }>("x:MemoryLookupKey", [
+    "namespace",
+    "key",
+  ]);
+  return keys.some((k) => k.namespace === RELAY_HOLD_NAMESPACE && k.key === address);
+}
+
+/** The mailbox's mail-server account id as recorded in Postgres. */
+async function stalwartIdOf(id: string): Promise<string> {
+  const [row] = await db.select().from(schema.mailbox).where(eq(schema.mailbox.id, id));
+  if (!row?.stalwartId) throw new Error("mailbox has no mail-server id");
+  return row.stalwartId;
 }
 
 /** The access the mail server holds for the mailbox now. */
@@ -171,11 +231,21 @@ describe("trust tiers through mailbox.ensure on Stalwart (ADR-0034 §3–4)", ()
     await drain(d.id, m.id);
     expect((await db.select().from(schema.mailbox).where(eq(schema.mailbox.id, m.id)))[0]?.status).toBe("active");
 
-    // A new account (the default): no SMTP submission from mail apps; the webmail still sends to hosted addresses.
+    // A new account (the default): no SMTP submission from mail apps, and on the relay hold, so JMAP (the webmail, or
+    // any JMAP client with the password or an app password) reaches hosted addresses only.
     expect(await serverAccess()).toBe("smtp_blocked");
+    expect(await listed()).toBe(true);
     expect(await authReply(P465)).toMatch(REFUSED);
     expect(await authReply(P587)).toMatch(REFUSED);
     expect(await jmapSend(`held ${tag}`)).toBe("submitted");
+    expect(await jmapSend(`held out ${tag}`, outside("held"))).toBe(RELAY_REFUSED);
+    const app = await keys.operations.createAppPassword(m.stalwartId ?? (await stalwartIdOf(m.id)), {
+      description: "jmap",
+      scopes: ["jmap"],
+    });
+    expect(await jmapSend(`held app ${tag}`, outside("held-app"), app.secret)).toBe(RELAY_REFUSED);
+    expect(await caughtFor(outside("held"), 2_000)).toBe(0);
+    expect(await caughtFor(outside("held-app"), 1_000)).toBe(0);
 
     // Standard: mail apps may send.
     await deps.uow.run((r) =>
@@ -191,8 +261,12 @@ describe("trust tiers through mailbox.ensure on Stalwart (ADR-0034 §3–4)", ()
     await enqueueProvisioning(deps, { kind: "mailbox.ensure", subjectId: m.id });
     await drain(m.id);
     expect(await serverAccess()).toBe("active");
+    expect(await listed()).toBe(false);
     expect(await authReply(P465)).toMatch(ACCEPTED);
     expect(await jmapSend(`standard ${tag}`)).toBe("submitted");
+    // Off the list and reloaded: outside recipients go out (caught by Mailpit in dev).
+    expect(await jmapSend(`standard out ${tag}`, outside("standard"))).toMatch(/^250 /);
+    expect(await caughtFor(outside("standard"), 20_000)).toBe(1);
 
     // Staff restrict this mailbox: no sending on any protocol (sign-in and delivery stay, as billing's block).
     await deps.uow.run((r) =>
@@ -201,6 +275,7 @@ describe("trust tiers through mailbox.ensure on Stalwart (ADR-0034 §3–4)", ()
     await enqueueProvisioning(deps, { kind: "mailbox.ensure", subjectId: m.id });
     await drain(m.id);
     expect(await serverAccess()).toBe("send_blocked");
+    expect(await listed()).toBe(true);
     expect(await authReply(P587)).toMatch(REFUSED);
     expect(await jmapSend(`restricted ${tag}`)).toBe("error:forbidden");
 
@@ -209,6 +284,62 @@ describe("trust tiers through mailbox.ensure on Stalwart (ADR-0034 §3–4)", ()
     await enqueueProvisioning(deps, { kind: "mailbox.ensure", subjectId: m.id });
     await drain(m.id);
     expect(await serverAccess()).toBe("active");
+    expect(await listed()).toBe(false);
     expect(await authReply(P587)).toMatch(ACCEPTED);
+  });
+
+  it("fails closed: without the relay hold in the relaying policy a new mailbox isn't created", async () => {
+    const [stage] = await mgmt.transport.getAll<{ id: string; allowRelaying: unknown }>(
+      "x:MtaStageRcpt",
+      ["allowRelaying"],
+      ["singleton"],
+    );
+    expect(stage?.allowRelaying).toEqual(desiredRelaying());
+    const [row] = await db
+      .insert(schema.mailbox)
+      .values({
+        accountId,
+        address: lateAddress,
+        quotaBytes: 50 * 1024 * 1024,
+        status: "provisioning",
+        pendingPasswordHash: await hashPassword(password),
+      })
+      .returning();
+    if (!row) throw new Error("mailbox not created");
+    await deps.uow.run((r) =>
+      r.trust.setTier(accountId, {
+        tier: "new",
+        since: new Date(),
+        source: "staff",
+        reason: null,
+        note: "t",
+        setBy: null,
+      }),
+    );
+    await mgmt.updateSingleton("x:MtaStageRcpt", { allowRelaying: { match: {}, else: "!is_empty(authenticated_as)" } });
+    await mgmt.reloadSettings();
+    try {
+      await enqueueProvisioning(deps, { kind: "mailbox.ensure", subjectId: row.id });
+      // One attempt: it fails and is queued again (retry with backoff). Other suites share the queue.
+      let job = await deps.uow.run((r) => r.provisioning.latest("mailbox.ensure", row.id));
+      for (let i = 0; i < 60 && (job?.attempts ?? 0) < 1; i++) {
+        if (!(await runNextJob(deps, mail))) await new Promise((r) => setTimeout(r, 100));
+        job = await deps.uow.run((r) => r.provisioning.latest("mailbox.ensure", row.id));
+      }
+      expect(job?.status).toBe("queued");
+      expect(job?.lastError).toMatch(/relay hold/);
+      // Listed, but not created until the policy is back (so the retry starts clean).
+      expect((await mgmt.listUsers()).find((u) => u.address === lateAddress)).toBeUndefined();
+    } finally {
+      await mgmt.updateSingleton("x:MtaStageRcpt", { allowRelaying: stage?.allowRelaying });
+      await mgmt.reloadSettings();
+    }
+    // With the policy back, the retry gives it the new tier's access.
+    await db
+      .update(schema.provisioningJob)
+      .set({ runAfter: new Date() })
+      .where(eq(schema.provisioningJob.subjectId, row.id));
+    await drain(row.id);
+    expect((await mgmt.listUsers()).find((u) => u.address === lateAddress)?.access).toBe("smtp_blocked");
   });
 });
