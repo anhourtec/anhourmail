@@ -5,7 +5,7 @@
  * verified customer domains), for the `new`-tier hold. Read-only: they change nothing, so they write no audit entry.
  */
 import { type BillingSendBlock, billingBlockOf } from "../billing/send-block";
-import type { Deps } from "../ports";
+import type { Deps, Repositories } from "../ports";
 import type { TrustTier } from "@anhourmail/shared/sending";
 
 import { effectiveTier } from "./entity";
@@ -30,6 +30,18 @@ export async function sendingStanding(deps: Deps, address: string): Promise<Send
     const billingBlock = await billingBlockOf(r, row.accountId, row.mailboxId);
     return { tier: effectiveTier(row.accountTier, row.mailboxRestricted), billingBlock };
   });
+}
+
+/**
+ * One mailbox's effective tier, by its account and id, in the caller's unit of work (the importer's message cap,
+ * ADR-0034 migration step B). A mailbox that isn't the account's, or an unknown account, reads as `restricted`: the
+ * strictest, so a lookup that goes wrong never loosens a limit.
+ */
+export async function mailboxTier(r: Repositories, accountId: string, mailboxId: string): Promise<TrustTier> {
+  const account = await r.trust.get(accountId);
+  const mailbox = account ? await r.trust.mailbox(accountId, mailboxId) : null;
+  if (!account || !mailbox) return "restricted";
+  return effectiveTier(account.tier, mailbox.restriction !== null);
 }
 
 /**

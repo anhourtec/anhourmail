@@ -8,7 +8,7 @@ import { defaultBilling } from "../billing/lifecycle";
 import { GB } from "../mailboxes/entity";
 
 import { effectiveTier } from "./entity";
-import { hostedDomains, sendingStanding } from "./standing";
+import { hostedDomains, mailboxTier, sendingStanding } from "./standing";
 
 const BOX_A = "a0000000-0000-4000-8000-000000000001";
 const BOX_B = "b0000000-0000-4000-8000-000000000002";
@@ -104,6 +104,23 @@ describe("sendingStanding", () => {
     expect(await sendingStanding(w.d, "someone@else.test")).toBeNull();
     expect(await sendingStanding(w.d, "   ")).toBeNull();
     expect(await sendingStanding(w.d, `${"x".repeat(250)}@acme.test`)).toBeNull();
+  });
+});
+
+describe("mailboxTier", () => {
+  it("is the account's tier, restricted while the mailbox is, and restricted for anything not the account's", async () => {
+    const w = world();
+    const tier = (accountId: string, mailboxId: string) => w.d.uow.run((r) => mailboxTier(r, accountId, mailboxId));
+    expect(await tier(ACCOUNT_A, BOX_A)).toBe("new");
+    w.setTier(ACCOUNT_A, "standard");
+    expect(await tier(ACCOUNT_A, BOX_A)).toBe("standard");
+    w.restrictMailbox(BOX_A);
+    expect(await tier(ACCOUNT_A, BOX_A)).toBe("restricted");
+    // Another account's mailbox, or an unknown account, never reads laxer than restricted.
+    w.setTier(ACCOUNT_B, "trusted");
+    expect(await tier(ACCOUNT_A, BOX_B)).toBe("restricted");
+    expect(await tier("99999999-9999-4999-8999-999999999999", BOX_A)).toBe("restricted");
+    expect(await tier(ACCOUNT_B, BOX_B)).toBe("trusted");
   });
 });
 
