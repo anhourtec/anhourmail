@@ -196,6 +196,13 @@ type AppProps = {
   viewKey?: string | null | undefined;
   /** Our mail server's authserv-ids (only its Authentication-Results are trusted in message details). */
   authservIds?: string[];
+  /** The public docs' "New accounts" section (Settings → Account → Sending, and the composer's held-send message). */
+  sendingHelpHref?: string;
+  /**
+   * The deployment's platform domains (its free addresses): with the mailbox's own addresses, what the composer counts
+   * as hosted on AnhourMail when a held send names the recipients outside (ADR-0034 §3, never from the server).
+   */
+  hostedDomains?: string[];
   /**
    * A tab scoped to one mailbox shared with the person (Open another mailbox, `/mailbox/<address>/`): `username` is
    * that mailbox, every request pins it, and the session's active mailbox (other tabs) is left alone. `folder` is the
@@ -223,6 +230,8 @@ function Mailroom({
   firstLoad,
   viewKey,
   authservIds = [],
+  sendingHelpHref,
+  hostedDomains = [],
   scope,
 }: AppProps) {
   const scoped = scope !== undefined;
@@ -2048,6 +2057,8 @@ function Mailroom({
         variant="inline"
         trashId={sharedMode ? writerTrash : roles.trash}
         alwaysCcBcc={prefs.showCcBcc}
+        hostedDomains={hostedDomains}
+        sendingHelpHref={sendingHelpHref}
         onClose={({ savedDraft }) => {
           setComposer(null);
           if (savedDraft) toasts.show({ message: "Draft saved." });
@@ -2453,6 +2464,8 @@ function Mailroom({
             variant="panel"
             trashId={sharedMode ? writerTrash : roles.trash}
             alwaysCcBcc={prefs.showCcBcc}
+            hostedDomains={hostedDomains}
+            sendingHelpHref={sendingHelpHref}
             onClose={({ savedDraft }) => {
               setComposer(null);
               if (savedDraft) toasts.show({ message: "Draft saved." });
@@ -2484,6 +2497,7 @@ function Mailroom({
             preferences={prefs}
             folders={folders ?? []}
             consoleHref={consoleHref}
+            sendingHelpHref={sendingHelpHref}
             shortcuts={SHORTCUTS}
             onChange={updatePrefs}
             onIdentitiesChanged={setIdentities}

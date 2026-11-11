@@ -8,6 +8,7 @@ import { SIDEBAR_COOKIE } from "@/components/webmail/webmail-app";
 import { FOLDER_ROLES } from "@/components/webmail/tab-paths";
 import { env } from "@/server/env";
 import { platform } from "@/server/platform";
+import { NEW_ACCOUNTS_DOCS_PATH } from "@/components/sending/sending-copy";
 import { signedNoticeReason } from "@/server/webmail/http";
 import { passwordChangeGate, settingsService, webmail, webmailCookieName } from "@/server/webmail/instance";
 import { trustedAuthservIds } from "@/server/webmail/original";
@@ -101,6 +102,8 @@ export default async function SharedMailboxPage({
       autoOpen={fromUs}
       signInHref={`${base}/sign-in`}
       helpHref={`${env().SITE_URL.replace(/\/$/, "")}/docs/webmail`}
+      sendingHelpHref={`${env().SITE_URL.replace(/\/$/, "")}${NEW_ACCOUNTS_DOCS_PATH}`}
+      hostedDomains={[...new Set([platform().domain, platform().freeAddressDomain])]}
       consoleHref={env().APP_URL.replace(/\/$/, "")}
       initialCollapsed={jar.get(SIDEBAR_COOKIE)?.value === "collapsed"}
       initialPreferences={preferences}

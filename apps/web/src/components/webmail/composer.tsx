@@ -3,6 +3,7 @@
 
 import {
   Ellipsis,
+  ExternalLink,
   FileText,
   Loader2,
   Maximize2,
@@ -30,6 +31,7 @@ import { ConfirmDialog } from "./dialogs";
 import { exec, rangeIn, restore } from "./format-toolbar";
 import { Menu } from "./menu";
 import { parkRemoteImages, unparkRemoteImages } from "./remote-images";
+import { domainsOf, type SendProblem, sendProblem } from "./send-errors";
 import { loadOutgoing, type Outgoing, RichEditor, useOutgoing } from "./rich-editor";
 import { hasFormatting, SIGNATURE_ATTR, signatureHtml, signatureInner, textToHtml } from "./rich-text";
 import {
@@ -327,6 +329,8 @@ export function Composer({
   onSent,
   onSavedDraft,
   alwaysCcBcc = false,
+  hostedDomains = [],
+  sendingHelpHref,
 }: {
   client: MailClient;
   identities: Identity[];
@@ -355,6 +359,10 @@ export function Composer({
   onSavedDraft?: () => void;
   /** Show the Cc and Bcc fields from the start (a setting). */
   alwaysCcBcc?: boolean;
+  /** The platform's domains: with the person's own addresses, what a held send counts as hosted (ADR-0034 §3). */
+  hostedDomains?: readonly string[];
+  /** The public docs' "New accounts" section, linked when a send is held. */
+  sendingHelpHref?: string | undefined;
 }) {
   const [to, setTo] = useState(seed.to);
   const [cc, setCc] = useState(seed.cc);
@@ -405,6 +413,8 @@ export function Composer({
   };
   const [save, setSave] = useState<SaveState>("idle");
   const [error, setError] = useState<string | null>(null);
+  /** Why the last send was refused, with what to do next (shown where `error` is). */
+  const [problem, setProblem] = useState<SendProblem | null>(null);
   const [sending, setSending] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const draftId = useRef<string | undefined>(seed.draftId);
@@ -639,8 +649,12 @@ export function Composer({
     }
   };
 
+  // A held send's outside recipients, as long as they are still on the draft (removing one takes it off the list).
+  const stillOutside = problem?.outside?.filter((a) => [...to, ...cc, ...bcc].some((r) => r.email.toLowerCase() === a));
+
   const send = async () => {
     setError(null);
+    setProblem(null);
     if (to.length + cc.length + bcc.length === 0) {
       setError("Add at least one recipient.");
       return;
@@ -661,7 +675,19 @@ export function Composer({
       onSent({ ...result, ...(sharedFrom ? { from: sharedFrom } : {}) }, id);
     } catch (err) {
       if (err instanceof SignedOutError) throw err;
-      setError(err instanceof RefusedError ? err.message : "Couldn't send. Check your connection and try again.");
+      // Which recipients look outside is worked out here, from the draft (the server never names them).
+      const hosted = [
+        ...hostedDomains,
+        ...domainsOf(identities.map((i) => i.email)),
+        ...domainsOf(senders.map((x) => x.mailbox)),
+      ];
+      setProblem(
+        sendProblem(
+          err,
+          [...to, ...cc, ...bcc].map((a) => a.email),
+          hosted,
+        ),
+      );
     } finally {
       setSending(false);
     }
@@ -943,6 +969,42 @@ export function Composer({
         <p role="alert" className="am-small border-t px-4 py-2 text-destructive">
           {error}
         </p>
+      )}
+      {problem && !error && (
+        <div role="alert" data-testid="send-problem" className="am-small flex flex-col gap-1 border-t px-4 py-2">
+          <p className="text-destructive">{problem.message}</p>
+          {stillOutside && stillOutside.length > 0 && (
+            <p>
+              May be outside AnhourMail:{" "}
+              {stillOutside.map((a, i) => (
+                <span key={a}>
+                  {i > 0 && ", "}
+                  <span className="font-mono">{a}</span>
+                </span>
+              ))}
+              . Remove the ones outside to send to the rest now; your draft is saved.
+            </p>
+          )}
+          {problem.appeal && (
+            <p>
+              To ask us to look again, write to{" "}
+              <a href={`mailto:${problem.appeal}`} className="font-mono text-primary hover:underline">
+                {problem.appeal}
+              </a>
+              .
+            </p>
+          )}
+          {problem.learnMore && sendingHelpHref && (
+            <a
+              href={sendingHelpHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex w-fit items-center gap-1.5 text-primary hover:underline"
+            >
+              What new accounts can send <ExternalLink className="size-3.5" aria-hidden />
+            </a>
+          )}
+        </div>
       )}
       <footer className="flex shrink-0 items-center gap-1 border-t px-3 py-2.5">
         <button

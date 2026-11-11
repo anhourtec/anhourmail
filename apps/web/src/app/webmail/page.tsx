@@ -15,6 +15,7 @@ import { DEFAULT_PREFERENCES } from "@anhourmail/shared/webmail";
 import { trustedAuthservIds } from "@/server/webmail/original";
 import { webmailBasePath } from "@/server/webmail/paths";
 import { platform } from "@/server/platform";
+import { NEW_ACCOUNTS_DOCS_PATH } from "@/components/sending/sending-copy";
 import { WebmailBlockedError } from "@/server/webmail/service";
 import { mailboxTabHref } from "@/components/webmail/tab-paths";
 import { pageFirstLoad } from "@/server/webmail/page-first-load";
@@ -103,6 +104,8 @@ export default async function WebmailPage() {
       username={session.username}
       signInHref={`${base}/sign-in`}
       helpHref={`${env().SITE_URL.replace(/\/$/, "")}/docs/webmail`}
+      sendingHelpHref={`${env().SITE_URL.replace(/\/$/, "")}${NEW_ACCOUNTS_DOCS_PATH}`}
+      hostedDomains={[...new Set([platform().domain, platform().freeAddressDomain])]}
       consoleHref={mailbox ? `${app}/accounts/${mailbox.accountId}/aliases` : app}
       initialCollapsed={jar.get(SIDEBAR_COOKIE)?.value === "collapsed"}
       initialPreferences={preferences}
