@@ -64,15 +64,86 @@ describe("effectiveTier", () => {
 describe("sendingStanding", () => {
   it("a new account's mailbox reads new with no billing block", async () => {
     const w = world();
-    expect(await sendingStanding(w.d, "me@acme.test")).toEqual({ tier: "new", billingBlock: null });
+    expect(await sendingStanding(w.d, "me@acme.test")).toEqual({
+      tier: "new",
+      billingBlock: null,
+      heldOnServer: false,
+    });
   });
 
   it("follows the account's tier at once (uncached) and trims and lowercases the address", async () => {
     const w = world();
     w.setTier(ACCOUNT_A, "standard");
-    expect(await sendingStanding(w.d, "  ME@Acme.TEST ")).toEqual({ tier: "standard", billingBlock: null });
+    expect(await sendingStanding(w.d, "  ME@Acme.TEST ")).toEqual({
+      tier: "standard",
+      billingBlock: null,
+      heldOnServer: false,
+    });
     w.setTier(ACCOUNT_A, "restricted");
-    expect(await sendingStanding(w.d, "me@acme.test")).toEqual({ tier: "restricted", billingBlock: null });
+    expect(await sendingStanding(w.d, "me@acme.test")).toEqual({
+      tier: "restricted",
+      billingBlock: null,
+      heldOnServer: false,
+    });
+  });
+
+  it("a loosened tier is still held on the server until the ensure queued for the change has succeeded", async () => {
+    const w = world();
+    const job = (status: "queued" | "running" | "succeeded" | "failed", at: Date) => ({
+      id: `j-${String(w.s.jobs.length)}`,
+      kind: "mailbox.ensure" as const,
+      subjectId: BOX_A,
+      status,
+      attempts: 0,
+      lastError: null,
+      runAfter: at,
+      lockToken: null,
+      createdAt: at,
+    });
+    const before = new Date(w.clock.now().getTime() - 60_000);
+    const after = new Date(w.clock.now().getTime() + 1_000);
+    // Promoted now; its mailbox was last applied a minute ago (held then).
+    w.s.jobs.push(job("succeeded", before));
+    w.setTier(ACCOUNT_A, "standard");
+    const held = async () => (await sendingStanding(w.d, "me@acme.test"))?.heldOnServer;
+    w.s.jobs.push(job("queued", after));
+    expect(await held()).toBe(true);
+    w.s.jobs.at(-1)!.status = "running";
+    expect(await held()).toBe(true);
+    w.s.jobs.at(-1)!.status = "failed";
+    expect(await held()).toBe(true);
+    // Applied: and an unrelated ensure queued later (an alias, a backfill) doesn't hold it again.
+    w.s.jobs.at(-1)!.status = "succeeded";
+    expect(await held()).toBe(false);
+    w.s.jobs.push(job("queued", new Date(after.getTime() + 1_000)));
+    expect(await held()).toBe(false);
+  });
+
+  it("an older queued ensure reused by the change holds until it succeeds; no ensure at all holds nothing", async () => {
+    const w = world();
+    const at = new Date(w.clock.now().getTime() - 5_000);
+    w.s.jobs.push({
+      id: "j-old",
+      kind: "mailbox.ensure",
+      subjectId: BOX_A,
+      status: "queued",
+      attempts: 0,
+      lastError: null,
+      runAfter: at,
+      lockToken: null,
+      createdAt: at,
+    });
+    w.setTier(ACCOUNT_A, "standard");
+    expect((await sendingStanding(w.d, "me@acme.test"))?.heldOnServer).toBe(true);
+    w.s.jobs[0]!.status = "succeeded";
+    expect((await sendingStanding(w.d, "me@acme.test"))?.heldOnServer).toBe(false);
+    // A tier held anyway (new, restricted) never reads held on the server: the tier itself holds it.
+    w.s.jobs[0]!.status = "queued";
+    w.setTier(ACCOUNT_A, "new");
+    expect((await sendingStanding(w.d, "me@acme.test"))?.heldOnServer).toBe(false);
+    // The other account's mailbox has no job at all.
+    w.setTier(ACCOUNT_B, "standard");
+    expect((await sendingStanding(w.d, "you@other.test"))?.heldOnServer).toBe(false);
   });
 
   it("a restricted mailbox in a standard account reads restricted; the other account's mailbox is unaffected", async () => {
@@ -87,7 +158,11 @@ describe("sendingStanding", () => {
   it("carries billing's block next to the tier", async () => {
     const w = world();
     w.s.billing = [{ ...defaultBilling(ACCOUNT_A, "free", w.clock.now()), state: "restricted" }];
-    expect(await sendingStanding(w.d, "me@acme.test")).toEqual({ tier: "new", billingBlock: "restricted" });
+    expect(await sendingStanding(w.d, "me@acme.test")).toEqual({
+      tier: "new",
+      billingBlock: "restricted",
+      heldOnServer: false,
+    });
     w.s.planHolds.push({
       id: "h1",
       accountId: ACCOUNT_A,

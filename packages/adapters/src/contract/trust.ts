@@ -325,18 +325,17 @@ export function describeTrustContract(name: string, factory: AdapterFactory): vo
           quotaBytes: 1024,
         });
         const accountId = (await uow.run((r) => r.directory.getMailbox(mailboxId)))?.accountId ?? "";
-        expect(await uow.run((r) => r.trust.standingByAddress(address))).toEqual({
-          accountId,
-          mailboxId,
-          accountTier: "new",
-          mailboxRestricted: false,
-        });
+        const first = await uow.run((r) => r.trust.standingByAddress(address));
+        expect(first).toMatchObject({ accountId, mailboxId, accountTier: "new", mailboxRestricted: false });
+        // The default tier dates from the account (or the migration that added it): some moment, never a made-up one.
+        expect(first?.tierSince).toBeInstanceOf(Date);
         await uow.run((r) => r.trust.setTier(accountId, change({ source: "billing", reason: null, note: null })));
         await uow.run((r) => r.trust.setMailboxRestriction(accountId, mailboxId, restriction()));
         expect(await uow.run((r) => r.trust.standingByAddress(address.toUpperCase()))).toEqual({
           accountId,
           mailboxId,
           accountTier: "standard",
+          tierSince: T,
           mailboxRestricted: true,
         });
         expect(await uow.run((r) => r.trust.standingByAddress(`nobody-${tag}@trust-s-${tag}.test`))).toBeNull();

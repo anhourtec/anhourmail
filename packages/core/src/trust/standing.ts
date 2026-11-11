@@ -8,12 +8,20 @@ import { type BillingSendBlock, billingBlockOf } from "../billing/send-block";
 import type { Deps, Repositories } from "../ports";
 import type { TrustTier } from "@anhourmail/shared/sending";
 
+import { mailboxRelayHold } from "./access";
 import { effectiveTier } from "./entity";
 
 export type SendingStanding = {
   /** The mailbox's effective tier: its account's, `restricted` while the mailbox itself is restricted. */
   tier: TrustTier;
   billingBlock: BillingSendBlock | null;
+  /**
+   * The mail server may still hold this mailbox's outside recipients although its tier no longer does: the tier was
+   * loosened and the `mailbox.ensure` that takes it off the relay hold hasn't succeeded yet (`relayHoldPending`). The
+   * webmail holds such a send itself (ADR-0034 update "the webmail's client address"), so it is refused with a clear
+   * message instead of going out with its outside recipients refused one by one.
+   */
+  heldOnServer: boolean;
 };
 
 const MAX_ADDRESS = 254;
@@ -28,8 +36,26 @@ export async function sendingStanding(deps: Deps, address: string): Promise<Send
     const row = await r.trust.standingByAddress(key);
     if (!row) return null;
     const billingBlock = await billingBlockOf(r, row.accountId, row.mailboxId);
-    return { tier: effectiveTier(row.accountTier, row.mailboxRestricted), billingBlock };
+    const tier = effectiveTier(row.accountTier, row.mailboxRestricted);
+    const heldOnServer = !mailboxRelayHold(tier, false) && (await relayHoldPending(r, row.mailboxId, row.tierSince));
+    return { tier, billingBlock, heldOnServer };
   });
+}
+
+/**
+ * Whether the mailbox's `mailbox.ensure` for its account's last tier change hasn't applied yet, so the mail server may
+ * still have it on the relay hold. The tier change queues that ensure in its own unit of work (a new job, or one
+ * already queued, which then runs with the new tier): applied once a job queued since the change has succeeded;
+ * pending while one queued since then hasn't; with none queued since (an earlier queued job was reused), pending
+ * until the most recent one succeeds. Unrelated ensures queued later (an alias, a backfill) don't hold the mailbox
+ * once the change's own ensure has succeeded. Not covered: a mailbox restriction lifted by staff (no timestamp); its
+ * few seconds are refused by the mail server per recipient.
+ */
+async function relayHoldPending(r: Repositories, mailboxId: string, since: Date): Promise<boolean> {
+  const p = await r.provisioning.progressSince("mailbox.ensure", mailboxId, since);
+  if (p.succeededSince) return false;
+  if (p.queuedSince) return true;
+  return p.latest !== null && p.latest !== "succeeded";
 }
 
 /**

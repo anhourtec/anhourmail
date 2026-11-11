@@ -77,6 +77,8 @@ export type MailboxStandingRow = {
   accountId: string;
   mailboxId: string;
   accountTier: TrustTier;
+  /** When the account's tier last changed (`trust_tier_since`). */
+  tierSince: Date;
   mailboxRestricted: boolean;
 };
 

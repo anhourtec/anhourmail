@@ -205,6 +205,7 @@ export class PgTrustRepository implements TrustRepository {
         accountId: mailbox.accountId,
         mailboxId: mailbox.id,
         tier: customerAccount.trustTier,
+        tierSince: customerAccount.trustTierSince,
         restrictedAt: mailbox.sendingRestrictedAt,
       })
       .from(mailbox)
@@ -216,6 +217,7 @@ export class PgTrustRepository implements TrustRepository {
       accountId: r.accountId,
       mailboxId: r.mailboxId,
       accountTier: tierOf(r.tier),
+      tierSince: r.tierSince,
       mailboxRestricted: r.restrictedAt !== null,
     };
   }

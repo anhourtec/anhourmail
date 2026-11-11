@@ -146,6 +146,7 @@ export function memoryTrust(s: State): TrustRepository {
         accountId: m.accountId,
         mailboxId: m.id,
         accountTier: t.tier,
+        tierSince: t.since,
         mailboxRestricted: s.mailboxRestrictions.some((r) => r.mailboxId === m.id),
       };
     },
