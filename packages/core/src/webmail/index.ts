@@ -7,6 +7,7 @@ export * from "./signatures-service";
 export * from "./account-safe-senders";
 export * from "./templates-service";
 export * from "./managed-script";
+export * from "./sending-pause";
 export * from "./handoff";
 export * from "./on-behalf";
 export * from "./delegation";
