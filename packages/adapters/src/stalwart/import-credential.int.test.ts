@@ -270,9 +270,12 @@ describe("mail import credential on Stalwart (ADR-0030)", () => {
       // The header read the dedupe index needs works with the credential.
       expect(fetched).toContain(`Message-ID: <${id}>`);
 
+      // The search index catches up with an APPEND a moment later: wait for both copies (bounded), then ask by
+      // Message-ID on the same settled index, so "not searchable" is never an index that hadn't caught up yet.
+      await expect
+        .poll(() => s.run(`UID SEARCH SUBJECT "kept ${tag}"`), { timeout: 15_000, interval: 250 })
+        .toMatch(/^\* SEARCH \d+ \d+/m);
       const byId = await s.run(`UID SEARCH HEADER Message-ID "${id}"`);
-      const bySubject = await s.run(`UID SEARCH SUBJECT "kept ${tag}"`);
-      expect(bySubject).toMatch(/^\* SEARCH \d+ \d+/m);
       expect(
         /^\* SEARCH\s*$/m.test(byId),
         "Message-ID became searchable: the importer's dedupe could use SEARCH now (ADR-0030 §5)",
