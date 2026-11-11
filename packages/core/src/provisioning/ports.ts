@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import type { standardSendingPolicy } from "@anhourmail/shared/sending";
 import type { DkimKey } from "@anhourmail/shared/dns";
 
 import type {
@@ -164,5 +165,26 @@ export type MailServer = {
    * is in place (the user can't change mail flow: no own Sieve, no VacationResponse). `sieveLocked` undefined =
    * not reported (treated as fine).
    */
-  listMailboxes(): Promise<{ address: string; quotaBytes: number; suspended: boolean; sieveLocked?: boolean }[]>;
+  listMailboxes(): Promise<
+    {
+      address: string;
+      quotaBytes: number;
+      suspended: boolean;
+      sieveLocked?: boolean;
+      /** What the account may do on the server (ADR-0034 §4); undefined = not reported (not compared). */
+      access?: MailServerAccess;
+    }[]
+  >;
+  /**
+   * What differs from the mail server's sending ceiling for every authenticated sender (ADR-0034 §4), by name; empty
+   * when it is in place. Null when this credential can't read it (the check is then reported as not run). Absent on
+   * fakes that don't model it.
+   */
+  sendingPolicyDrift?(policy: SendingCeiling): Promise<string[] | null>;
 };
+
+/** A mailbox's access as the mail server holds it (`accessOf` in `@anhourmail/stalwart-client`). */
+export type MailServerAccess = "active" | "smtp_blocked" | "send_blocked" | "receive_blocked" | "suspended";
+
+/** The ceiling's facts (`standardSendingPolicy` in `@anhourmail/shared/sending`). */
+export type SendingCeiling = ReturnType<typeof standardSendingPolicy>;

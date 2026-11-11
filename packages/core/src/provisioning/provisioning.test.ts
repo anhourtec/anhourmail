@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { deps as makeDeps, fixedClock } from "../__tests__/helpers";
 import { defaultBilling } from "../billing/lifecycle";
-import type { MailServer } from "./ports";
+import type { MailServer, MailServerAccess } from "./ports";
 import { enqueueProvisioning, reconcile, requeueActiveMailboxes, runClaimedJob, runNextJob } from "./service";
 import { backoffMs, MAX_ATTEMPTS, STALE_RUNNING_MS } from "./types";
 
@@ -722,6 +722,104 @@ describe("suspension drift", () => {
     expect(mail.boxes.find((b) => b.address === "paused@example.test")?.suspended).toBe(true);
     expect(mail.boxes.find((b) => b.address === "open@example.test")?.suspended).toBe(false);
     expect((await reconcile(d, mail)).suspensionMismatch).toEqual([]);
+  });
+});
+
+describe("sending access and the sending ceiling on the mail server (ADR-0034 §4)", () => {
+  /** The fake mail server, recording the access each ensure writes and reporting it back (as the real one does). */
+  function accessServer(drift?: () => Promise<string[] | null>) {
+    const mail = fakeMailServer();
+    const access = new Map<string, MailServerAccess>();
+    const ensure = mail.ensureMailbox.bind(mail);
+    mail.ensureMailbox = async (input) => {
+      access.set(input.address, input.suspended ? "suspended" : (input.access ?? "active"));
+      return ensure(input);
+    };
+    const list = mail.listMailboxes.bind(mail);
+    mail.listMailboxes = async () => (await list()).map((m) => ({ ...m, access: access.get(m.address) ?? "active" }));
+    if (drift) mail.sendingPolicyDrift = drift;
+    return { mail, access };
+  }
+  const base = { userId: null, createdAt: new Date(0), quotaBytes: 1, purgeAfter: null, lastError: null };
+
+  it("re-queues an active mailbox whose access isn't what its tier wants, and the job puts it right", async () => {
+    const { d } = setup();
+    d.uow.state.mailboxes = [
+      { ...base, accountId: "a1", id: "m1", address: "held@example.test", status: "active", stalwartId: "x1" },
+      { ...base, accountId: "a2", id: "m2", address: "open@example.test", status: "active", stalwartId: "x2" },
+      { ...base, accountId: "a2", id: "m3", address: "off@example.test", status: "suspended", stalwartId: "x3" },
+    ];
+    d.uow.state.accounts.push({ id: "a1", name: "One", plan: "free" }, { id: "a2", name: "Two", plan: "plus" });
+    d.uow.state.trust.push(trustRow("a1", "new", new Date(0)), trustRow("a2", "standard", new Date(0)));
+    const { mail, access } = accessServer();
+    await mail.ensureDomain("example.test");
+    for (const a of ["held", "open"]) await mail.ensureMailbox(ensureArgs(`${a}@example.test`, 1));
+    await mail.ensureMailbox({ ...ensureArgs("off@example.test", 1), suspended: true });
+    // The new account's mailbox can use SMTP on the server (an ensure that gave up after the tier changed).
+    access.set("held@example.test", "active");
+
+    const report = await reconcile(d, mail);
+    expect(report.accessMismatch).toEqual([
+      { address: "held@example.test", desired: "smtp_blocked", actual: "active" },
+    ]);
+    expect(report.sendingPolicyMismatch).toBeNull();
+    expect(report.clean).toBe(false);
+    expect(d.uow.state.jobs.map((j) => [j.kind, j.subjectId])).toEqual([["mailbox.ensure", "m1"]]);
+    expect(d.uow.state.audit.at(-1)?.meta).toMatchObject({ accessMismatches: 1, requeued: 1 });
+    while (await runNextJob(d, mail)) {
+      /* drain */
+    }
+    expect(access.get("held@example.test")).toBe("smtp_blocked");
+    expect((await reconcile(d, mail)).accessMismatch).toEqual([]);
+  });
+
+  it("compares a restriction and billing too: a restricted mailbox the server lets send is drift", async () => {
+    const { d } = setup();
+    d.uow.state.mailboxes = [
+      { ...base, accountId: "a1", id: "m1", address: "cut@example.test", status: "active", stalwartId: "x1" },
+    ];
+    d.uow.state.accounts.push({ id: "a1", name: "One", plan: "plus" });
+    d.uow.state.trust.push(trustRow("a1", "standard", new Date(0)));
+    d.uow.state.mailboxRestrictions.push({
+      mailboxId: "m1",
+      at: new Date(0),
+      reason: "spam",
+      note: null,
+      byUserId: null,
+    });
+    const { mail, access } = accessServer();
+    await mail.ensureDomain("example.test");
+    await mail.ensureMailbox(ensureArgs("cut@example.test", 1));
+    access.set("cut@example.test", "smtp_blocked");
+    expect((await reconcile(d, mail)).accessMismatch).toEqual([
+      { address: "cut@example.test", desired: "send_blocked", actual: "smtp_blocked" },
+    ]);
+  });
+
+  it("reports the ceiling's drift by name (report only, nothing re-queued); unreadable is not counted", async () => {
+    const { d } = setup();
+    let answer: string[] | null = ["throttle-hour-missing", "max-recipients-changed"];
+    const asked: unknown[] = [];
+    const { mail } = accessServer(async () => answer);
+    await mail.ensureDomain("example.test");
+    const drift = mail.sendingPolicyDrift?.bind(mail);
+    mail.sendingPolicyDrift = async (policy) => {
+      asked.push(policy);
+      return (await drift?.(policy)) ?? null;
+    };
+    const report = await reconcile(d, mail);
+    expect(report.sendingPolicyMismatch).toEqual(["throttle-hour-missing", "max-recipients-changed"]);
+    expect(report.clean).toBe(false);
+    expect(d.uow.state.jobs).toEqual([]);
+    expect(d.uow.state.audit.at(-1)?.meta).toMatchObject({ sendingPolicyMismatches: 2 });
+    // The ceiling for this deployment's platform domain.
+    expect(asked[0]).toMatchObject({ exempt: { domain: d.platform.domain } });
+    answer = [];
+    expect((await reconcile(d, mail)).clean).toBe(true);
+    answer = null;
+    const unread = await reconcile(d, mail);
+    expect(unread.sendingPolicyMismatch).toBeNull();
+    expect(unread.clean).toBe(true);
   });
 });
 

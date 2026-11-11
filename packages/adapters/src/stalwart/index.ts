@@ -21,8 +21,10 @@ import {
   LEGACY_SERVICE_ACCOUNT,
   samplesMadeBefore,
   scopesOf,
+  sendingPolicyDrift,
   SERVICE_CREDENTIALS,
   SPAM_SAMPLE_HOLD_DEFAULT_MS,
+  StalwartError,
   type StalwartManagement,
 } from "@anhourmail/stalwart-client";
 
@@ -327,7 +329,21 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
         quotaBytes: u.quotaBytes ?? 0,
         suspended: u.suspended,
         sieveLocked: u.sieveLocked,
+        access: u.access,
       }));
+    },
+    // Read only; a key without `sysMtaInboundThrottleGet` / `sysMtaStageRcptGet` answers `forbidden`: not checked.
+    async sendingPolicyDrift(policy) {
+      try {
+        return await sendingPolicyDrift(mgmt, policy);
+      } catch (err) {
+        const type =
+          err instanceof StalwartError && err.kind === "method"
+            ? (err.detail as { type?: unknown } | undefined)?.type
+            : null;
+        if (type === "forbidden") return null;
+        throw err;
+      }
     },
   };
 }

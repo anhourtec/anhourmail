@@ -31,7 +31,15 @@ l.at(report.clean ? "info" : "warn", "reconcile finished", {
   quotaMismatches: report.quotaMismatch.length,
   suspensionMismatches: report.suspensionMismatch.length,
   sieveLockMismatches: report.sieveLockMismatch.length,
+  // Sending access per mailbox (re-queued) and the ceiling for every authenticated sender (report only; ADR-0034 §4).
+  accessMismatches: report.accessMismatch.length,
+  sendingPolicyMismatch: report.sendingPolicyMismatch?.join(",") ?? "not checked",
 });
+if (report.sendingPolicyMismatch === null) {
+  // The provisioning key can't read the throttles until the ops follow-up gives it (or the reconciler's key)
+  // `sysMtaInboundThrottleGet` and `sysMtaStageRcptGet`; the deploy's bootstrap applies the ceiling meanwhile.
+  l.warn("sending ceiling check skipped: this key can't read the mail server's throttles");
+}
 // App passwords and API keys per mailbox (ADR-0020): report only; pending revocations are queued again. Read from the
 // accounts with the provisioning key (no owner access to the mailboxes).
 const credentials = await reconcileAppPasswords(deps, stalwartAppPasswordInventory(stalwartProvisioning()));

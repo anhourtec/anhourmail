@@ -6,3 +6,4 @@ export * from "./access";
 export * from "./service";
 export * from "./promote";
 export * from "./hold";
+export * from "./desired";

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { isSystemLocalPart } from "@anhourmail/shared/addresses";
+import { standardSendingPolicy } from "@anhourmail/shared/sending";
 
 import { billingMailboxAccess } from "../billing/lifecycle";
 import type { BillingProvider } from "../billing/ports";
@@ -10,6 +11,7 @@ import { mailboxNameOf } from "../people/names";
 import { mutation } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 import { mailboxSendAccess } from "../trust/access";
+import { desiredSendAccess } from "../trust/desired";
 import type { MailServer } from "./ports";
 import { backoffMs, type ClaimedJob, type JobKind, MAX_ATTEMPTS } from "./types";
 
@@ -545,6 +547,16 @@ export type DriftReport = {
    * re-applies the lock.
    */
   sieveLockMismatch: string[];
+  /**
+   * Active mailboxes whose sending access on the mail server isn't what billing and the trust tier want now (ADR-0034
+   * §4, `desiredSendAccess`): e.g. an `ensure` that gave up after a tier change. Re-queued; `mailbox.ensure` writes it.
+   */
+  accessMismatch: { address: string; desired: string; actual: string }[];
+  /**
+   * What differs from the mail server's sending ceiling (`applySendingPolicy`), by name; reported only (the deploy's
+   * bootstrap applies it). Null when the credential can't read it, or the mail server adapter doesn't check it.
+   */
+  sendingPolicyMismatch: string[] | null;
   clean: boolean;
 };
 
@@ -608,6 +620,8 @@ export async function reconcile(
     }),
     suspensionMismatch: [],
     sieveLockMismatch: [],
+    accessMismatch: [],
+    sendingPolicyMismatch: null,
     clean: true,
   };
   // Settled states only: a provisioning or failed mailbox has a job (or an error) of its own.
@@ -633,6 +647,32 @@ export async function reconcile(
     report.sieveLockMismatch.push(m.address);
     if (!requeue.includes(m.id)) requeue.push(m.id);
   }
+  // Sending access of settled active mailboxes (a suspended one is compared above). What `mailbox.ensure` writes is
+  // never `receive_blocked` or `suspended` for an active mailbox, so either is drift too.
+  const haveAccess = new Map(mailboxes.map((m) => [m.address, m.access] as const));
+  const activeIds = settled.filter((m) => m.status === "active" && haveAccess.get(m.address) !== undefined);
+  if (activeIds.length > 0) {
+    const now = deps.clock.now();
+    const wanted = await deps.uow.run(async (r) => {
+      const out: { id: string; address: string; desired: string }[] = [];
+      for (const m of activeIds) {
+        const state = await r.directory.getMailbox(m.id);
+        if (state)
+          out.push({ id: m.id, address: m.address, desired: await desiredSendAccess(r, state.accountId, m.id, now) });
+      }
+      return out;
+    });
+    for (const w of wanted) {
+      const actual = haveAccess.get(w.address);
+      if (actual === undefined || actual === "suspended" || actual === w.desired) continue;
+      report.accessMismatch.push({ address: w.address, desired: w.desired, actual });
+      if (!requeue.includes(w.id)) requeue.push(w.id);
+    }
+  }
+  // The ceiling for every authenticated sender: report only.
+  report.sendingPolicyMismatch = mail.sendingPolicyDrift
+    ? await mail.sendingPolicyDrift(standardSendingPolicy(deps.platform.domain))
+    : null;
   report.clean =
     report.missingOnMailServer.domains.length +
       report.missingOnMailServer.mailboxes.length +
@@ -640,7 +680,9 @@ export async function reconcile(
       report.unknownOnMailServer.mailboxes.length +
       report.quotaMismatch.length +
       report.suspensionMismatch.length +
-      report.sieveLockMismatch.length ===
+      report.sieveLockMismatch.length +
+      report.accessMismatch.length +
+      (report.sendingPolicyMismatch?.length ?? 0) ===
     0;
 
   if (!report.clean) {
@@ -669,6 +711,8 @@ export async function reconcile(
             quotaMismatches: report.quotaMismatch.length,
             suspensionMismatches: report.suspensionMismatch.length,
             sieveLockMismatches: report.sieveLockMismatch.length,
+            accessMismatches: report.accessMismatch.length,
+            sendingPolicyMismatches: report.sendingPolicyMismatch?.length ?? 0,
             requeued: requeue.length,
           },
         };
