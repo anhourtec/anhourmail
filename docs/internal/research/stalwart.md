@@ -356,8 +356,9 @@ namespace in `allowRelaying`, the original written back; R6 restarts the dev con
 
 Also found:
 
-- **Every refused recipient counts towards a permanent IP ban.** Stalwart's `rcpt_error` (unknown recipient or relay
-  refused) calls `is_rcpt_fail2banned`, which counts per client address **and per recipient address** against
+- **Every recipient refused in an SMTP session counts towards a permanent IP ban** (not a JMAP submission's: see
+  "Which address a refusal counts against" below). Stalwart's `rcpt_error` (unknown recipient or relay refused) calls
+  `is_rcpt_fail2banned`, which counts per client address **and per recipient address** against
   `x:Security.abuseBanRate` (default 35 per day, fixed UTC-day window; `abuseBanPeriod` null = permanent) and bans the
   client's address once either is over (`crates/common/src/network/security.rs`). Counters are in the in-memory store,
   which defaults to the data store, so they **survive restarts**; loopback and `x:AllowedIp` are exempt. In dev every
@@ -370,6 +371,34 @@ Also found:
 - `x:MemoryLookupKey/query` filters by `namespace` only (`key` and `text` are `unsupportedFilter`); a duplicate
   create is refused with `primaryKeyViolation` and the existing key's `objectId`, which `RelayHoldList` uses to add and
   remove with one or two calls whatever the list's size.
+
+### Which address a refusal counts against (verified on the pinned v0.16.27, 2026-11-11)
+
+Probes B1–B5 in `packages/adapters/src/stalwart/ban-attribution.int.test.ts` (opt-in, `BAN_PROBE=1`: for about a
+minute the dev allow-list is taken off and put back, `abuseBanRate` and `authBanRate` lowered to 2 a day and
+`abuseBanPeriod` set to an hour, all written back; a throwaway client container on `mailnet` for the SMTP control).
+Source read at the tag: `crates/jmap/src/submission/set.rs` (`Session::<NullIo>::local`), `crates/smtp/src/core/mod.rs`
+(`SessionData::local`: `remote_ip` 127.0.0.1), `crates/smtp/src/inbound/rcpt.rs` (`rcpt_error` →
+`is_rcpt_fail2banned(remote_ip, rcpt)`), `crates/common/src/network/security.rs` (`is_ip_allowed` short-circuits the
+counters; loopback is always allowed), `crates/http/src/auth/authenticate.rs` (`session.remote_ip`).
+
+| #   | Question                                                                                       | Result                                                                                                                                                                                                                                                                                                       |
+| --- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| B1  | A JMAP submission's outside recipient refused by the relay hold, with and without X-Forwarded-For | Five refusals of one recipient (three from one forwarded address, two from the connection's): `550 5.1.2 Relay not allowed.` in `deliveryStatus` each time and **no address banned**, the forwarder's included, with the allow-list off and the rate at 2. The submission's SMTP session is a local one from 127.0.0.1, which is always allowed, so neither the client nor the recipient counter moves. |
+| B2  | A JMAP submission to an unknown hosted address                                                  | `550 5.1.2 …` in `deliveryStatus`, no ban (same reason).                                                                                                                                                                                                                                                       |
+| B3  | Failed sign-ins on `/jmap` with X-Forwarded-For (`x:Http.useXForwarded` on)                     | The **forwarded** address is banned (`authFailure`, `expiresAt` null: `authBanPeriod` unset), never the connection's. Every HTTP limit and ban uses `session.remote_ip`, which is the forwarded address.                                                                                                       |
+| B4  | Control: the same relay refusals in an SMTP session on 465 from a client on `mailnet`            | AUTH `235`, each outside RCPT `550 5.1.2`, and the client's address banned (`rcptToFailure`) with `expiresAt` = now + `abuseBanPeriod` (one hour here). With `abuseBanPeriod` null the ban is permanent.                                                                                                      |
+| B5  | A malformed bearer token on `/jmap`                                                             | `401`, not counted as a failed sign-in. A real token that expired or was revoked isn't probed (an access token lives an hour); the code counts `AuthEvent::Failed` against `session.remote_ip`.                                                                                                                 |
+
+Consequences: the webmail BFF's JMAP sends never get anyone banned, so ADR-0034's earlier residual ("counts towards the
+visitor's abuse ban") was wrong. What still lands on the BFF's own address without X-Forwarded-For is every HTTP-level
+count: the anonymous rate limit on each first use of a token (`is_http_anonymous_request_allowed`), and failed
+sign-ins; so the webmail now forwards the visitor's address on every request (ADR-0034 update "second security review").
+Mail apps over SMTP still count per client address and per recipient: a finite `abuseBanPeriod` (`applyAbuseBanPeriod`,
+`STALWART_ABUSE_BAN_PERIOD_MS`) lets an address banned that way back in on its own. `x:AllowedIp` entries whose
+`expiresAt` has passed are deleted by the server (the probe's first run found its expired entries gone); the
+schema's `abuseBanPeriod`, `authBanPeriod`, `loiterBanPeriod`, `scanBanPeriod` are nullable durations (ms), the rates
+`x:Rate` objects `{count, period}`; reads need `sysSecurityGet`, `sysAllowedIpGet`.
 
 **The ceiling as built (ADR-0034 slice 13, 2026-11-11; `packages/adapters/src/stalwart/sending-ceiling.int.test.ts`):**
 two `authenticatedAs` throttles with the standard tier's numbers (50 / h, 200 / day) and `match` `!is_empty(authenticated_as)
