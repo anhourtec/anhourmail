@@ -95,8 +95,12 @@ local-only `deploy.md`). Release 9fa7dab went out on 2026-11-05 (deploy.md Part 
 Stripe test mode, mail and contacts import), then 9e506fc (the billing page redesign); on 2026-11-06 it ran 9e506fc
 with ops 976c791 (the importer gate's TLS check fixed, smoke 176/0). Pushed for the next deploy, cf19232 (deploy.md
 Part 6d, no migrations): disposable email addresses refused (ADR-0033), the email address confirmed at sign-up before
-the first sign-in, and the authenticator set-up in numbered steps. The work plan stops before Phase 6, which has not
-started. The next phases, in order, with exit criteria, are in `docs/internal/09-roadmap.md` "Path to production":
+the first sign-in, and the authenticator set-up in numbered steps. Phase 6 started on 2026-11-11 with trust tiers
+(ADR-0034, slices 1–20 built locally, not pushed): the tier on the customer account, automatic and paid promotion,
+the new-account hold (outside recipients refused in the webmail and by a mail-server relay hold, mail-app sending off
+until promoted), a mail-server sending ceiling, staff and customer cards; deploying it needs the ops follow-ups in
+`08-operations.md` "Trust tiers" (the `svc-hold` key, proxy rules, ban period) first. The next phases, in order, with exit criteria,
+are in `docs/internal/09-roadmap.md` "Path to production":
 
 1. pre-staging on one VM (real DNS, certificates, rDNS, external mail, backups and a restore drill);
 2. product gaps a beta needs (all built: webmail session handoff, data export and deletion, act-as, image proxy,
@@ -413,3 +417,4 @@ an app container direct access to Stalwart's management listener.
 | 2026-11-01 | Nishchayjeet Singh (Nish) | "Where we are and what's next": password-first sign-in, faster webmail, safe-sender images pushed                                  |
 | 2026-11-05 | Nishchayjeet Singh (Nish) | "Where we are and what's next": product gaps all built; billing and mail/contacts import built, billing still `planned`            |
 | 2026-11-07 | Nishchayjeet Singh (Nish) | "Where we are and what's next": pre-staging at 9e506fc (Part 6c done); cf19232 (disposable guard, confirm at sign-up) next         |
+| 2026-11-11 | Nishchayjeet Singh (Nish) | "Where we are and what's next": Phase 6 started; trust tiers (ADR-0034) built locally, ops follow-ups before deploy                |
