@@ -82,9 +82,23 @@ export class SignedOutError extends Error {
   override readonly name = "SignedOutError";
 }
 
-/** A refusal from the BFF with a message meant for the person (e.g. "You can only send from your own addresses."). */
+/**
+ * A refusal from the BFF with a message meant for the person (e.g. "You can only send from your own addresses."), and
+ * the error code when the BFF gave one (`sending_held`, `sending_limit`, …), so a caller can add what to do next.
+ */
 export class RefusedError extends Error {
   override readonly name = "RefusedError";
+  constructor(
+    message: string,
+    readonly code?: string,
+  ) {
+    super(message);
+  }
+}
+
+/** The BFF answered 503: the mail server or a check it needs couldn't be reached just now (nothing was changed). */
+export class UnavailableError extends Error {
+  override readonly name = "UnavailableError";
 }
 
 const USING = ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"];
@@ -188,8 +202,9 @@ async function api<T>(path: string, init: RequestInit = {}, go: typeof fetch = p
       (res.status === 422 && body?.error?.code === "sending_held") ||
       (res.status === 503 && body?.error?.code === "send_unconfirmed");
     if (res.status === 400 || res.status === 413 || res.status === 429 || pending || explained) {
-      throw new RefusedError(body?.error?.message ?? "That didn't work. Try again.");
+      throw new RefusedError(body?.error?.message ?? "That didn't work. Try again.", body?.error?.code);
     }
+    if (res.status === 503) throw new UnavailableError("HTTP 503");
     throw new Error(`HTTP ${String(res.status)}`);
   }
   return body?.data as T;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createMailClient, MailboxChangedError, RefusedError } from "./mail-client";
+import { createMailClient, MailboxChangedError, RefusedError, UnavailableError } from "./mail-client";
 
 const ORIGIN = "http://mail.test";
 const SESSION = {
@@ -330,6 +330,41 @@ describe("telling the app about changes", () => {
     expect(seen).toHaveBeenCalledTimes(2);
     await client.undoSend("s1");
     expect(seen).toHaveBeenCalledTimes(3);
+  });
+
+  it("a refused send carries the server's code (trust tier, limits); a 503 is told apart (ADR-0034 §5)", async () => {
+    const answers: Record<string, Response> = {
+      held: Response.json({ error: { code: "sending_held", message: "New accounts can send…" } }, { status: 403 }),
+      paused: Response.json({ error: { code: "sending_paused", message: "Sending is paused." } }, { status: 403 }),
+      limit: Response.json({ error: { code: "sending_limit", message: "You've reached…" } }, { status: 429 }),
+      down: Response.json(
+        { error: { code: "unavailable", message: "The mail server isn't answering." } },
+        { status: 503 },
+      ),
+    };
+    let next = "held";
+    vi.stubGlobal(
+      "fetch",
+      jmapServer(setOk, (path) =>
+        path.endsWith("/send") ? (answers[next] ?? new Response(null, { status: 500 })) : Response.json({ data: {} }),
+      ).fetchFn,
+    );
+    const client = createMailClient(ORIGIN);
+    for (const [key, code] of [
+      ["held", "sending_held"],
+      ["paused", "sending_paused"],
+      ["limit", "sending_limit"],
+    ] as const) {
+      next = key;
+      const err = await client.send("d1", "i1").catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(RefusedError);
+      expect((err as RefusedError).code).toBe(code);
+    }
+    next = "down";
+    const err = await client.send("d1", "i1").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnavailableError);
+    expect(err).not.toBeInstanceOf(RefusedError);
+    expect((err as Error).message).toBe("HTTP 503");
   });
 
   it("asks for a send's delivery report pinned to the tab's mailbox, naming a shared one, as no change", async () => {
