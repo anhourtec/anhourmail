@@ -30,13 +30,13 @@ import {
  *   reload while it is enabled. Dev only — production keeps it on (rule 20 is about production filtering).
  * - The admin WebUI bundle is served from a pinned local file because Stalwart can't download it.
  * - Every mail-port client reaches the dev Stalwart through the `mail-edge` forwarder, one address on `mailnet`, so
- *   Stalwart's automatic bans would cut every dev client and test off at once: a refused recipient (unknown address,
- *   the relay hold) counts towards a permanent abuse ban at 35 a day per address, and the counters live in the data
- *   store, surviving restarts until the UTC day ends. The private ranges Docker networks use are allowed
+ *   Stalwart's automatic bans would cut every dev client and test off at once: a recipient refused in an SMTP session
+ *   (unknown address, the relay hold) counts towards an abuse ban at 35 a day per address, and the counters live in
+ *   the data store, surviving restarts until the UTC day ends. The private ranges Docker networks use are allowed
  *   (`x:AllowedIp`, `DEV_ALLOWED_NETWORKS`). HTTP requests that carry X-Forwarded-For (the webmail BFF, tests'
  *   documentation-range addresses) are still counted and banned per client. Dev only: production has no such entry
- *   (its bootstrap refuses one, `assertNoPrivateAllowedIps`, and the reconciler reports one). A JMAP submission's refused
- *   recipients never count (they run as a local session from 127.0.0.1); only SMTP sessions' do.
+ *   (its bootstrap refuses one, `assertNoPrivateAllowedIps`, and the reconciler reports one). A JMAP submission's
+ *   refused recipients never count (they run as a local session from 127.0.0.1); only SMTP sessions' do.
  * - The sender-identity script carries the send-on-behalf exception (ADR-0026 §8), keyed with `SENDER_DELEGATION_KEY`
  *   from `.env`, or the dev key derived from BETTER_AUTH_SECRET when unset (`resolveSenderDelegationKey`), so the web
  *   app and `stack:verify` compute the same tags. Production's bootstrap passes its own key (private ops repository).

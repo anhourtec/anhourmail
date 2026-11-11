@@ -46,9 +46,10 @@ const tag = randomUUID().slice(0, 8);
 const domain = `relay-${tag}.test`;
 const password = randomBytes(18).toString("base64url");
 /**
- * A fresh documentation-range client address for each JMAP request: every refused recipient counts towards Stalwart's
- * abuse ban of the client's address (`x:Security.abuseBanRate`, 35 a day, permanent; R1), so refusals are spread over
- * addresses nobody uses instead of the dev forwarder's one address that every mail-port test shares.
+ * A fresh documentation-range client address for each JMAP request. A JMAP submission's refused recipients count
+ * towards no ban (a local session from 127.0.0.1; `ban-attribution.int.test.ts`), but failed sign-ins on `/jmap` count
+ * against the forwarded address, so anything these requests could provoke is spread over addresses nobody uses
+ * instead of the dev forwarder's one address that every mail-port test shares.
  */
 let clientSeq = Math.floor(Math.random() * 200);
 const nextClient = () => `198.51.100.${String(1 + (clientSeq++ % 254))}`;

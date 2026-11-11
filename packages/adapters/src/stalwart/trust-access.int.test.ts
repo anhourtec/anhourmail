@@ -53,7 +53,7 @@ const domain = `trust-${tag}.test`;
 const address = `held@${domain}`;
 const lateAddress = `late@${domain}`;
 const password = randomBytes(18).toString("base64url");
-/** A fresh documentation-range address per JMAP request: refused recipients count towards the client's abuse ban. */
+/** A fresh documentation-range address per JMAP request (failed sign-ins on `/jmap` count against it). */
 let clientSeq = Math.floor(Math.random() * 200);
 const nextClient = () => `203.0.113.${String(1 + (clientSeq++ % 254))}`;
 const MAILPIT = `http://localhost:${process.env.MAILPIT_UI_PORT ?? "43026"}`;

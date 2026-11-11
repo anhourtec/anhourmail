@@ -20,10 +20,12 @@
  * - `ReloadSettings` neither loads nor drops keys. Keys are stored in the data store, survive a restart and are all in
  *   force at start, a key never reloaded included.
  * - A reload with 3,000 keys took 2 ms; writing them took 0.3 s in batches of 500.
- * - Every refused recipient counts towards Stalwart's abuse ban of the client's address **and** of the recipient
- *   address (`x:Security.abuseBanRate`, default 35 a UTC day, ban permanent): a held account's mail app that keeps
- *   trying outside recipients gets its address banned from every protocol. That is why a `new` account's mail apps stay
- *   refused at SMTP AUTH (which doesn't count) and the hold covers JMAP (ADR-0034 update "relay hold").
+ * - Every recipient refused in an SMTP session counts towards Stalwart's abuse ban of the client's address **and** of
+ *   the recipient address (`x:Security.abuseBanRate`, default 35 a UTC day, ban permanent unless `abuseBanPeriod` is
+ *   set, `security.ts`): a held account's mail app that keeps trying outside recipients gets its address banned from
+ *   every protocol. That is why a `new` account's mail apps stay refused at SMTP AUTH (which doesn't count) and the hold
+ *   covers JMAP (ADR-0034 update "relay hold"). A JMAP submission's refused recipients never count: the submission
+ *   runs as a local session from 127.0.0.1, which is always allowed (`ban-attribution.int.test.ts`).
  *
  * Keys are the account's address in lower case. The namespace's permission covers every namespace, the spam filter's
  * lists included (`trusted-domains`, `blocked-domains`, `spam-traps`, `url-redirectors`), so the hold key is kept to
