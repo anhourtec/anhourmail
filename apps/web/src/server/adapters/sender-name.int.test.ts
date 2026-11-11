@@ -24,6 +24,7 @@ import { memoryKv, WebmailSessionStore } from "../webmail/session-store";
 import { WebmailService } from "../webmail/service";
 import { WebmailSettings } from "../webmail/settings";
 import { stalwartOAuthPort } from "./stalwart-oauth";
+import { fixedTrust } from "../webmail/__tests__/trust";
 
 const STALWART_URL = process.env.STALWART_URL ?? "http://127.0.0.1:43080";
 const WEBMAIL_URL = process.env.WEBMAIL_URL ?? "http://localhost:43300";
@@ -104,6 +105,7 @@ describe("webmail sender names on the dev Stalwart", () => {
       stalwartUrl: STALWART_URL,
       access: { state: async () => "ok" as const },
       quota: memorySlidingQuota(),
+      trust: fixedTrust(),
       sieve: { read: async () => null, write: async () => true },
       confirmedForward: async () => null,
       defer: () => undefined,
@@ -209,6 +211,7 @@ describe("webmail sender names on the dev Stalwart", () => {
         stalwartUrl: STALWART_URL,
         access: { state: async () => "ok" as const },
         quota: memorySlidingQuota(),
+        trust: fixedTrust(),
         sieve: { read: async () => null, write: async () => true },
         confirmedForward: async () => null,
         defer: () => undefined,

@@ -19,6 +19,7 @@ import { type MailExportSummary, mailExportStream } from "../webmail/export";
 import { memoryKv, WebmailSessionStore } from "../webmail/session-store";
 import { WebmailRefusedError, WebmailService } from "../webmail/service";
 import { stalwartOAuthPort } from "./stalwart-oauth";
+import { fixedTrust } from "../webmail/__tests__/trust";
 
 const STALWART_URL = process.env.STALWART_URL ?? "http://127.0.0.1:43080";
 const WEBMAIL_URL = process.env.WEBMAIL_URL ?? "http://localhost:43300";
@@ -92,6 +93,7 @@ function service() {
     stalwartUrl: STALWART_URL,
     access: { state: async () => "ok" as const },
     quota: memorySlidingQuota(),
+    trust: fixedTrust(),
     sieve: { read: async () => null, write: async () => true },
     confirmedForward: async () => null,
     defer: () => undefined,

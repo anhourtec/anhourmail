@@ -16,7 +16,7 @@ import { MemoryUnitOfWork } from "@anhourmail/adapters/memory";
 import type { MailMessage } from "@anhourmail/adapters/mail";
 import { systemClock } from "@anhourmail/core";
 import { setWebmailSenderName, webmailSenderName } from "@anhourmail/core/people";
-import { WebmailSettingsService, WebmailSignaturesService } from "@anhourmail/core/webmail";
+import { outboundCommands, WebmailSettingsService, WebmailSignaturesService } from "@anhourmail/core/webmail";
 import { memorySlidingQuota } from "@anhourmail/server/rate-limit";
 import { redis } from "@anhourmail/server/redis";
 import { createKeyRing } from "@anhourmail/server/keyring";
@@ -26,11 +26,13 @@ import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
 import { memoryKv, WebmailSessionStore } from "../webmail/session-store";
 import { WebmailService } from "../webmail/service";
 import { applyToMailboxes } from "../webmail/account-safe-apply";
+import { applyPauseToMailboxes } from "../webmail/sending-pause-apply";
 import { RULE_FORWARD_UNCONFIRMED, WebmailSettings } from "../webmail/settings";
 import { ourAuthResultsHeader, type RawHeader, trustedAuthservIds } from "../webmail/original";
 import { createSafeSenders, redisRulesVersions, rulesVersionKey } from "../webmail/safe-senders";
 import { DEFAULT_RULES, MANAGED_SCRIPT, parseScript } from "../webmail/sieve";
 import { stalwartOAuthPort } from "./stalwart-oauth";
+import { fixedTrust } from "../webmail/__tests__/trust";
 
 const STALWART_URL = process.env.STALWART_URL ?? "http://127.0.0.1:43080";
 const WEBMAIL_URL = process.env.WEBMAIL_URL ?? "http://localhost:43300";
@@ -88,6 +90,7 @@ function mailService() {
     stalwartUrl: STALWART_URL,
     access: { state: async () => "ok" as const },
     quota: memorySlidingQuota(),
+    trust: fixedTrust(),
     sieve: {
       read: (accountId) => stalwartDevAdmin().getSieveScript(accountId, MANAGED_SCRIPT),
       write: (accountId, script, ifInState) =>
@@ -481,6 +484,72 @@ describe("webmail settings on the dev Stalwart", () => {
     await settings.removeForwarding(ownerSession, account, req);
     expect((await settings.overview(ownerSession)).rules.forwarding).toMatchObject({ enabled: false, address: null });
   }, 90_000);
+
+  it("a tier pause stops the script's redirect and automatic reply on the mail server, and lifting brings them back", async () => {
+    // Forwarding (kept copy) to the target and an automatic reply, as the owner would set them.
+    const asked = await settings.requestForwarding(ownerSession, account, target.address, req);
+    expect(asked.emailed).toBe(true);
+    const link = /\/forwarding\/confirm\/([A-Za-z0-9_-]{43})/.exec(sent.at(-1)?.text ?? "")?.[1];
+    if (!link) throw new Error("no confirmation link");
+    await core.confirmForwarding(link, req);
+    await settings.setForwarding(ownerSession, account, { enabled: true, keepCopy: true }, req);
+    await settings.saveVacation(
+      ownerSession,
+      account,
+      {
+        vacation: { ...DEFAULT_RULES.vacation, enabled: true, subject: `Paused away ${run}`, message: "Away." },
+        timeZone: "UTC",
+      },
+      req,
+    );
+    const store = {
+      read: (id: string) => stalwartDevAdmin().getSieveScript(id, MANAGED_SCRIPT),
+      write: (id: string, content: string, state: string) =>
+        stalwartDevAdmin().putSieveScript(id, MANAGED_SCRIPT, content, state),
+    };
+    const ownerBox = { stalwartId: account, address: owner.address };
+    // Restricted: the server accepts the paused script, and neither the forward nor the reply goes out.
+    const restricted = await applyPauseToMailboxes([{ ...ownerBox, tier: "restricted" }], store, async () => []);
+    expect(restricted).toMatchObject({ updated: 1, failed: 0 });
+    const paused = (await store.read(account))?.content ?? "";
+    expect(outboundCommands(paused).map((c) => [c.kind, c.paused])).toEqual([
+      ["vacation", true],
+      ["redirect", true],
+    ]);
+    // The person's settings still read as they set them.
+    expect((await settings.overview(ownerSession)).rules.forwarding).toMatchObject({ enabled: true });
+    const quiet = `int-paused ${run}`;
+    await send(mail, senderSession, sender.address, owner.address, quiet);
+    expect(await waitFor(mail, ownerSession, quiet)).toContain("inbox");
+    // Delivery to the owner is done; give the script's actions time they would have needed, then check none ran.
+    await new Promise((r) => setTimeout(r, 4000));
+    expect(await headersOf(mail, targetSession, quiet)).toEqual([]);
+    expect(await headersOf(mail, senderSession, `Paused away ${run}`)).toEqual([]);
+
+    // New with the target outside (the predicate says so): only the redirect stays paused; the reply runs.
+    const held = await applyPauseToMailboxes([{ ...ownerBox, tier: "new" }], store, async (a) => [...a]);
+    expect(held.updated).toBe(1);
+    const replyOnly = `int-held ${run}`;
+    await send(mail, senderSession, sender.address, owner.address, replyOnly);
+    expect(await waitFor(mail, senderSession, `Paused away ${run}`)).toContain("inbox");
+    await new Promise((r) => setTimeout(r, 3000));
+    expect(await headersOf(mail, targetSession, replyOnly)).toEqual([]);
+
+    // Lifted: exactly the script that was written before, and forwarding works again.
+    expect((await applyPauseToMailboxes([{ ...ownerBox, tier: "standard" }], store, async () => [])).updated).toBe(1);
+    expect(outboundCommands((await store.read(account))?.content ?? "").every((c) => !c.paused)).toBe(true);
+    const again = `int-lifted ${run}`;
+    await send(mail, senderSession, sender.address, owner.address, again);
+    expect(await waitFor(mail, targetSession, again)).toContain("inbox");
+
+    await settings.saveVacation(
+      ownerSession,
+      account,
+      { vacation: { ...DEFAULT_RULES.vacation }, timeZone: "UTC" },
+      req,
+    );
+    await settings.removeForwarding(ownerSession, account, req);
+  }, 120_000);
 
   it("a mail rule moves a delivered message into a nested folder, marked read; forwarding needs a confirmed address", async () => {
     // Folders as a mail app makes them over IMAP (the webmail's JMAP can't create folders): made here with the dev
