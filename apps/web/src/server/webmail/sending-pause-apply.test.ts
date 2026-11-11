@@ -4,7 +4,13 @@ import { describe, expect, it } from "vitest";
 import { type ManagedScriptStore, outboundCommands } from "@anhourmail/core/webmail";
 import { memoryAccountSignals } from "@anhourmail/server/account-signals";
 
-import { applyPauseToMailboxes, type PauseMailbox, takeSendingPauseSignals } from "./sending-pause-apply";
+import {
+  applyPauseToMailboxes,
+  catchUpSendingPauses,
+  type PauseApplyResult,
+  type PauseMailbox,
+  takeSendingPauseSignals,
+} from "./sending-pause-apply";
 import { buildScript, DEFAULT_RULES, type MailRules } from "./sieve";
 
 const ctx = { identities: ["me@a.test"], contacts: [], authservIds: [], mailboxDomain: "a.test" };
@@ -125,5 +131,80 @@ describe("the worker's signals (a billing sync moved a tier)", () => {
     expect(scheduled.sort()).toEqual([a, b]);
     expect(signals.pending()).toEqual([]);
     expect(await takeSendingPauseSignals(signals, (id) => scheduled.push(id))).toBe(0);
+  });
+});
+
+describe("the catch-up pass (tier changes and restrictions made anywhere)", () => {
+  const a = "11111111-1111-4111-8111-111111111111";
+  const b = "22222222-2222-4222-8222-222222222222";
+  const ok = (): PauseApplyResult => ({
+    checked: 1,
+    updated: 1,
+    current: 0,
+    skippedInactive: 0,
+    skippedChanged: 0,
+    failed: 0,
+  });
+
+  it("applies every account changed since the last pass, then moves on from this pass's start", async () => {
+    const asked: Date[] = [];
+    const applied: string[] = [];
+    const t0 = new Date("2026-11-11T12:00:00Z");
+    const now = new Date("2026-11-11T12:05:00Z");
+    const out = await catchUpSendingPauses(
+      { since: t0, retry: new Set() },
+      {
+        changed: async (since) => {
+          asked.push(since);
+          return [a, b, a, "not-an-id"];
+        },
+        apply: async (id) => {
+          applied.push(id);
+          return ok();
+        },
+        now: () => now,
+      },
+    );
+    expect(asked).toEqual([t0]);
+    expect(applied.sort()).toEqual([a, b]);
+    expect(out.accounts).toBe(2);
+    expect(out.unfinished).toBe(0);
+    // From just before this pass began (worker and web clocks differ a little).
+    expect(out.state.since.getTime()).toBe(now.getTime() - 2 * 60_000);
+    expect(out.state.retry.size).toBe(0);
+  });
+
+  it("tries an account again next time when a mailbox failed, changed meanwhile, or the pass threw", async () => {
+    const results: Record<string, PauseApplyResult | Error> = {
+      [a]: { ...ok(), failed: 1 },
+      [b]: { ...ok(), skippedChanged: 1 },
+    };
+    const deps = {
+      changed: async () => [a, b],
+      apply: async (id: string) => {
+        const r = results[id];
+        if (r instanceof Error) throw r;
+        return r ?? ok();
+      },
+      now: () => new Date("2026-11-11T12:05:00Z"),
+    };
+    const first = await catchUpSendingPauses({ since: new Date(0), retry: new Set() }, deps);
+    expect([...first.state.retry].sort()).toEqual([a, b]);
+    // Next pass: nothing new changed, the retries go again; one throws now and stays.
+    results[a] = new Error("mail server down");
+    results[b] = ok();
+    const second = await catchUpSendingPauses(first.state, { ...deps, changed: async () => [] });
+    expect(second.accounts).toBe(2);
+    expect([...second.state.retry]).toEqual([a]);
+  });
+
+  it("keeps looking from the same moment when the batch was full", async () => {
+    const t0 = new Date("2026-11-11T12:00:00Z");
+    const many = Array.from({ length: 1_000 }, (_, i) => `${String(i).padStart(8, "0")}-0000-4000-8000-000000000000`);
+    const out = await catchUpSendingPauses(
+      { since: t0, retry: new Set() },
+      { changed: async () => many, apply: async () => ok(), now: () => new Date("2026-11-11T12:05:00Z") },
+    );
+    expect(out.state.since).toEqual(t0);
   });
 });

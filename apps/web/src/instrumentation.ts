@@ -21,9 +21,12 @@ export async function register(): Promise<void> {
   // Then the account-wide Safe senders reach mailboxes a cut-short background pass missed (ADR-0032 §1).
   const { applyAllAccountSafeSenders } = await import("./server/webmail/account-safe-apply");
   // Then each script follows its mailbox's trust tier (redirects and replies paused or back, ADR-0034).
-  const { applyAllSendingPauses, startSendingPauseSignals } = await import("./server/webmail/sending-pause-apply");
-  // And follows the tier changes the worker's billing syncs signal while it runs.
+  const { applyAllSendingPauses, startSendingPauseCatchUp, startSendingPauseSignals } =
+    await import("./server/webmail/sending-pause-apply");
+  // And follows the tier changes the worker signals while it runs (billing syncs, the reconciler), and every tier
+  // change or restriction made since, whoever made it, every five minutes.
   startSendingPauseSignals();
+  startSendingPauseCatchUp();
   setTimeout(
     () =>
       void upgradeMailRules()

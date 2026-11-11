@@ -24,9 +24,10 @@ import { bumpRulesVersion } from "./safe-senders";
  * `restricted` mailbox's script has both paused and a `new` one's redirects outside are paused (`sending-pause.ts`);
  * any other tier gets them back exactly as set. Only the web app holds the key that writes Sieve (ADR-0020), so this
  * runs here: in the background after a staff tier change or mailbox restriction, a refund or a plan change made in the
- * console (`scheduleSendingPause`), after a billing sync in the worker moved a tier (its signal, polled by
- * `startSendingPauseSignals`), and once after start-up for every mailbox (`applyAllSendingPauses`), which also catches
- * a promotion by the hourly job and any signal lost. A
+ * console (`scheduleSendingPause`), after a billing sync in the worker moved a tier or the reconciler found a script
+ * still forwarding or replying against its tier (their signals, polled by `startSendingPauseSignals`), every five
+ * minutes for every account whose tier changed or that was restricted since (`startSendingPauseCatchUp`, whoever made
+ * the change, a signal lost included), and once after start-up for every mailbox (`applyAllSendingPauses`). A
  * webmail save writes the pause itself (`saveMailRules`). Each write is a compare-and-swap on the Sieve state read; a
  * save that wins is checked again on the next pass. Counts only in logs.
  */
@@ -219,6 +220,84 @@ export function startSendingPauseSignals(): void {
       }
     })();
   }, SIGNAL_POLL_MS).unref();
+}
+
+/** How often the catch-up pass runs, how many accounts it takes at once, and how far it looks back past its last run. */
+const CATCH_UP_EVERY_MS = 5 * 60_000;
+const CATCH_UP_LIMIT = 1_000;
+/** The worker's and the web app's clocks differ a little: each pass looks back this far before the last one began. */
+const CATCH_UP_OVERLAP_MS = 2 * 60_000;
+
+export type CatchUpState = { since: Date; retry: Set<string> };
+export type CatchUpDeps = {
+  /** Accounts whose tier changed or that were restricted since then (`TrustRepository.changedSince`). */
+  changed: (since: Date, limit: number) => Promise<string[]>;
+  apply: (accountId: string) => Promise<PauseApplyResult>;
+  now: () => Date;
+};
+
+const catchUpDeps: CatchUpDeps = {
+  changed: (since, limit) => container().deps.uow.run((r) => r.trust.changedSince(since, limit)),
+  apply: applySendingPauseNow,
+  now: () => new Date(),
+};
+
+/**
+ * One catch-up pass (ADR-0034 security review F5): every account whose tier changed or that was restricted since the
+ * last pass, whoever changed it (the promotion job, a billing sync, a later detection job in the worker), plus the
+ * accounts the last pass couldn't finish, get their mailboxes' pause applied. So a restriction made outside the web
+ * app reaches its scripts within minutes even when its signal was lost (Redis down, the worker without `REDIS_URL`).
+ * Returns the state for the next pass: from this pass's start (less the overlap), with the accounts that failed or
+ * changed meanwhile to try again. Never throws for one account; ids only, never logged.
+ */
+export async function catchUpSendingPauses(
+  state: CatchUpState,
+  d: CatchUpDeps = catchUpDeps,
+): Promise<{ state: CatchUpState; accounts: number; unfinished: number }> {
+  const started = d.now();
+  const changed = await d.changed(state.since, CATCH_UP_LIMIT);
+  const ids = [...new Set([...changed, ...state.retry])].filter(isId);
+  const retry = new Set<string>();
+  for (const id of ids) {
+    const r = await d.apply(id).catch(() => null);
+    if (!r || r.failed > 0 || r.skippedChanged > 0) retry.add(id);
+  }
+  // A full batch may have left some out: look from the same moment again next time.
+  const since = changed.length >= CATCH_UP_LIMIT ? state.since : new Date(started.getTime() - CATCH_UP_OVERLAP_MS);
+  return { state: { since, retry }, accounts: ids.length, unfinished: retry.size };
+}
+
+/**
+ * At web-app start-up: the catch-up pass every five minutes (unref'd), from just before `from` (the start-up pass
+ * covers everything until then). One pass at a time; counts only in logs.
+ */
+export function startSendingPauseCatchUp(from: Date = new Date()): void {
+  let state: CatchUpState = { since: new Date(from.getTime() - CATCH_UP_OVERLAP_MS), retry: new Set() };
+  let busy = false;
+  setInterval(() => {
+    if (busy) return;
+    busy = true;
+    void (async () => {
+      try {
+        const out = await catchUpSendingPauses(state);
+        state = out.state;
+        if (out.accounts > 0) {
+          log.at(out.unfinished === 0 ? "info" : "warn", "sending pause catch-up pass", {
+            component: "webmail-sending-pause",
+            accounts: out.accounts,
+            unfinished: out.unfinished,
+          });
+        }
+      } catch (err) {
+        log.warn("sending pause catch-up pass skipped", {
+          component: "webmail-sending-pause",
+          errorName: err instanceof Error ? err.name : "unknown",
+        });
+      } finally {
+        busy = false;
+      }
+    })();
+  }, CATCH_UP_EVERY_MS).unref();
 }
 
 const DONE_KEY = "am:webmail:sending-pause:done:";
