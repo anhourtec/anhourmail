@@ -346,6 +346,47 @@ export function describeTrustContract(name: string, factory: AdapterFactory): vo
       }
     });
 
+    it("changed since: a tier change, an account restriction or a mailbox restriction at or after the moment", async () => {
+      const { uow, cleanup, seedMail } = await factory();
+      try {
+        const tag = randomUUID().slice(0, 8);
+        const seeded = await Promise.all(
+          ["tier", "acct", "box", "quiet"].map((k) =>
+            seedMail({
+              domain: `trust-c-${k}-${tag}.test`,
+              address: `c@trust-c-${k}-${tag}.test`,
+              alias: `c-alias@trust-c-${k}-${tag}.test`,
+              quotaBytes: 1024,
+            }),
+          ),
+        );
+        const ids = await Promise.all(
+          seeded.map(async (x) => ({
+            accountId: (await uow.run((r) => r.directory.getMailbox(x.mailboxId)))?.accountId ?? "",
+            mailboxId: x.mailboxId,
+          })),
+        );
+        const [tier, acct, box, quiet] = ids;
+        if (!tier || !acct || !box || !quiet) throw new Error("not seeded");
+        const later = new Date("2031-01-01T00:00:00Z");
+        const since = new Date("2030-12-31T00:00:00Z");
+        await uow.run((r) => r.trust.setTier(tier.accountId, change({ since: later })));
+        await uow.run((r) => r.trust.markRestricted(acct.accountId, later));
+        await uow.run((r) => r.trust.setMailboxRestriction(box.accountId, box.mailboxId, restriction({ at: later })));
+        // `quiet` changed long before.
+        await uow.run((r) => r.trust.setTier(quiet.accountId, change({ since: T })));
+        const found = await uow.run((r) => r.trust.changedSince(since, 1000));
+        expect(found).toEqual(expect.arrayContaining([tier.accountId, acct.accountId, box.accountId]));
+        expect(found).not.toContain(quiet.accountId);
+        const ours = ids.map((x) => x.accountId);
+        const afterAll = await uow.run((r) => r.trust.changedSince(new Date("2031-01-02T00:00:00Z"), 1000));
+        expect(afterAll.filter((id) => ours.includes(id))).toEqual([]);
+        expect(await uow.run((r) => r.trust.changedSince(since, 0))).toEqual([]);
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("hosted domains: verified customer domains only, any case, de-duplicated", async () => {
       const { uow, cleanup, seedMail } = await factory();
       try {

@@ -44,4 +44,10 @@ export type TrustRepository = {
   ): Promise<boolean>;
   /** A mailbox's sending facts by its address (lowercase), or null when we don't hold the address. */
   standingByAddress(address: string): Promise<MailboxStandingRow | null>;
+  /**
+   * Accounts whose tier changed, or that were restricted (the account or one of its mailboxes), at or after `since`:
+   * at most `limit` ids, in no set order. The web app's catch-up pass re-applies their managed scripts' sending pause
+   * (ADR-0034), whoever made the change (a worker job, the promotion job, billing).
+   */
+  changedSince(since: Date, limit: number): Promise<string[]>;
 };

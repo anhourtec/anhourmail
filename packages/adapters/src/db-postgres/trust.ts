@@ -221,4 +221,22 @@ export class PgTrustRepository implements TrustRepository {
       mailboxRestricted: r.restrictedAt !== null,
     };
   }
+
+  async changedSince(since: Date, limit: number): Promise<string[]> {
+    if (limit <= 0) return [];
+    const at = since.toISOString();
+    const rows = await this.x
+      .select({ id: customerAccount.id })
+      .from(customerAccount)
+      .where(
+        sql`${customerAccount.trustTierSince} >= ${at}::timestamptz
+          or ${customerAccount.lastRestrictedAt} >= ${at}::timestamptz
+          or exists (
+            select 1 from ${mailbox} m
+            where m.account_id = ${customerAccount.id} and m.sending_restricted_at >= ${at}::timestamptz
+          )`,
+      )
+      .limit(limit);
+    return rows.map((r) => r.id);
+  }
 }

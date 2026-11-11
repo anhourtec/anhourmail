@@ -150,5 +150,20 @@ export function memoryTrust(s: State): TrustRepository {
         mailboxRestricted: s.mailboxRestrictions.some((r) => r.mailboxId === m.id),
       };
     },
+
+    changedSince: async (since, limit) =>
+      s.accounts
+        .map((a) => a.id)
+        .filter((id) => {
+          const t = rowOf(id);
+          const restricted = s.mailboxRestrictions.some(
+            (r) => r.at >= since && s.mailboxes.some((m) => m.id === r.mailboxId && m.accountId === id),
+          );
+          return (
+            t !== null &&
+            (t.since >= since || (t.lastRestrictedAt !== null && t.lastRestrictedAt >= since) || restricted)
+          );
+        })
+        .slice(0, Math.max(0, limit)),
   };
 }
