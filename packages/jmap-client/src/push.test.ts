@@ -110,6 +110,15 @@ describe("parseStateChange", () => {
 });
 
 describe("openPushChannel", () => {
+  it("sends the end user's address when given one, and nothing that isn't an address", () => {
+    expect(open({ clientAddress: "203.0.113.8" }).sock.init.headers).toEqual({
+      Authorization: "Bearer tok",
+      "X-Forwarded-For": "203.0.113.8",
+    });
+    expect(open({ clientAddress: "1.2.3.4, 5.6.7.8" }).sock.init.headers).toEqual({ Authorization: "Bearer tok" });
+    expect(open({ clientAddress: null }).sock.init.headers).toEqual({ Authorization: "Bearer tok" });
+  });
+
   it("opens with the jmap subprotocol and the token header, then enables push", () => {
     const { sock, onOpen, ch } = open();
     expect(sock.url).toBe("ws://mail/jmap/ws");

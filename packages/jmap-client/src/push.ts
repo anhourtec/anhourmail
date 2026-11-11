@@ -5,6 +5,7 @@
  * in its `Authorization` header (a WebSocket client that accepts headers, such as Node's built-in one). Only type and
  * state names are surfaced; nothing else in a message is kept or logged.
  */
+import { clientAddressHeaders } from "./client-address";
 
 /** Per account id, the data types that changed and their new state strings. */
 export type StateChange = Record<string, Record<string, string>>;
@@ -38,6 +39,11 @@ export type PushChannelOptions = {
   url: string;
   /** Full Authorization header value. */
   authorization: string;
+  /**
+   * The end user's address, as the caller trusts it (`client-address.ts`): sent as `X-Forwarded-For` so the server
+   * counts this socket against that user, not against the caller's own address. Not an IP address: not sent.
+   */
+  clientAddress?: string | null;
   /** Types to be told about (`null`: all). */
   dataTypes?: string[] | null;
   /**
@@ -146,7 +152,10 @@ export function openPushChannel(opts: PushChannelOptions): PushChannel {
   };
 
   try {
-    socket = new Ctor(opts.url, { protocols: ["jmap"], headers: { Authorization: opts.authorization } });
+    socket = new Ctor(opts.url, {
+      protocols: ["jmap"],
+      headers: { Authorization: opts.authorization, ...clientAddressHeaders(opts.clientAddress) },
+    });
   } catch {
     // Reported asynchronously, like any other failure.
     timers.setTimeout(() => {

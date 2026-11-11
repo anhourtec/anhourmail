@@ -7,7 +7,8 @@
   "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
-    "./push": "./src/push.ts"
+    "./push": "./src/push.ts",
+    "./client-address": "./src/client-address.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
