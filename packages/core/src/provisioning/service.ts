@@ -61,7 +61,13 @@ async function apply(deps: Deps, mail: MailServer, job: ClaimedJob, handlers: Jo
       await resolveOrphanEvent(deps, handlers.billing, job.subjectId);
       return;
     }
-    await syncAccountBilling(deps, handlers.billing, job.subjectId, { requestId: `job-${job.id}`, guard: confirm });
+    const out = await syncAccountBilling(deps, handlers.billing, job.subjectId, {
+      requestId: `job-${job.id}`,
+      guard: confirm,
+    });
+    // The tier moved (committed above): the web app, which alone may write Sieve, re-applies the managed scripts'
+    // sending pause (ADR-0034). A failed signal never fails the job; the web app's start-up pass catches it.
+    if (out.status === "synced" && out.tierChanged) await handlers.tierChanged?.(job.subjectId).catch(() => undefined);
     return;
   }
   if (job.kind === "app_password.revoke") {
@@ -345,7 +351,12 @@ export type ProcessedJob = ClaimedJob & { lockLost: boolean };
  * the spam-training sample remover for `mail_import.training_cleanup` and `mailbox.training_purge` (the training key;
  * absent: those jobs fail).
  */
-export type JobHandlers = { billing?: BillingProvider | null; trainingSamples?: ImportTrainingSamples | null };
+export type JobHandlers = {
+  billing?: BillingProvider | null;
+  trainingSamples?: ImportTrainingSamples | null;
+  /** A billing sync changed the account's trust tier (the worker tells the web app; ADR-0034). */
+  tierChanged?: (accountId: string) => Promise<void>;
+};
 
 const sameSecond = (a: Date, b: Date) => Math.abs(a.getTime() - b.getTime()) < 1000;
 

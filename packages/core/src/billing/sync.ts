@@ -45,7 +45,8 @@ export const EVENT_RETENTION_MS = 35 * DAY_MS;
 const reqOf = (id: string): RequestMeta => ({ requestId: id, ip: null, userAgent: null });
 
 export type SyncOutcome =
-  | { status: "synced"; changes: BillingChange[] }
+  /** `tierChanged`: the account's trust tier moved (promoted or taken back), so its managed scripts must follow. */
+  | { status: "synced"; changes: BillingChange[]; tierChanged: boolean }
   /** The account is gone (deleted meanwhile): nothing to do. */
   | { status: "no_account" }
   /** A provider answer we must not guess past (catalogue drift, two live subscriptions): audited, state unchanged. */
@@ -393,7 +394,11 @@ export async function syncAccountBilling(
       now,
     });
     await recordSystemChanges(deps, r, SYNC, req, entries);
-    return { status: "synced", changes: d.changes };
+    return {
+      status: "synced",
+      changes: d.changes,
+      tierChanged: entries.some((e) => e.action === "trust.tier_changed"),
+    };
   });
 }
 

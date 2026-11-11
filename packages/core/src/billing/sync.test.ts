@@ -425,10 +425,34 @@ describe("billing.sync", () => {
     const w = await world();
     await w.subscribe();
     await w.deliver();
-    const job = await runNextJob(w.d, {} as MailServer, { billing: w.provider });
+    const signalled: string[] = [];
+    const tierChanged = async (id: string) => {
+      signalled.push(id);
+    };
+    const job = await runNextJob(w.d, {} as MailServer, { billing: w.provider, tierChanged });
     expect(job).toMatchObject({ kind: "billing.sync", lockLost: false });
     expect(w.d.uow.state.jobs.find((j) => j.id === job?.id)?.status).toBe("succeeded");
     expect((await w.billing())?.state).toBe("active");
+    // The promotion moved the tier: the web app is told, once (ADR-0034, the managed scripts' pause).
+    expect(signalled).toEqual([w.accountId]);
+    w.d.uow.state.jobs = []; // the mailbox.ensure jobs the promotion queued run elsewhere
+    // A sync that moves nothing tells nobody; a signal that fails never fails the job.
+    await w.d.uow.run((r) =>
+      r.provisioning.enqueue({ kind: "billing.sync", subjectId: w.accountId, runAfter: w.clock.now() }),
+    );
+    expect(await runNextJob(w.d, {} as MailServer, { billing: w.provider, tierChanged })).toMatchObject({
+      kind: "billing.sync",
+    });
+    expect(signalled).toEqual([w.accountId]);
+    await w.provider.refundLatest(w.customerId);
+    await w.deliver();
+    const failing = await runNextJob(w.d, {} as MailServer, {
+      billing: w.provider,
+      tierChanged: () => Promise.reject(new Error("redis down")),
+    });
+    expect(failing).toMatchObject({ kind: "billing.sync" });
+    expect(w.d.uow.state.jobs.find((j) => j.id === failing?.id)?.status).toBe("succeeded");
+    expect((await w.d.uow.run((r) => r.trust.get(w.accountId)))?.tier).toBe("new");
   });
 
   it("cancel at period end → lapsed with holds (nothing deleted) → resubscribe lifts every hold", async () => {
