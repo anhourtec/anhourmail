@@ -22,7 +22,7 @@ import type { WebmailPreferences } from "@anhourmail/shared/webmail";
 import { log } from "@anhourmail/server/log";
 
 import { forwardingConfirmEmail } from "../mail/system-email";
-import { type Identity, sendingTier } from "./compose";
+import type { Identity } from "./compose";
 import { type Junk, JunkInput, type MailRules, type Vacation, VacationInput, zoneOffset } from "./sieve";
 import {
   ownMailbox,
@@ -37,6 +37,7 @@ import { cleanSignature, identitySignature, textAsHtml } from "./signature-html"
 import { cleanTemplate } from "./template-html";
 import { isJmapId } from "./view";
 import type { DisposableEmailCheck } from "@anhourmail/core/security";
+import { externalHeld, SendingHeldError } from "@anhourmail/core/trust";
 
 /**
  * Webmail settings (docs/internal/05-webmail.md "Settings"): the one place that joins the control plane
@@ -55,6 +56,8 @@ type MailServer = Pick<
   | "legacySignature"
   | "mirrorSignature"
   | "folderPaths"
+  | "sendingTier"
+  | "outsideOf"
 >;
 type Mailer = { send(message: ReturnType<typeof forwardingConfirmEmail>): Promise<void> };
 
@@ -190,6 +193,8 @@ export function ownFolderPath(path: string, own: ReadonlySet<string>): boolean {
   if (first.trim().toLowerCase() === SHARED_FOLDERS_PREFIX.toLowerCase() || parts.some((p) => p === "")) return false;
   return parts.every((_, i) => own.has(parts.slice(0, i + 1).join("/")));
 }
+
+const FORWARDING_PAUSED = "Forwarding is paused while sending from this mailbox is paused.";
 
 export const RULES_CHANGED = "Your rules changed in another window. Reload them and try again.";
 export const RULE_FORWARD_UNCONFIRMED =
@@ -454,8 +459,9 @@ export class WebmailSettings {
     req: RequestMeta,
   ): Promise<Vacation> {
     const { address } = await this.#pinned(sessionId, account);
-    // Automatic replies, like forwarding, are gated on the mailbox's trust tier.
-    if (input.vacation.enabled && sendingTier(address) === "restricted") {
+    // Automatic replies are paused only while the mailbox's trust tier is `restricted` (the external hold of a `new`
+    // tier keeps them: one reply per sender per period, to people who wrote first; ADR-0034 §3).
+    if (input.vacation.enabled && (await this.d.mail.sendingTier(address)) === "restricted") {
       throw new WebmailRefusedError("Automatic replies are paused while sending from this mailbox is paused.");
     }
     const rules = await this.#rules(sessionId);
@@ -497,13 +503,25 @@ export class WebmailSettings {
   // ---- mail rules (ADR-0032 §2) ------------------------------------------------------------------------------
 
   /**
+   * Whether the mailbox's trust tier lets it forward to `target` now (ADR-0034 §3): `paused` while `restricted`,
+   * `held` while `new` and the target is outside the addresses we host, else null. A billing send-block keeps
+   * forwarding on (ADR-0029 SA60-03).
+   */
+  async #forwardBlock(address: string, target: string): Promise<"paused" | "held" | null> {
+    const tier = await this.d.mail.sendingTier(address);
+    if (tier === "restricted") return "paused";
+    if (externalHeld(tier) && (await this.d.mail.outsideOf([target])).length > 0) return "held";
+    return null;
+  }
+
+  /**
    * Where a rule's forward would go: the confirmed forwarding address, or null without one or while the mailbox's trust
-   * tier is `restricted` (the same check as Forwarding; a billing send-block keeps forwarding on, ADR-0029 SA60-03).
+   * tier doesn't let it forward there (the same check as Forwarding).
    */
   async #forwardTo(address: string): Promise<string | null> {
-    if (sendingTier(address) === "restricted") return null;
     const f = await this.d.settings.forwarding(address);
-    return f?.status === "confirmed" ? f.address : null;
+    if (f?.status !== "confirmed") return null;
+    return (await this.#forwardBlock(address, f.address)) === null ? f.address : null;
   }
 
   async rules(sessionId: string): Promise<RulesView> {
@@ -569,10 +587,12 @@ export class WebmailSettings {
     }
     const forwarding = filters.filter((f) => f.enabled && f.actions.forward).length;
     if (forwarding > 0) {
-      if (sendingTier(address) === "restricted") {
-        throw new WebmailRefusedError("Forwarding is paused while sending from this mailbox is paused.");
-      }
-      if ((await this.#forwardTo(address)) === null) throw new WebmailRefusedError(RULE_FORWARD_UNCONFIRMED);
+      const f = await this.d.settings.forwarding(address);
+      if (f?.status !== "confirmed") throw new WebmailRefusedError(RULE_FORWARD_UNCONFIRMED);
+      const block = await this.#forwardBlock(address, f.address);
+      if (block === "paused") throw new WebmailRefusedError(FORWARDING_PAUSED);
+      // 422 `sending_held`: a new account's rules forward only to addresses we host (ADR-0034 §3).
+      if (block === "held") throw new SendingHeldError();
     }
     const { rules, at } = await this.#rulesAt(sessionId);
     const now = at.ifInState === undefined ? undefined : at.ifInState;
@@ -727,7 +747,7 @@ export class WebmailSettings {
       {
         target,
         ownAddresses: identities.map((i) => i.email),
-        tier: sendingTier(address),
+        tier: await this.d.mail.sendingTier(address),
         ...(this.d.disposable ? { disposable: this.d.disposable } : {}),
       },
       req,
@@ -787,13 +807,15 @@ export class WebmailSettings {
     req: RequestMeta,
   ): Promise<MailRules["forwarding"]> {
     const { address } = await this.#pinned(sessionId, account);
-    if (input.enabled && sendingTier(address) === "restricted") {
-      throw new WebmailRefusedError("Forwarding is paused while sending from this mailbox is paused.");
+    if (input.enabled && (await this.d.mail.sendingTier(address)) === "restricted") {
+      throw new WebmailRefusedError(FORWARDING_PAUSED);
     }
     const target = await this.d.settings.forwarding(address);
     if (target?.status !== "confirmed") {
       throw new WebmailRefusedError("Forwarding starts once the other address confirms it.");
     }
+    // 422 `sending_held`: a new account forwards only to addresses we host (ADR-0034 §3).
+    if (input.enabled && (await this.#forwardBlock(address, target.address)) === "held") throw new SendingHeldError();
     const rules = await this.#rules(sessionId);
     const forwarding = { enabled: input.enabled, address: target.address, keepCopy: input.keepCopy };
     await this.d.mail.saveMailRules(sessionId, account, { ...rules, forwarding });

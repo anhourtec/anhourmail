@@ -7,7 +7,15 @@ import { MemoryUnitOfWork } from "@anhourmail/adapters/memory";
 import { NotFoundError } from "@anhourmail/core";
 import type { MailMessage } from "@anhourmail/adapters/mail";
 import { setWebmailSenderName, webmailSenderName, webmailSendingNames } from "@anhourmail/core/people";
-import { WebmailSettingsService, WebmailSignaturesService, WebmailTemplatesService } from "@anhourmail/core/webmail";
+import { SendingHeldError } from "@anhourmail/core/trust";
+import {
+  liftSendingPause,
+  outboundCommands,
+  PAUSE_OPEN,
+  WebmailSettingsService,
+  WebmailSignaturesService,
+  WebmailTemplatesService,
+} from "@anhourmail/core/webmail";
 import { createKeyRing } from "@anhourmail/server/keyring";
 import { setLogSinkForTests } from "@anhourmail/server/log";
 import { memorySlidingQuota } from "@anhourmail/server/rate-limit";
@@ -20,6 +28,8 @@ import {
   WebmailRefusedError,
   WebmailSenderBlockedError,
   WebmailService,
+  type WebmailTrust,
+  WebmailUnavailableError,
 } from "./service";
 import { memoryKv, WebmailSessionStore } from "./session-store";
 import {
@@ -33,6 +43,7 @@ import {
   WebmailSettings,
 } from "./settings";
 import { buildScript, DEFAULT_RULES, parseScript } from "./sieve";
+import { fixedTrust } from "./__tests__/trust";
 
 const MAIL = "urn:ietf:params:jmap:mail";
 const req = { requestId: "r1", ip: null, userAgent: null };
@@ -164,7 +175,7 @@ function fakeServer() {
   return { state, fetchImpl };
 }
 
-async function setup() {
+async function setup(trust: WebmailTrust = fixedTrust()) {
   const fake = fakeServer();
   // The managed Sieve script, read/written with management credentials in production; an in-memory map here.
   const managed = new Map<string, string>();
@@ -200,6 +211,7 @@ async function setup() {
     stalwartUrl: "http://stalwart",
     access: { state: async () => "ok" as const },
     quota: memorySlidingQuota(),
+    trust,
     sieve: {
       read: async (accountId) => {
         beforeRead.shift()?.();
@@ -548,7 +560,7 @@ describe("settings in the mail server", () => {
     // goes through the same filter.
     const { token } = await t.core.requestForwarding(
       "a@x.test",
-      { target: "copy@example.org", ownAddresses: [], tier: "new" },
+      { target: "copy@example.org", ownAddresses: [], tier: "standard" },
       req,
     );
     await t.core.confirmForwarding(token, req);
@@ -990,7 +1002,7 @@ describe("webmail settings: control plane and mail server together", () => {
       const f = await original(address);
       calls += 1;
       if (calls === 2) {
-        await t.core.requestForwarding(address, { target: "new@example.org", ownAddresses: [], tier: "new" }, req);
+        await t.core.requestForwarding(address, { target: "new@example.org", ownAddresses: [], tier: "standard" }, req);
       }
       return f;
     };
@@ -1005,7 +1017,7 @@ describe("webmail settings: control plane and mail server together", () => {
     // With a confirmed target and a rule that forwards to it, asking for another address rewrites the script at once.
     const asked = await t.core.requestForwarding(
       "a@x.test",
-      { target: "copy@example.org", ownAddresses: [], tier: "new" },
+      { target: "copy@example.org", ownAddresses: [], tier: "standard" },
       req,
     );
     await t.core.confirmForwarding(asked.token, req);
@@ -1064,6 +1076,115 @@ describe("webmail settings: control plane and mail server together", () => {
     expect(SafeSenderInput.safeParse({ emailId: "Ma1b2", address: "x@y.example" }).success).toBe(false);
     expect(SafeSenderInput.safeParse({ emailId: "a@b.example" }).success).toBe(false);
     expect(SafeSenderInput.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("settings and the mailbox's trust tier (ADR-0034)", () => {
+  /** A confirmed forwarding target for a@x.test (the control plane), as the confirmation link would leave it. */
+  const confirm = async (t: Awaited<ReturnType<typeof setup>>, target: string) => {
+    const { token } = await t.core.requestForwarding("a@x.test", { target, ownAddresses: [], tier: "standard" }, req);
+    await t.core.confirmForwarding(token, req);
+  };
+  const { include: _i, ...base } = DEFAULT_RULES;
+  const vacation = { ...base.vacation, enabled: true, message: "Away." };
+
+  it("new: automatic replies and internal forwarding run; a redirect outside is paused in the script, not dropped", async () => {
+    const trust = fixedTrust("new", ["x.test"]);
+    const t = await setup(trust);
+    await confirm(t, "copy@outside.example");
+    await t.svc.saveMailRules(t.sessionId, "acc1", {
+      ...base,
+      vacation,
+      forwarding: { enabled: true, address: "copy@outside.example", keepCopy: true },
+    });
+    const found = outboundCommands(t.script());
+    expect(found.map((c) => [c.kind, c.paused])).toEqual([
+      ["vacation", false],
+      ["redirect", true],
+    ]);
+    // The settings line keeps what the person set: lifted, the redirect is back exactly.
+    expect(parseScript(t.script())?.forwarding).toMatchObject({ enabled: true, address: "copy@outside.example" });
+    expect(liftSendingPause(t.script())).toContain('redirect :copy "copy@outside.example";');
+    // A hosted target isn't paused.
+    const internal = await setup(fixedTrust("new", ["x.test"]));
+    await confirm(internal, "colleague@x.test");
+    await internal.svc.saveMailRules(internal.sessionId, "acc1", {
+      ...base,
+      forwarding: { enabled: true, address: "colleague@x.test", keepCopy: true },
+    });
+    expect(outboundCommands(internal.script()).every((c) => !c.paused)).toBe(true);
+  });
+
+  it("restricted: every redirect and automatic reply is paused; standard pauses nothing", async () => {
+    const t = await setup(fixedTrust("restricted"));
+    await confirm(t, "colleague@x.test");
+    await t.svc.saveMailRules(t.sessionId, "acc1", {
+      ...base,
+      vacation,
+      forwarding: { enabled: true, address: "colleague@x.test", keepCopy: false },
+    });
+    expect(outboundCommands(t.script()).map((c) => c.paused)).toEqual([true, true]);
+    const open = await setup(fixedTrust("standard"));
+    await confirm(open, "copy@outside.example");
+    await open.svc.saveMailRules(open.sessionId, "acc1", {
+      ...base,
+      vacation,
+      forwarding: { enabled: true, address: "copy@outside.example", keepCopy: false },
+    });
+    expect(open.script()).not.toContain(PAUSE_OPEN);
+  });
+
+  it("new: turning forwarding on to an outside target, or a rule that forwards there, is 422 sending_held", async () => {
+    const t = await setup(fixedTrust("new", ["x.test"]));
+    await confirm(t, "copy@outside.example");
+    const on = t.settings.setForwarding(t.sessionId, "acc1", { enabled: true, keepCopy: true }, req);
+    await expect(on).rejects.toBeInstanceOf(SendingHeldError);
+    await expect(on).rejects.toMatchObject({ code: "sending_held" });
+    // Turning it off is always fine.
+    await t.settings.setForwarding(t.sessionId, "acc1", { enabled: false, keepCopy: true }, req);
+    const rule = {
+      name: "Copy",
+      enabled: true,
+      match: "all",
+      conditions: [{ field: "attachment" }],
+      actions: { move: null, markRead: false, flag: false, forward: true, stop: false },
+    };
+    const view = await t.settings.rules(t.sessionId);
+    expect(view.forwardTo).toBeNull();
+    await expect(
+      t.settings.saveRules(t.sessionId, "acc1", { rules: [rule], version: view.version }, req),
+    ).rejects.toMatchObject({ code: "sending_held" });
+    // Automatic replies stay available while held.
+    await expect(
+      t.settings.saveVacation(t.sessionId, "acc1", { vacation, timeZone: "UTC" }, req),
+    ).resolves.toMatchObject({ enabled: true });
+  });
+
+  it("restricted: automatic replies and forwarding are refused at set-up", async () => {
+    const t = await setup(fixedTrust("restricted"));
+    await expect(t.settings.saveVacation(t.sessionId, "acc1", { vacation, timeZone: "UTC" }, req)).rejects.toThrow(
+      /paused/,
+    );
+    await confirm(t, "colleague@x.test");
+    await expect(t.settings.setForwarding(t.sessionId, "acc1", { enabled: true, keepCopy: true }, req)).rejects.toThrow(
+      /paused/,
+    );
+    await expect(t.settings.requestForwarding(t.sessionId, "acc1", "other@x.test", req)).rejects.toThrow(/paused/);
+  });
+
+  it("new: asking an outside address to confirm is refused (sending_held); a hosted one is emailed", async () => {
+    const t = await setup(fixedTrust("new", ["x.test"]));
+    await expect(t.settings.requestForwarding(t.sessionId, "acc1", "me@outside.example", req)).rejects.toMatchObject({
+      code: "sending_held",
+    });
+    expect(t.sent).toEqual([]);
+  });
+
+  it("a tier that can't be read refuses the rules write (503)", async () => {
+    const t = await setup({ ...fixedTrust(), standing: () => Promise.reject(new Error("db down")) });
+    await expect(t.svc.saveMailRules(t.sessionId, "acc1", { ...base, vacation })).rejects.toBeInstanceOf(
+      WebmailUnavailableError,
+    );
   });
 });
 
