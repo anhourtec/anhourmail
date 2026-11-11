@@ -437,6 +437,15 @@ describe("promoteForPayment (billing, ADR-0034 §2)", () => {
     const d = world();
     expect(await d.uow.run((r) => promoteForPayment(d, r, MISSING))).toEqual([]);
   });
+
+  it("a suspended account isn't promoted by paying (finding 6 of the slices 1–11 review)", async () => {
+    const d = world();
+    const a = d.uow.state.accounts.find((x) => x.id === ACCOUNT_A);
+    if (a) a.status = "suspended";
+    expect(await d.uow.run((r) => promoteForPayment(d, r, ACCOUNT_A))).toEqual([]);
+    expect((await trustOf(d, ACCOUNT_A))?.tier).toBe("new");
+    expect(ensures(d)).toEqual([]);
+  });
 });
 
 describe("promoteEstablished (the promotion job's step)", () => {

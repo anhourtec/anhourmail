@@ -361,13 +361,15 @@ const systemMayPromote = (t: AccountTrust): boolean =>
 /**
  * Billing's promotion (ADR-0034 §2): inside the caller's unit of work, under the account lock it holds, a `new`
  * account that pays (billing state `active`) becomes `standard` with source `billing`, and its mailboxes are queued so
- * the mail server follows. Sticky: nothing here ever lowers a tier. Returns the audit entry for the caller to record
- * with its own (`recordSystemChanges`, or a person's own entry for a staff grant or a code redemption); none when
- * nothing changed.
+ * the mail server follows. Only an `active` (not suspended) account; nothing here lowers a tier. Returns the audit
+ * entry for the caller to record with its own (`recordSystemChanges`, or a person's own entry for a staff grant or a
+ * code redemption); none when nothing changed.
  */
 export async function promoteForPayment(deps: Deps, r: Repositories, accountId: string): Promise<SystemChange[]> {
-  const current = await r.trust.get(accountId);
-  if (!current || !systemMayPromote(current)) return [];
+  const account = await r.accounts.get(accountId);
+  const current = account ? await r.trust.get(accountId) : null;
+  // A suspended account isn't promoted by paying (nor by a comp or a grant) while suspended.
+  if (account?.status !== "active" || !current || !systemMayPromote(current)) return [];
   return promote(deps, r, current, "billing");
 }
 
