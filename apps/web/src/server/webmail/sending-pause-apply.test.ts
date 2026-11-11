@@ -49,7 +49,7 @@ const box = (id: string, tier: PauseMailbox["tier"]): PauseMailbox => ({
 });
 
 describe("applying the trust tier to managed scripts (ADR-0034)", () => {
-  it("restricted pauses replies and redirects; new pauses only outside redirects; standard lifts them back", async () => {
+  it("restricted pauses replies and redirects; new pauses replies and outside redirects; standard lifts them", async () => {
     const outside = buildScript(rules("friend@elsewhere.example"), ctx);
     const internal = buildScript(rules("colleague@a.test"), ctx);
     const t = store({
@@ -62,7 +62,7 @@ describe("applying the trust tier to managed scripts (ADR-0034)", () => {
       t.s,
       outsideOnly,
     );
-    expect(first).toMatchObject({ checked: 3, updated: 2, current: 1, failed: 0 });
+    expect(first).toMatchObject({ checked: 3, updated: 3, current: 0, failed: 0 });
     const paused = (id: string) => {
       const v = t.scripts[id];
       return v && v !== "fail" ? outboundCommands(v.content).map((c) => [c.kind, c.paused]) : [];
@@ -71,24 +71,35 @@ describe("applying the trust tier to managed scripts (ADR-0034)", () => {
       ["vacation", true],
       ["redirect", true],
     ]);
+    // New: automatic replies paused (finding F4), the outside redirect too, the internal one runs.
     expect(paused("n")).toEqual([
-      ["vacation", false],
+      ["vacation", true],
       ["redirect", true],
+    ]);
+    expect(paused("i")).toEqual([
+      ["vacation", true],
+      ["redirect", false],
     ]);
     // Written on the state each read.
     expect(t.writes.map((w) => [w.id, w.state])).toEqual([
       ["r", "1"],
       ["n", "1"],
+      ["i", "1"],
     ]);
     // Lifted (promotion, or staff lifting a restriction): exactly what was there before.
-    const lifted = await applyPauseToMailboxes([box("r", "standard"), box("n", "standard")], t.s, outsideOnly);
-    expect(lifted.updated).toBe(2);
+    const lifted = await applyPauseToMailboxes(
+      [box("r", "standard"), box("n", "standard"), box("i", "standard")],
+      t.s,
+      outsideOnly,
+    );
+    expect(lifted.updated).toBe(3);
     const content = (id: string) => {
       const v = t.scripts[id];
       return v && v !== "fail" ? v.content : "";
     };
     expect(content("r")).toBe(internal);
     expect(content("n")).toBe(outside);
+    expect(content("i")).toBe(internal);
   });
 
   it("counts no script, a switched-off one, one changed meanwhile, no state and a failure; never writes blind", async () => {

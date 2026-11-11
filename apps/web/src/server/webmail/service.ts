@@ -4143,7 +4143,8 @@ export class WebmailService {
       contacts = fitContacts(addresses, Math.floor((MAX_SCRIPT_BYTES - Buffer.byteLength(base)) / 2));
     }
     const built = buildScript(full, { identities, contacts, authservIds, mailboxDomain, accountSafe, ruleForwardTo });
-    // Restricted: every redirect and automatic reply paused; new: redirects outside the addresses we host (ADR-0034).
+    // Restricted: every redirect and automatic reply paused; new: every automatic reply and the redirects outside the
+    // addresses we host (ADR-0034, finding F4).
     const mode = pauseModeFor(tier);
     const outside = new Set(mode === "external" ? await this.outsideOf(redirectTargets(built)) : []);
     const script = applySendingPause(built, mode, (a) => outside.has(a));

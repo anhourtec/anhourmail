@@ -1088,7 +1088,7 @@ describe("settings and the mailbox's trust tier (ADR-0034)", () => {
   const { include: _i, ...base } = DEFAULT_RULES;
   const vacation = { ...base.vacation, enabled: true, message: "Away." };
 
-  it("new: automatic replies and internal forwarding run; a redirect outside is paused in the script, not dropped", async () => {
+  it("new: internal forwarding runs; automatic replies and a redirect outside are paused in the script, not dropped", async () => {
     const trust = fixedTrust("new", ["x.test"]);
     const t = await setup(trust);
     await confirm(t, "copy@outside.example");
@@ -1099,10 +1099,12 @@ describe("settings and the mailbox's trust tier (ADR-0034)", () => {
     });
     const found = outboundCommands(t.script());
     expect(found.map((c) => [c.kind, c.paused])).toEqual([
-      ["vacation", false],
+      ["vacation", true],
       ["redirect", true],
     ]);
-    // The settings line keeps what the person set: lifted, the redirect is back exactly.
+    // The settings line keeps what the person set: lifted, the reply and the redirect are back exactly.
+    expect(parseScript(t.script())?.vacation).toMatchObject({ enabled: true, message: "Away." });
+    expect(liftSendingPause(t.script())).toMatch(/^ *vacation :days \d+ /m);
     expect(parseScript(t.script())?.forwarding).toMatchObject({ enabled: true, address: "copy@outside.example" });
     expect(liftSendingPause(t.script())).toContain('redirect :copy "copy@outside.example";');
     // A hosted target isn't paused.
@@ -1154,7 +1156,7 @@ describe("settings and the mailbox's trust tier (ADR-0034)", () => {
     await expect(
       t.settings.saveRules(t.sessionId, "acc1", { rules: [rule], version: view.version }, req),
     ).rejects.toMatchObject({ code: "sending_held" });
-    // Automatic replies stay available while held.
+    // Automatic replies can still be set up while held; the script keeps them paused until the account is established.
     await expect(
       t.settings.saveVacation(t.sessionId, "acc1", { vacation, timeZone: "UTC" }, req),
     ).resolves.toMatchObject({ enabled: true });

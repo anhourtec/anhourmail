@@ -471,8 +471,8 @@ export class WebmailSettings {
     req: RequestMeta,
   ): Promise<Vacation> {
     const { address } = await this.#pinned(sessionId, account);
-    // Automatic replies are paused only while the mailbox's trust tier is `restricted` (the external hold of a `new`
-    // tier keeps them: one reply per sender per period, to people who wrote first; ADR-0034 §3).
+    // Refused while the mailbox's trust tier is `restricted`. While `new` they can be set up, and the managed script
+    // keeps them paused until the account is established (ADR-0034, finding F4): lifted, they start as saved.
     if (input.vacation.enabled && (await this.d.mail.sendingTier(address)) === "restricted") {
       throw new WebmailRefusedError("Automatic replies are paused while sending from this mailbox is paused.");
     }
