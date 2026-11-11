@@ -84,7 +84,7 @@ describe("forwarding confirmation", () => {
     const { d, svc } = setup();
     const { token, target } = await svc.requestForwarding(
       "sam@a.test",
-      { target: "Copy@Example.org", ownAddresses: ["hi@a.test"], tier: "new" },
+      { target: "Copy@Example.org", ownAddresses: ["hi@a.test"], tier: "standard" },
       req,
     );
     expect(target).toBe("copy@example.org");
@@ -117,7 +117,7 @@ describe("forwarding confirmation", () => {
           address.toLowerCase().endsWith("@burner.test") ? { disposable: true, via: "listed" } : { disposable: false },
         ),
     };
-    const own = { ownAddresses: ["hi@a.test"], tier: "new" as const, disposable };
+    const own = { ownAddresses: ["hi@a.test"], tier: "standard" as const, disposable };
     await expect(svc.requestForwarding("sam@a.test", { ...own, target: "Me@Burner.test" }, req)).rejects.toMatchObject({
       code: "disposable_email",
     });
@@ -126,9 +126,47 @@ describe("forwarding confirmation", () => {
     expect(ok.target).toBe("me@example.org");
   });
 
+  it("while the new tier holds the mailbox, refuses an outside target (sending_held, audited) and takes a hosted one", async () => {
+    const { d, svc } = setup();
+    d.uow.state.domains.push({
+      id: "dom-b",
+      accountId: ACCOUNT_B,
+      name: "b.test",
+      status: "active",
+      verifyToken: "t",
+      stalwartId: null,
+      lastError: null,
+      createdAt: d.clock.now(),
+    });
+    const own = { ownAddresses: ["hi@a.test"], tier: "new" as const };
+    await expect(
+      svc.requestForwarding("sam@a.test", { ...own, target: "Me@Outside.example" }, req),
+    ).rejects.toMatchObject({ code: "sending_held" });
+    expect(d.uow.state.forwardingTargets).toEqual([]);
+    expect(d.uow.state.audit.at(-1)).toMatchObject({
+      action: "forwarding.verification_sent",
+      result: "denied",
+      errorCode: "sending_held",
+      scope: `account:${ACCOUNT_A}`,
+    });
+    // A verified customer domain and the platform's own domain are ours: set up as usual.
+    expect((await svc.requestForwarding("sam@a.test", { ...own, target: "lee@b.test" }, req)).target).toBe(
+      "lee@b.test",
+    );
+    const free = `x@${d.platform.freeAddressDomain}`;
+    expect((await svc.requestForwarding("sam@a.test", { ...own, target: free }, req)).target).toBe(free);
+    // Standard: the outside target is fine.
+    const standard = await svc.requestForwarding(
+      "sam@a.test",
+      { ...own, tier: "standard", target: "me@outside.example" },
+      req,
+    );
+    expect(standard.target).toBe("me@outside.example");
+  });
+
   it("refuses loops, paused senders, junk tokens, expired links and too many emails", async () => {
     const { clock, svc } = setup();
-    const own = { ownAddresses: ["hi@a.test"], tier: "new" as const };
+    const own = { ownAddresses: ["hi@a.test"], tier: "standard" as const };
     await expect(svc.requestForwarding("sam@a.test", { ...own, target: "SAM@a.test" }, req)).rejects.toThrow(/own/);
     await expect(svc.requestForwarding("sam@a.test", { ...own, target: "hi@a.test" }, req)).rejects.toThrow(/own/);
     await expect(svc.requestForwarding("sam@a.test", { ...own, target: "nope" }, req)).rejects.toThrow(/Enter/);

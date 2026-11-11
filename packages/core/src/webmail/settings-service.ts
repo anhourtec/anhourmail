@@ -11,6 +11,7 @@ import type { Deps, RequestMeta } from "../ports";
 import { hashToken, isTokenShaped, newToken } from "../tokens";
 import type { ForwardingStatus, ForwardingTarget, WebmailMailbox } from "./settings-repository";
 import { assertNotDisposable, type DisposableEmailCheck } from "../security/disposable-email";
+import { externalHeld, outsideAddresses, SendingHeldError } from "../trust/hold";
 
 /**
  * Webmail settings that live in the control plane (docs/internal/05-webmail.md "Settings"): a mailbox's display
@@ -110,7 +111,9 @@ export class WebmailSettingsService {
   /**
    * Starts (or restarts) confirmation of a forwarding target and returns the one-time token for the email. Refuses
    * the mailbox's own addresses (a loop), a paused sender (restricted tier), a temporary-inbox address and more than
-   * `FORWARDING_EMAILS_PER_DAY` confirmation emails a day. Replaces any earlier target, which stops working at once.
+   * `FORWARDING_EMAILS_PER_DAY` confirmation emails a day. While the mailbox's tier holds it to addresses we host
+   * (`new`, ADR-0034 §3), an outside target is refused (422 `sending_held`, audited as denied). Replaces any earlier
+   * target, which stops working at once.
    */
   async requestForwarding(
     address: string,
@@ -132,6 +135,7 @@ export class WebmailSettingsService {
       throw new ValidationError("Forwarding is paused while sending from this mailbox is paused.");
     }
     await assertNotDisposable(input.disposable, target);
+    const held = externalHeld(input.tier) && (await outsideAddresses(this.deps, [target])).length > 0;
     const now = this.deps.clock.now();
     const token = newToken();
     const expiresAt = new Date(now.getTime() + FORWARDING_LINK_HOURS * 3_600_000);
@@ -146,6 +150,11 @@ export class WebmailSettingsService {
         target: { type: "mailbox", id: m.id, label: m.address },
       },
       async (repos) => {
+        if (held) {
+          const refused = new SendingHeldError();
+          refused.auditDenied = true;
+          throw refused;
+        }
         const prev = await repos.webmailSettings.forwardingForUpdate(m.id, m.accountId);
         if (prev?.status === "confirmed" && prev.address === target) {
           throw new ValidationError("That address is already confirmed.");
