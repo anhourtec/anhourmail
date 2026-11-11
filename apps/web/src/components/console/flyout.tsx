@@ -154,6 +154,37 @@ export function UrlFlyout({
   );
 }
 
+/**
+ * A modal dialog for a short form (a staff change): the page dimmed behind it, focus kept inside, Escape or a click
+ * outside closes it. The content brings its own heading (`labelledBy`) and buttons.
+ */
+export function ModalDialog({
+  labelledBy,
+  onClose,
+  children,
+}: {
+  labelledBy: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  useModal(box, onClose);
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <div aria-hidden onClick={onClose} className="absolute inset-0 bg-foreground/30 dark:bg-background/70" />
+      <div
+        ref={box}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={labelledBy}
+        className="relative max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-xl border bg-background p-5 shadow-xl"
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 /** Two-step confirmation for destructive actions; it names the thing. Focus starts on Cancel. */
 export function ConfirmDialog({
   title,
