@@ -159,6 +159,13 @@ export const REDACT_KEYS: readonly string[] = [
   // Safe senders (ADR-0027): a backstop, no log line carries an entry
   "safesender",
   "safesenders",
+  // Staff notes on a trust tier, a mailbox's sending restriction or a suspension (ADR-0034 §2): a backstop, no log line
+  // carries one. Never `note` or `internalNote`: the staff suspension's platform audit entry keeps its note on purpose
+  // (audit meta goes through this list too).
+  "trustnote",
+  "sendingrestrictednote",
+  "suspensionnote",
+  "staffnote",
 ];
 
 const REDACT = new Set(REDACT_KEYS);

@@ -343,3 +343,32 @@ describe("redaction of billing secrets (ADR-0029 §1)", () => {
     expect(out).toEqual(expected);
   });
 });
+
+describe("redaction of staff notes (ADR-0034 §2)", () => {
+  it("redacts the trust, restriction and suspension notes in any spelling; keeps internalNote and note", () => {
+    const out = redact({
+      trustNote: "t",
+      trust_note: "t",
+      sendingRestrictedNote: "s",
+      sending_restricted_note: "s",
+      suspensionNote: "n",
+      SUSPENSION_NOTE: "n",
+      staffNote: "x",
+      nested: { trustNote: "t" },
+      internalNote: "kept for the platform audit entry",
+      note: "kept",
+    }) as Record<string, unknown>;
+    expect(out).toEqual({
+      trustNote: "[redacted]",
+      trust_note: "[redacted]",
+      sendingRestrictedNote: "[redacted]",
+      sending_restricted_note: "[redacted]",
+      suspensionNote: "[redacted]",
+      SUSPENSION_NOTE: "[redacted]",
+      staffNote: "[redacted]",
+      nested: { trustNote: "[redacted]" },
+      internalNote: "kept for the platform audit entry",
+      note: "kept",
+    });
+  });
+});
