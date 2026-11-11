@@ -1,6 +1,8 @@
 # 02 — Mail infrastructure
 
-Last updated: 2026-11-11 (the relay hold: `new` and `restricted` mailboxes send to hosted addresses only on SMTP and JMAP, the hold key, fail-closed `mailbox.ensure`; dev allows the forwarder's address past Stalwart's automatic bans); 2026-11-05 (mail import: the IMAP-only import credential, IMAP probes, the training key and the run-65 fixes, ADR-0030); 2026-11-04 (the webmail tells the sender about unknown local recipients); 2026-10-31 (no file storage on customer mailboxes; the provisioning key's set narrows); 2026-10-30 (internal-mail marker and the inbound-headers script; send-on-behalf tag expiry, ADR-0026 slice 13). Research: `research/stalwart.md`, `research/deliverability.md`.
+Last updated: 2026-11-11 (second security review: what a refusal counts against, a finite abuse ban and no private
+allow-list entries in production, the webmail's client address on every request, the hold list reloaded on every
+held ensure and by the reconciler, tightening ensures never give up; the relay hold: `new` and `restricted` mailboxes send to hosted addresses only on SMTP and JMAP, the hold key, fail-closed `mailbox.ensure`; dev allows the forwarder's address past Stalwart's automatic bans); 2026-11-05 (mail import: the IMAP-only import credential, IMAP probes, the training key and the run-65 fixes, ADR-0030); 2026-11-04 (the webmail tells the sender about unknown local recipients); 2026-10-31 (no file storage on customer mailboxes; the provisioning key's set narrows); 2026-10-30 (internal-mail marker and the inbound-headers script; send-on-behalf tag expiry, ADR-0026 slice 13). Research: `research/stalwart.md`, `research/deliverability.md`.
 
 ## URL and hostname map
 
@@ -164,14 +166,34 @@ the only JMAP sender and the BFF's own hold is not enough. Verified in `research
   (`packages/stalwart-client/src/relay-hold.ts`; written with the sending ceiling by `applySendingPolicy`: the dev plan
   and the deploy's bootstrap). An outside recipient gets `550 5.1.2 Relay not allowed.` at RCPT, or in the JMAP
   submission's `deliveryStatus`; local delivery is never relaying.
-- **`new` keeps `smtp_blocked`** as well: every relay refusal counts towards Stalwart's permanent abuse ban of the
-  client's address (35 a day), so mail apps of new accounts are refused at AUTH (which doesn't count) rather than at
-  each outside recipient. `restricted` is `send_blocked` and listed as defence in depth.
+- **`new` keeps `smtp_blocked`** as well: every recipient refused in an SMTP session counts towards Stalwart's abuse
+  ban of the client's address (35 a day; permanent unless `abuseBanPeriod` is set), so mail apps of new accounts are
+  refused at AUTH (which doesn't count) rather than at each outside recipient. A JMAP submission's refused recipients
+  count towards no ban (a local session from 127.0.0.1; `research/stalwart.md` "Which address a refusal counts
+  against"). `restricted` is `send_blocked` and listed as defence in depth.
 - **Writes:** `mailbox.ensure` in the worker with the hold key (`STALWART_HOLD_KEY`), fail closed: listed, kept
   `send_blocked` (a new account: not yet created) while the list is reloaded (`ReloadLookupStores`; a key isn't in
-  force before it) and the relaying policy is checked, then given its access. Off the list: unlisted and reloaded before its new access is written. Keys
-  persist in the data store and are in force from start-up.
-- **Drift:** the reconciler's `relayHoldMismatch` (list against the tiers; policy exactly the hold's).
+  force before it) and the relaying policy is checked, then given its access. Every run of a held mailbox reloads the
+  list (a key stored by an earlier attempt may never have been loaded). Off the list: unlisted and reloaded before its
+  new access is written; looking up an address that wasn't listed writes and destroys a key, then reloads, so it is
+  never left loaded. Keys persist in the data store and are in force from start-up. An ensure that would tighten a
+  mailbox never gives up (retries at most five minutes apart, alert `mailbox_restriction_overdue`).
+- **Drift:** the reconciler reloads the list first, then `relayHoldMismatch` (list against the tiers of settled
+  mailboxes and of failed ones the server has; policy exactly the hold's).
+- **The webmail holds a promoted mailbox until its ensure has run** (`SendingStanding.heldOnServer`), so a send in the
+  seconds between a promotion and the server's change is refused clearly instead of per recipient.
+
+## Automatic bans and the client address (ADR-0034 update "second security review")
+
+- **Abuse ban:** finite in production (`applyAbuseBanPeriod`, `STALWART_ABUSE_BAN_PERIOD_MS`, applied by the deploy's
+  bootstrap and by the dev plan when set; `packages/stalwart-client/src/security.ts`). Counts only recipients refused in
+  SMTP sessions (mail apps, other servers), per client address and per recipient.
+- **Allow-list:** no private range in production (`assertNoPrivateAllowedIps` in the bootstrap; the reconciler's
+  `banPolicyMismatch`). Dev allows Docker's ranges for its one forwarder (below).
+- **Client address:** with `x:Http.useXForwarded`, every HTTP limit and ban (failed sign-ins, the anonymous rate limit on
+  a token's first use) counts against X-Forwarded-For. The webmail sends the visitor's trusted address on every request
+  (`withClientAddress`, `@anhourmail/jmap-client/client-address`; OAuth sign-in and refresh already did), and NGINX sets
+  the header on every location that proxies to Stalwart. Pinned in `ban-attribution.int.test.ts` (opt-in).
 
 ## Stalwart configuration principles (v0.16.27)
 
@@ -356,10 +378,12 @@ Verified 2026-10-29 on v0.16.27 (handoff item 14; `stack:verify` checks every ca
 - **Pyzor is disabled in dev only.** It is a network lookup, and Stalwart refuses to reload while it can't resolve. Production keeps it on.
 - **The forwarder's address is exempt from Stalwart's automatic bans in dev only** (`x:AllowedIp` for Docker's private
   ranges, `DEV_ALLOWED_NETWORKS` in the dev plan). Every mail-port client reaches the dev server through `mail-edge`,
-  one address, and every refused recipient (unknown address, relay hold) and failed sign-in counts towards a ban of
-  it; a ban of that one address cut off every dev client and test, and lifting it didn't help while the day's counter
-  (kept in the data store) stayed over. HTTP requests carrying `X-Forwarded-For` (the webmail, tests' documentation
-  addresses) are still counted per client. Production has no allowed range.
+  one address, and every recipient refused in an SMTP session (unknown address, relay hold) and failed sign-in without
+  X-Forwarded-For counts towards a ban of it; a ban of that one address cut off every dev client and test, and lifting
+  it didn't help while the day's counter (kept in the data store) stayed over. HTTP requests carrying
+  `X-Forwarded-For` (the webmail, tests' documentation addresses) are still counted per client. Production has no
+  allowed range. With `STALWART_ABUSE_BAN_PERIOD_MS` in `.env` (`.env.example` has an hour), the dev plan makes the
+  abuse ban finite too.
 - The Stalwart admin WebUI bundle is pinned (v1.0.11, sha256-checked), served via `file://` `resourceUrl` from a read-only mount, because Stalwart has no egress. Stalwart needs one restart after the bundle changes.
-- `npm run stack:verify` proves it: alice → bob over JMAP; external recipient → Mailpit; `curl` from the Stalwart container to the internet fails; unknown local recipients get 550 at `RCPT` (25 and 465) while a throwaway catch-all domain accepts them, and a JMAP submission to one reports the 550 in `deliveryStatus`; the relay hold is in `allowRelaying`, and a listed throwaway mailbox gets `550 5.1.2` for an outside recipient on 465 and over JMAP while its local mail is delivered.
+- `npm run stack:verify` proves it: alice → bob over JMAP; external recipient → Mailpit; `curl` from the Stalwart container to the internet fails; unknown local recipients get 550 at `RCPT` (25 and 465) while a throwaway catch-all domain accepts them, and a JMAP submission to one reports the 550 in `deliveryStatus`; the relay hold is in `allowRelaying`, and a listed throwaway mailbox gets `550 5.1.2` for an outside recipient on 465 and over JMAP while its local mail is delivered; the abuse-ban period is the configured one and the allow-list holds only the forwarder's ranges.
 - Tests that need "external" delivery use a second local domain or Mailpit. Nothing leaves the machine (rule 19).
