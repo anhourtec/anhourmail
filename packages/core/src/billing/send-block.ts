@@ -6,7 +6,7 @@
  * (`403 billing_restricted`), and holds in the moments before the worker has applied the new state. Read-only: it
  * changes nothing, so it writes no audit entry.
  */
-import type { Deps } from "../ports";
+import type { Deps, Repositories } from "../ports";
 
 /** Why billing stops a mailbox sending: the account's payment problem, or the mailbox held after the plan ended. */
 export type BillingSendBlock = "restricted" | "held";
@@ -17,10 +17,18 @@ export async function billingSendBlock(deps: Deps, address: string): Promise<Bil
   if (key === "" || key.length > 254) return null;
   return deps.uow.run(async (r) => {
     const m = await r.webmailSettings.mailboxByAddress(key);
-    if (!m) return null;
-    // One query at a time: a unit of work holds one database connection.
-    const held = await r.billing.heldIds(m.accountId, "mailbox", [m.id]);
-    if (held.length > 0) return "held";
-    return (await r.billing.get(m.accountId))?.state === "restricted" ? "restricted" : null;
+    return m ? billingBlockOf(r, m.accountId, m.id) : null;
   });
+}
+
+/** Billing's reason a mailbox of this account can't send, inside a unit of work (also read by `sendingStanding`). */
+export async function billingBlockOf(
+  r: Repositories,
+  accountId: string,
+  mailboxId: string,
+): Promise<BillingSendBlock | null> {
+  // One query at a time: a unit of work holds one database connection.
+  const held = await r.billing.heldIds(accountId, "mailbox", [mailboxId]);
+  if (held.length > 0) return "held";
+  return (await r.billing.get(accountId))?.state === "restricted" ? "restricted" : null;
 }
