@@ -82,6 +82,8 @@ const STATUS: Record<string, number> = {
   disposable_email: 422,
   // A new account's forward to an address we don't host, refused at set-up (ADR-0034 §3).
   sending_held: 422,
+  // A trust tier staff can't set yet (`trusted`, ADR-0034 §2).
+  tier_unavailable: 422,
 };
 
 export type RouteOptions = {
