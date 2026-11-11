@@ -38,6 +38,11 @@
  *      accepts them; a JMAP submission to one is created but reports the 550 in `deliveryStatus` (no bounce), which
  *      is what the webmail must show the sender. No message content is sent: each SMTP probe stops at RCPT.
  *
+ *  11. Relay hold (ADR-0034 update "relay hold"): `allowRelaying` holds listed accounts first; a throwaway mailbox put
+ *      on the list (through the hold list, then reloaded) gets `550 5.1.2` for an outside recipient over SMTP 465 and
+ *      over JMAP (`deliveryStatus`), while a local recipient is still delivered; nothing reaches Mailpit. Each run
+ *      refuses one SMTP recipient from the dev forwarder (allowed in dev, `DEV_ALLOWED_NETWORKS`).
+ *
  *   npm run stack:verify      (after `npm run stack:up` and `npm run db:seed`)
  */
 import { execFileSync } from "node:child_process";
@@ -54,7 +59,7 @@ import {
   resolveSenderDelegationKey,
 } from "@anhourmail/core/webmail";
 import { JmapClient } from "@anhourmail/jmap-client";
-import { INTERNAL_MAIL_HEADER, stalwartDevAdmin } from "@anhourmail/stalwart-client";
+import { INTERNAL_MAIL_HEADER, isDesiredRelaying, RelayHoldList, stalwartDevAdmin } from "@anhourmail/stalwart-client";
 
 import { isInternalMail, ourAuthResultsHeader, trustedAuthservIds } from "../apps/web/src/server/webmail/original";
 import { buildScript, DEFAULT_RULES, dmarcPassRegex, upgradeManagedScript } from "../apps/web/src/server/webmail/sieve";
@@ -1056,6 +1061,81 @@ await protocolCheck("JMAP submission: unknown local recipient reported as not de
   }, 10_000);
   return status?.smtpReply?.startsWith("550") === true;
 });
+
+// 11. Relay hold.
+{
+  const admin = stalwartDevAdmin();
+  const [stage] = await admin.transport.getAll<{ id: string; allowRelaying?: unknown }>(
+    "x:MtaStageRcpt",
+    ["allowRelaying"],
+    ["singleton"],
+  );
+  check("Relay hold: allowRelaying refuses listed accounts first", isDesiredRelaying(stage?.allowRelaying));
+  await protocolCheck("Relay hold: a listed mailbox can't send outside over SMTP or JMAP; local mail still goes", () =>
+    withThrowawayMailbox("held", async (held) => {
+      const list = new RelayHoldList(admin);
+      await list.add(held.user);
+      try {
+        await list.reload();
+        const outside = `held-${token}@example.com`;
+        const w = await wire(port("STALWART_SUBMISSIONS_PORT", 465), true);
+        let smtp = "";
+        try {
+          await w.read(/^220 /m);
+          w.send("EHLO verify.local");
+          await w.read(/^250 /m);
+          w.send(`AUTH PLAIN ${Buffer.from(`\0${held.user}\0${held.password}`).toString("base64")}`);
+          await w.read(/^235 /m);
+          w.send(`MAIL FROM:<${held.user}>`);
+          await w.read(/^\d{3} /m);
+          w.send(`RCPT TO:<${outside}>`);
+          smtp = (await w.read(/^\d{3} /m, 30_000)).trim();
+          w.send("QUIT");
+        } finally {
+          w.close();
+        }
+        const client = new JmapClient({
+          sessionUrl: `${base}/jmap/session`,
+          authorization: `Basic ${Buffer.from(`${held.user}:${held.password}`).toString("base64")}`,
+        });
+        const accountId = await client.accountId();
+        type Status = Record<string, { delivered?: string; smtpReply?: string }>;
+        const replyTo = async (to: string) => {
+          const id = await client.sendText({
+            from: held.user,
+            to: [to],
+            subject: `stack-verify hold ${token}`,
+            text: "Hold.",
+          });
+          return waitFor(async () => {
+            const res = await client.request([["EmailSubmission/get", { accountId, ids: [id] }, "g"]]);
+            const s = ((res.get("g")?.list ?? []) as { deliveryStatus?: Status }[])[0]?.deliveryStatus?.[to];
+            // A refusal is final (`delivered: no`); an accepted local recipient reads `250 2.1.5 Queued` at RCPT.
+            return s?.delivered === "no" || s?.smtpReply?.startsWith("250") === true ? s : undefined;
+          }, 15_000);
+        };
+        const jmapOut = await replyTo(`held-jmap-${token}@example.com`);
+        // To itself: a hosted recipient no other check writes to.
+        const jmapLocal = await replyTo(held.user);
+        await sleep(1500);
+        const leaked = await fetch(
+          `${mailpit}/api/v1/search?query=${encodeURIComponent(`subject:"stack-verify hold ${token}"`)}`,
+        )
+          .then((r) => r.json() as Promise<{ messages?: unknown[] }>)
+          .then((j) => j.messages?.length ?? 0);
+        return (
+          smtp.endsWith("550 5.1.2 Relay not allowed.") &&
+          jmapOut?.smtpReply === "550 5.1.2 Relay not allowed." &&
+          jmapLocal?.smtpReply?.startsWith("250") === true &&
+          leaked === 0
+        );
+      } finally {
+        await list.remove(held.user);
+        await list.reload();
+      }
+    }),
+  );
+}
 
 console.log(failures === 0 ? "\nstack:verify — all checks passed." : `\nstack:verify — ${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
