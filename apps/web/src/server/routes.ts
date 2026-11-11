@@ -503,6 +503,14 @@ export const ROUTES: readonly RouteSpec[] = [
     // The harness sends no policy: allowed callers get a validation error.
     probeStatus: 400,
   },
+  // The account's sending standing for its people (ADR-0034 §5): the tier's published facts, never a staff note.
+  {
+    method: "GET",
+    path: "/api/accounts/:accountId/sending",
+    file: "app/api/accounts/[accountId]/sending/route.ts",
+    guard: "account.read",
+    accountParam: "accountId",
+  },
   // The account-wide Safe senders list (ADR-0032 §1). The harness's empty body is a 400 for allowed callers; a random
   // entry id is a 404.
   {
@@ -925,6 +933,32 @@ export const ROUTES: readonly RouteSpec[] = [
     file: "app/api/platform/people/[userId]/suspension/route.ts",
     guard: "platform.account.suspend",
     audits: "trust.unsuspended",
+    probeStatus: 404,
+  },
+  // Trust tiers (ADR-0034 §2, §6): the staff read (notes only with `platform.suspensionNotes.read`), the tier change and
+  // one mailbox's sending restriction (Global and Trust & Safety Administrators, fresh step-up, never while acting as;
+  // tier `staffTrust`). The harness probes random ids: allowed callers get 404.
+  {
+    method: "GET",
+    path: "/api/platform/accounts/:accountId/trust",
+    file: "app/api/platform/accounts/[accountId]/trust/route.ts",
+    guard: "platform.accounts.read",
+    probeStatus: 404,
+  },
+  {
+    method: "PUT",
+    path: "/api/platform/accounts/:accountId/trust",
+    file: "app/api/platform/accounts/[accountId]/trust/route.ts",
+    guard: "platform.trust.manage",
+    audits: "trust.tier_changed",
+    probeStatus: 404,
+  },
+  {
+    method: "PUT",
+    path: "/api/platform/accounts/:accountId/mailboxes/:mailboxId/sending",
+    file: "app/api/platform/accounts/[accountId]/mailboxes/[mailboxId]/sending/route.ts",
+    guard: "platform.trust.manage",
+    audits: "trust.mailbox_restricted",
     probeStatus: 404,
   },
   // Staff: an account's address ceiling override (ADR-0029 §7; Global and Billing Administrators, fresh step-up). The
