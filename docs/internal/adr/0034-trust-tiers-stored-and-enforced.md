@@ -271,3 +271,33 @@ columns, sets the account's `last_restricted_at`, queues that mailbox's `mailbox
 1. The `TRUST_PROMOTE_MIN_AGE_HOURS` value, and whether to publish the waiting period (it is easy to learn by waiting;
    this ADR keeps it private, as `03-anti-spam-and-abuse.md` says, and the console shows no date).
 2. Confirm the product trade-off in §3: new free accounts can't send from mail apps (SMTP) until promoted.
+
+## Update 2026-11-11: probes P1–P4 (build slice 1)
+
+Pinned in `packages/adapters/src/stalwart/sending-policy.int.test.ts`; details in `research/stalwart.md` "Trust tiers on
+the mail server".
+
+- **P1 holds:** `CUSTOMER_DENIALS` + `emailSend` refuses SMTP AUTH on 465 and 587 (`550 5.7.1`) and leaves JMAP
+  submission, IMAP and delivery working; the provisioning key may write it.
+- **P2 corrects one detail:** the `authenticatedAs` throttle answers at MAIL FROM with **`452 4.4.5`** (not 451), counts
+  MAIL transactions (a `MAIL FROM` then `RSET` counts; recipients don't), and one allowance covers 465, 587 and JMAP.
+  A JMAP submission over it is not created (`forbiddenMailFrom`), so the BFF sees a refusal, not a queued message.
+  §4's ceiling therefore counts messages as assumed.
+- **P3 holds:** `maxRecipients` for an authenticated session refuses the 51st RCPT (`455 4.5.3`); port 25 keeps 100.
+- **P4 disproves a fact this ADR relied on.** The Context ("no way to make an expression read per-account data") and
+  §3 ("Stalwart can't tell an internal from an external recipient per account") are wrong for MTA-stage expressions:
+  they read `x:MemoryLookupKey` (`key_exists`) and `x:MemoryLookupKeyValue` (`key_get`) once `x:Action`
+  `ReloadLookupStores` has run (ADR-0026 P9 only tried `ReloadSettings`, and only from Sieve). Verified: an
+  `allowRelaying` branch on a lookup list refuses outside recipients for listed accounts (`550 5.1.2 Relay not allowed.`
+  at RCPT; in JMAP `deliveryStatus`) while local delivery works, and a throttle `match` on the list limits listed
+  accounts only. So the "SMTP external hold in Stalwart" alternative and per-tier throttles are technically possible.
+
+**Decision for this build: unchanged.** Slices 2–22 go ahead as written (`smtp_blocked` for `new`, one ceiling for every
+authenticated sender, `trusted` reserved). Reasons: permissions are stored on the account, apply at once and are
+verified on every protocol, while a lookup list changes only after a server-wide reload, and three things are not
+verified yet — that keys survive a restart and load without a reload, what expressions do when a reload fails, and the
+reload's cost with thousands of keys. Writing keys also needs `sysMemoryLookupKey*` and `sysActionCreate`, and the latter allows every
+`x:Action` (pausing the queue included), so it needs its own narrowly used key. A later update of this ADR, after those
+checks, can replace `smtp_blocked` with a relay hold (held accounts keep sending to hosted addresses from mail apps),
+move the ceiling to per-tier throttles and open `trusted`. That would also answer open question 2 differently: the
+mail-app trade-off for new free accounts becomes avoidable rather than inherent.
