@@ -54,7 +54,7 @@ const adminMgmt = new StalwartManagement(
 const tag = randomUUID().slice(0, 8);
 const domain = `pw-${tag}.test`;
 const keys = await issueTestKeys(adminMgmt, stalwartUrl, `pwsvc-${tag}.test`);
-const mail = stalwartMailServer(keys.provisioning);
+const mail = stalwartMailServer(keys.provisioning, { hold: keys.hold });
 const meta = { requestId: "int-passwords", ip: null, userAgent: null };
 /** This test's own client address (RFC 5737), so its deliberate failures never count against the shared forwarder. */
 const clientAddress = `198.51.100.${String(1 + Math.floor(Math.random() * 254))}`;

@@ -144,7 +144,7 @@ describe("the credential split on Stalwart", () => {
   });
 
   it("provisioning key: creates and locks customer mailboxes, revokes credentials, never reads a mailbox", async () => {
-    const mail = stalwartMailServer(keys.provisioning);
+    const mail = stalwartMailServer(keys.provisioning, { hold: keys.hold });
     await mail.ensureDomain(domain);
     customer.id = (
       await mail.ensureMailbox({
@@ -249,7 +249,10 @@ describe("the credential split on Stalwart", () => {
     expect(inventory.appPasswords).toEqual([
       { credentialId: made.credentialId, createdAt: made.createdAt, protocols: ["imap"] },
     ]);
-    await stalwartMailServer(keys.provisioning).revokeAppPassword({ externalId: customer.id, ...made });
+    await stalwartMailServer(keys.provisioning, { hold: keys.hold }).revokeAppPassword({
+      externalId: customer.id,
+      ...made,
+    });
     expect((await stalwartAppPasswordInventory(keys.provisioning).list(customer.id)).appPasswords).toEqual([]);
     // Undo-a-create with owner access, as the web app does when recording fails.
     const second = await issuer.create({ externalId: customer.id, name: "Laptop", protocols: ["smtp"] });
@@ -323,11 +326,12 @@ describe("the credential split on Stalwart", () => {
     expect(listed.domains).toEqual([serviceDomain]);
     expect(listed.accounts.map((a) => `${a.name}:${a.credentials.join("+")}`).sort()).toEqual([
       "svc-audit:ApiKey",
+      "svc-hold:ApiKey",
       "svc-ops:ApiKey",
       "svc-provision:ApiKey+ApiKey", // the second is the "wider" key of the first test
       "svc-train:ApiKey",
     ]);
-    expect(await reconcileServiceAccounts(deps, inventory, expected)).toMatchObject({ checked: 4, clean: true });
+    expect(await reconcileServiceAccounts(deps, inventory, expected)).toMatchObject({ checked: 5, clean: true });
     // The infrastructure domain is also the platform domain (free addresses, ADR-0021): a customer mailbox and the
     // system mailboxes there, each with a password, are neither service accounts nor drift.
     for (const name of ["jane.free", "no-reply", "postmaster"]) {
@@ -340,11 +344,12 @@ describe("the credential split on Stalwart", () => {
     }
     expect((await inventory.list()).accounts.map((a) => a.name).sort()).toEqual([
       "svc-audit",
+      "svc-hold",
       "svc-ops",
       "svc-provision",
       "svc-train",
     ]);
-    expect(await reconcileServiceAccounts(deps, inventory, expected)).toMatchObject({ checked: 4, clean: true });
+    expect(await reconcileServiceAccounts(deps, inventory, expected)).toMatchObject({ checked: 5, clean: true });
     // No infrastructure domain configured must not pass with checked: 0.
     expect(
       await reconcileServiceAccounts(deps, stalwartServiceAccounts(keys.provisioning, []), expected),

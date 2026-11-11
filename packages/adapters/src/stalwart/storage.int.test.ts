@@ -121,7 +121,7 @@ describe("mailbox storage used against Stalwart", () => {
     // Free's pool is 1 GB: the 30 GB quota comes down (it holds far less), and the worker applies it.
     await rebalanceStoragePools(deps, reader);
     expect((await row(m.id))?.quotaBytes).toBe(1 * GB);
-    const mail = stalwartMailServer(keys.provisioning);
+    const mail = stalwartMailServer(keys.provisioning, { hold: keys.hold });
     for (let i = 0; i < 20 && (await runNextJob(deps, mail)); i++);
     const onServer = (await adminMgmt.listUsers()).find((u) => u.address === address);
     expect(onServer?.quotaBytes).toBe(1 * GB);

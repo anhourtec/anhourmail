@@ -36,7 +36,7 @@ const deps = { uow: new PgUnitOfWork(db), clock: systemClock, platform: PUBLIC_P
 const mgmt = new StalwartManagement(
   new StalwartTransport({ baseUrl: STALWART_URL, auth: { type: "basic", username: admin, password: adminPassword } }),
 );
-const mail = stalwartMailServer(mgmt);
+const mail = stalwartMailServer(mgmt, { hold: mgmt });
 const system: Actor = { kind: "system", name: "sender-name-int-test" };
 const req = { requestId: "int-sender-name", ip: null, userAgent: "vitest" };
 

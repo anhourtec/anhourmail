@@ -47,7 +47,7 @@ const adminMgmt = new StalwartManagement(
   new StalwartTransport({ baseUrl: stalwartUrl, auth: { type: "basic", username: admin, password: adminPassword } }),
 );
 const keys = await issueTestKeys(adminMgmt, stalwartUrl, `freesvc-${tag}.test`);
-const mail = stalwartMailServer(keys.provisioning);
+const mail = stalwartMailServer(keys.provisioning, { hold: keys.hold });
 const meta = { requestId: "int-platform-addresses", ip: "198.51.100.10", userAgent: null };
 const clientAddress = `198.51.100.${String(1 + Math.floor(Math.random() * 254))}`;
 const accountIds: string[] = [];

@@ -66,7 +66,7 @@ const meta = { requestId: `int-handoff-${randomUUID().slice(0, 8)}`, ip: null, u
 
 const tag = randomUUID().slice(0, 8);
 const keys = await issueTestKeys(mgmt, stalwartUrl, `svc-${tag}.test`);
-const mail = stalwartMailServer(keys.provisioning);
+const mail = stalwartMailServer(keys.provisioning, { hold: keys.hold });
 const inventory = stalwartAppPasswordInventory(keys.provisioning);
 const ops = keys.operations;
 const domain = `hof-${tag}.test`;

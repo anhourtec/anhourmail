@@ -267,7 +267,7 @@ const stop = async (c: ChildProcess) => {
 
 /** Runs this import's queued jobs as the worker would (other tests' leftovers in the shared database are completed). */
 async function runJobs(importId: string): Promise<string[]> {
-  const mail = stalwartMailServer(keys.provisioning);
+  const mail = stalwartMailServer(keys.provisioning, { hold: keys.hold });
   const trainingSamples = stalwartImportTrainingSamples(keys.training);
   const ran: string[] = [];
   // Training clean-ups wait a minute after their slice: claim "later".

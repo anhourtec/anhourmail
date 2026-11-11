@@ -46,7 +46,7 @@ const { db, pool } = createDb(dbUrl);
 const mgmt = new StalwartManagement(
   new StalwartTransport({ baseUrl: stalwartUrl, auth: { type: "basic", username: admin, password: adminPassword } }),
 );
-const mail = stalwartMailServer(mgmt);
+const mail = stalwartMailServer(mgmt, { hold: mgmt });
 const tag = randomUUID().slice(0, 8);
 const domain = `del-${tag}.test`;
 const address = `owner@${domain}`;

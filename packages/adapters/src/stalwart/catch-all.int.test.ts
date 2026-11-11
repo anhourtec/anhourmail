@@ -36,7 +36,7 @@ const deps = { uow: new PgUnitOfWork(db), clock: systemClock, platform: PUBLIC_P
 const mgmt = new StalwartManagement(
   new StalwartTransport({ baseUrl: stalwartUrl, auth: { type: "basic", username: admin, password: adminPassword } }),
 );
-const mail = stalwartMailServer(mgmt);
+const mail = stalwartMailServer(mgmt, { hold: mgmt });
 const meta = { requestId: "int-catch-all", ip: null, userAgent: null };
 
 const tag = randomUUID().slice(0, 8);

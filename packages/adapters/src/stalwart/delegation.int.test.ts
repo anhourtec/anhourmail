@@ -59,7 +59,7 @@ const meta = { requestId: `int-delegation-${randomUUID().slice(0, 8)}`, ip: null
 
 const tag = randomUUID().slice(0, 8);
 const keys = await issueTestKeys(mgmt, stalwartUrl, `svc-${tag}.test`);
-const mail = stalwartMailServer(keys.provisioning);
+const mail = stalwartMailServer(keys.provisioning, { hold: keys.hold });
 const ops = keys.operations;
 const domain = `dlg-${tag}.test`;
 const kimAddress = `kim@${domain}`;

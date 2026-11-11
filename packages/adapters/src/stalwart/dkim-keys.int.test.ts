@@ -37,7 +37,7 @@ afterAll(async () => {
 describe("DKIM keys from the mail server", () => {
   it("reads a new domain's Ed25519 and RSA keys with the provisioning key", async () => {
     keys = await issueTestKeys(devAdmin, stalwartUrl, keysDomain);
-    const mail = stalwartMailServer(keys.provisioning);
+    const mail = stalwartMailServer(keys.provisioning, { hold: keys.hold });
     const { externalId } = await mail.ensureDomain(customer);
 
     // The RSA key is generated a moment after the domain (the job retries until it is there).

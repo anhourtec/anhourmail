@@ -104,7 +104,7 @@ describe("Archive folder against Stalwart", () => {
       .returning();
     if (!m) throw new Error("mailbox not created");
     await enqueueProvisioning(deps, { kind: "mailbox.ensure", subjectId: m.id });
-    const mail = stalwartMailServer(keys.provisioning);
+    const mail = stalwartMailServer(keys.provisioning, { hold: keys.hold });
     for (let i = 0; i < 20; i++) {
       const [r] = await db.select().from(schema.mailbox).where(eq(schema.mailbox.id, m.id));
       if (r?.status === "active") break;

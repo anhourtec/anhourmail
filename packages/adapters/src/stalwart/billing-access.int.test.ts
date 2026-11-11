@@ -52,7 +52,7 @@ const mgmt = new StalwartManagement(
 );
 const tag = randomUUID().slice(0, 8);
 const keys = await issueTestKeys(mgmt, stalwartUrl, `svc-bill-${tag}.test`);
-const mail = stalwartMailServer(keys.provisioning);
+const mail = stalwartMailServer(keys.provisioning, { hold: keys.hold });
 const provider = createFakeBillingProvider({
   store: memoryFakeBillingStore(),
   appUrl: "http://localhost:43200",

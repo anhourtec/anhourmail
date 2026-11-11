@@ -64,7 +64,7 @@ const meta = { requestId: "int-app-passwords", ip: null, userAgent: null };
 
 const tag = randomUUID().slice(0, 8);
 const keys = await issueTestKeys(mgmt, stalwartUrl, `svc-${tag}.test`);
-const mail = stalwartMailServer(keys.provisioning);
+const mail = stalwartMailServer(keys.provisioning, { hold: keys.hold });
 const issuer = stalwartAppPasswords(keys.operations);
 const inventory = stalwartAppPasswordInventory(keys.provisioning);
 const domain = `apw-${tag}.test`;
