@@ -144,6 +144,33 @@ describe("processor adapter: reading a subscription", () => {
     expect(list?.query.getAll("expand[]")).toEqual(["data.latest_invoice"]);
   });
 
+  it("counts only what a succeeded charge captured: credit-balance, out-of-band and pending payments charge nothing (F8)", async () => {
+    const charged = async (routes: Parameters<typeof stubFetch>[0]) =>
+      (
+        await provider({
+          "GET /subscriptions": { json: { data: [subscription()], has_more: false } },
+          ...routes,
+        }).p.getSubscription("cus_1")
+      )?.latestInvoice?.chargedMinor;
+    expect(await charged(paymentRoutes(0, [], 2300))).toBe(2300);
+    // Paid from the credit balance or marked paid out of band: no payment intent behind the invoice.
+    expect(
+      await charged({ ...paymentRoutes(), "GET /invoice_payments": { json: { data: [], has_more: false } } }),
+    ).toBe(0);
+    // A charge that hasn't succeeded, or one that doesn't say what it captured, is not money.
+    for (const latest of [
+      { id: "ch_1", amount_refunded: 0, amount_captured: 2300, status: "pending" },
+      { id: "ch_1", amount_refunded: 0 },
+    ]) {
+      expect(
+        await charged({
+          ...paymentRoutes(),
+          "GET /payment_intents/pi_1": { json: { id: "pi_1", latest_charge: latest } },
+        }),
+      ).toBe(0);
+    }
+  });
+
   it("reads what the latest invoice billed from its lines, prorations left out (run-62 F1)", async () => {
     const line = (priceId: string, quantity: number, extra: Record<string, unknown> = {}) => ({
       quantity,
