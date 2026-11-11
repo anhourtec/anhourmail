@@ -1,6 +1,6 @@
 # 03 — Anti-spam and abuse
 
-Last updated: 2026-11-11 (trust tiers ADR-0034 slices 1–11 built; trust tiers designed, ADR-0034: stored on the account, `new`-tier external hold, mail-server gates); 2026-11-06 (disposable email addresses refused, ADR-0033); 2026-11-05 (sign-up proof-of-work and sign-up limits built, ADR-0031; suspension note readers, open sessions after a suspension and their mitigations); 2026-11-04 (the webmail reads `deliveryStatus` after a send). 2026-10-30. Research: `research/deliverability.md` §6–8, `research/market-and-legal.md` §4.
+Last updated: 2026-11-11 (billing's promotion taken back on refunds, disputes and early plan ends; slices 12–15 built; trust tiers ADR-0034 slices 1–11 built; trust tiers designed, ADR-0034: stored on the account, `new`-tier external hold, mail-server gates); 2026-11-06 (disposable email addresses refused, ADR-0033); 2026-11-05 (sign-up proof-of-work and sign-up limits built, ADR-0031; suspension note readers, open sessions after a suspension and their mitigations); 2026-11-04 (the webmail reads `deliveryStatus` after a send). 2026-10-30. Research: `research/deliverability.md` §6–8, `research/market-and-legal.md` §4.
 
 Outbound abuse is the priority. One spammer on a shared IP hurts every user's inbox placement, and under CASL a host that knowingly helps spammers can be liable.
 
@@ -88,11 +88,17 @@ on a paid plan; staff set or restrict with `platform.trust.manage`; `restricted`
 reserved until the mail server can hold per-tier numbers. A `new` mailbox sends only to addresses we host (webmail
 refuses outside recipients with `sending_held`) and can't use SMTP submission (`smtp_blocked`: `emailSend` denied on
 Stalwart); `restricted` is `send_blocked`. Every authenticated sender is also capped on Stalwart at the `standard`
-numbers. Built so far (2026-11-11, slices 1–11): the stored tier, `smtp_blocked` / `send_blocked` applied on the mail
-server, staff changes and mailbox restrictions in the trust service, promotion by payment and by the hourly job, and
-the importer cap. Not yet: the webmail's outside-recipient hold and per-tier limits (it still uses the `new` stub), the
-mail-server ceiling, the console and staff screens. Until those are built, the table below and "Free-tier risk"
-describe the target.
+numbers. Built so far (2026-11-11, slices 1–15): the stored tier, `smtp_blocked` / `send_blocked` applied on the mail
+server, staff changes and mailbox restrictions in the trust service and their routes, promotion by payment and by the
+hourly job, the importer cap, the webmail's outside-recipient hold and per-tier limits, the managed scripts' pause of
+forwarding and replies, and the mail-server ceiling. Not yet: the console and staff screens (slices 16–18). Until
+those are built, the table below and "Free-tier risk" describe the target.
+
+**A payment's promotion isn't a free pass (security review of slices 1–11, 2026-11-11).** Billing's `standard` goes
+back to `new` on a refund, on any dispute, and when the paid plan (a comp or staff grant included) ends within the
+refund window of the promotion; a dispute also marks the account so it is never promoted automatically again (staff
+review only). So "pay with a stolen card, refund or dispute, keep sending as standard" doesn't work. A person's
+suspension and the promotion job lock the same accounts, and the job checks every condition again under the lock.
 
 | Tier         | Who                                          | Movement                                                                                                                    |
 | ------------ | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
