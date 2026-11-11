@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 
-import { ACCOUNT_A, ACCOUNT_B, actAs, actingStaff, deps, req, user } from "../__tests__/helpers";
+import { ACCOUNT_A, ACCOUNT_B, actAs, actingStaff, deps, fixedClock, req, user } from "../__tests__/helpers";
 import { defaultBilling } from "../billing/lifecycle";
 import type { Mailbox, MailboxStatus } from "../mailboxes/entity";
 import type { Repositories } from "../ports";
@@ -12,6 +12,7 @@ import {
   parseTrustNote,
   promoteEstablished,
   promoteForPayment,
+  RESTRICTION_NOTICE_EVERY_MS,
   revokeBillingPromotion,
   setAccountTier,
   setMailboxRestriction,
@@ -309,6 +310,115 @@ describe("setAccountTier", () => {
     await expect(setAccountTier(d, GA, ACCOUNT_A, { tier: "new", note: NOTE }, SESSION, req)).rejects.toMatchObject({
       code: "conflict",
     });
+  });
+});
+
+describe("the restriction notice (ADR-0034 §5, build slice 19)", () => {
+  const restrictAccount = (d: World) =>
+    setAccountTier(d, GA, ACCOUNT_A, { tier: "restricted", reason: "spam", note: NOTE }, SESSION, req);
+  const notices = (d: World) =>
+    entries(d, "trust.restriction_notice_sent").filter((x) => x.scope === `account:${ACCOUNT_A}`);
+  const lift = (d: World) =>
+    setAccountTier(d, GA, ACCOUNT_A, { tier: "standard", reason: "other", note: NOTE }, SESSION, req);
+
+  it("restricting the account names its owners and administrators once, audited in the same unit of work", async () => {
+    const d = world();
+    const out = await restrictAccount(d);
+    expect(out.notify.map((n) => n.email).sort()).toEqual(["admin-a@example.test", "owner-a@example.test"]);
+    const [n, ...more] = notices(d);
+    expect(more).toEqual([]);
+    expect(n).toMatchObject({
+      result: "success",
+      actor: { type: "staff", userId: "ga" },
+      target: { type: "account", id: ACCOUNT_A },
+      meta: { restricted: "account", reasonCategory: "spam", notified: 2 },
+    });
+    // A count, the plain reason and the subject only: never an address or the staff note (rules 24, 48).
+    expect(JSON.stringify(n)).not.toMatch(/owner-a@|admin-a@|ticket 42/);
+    // Written right after the restriction, in its unit of work (one request).
+    const restricted = entries(d, "trust.restricted").find((x) => x.scope === `account:${ACCOUNT_A}`);
+    expect(n?.requestId).toBe(restricted?.requestId);
+  });
+
+  it("at most one a day per account: a second restriction that day, of the account or a mailbox, emails nobody", async () => {
+    const clock = fixedClock();
+    const d = Object.assign(world(), { clock });
+    await restrictAccount(d);
+    await lift(d);
+    expect((await restrictAccount(d)).notify).toEqual([]);
+    expect(
+      (
+        await setMailboxRestriction(
+          d,
+          TS,
+          ACCOUNT_A,
+          M_ACTIVE,
+          { restricted: true, reason: "abuse", note: NOTE },
+          TS_SESSION,
+          req,
+        )
+      ).notify,
+    ).toEqual([]);
+    expect(notices(d)).toHaveLength(1);
+    // A day later, a new restriction is emailed again.
+    await lift(d);
+    clock.set(new Date(clock.now().getTime() + RESTRICTION_NOTICE_EVERY_MS + 1));
+    d.uow.state.stepUps.push({
+      userId: "ga",
+      sessionId: "s-ga",
+      expiresAt: new Date(d.clock.now().getTime() + 60_000),
+    });
+    expect((await restrictAccount(d)).notify).toHaveLength(2);
+    expect(notices(d)).toHaveLength(2);
+  });
+
+  it("a mailbox restriction is emailed with its subject; lifting it, or the account, emails nobody", async () => {
+    const d = world();
+    const out = await setMailboxRestriction(
+      d,
+      TS,
+      ACCOUNT_A,
+      M_ACTIVE,
+      { restricted: true, reason: "abuse", note: NOTE },
+      TS_SESSION,
+      req,
+    );
+    expect(out.notify).toHaveLength(2);
+    expect(notices(d)[0]).toMatchObject({
+      target: { type: "mailbox", id: M_ACTIVE },
+      meta: { restricted: "mailbox", reasonCategory: "abuse", notified: 2 },
+    });
+    expect(
+      (
+        await setMailboxRestriction(
+          d,
+          TS,
+          ACCOUNT_A,
+          M_ACTIVE,
+          { restricted: false, reason: "other", note: NOTE },
+          TS_SESSION,
+          req,
+        )
+      ).notify,
+    ).toEqual([]);
+    expect(notices(d)).toHaveLength(1);
+  });
+
+  it("another account's notice never counts against this one, and an account with nobody to tell records none", async () => {
+    const d = world();
+    await setAccountTier(d, GA, ACCOUNT_B, { tier: "restricted", reason: "spam", note: NOTE }, SESSION, req);
+    expect((await restrictAccount(d)).notify).toHaveLength(2);
+    const d2 = world();
+    d2.uow.state.memberships = d2.uow.state.memberships.filter((m) => m.accountId !== ACCOUNT_A);
+    expect((await restrictAccount(d2)).notify).toEqual([]);
+    expect(notices(d2)).toEqual([]);
+  });
+
+  it("a refused restriction (no step-up) emails nobody and records no notice", async () => {
+    const d = world();
+    d.uow.state.stepUps = [];
+    await expect(restrictAccount(d)).rejects.toMatchObject({ code: "step_up_required" });
+    expect(notices(d)).toEqual([]);
   });
 });
 

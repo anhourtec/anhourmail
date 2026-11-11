@@ -171,6 +171,7 @@ const EXPLICIT: Partial<Record<AuditAction, string>> = {
   "trust.mailbox_restricted": "Mailbox sending restricted",
   "trust.mailbox_unrestricted": "Mailbox sending restriction lifted",
   "trust.send_held": "Send to an outside address held (new account)",
+  "trust.restriction_notice_sent": "Sending restriction notice emailed",
   "trust.suspended": "Suspended by Anhourtec",
   "trust.unsuspended": "Suspension lifted by Anhourtec",
   "abuse.report_received": "Abuse report received",

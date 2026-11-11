@@ -40,7 +40,7 @@ import {
   ValidationError,
 } from "../errors";
 import type { MailboxStatus } from "../mailboxes/entity";
-import { authorizeAudited, mutation, type MutationOutcome, type SystemChange } from "../mutation";
+import { type AuditAlso, authorizeAudited, mutation, type MutationOutcome, type SystemChange } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 
 import type { AccountTrust, MailboxSendingRestriction, PromotionCriteria } from "./entity";
@@ -124,6 +124,46 @@ async function notifyList(r: Repositories, accountId: string): Promise<{ email: 
     .map((m) => ({ email: m.email }));
 }
 
+/** How often an account's owners get a restriction notice, at most (ADR-0034 §5, build slice 19). */
+export const RESTRICTION_NOTICE_EVERY_MS = 86_400_000;
+
+/**
+ * Who to email about a restriction made now, and the `trust.restriction_notice_sent` entry to record with it, inside
+ * the restriction's unit of work under the account lock: nobody (and no entry) when the account already had a notice in
+ * the last day, or has nobody to tell. The entry carries what was restricted, the reason category and how many people
+ * are told (`notified`) — never an address or the staff note (rules 24, 48; not `subject` or `recipients`, which the
+ * redaction list hides as mail headers). The route sends the email after the commit.
+ */
+async function restrictionNotice(
+  deps: Deps,
+  r: Repositories,
+  accountId: string,
+  what: "account" | "mailbox",
+  reason: SuspensionReason,
+  target: { type: "account" | "mailbox"; id: string },
+): Promise<{ notify: { email: string }[]; also: AuditAlso[] }> {
+  const since = new Date(deps.clock.now().getTime() - RESTRICTION_NOTICE_EVERY_MS);
+  const recent = await r.audit.list({
+    scope: `account:${accountId}`,
+    action: "trust.restriction_notice_sent",
+    from: since,
+    limit: 1,
+  });
+  if (recent.length > 0) return { notify: [], also: [] };
+  const notify = await notifyList(r, accountId);
+  if (notify.length === 0) return { notify, also: [] };
+  return {
+    notify,
+    also: [
+      {
+        action: "trust.restriction_notice_sent",
+        target,
+        meta: { restricted: what, reason: SUSPENSION_REASONS[reason], reasonCategory: reason, notified: notify.length },
+      },
+    ],
+  };
+}
+
 /** The audit action for a move between tiers (ADR-0034 §2 "Audit"). */
 export function tierChangeAction(from: TrustTier, to: TrustTier): AuditAction {
   if (to === "restricted" && from !== "restricted") return "trust.restricted";
@@ -175,7 +215,10 @@ export type SetTierResult = {
   source: TrustTierSource;
   reason: SuspensionReason | null;
   mailboxesQueued: number;
-  /** Owners and administrators to email when the account was restricted now (empty otherwise). */
+  /**
+   * Owners and administrators to email when the account was restricted now (empty otherwise, and when the account had
+   * a restriction notice in the last day: `RESTRICTION_NOTICE_EVERY_MS`).
+   */
   notify: { email: string }[];
 };
 
@@ -246,6 +289,10 @@ export async function setAccountTier(
       const mailboxesQueued = await ensureMailboxes(deps, repos, accountId);
       const meta = { ...tierChangeMeta(current.tier, asked, source, reason), mailboxesQueued };
       const restrictedNow = asked === "restricted" && current.tier !== "restricted";
+      const notice =
+        restrictedNow && reason
+          ? await restrictionNotice(deps, repos, accountId, "account", reason, { type: "account", id: accountId })
+          : { notify: [], also: [] };
       return {
         result: {
           accountName: known.account.name,
@@ -254,11 +301,12 @@ export async function setAccountTier(
           source,
           reason,
           mailboxesQueued,
-          notify: restrictedNow ? await notifyList(repos, accountId) : [],
+          notify: notice.notify,
         },
         meta,
         // Staff see every trust change in the platform log too; neither entry carries the note.
         copies: [{ accountId: null, meta: { ...meta, accountId } }],
+        also: notice.also,
       };
     },
   );
@@ -273,7 +321,10 @@ export type MailboxRestrictionResult = {
   address: string;
   restricted: boolean;
   reason: SuspensionReason;
-  /** Owners and administrators to email when the mailbox was restricted now (empty when lifted). */
+  /**
+   * Owners and administrators to email when the mailbox was restricted now (empty when lifted, and when the account had
+   * a restriction notice in the last day).
+   */
   notify: { email: string }[];
 };
 
@@ -338,16 +389,20 @@ export async function setMailboxRestriction(
       if (restricted) await repos.trust.markRestricted(accountId, now);
       await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: mailboxId, runAfter: now });
       const meta = { reason: SUSPENSION_REASONS[reason], reasonCategory: reason };
+      const notice = restricted
+        ? await restrictionNotice(deps, repos, accountId, "mailbox", reason, { type: "mailbox", id: mailboxId })
+        : { notify: [], also: [] };
       return {
         result: {
           accountName: known.account.name,
           address: current.address,
           restricted,
           reason,
-          notify: restricted ? await notifyList(repos, accountId) : [],
+          notify: notice.notify,
         },
         meta,
         copies: [{ accountId: null, meta: { ...meta, accountId } }],
+        also: notice.also,
       };
     },
   );
