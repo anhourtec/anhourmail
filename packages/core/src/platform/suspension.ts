@@ -143,23 +143,34 @@ export async function releaseMailboxes(
 }
 
 /**
- * Takes the locks a person suspension or lift needs and returns their mailboxes as read under them: the accounts those
- * mailboxes live in (sorted by id, the order every account-locking path follows), then the person's login row. An
- * account suspension, a customer resuming a mailbox or a second staff click on the same person then waits for this one
- * to finish and sees its result, so a racing account suspension can't leave a mailbox active and two clicks can't both
- * suspend (one email and one audit entry). A mailbox in another account assigned to them between the first read and the
- * locks is a 409 (try again), never a mailbox left out.
+ * Takes the locks a person suspension or lift needs and returns their mailboxes and accounts as read under them: every
+ * account of theirs — those their mailboxes live in and those they belong to — sorted by id (the order every
+ * account-locking path follows), then the person's login row. An account suspension, a customer resuming a mailbox, a
+ * promotion of one of their accounts (`promoteEstablished` takes the same lock and checks again) or a second staff click
+ * on the same person then waits for this one to finish and sees its result, so a racing account suspension can't leave a
+ * mailbox active, a promotion can't slip past the suspension (security review of ADR-0034 slices 1–11, finding 5) and
+ * two clicks can't both suspend (one email and one audit entry). A mailbox or membership in another account added
+ * between the first read and the locks is a 409 (try again), never an account left out.
  */
-async function lockPerson(repos: Repositories, userId: string): Promise<Mailbox[]> {
-  const accountsOf = (list: readonly Mailbox[]) => [...new Set(list.map((m) => m.accountId))].sort();
-  const locked = accountsOf(await repos.suspensions.mailboxesOf(userId));
+async function lockPerson(
+  repos: Repositories,
+  userId: string,
+): Promise<{ mailboxes: Mailbox[]; accountIds: string[] }> {
+  // One query at a time: a unit of work holds one database connection.
+  const read = async () => {
+    const mailboxes = await repos.suspensions.mailboxesOf(userId);
+    const memberships = await repos.access.memberships(userId);
+    const ids = [...new Set([...mailboxes.map((m) => m.accountId), ...memberships.map((m) => m.accountId)])].sort();
+    return { mailboxes, ids };
+  };
+  const { ids: locked } = await read();
   for (const id of locked) await repos.accounts.lock(id);
   await repos.dataLifecycle.lockLogin(userId);
-  const mailboxes = await repos.suspensions.mailboxesOf(userId);
-  if (accountsOf(mailboxes).some((id) => !locked.includes(id))) {
-    throw new ConflictError("This person's mailboxes changed. Try again.");
+  const now = await read();
+  if (now.ids.some((id) => !locked.includes(id))) {
+    throw new ConflictError("This person's mailboxes or accounts changed. Try again.");
   }
-  return mailboxes;
+  return { mailboxes: now.mailboxes, accountIds: now.ids };
 }
 
 /** Act-as and step-up checks shared by every staff suspension change (refusals are audited as denied). */
@@ -365,7 +376,7 @@ export async function suspendPerson(
       if (actor.kind === "user" && actor.userId === userId) return { result: "self", denied: { code: "self" } };
       if ((await repos.access.platformRoles(userId)).length > 0) return { result: "staff", denied: { code: "staff" } };
       const { reason, note } = parseSuspendInput(input);
-      const mailboxes = await lockPerson(repos, userId);
+      const { mailboxes, accountIds } = await lockPerson(repos, userId);
       if (await repos.suspensions.person(userId)) throw new ConflictError("This person is already suspended.");
       const at = deps.clock.now();
       await repos.suspensions.setPerson(userId, {
@@ -375,12 +386,9 @@ export async function suspendPerson(
         byUserId: actor.kind === "user" ? actor.userId : null,
       });
       // None of their accounts is promoted automatically afterwards, even once lifted (ADR-0034 §2): the accounts of
-      // their mailboxes (locked above) and the ones they belong to. The mark only moves forward, so no lock is needed
-      // for the second kind.
+      // their mailboxes and the ones they belong to, every one locked above.
+      for (const id of accountIds) await repos.trust.markRestricted(id, at);
       const memberships = await repos.access.memberships(userId);
-      for (const id of new Set([...mailboxes.map((m) => m.accountId), ...memberships.map((m) => m.accountId)])) {
-        await repos.trust.markRestricted(id, at);
-      }
       const sessionsRevoked = await repos.security.revokeOtherSessions(userId, "");
       const held = await holdMailboxes(deps, repos, mailboxes, "person", {
         revokeAppPasswords: SUSPENSION_REVOKES_APP_PASSWORDS.includes(reason),
@@ -433,7 +441,7 @@ export async function liftPersonSuspension(
     async (repos): Promise<MutationOutcome<PersonSuspensionResult | Refusal>> => {
       const refusal = await staffChecks(deps, repos, actor, session);
       if (refusal) return { result: refusal, denied: { code: refusal } };
-      const mailboxes = await lockPerson(repos, userId);
+      const { mailboxes } = await lockPerson(repos, userId);
       const current = await repos.suspensions.person(userId);
       if (!current) throw new ConflictError("This person isn't suspended.");
       await repos.suspensions.setPerson(userId, null);

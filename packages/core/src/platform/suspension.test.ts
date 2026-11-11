@@ -18,6 +18,7 @@ import {
   suspendPerson,
 } from "./suspension";
 
+const ACCOUNT_C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const GA = user({ id: "ga", platform: ["global_admin"] });
 const SESSION = { sessionId: "s-ga" };
 const MISSING_ACCOUNT = "33333333-3333-4333-8333-333333333333";
@@ -412,16 +413,25 @@ describe("suspendPerson", () => {
     const d = world();
     const calls = recordLocks(d);
     expect((await suspendPerson(d, GA, "admin-a", { reason: "spam" }, SESSION, req)).mailboxes).toBe(0);
-    expect(calls).toEqual(["login:admin-a"]);
+    // The account they belong to is locked too (it is marked: never promoted automatically afterwards).
+    expect(calls).toEqual([`account:${ACCOUNT_A}`, "login:admin-a"]);
+  });
+
+  it("locks every account of theirs, mailbox or membership, in id order, before the login and any write", async () => {
+    const d = world();
+    const calls = recordLocks(d);
+    await suspendPerson(d, GA, "member-a", { reason: "spam" }, SESSION, req);
+    expect(calls).toEqual([...[ACCOUNT_A, ACCOUNT_B].sort().map((id) => `account:${id}`), "login:member-a"]);
   });
 
   it("is 409 and changes nothing when they get a mailbox in another account before the locks are held", async () => {
     const d = world();
+    d.uow.state.accounts.push({ id: ACCOUNT_C, name: "Third", plan: "free" });
     let once = true;
     recordLocks(d, () => {
       if (!once) return;
       once = false;
-      d.uow.state.mailboxes.push(mb("bbbbbbbb-0000-4000-8000-000000000009", ACCOUNT_B, "member-a", "active"));
+      d.uow.state.mailboxes.push(mb("cccccccc-0000-4000-8000-000000000009", ACCOUNT_C, "member-a", "active"));
     });
     await expect(suspendPerson(d, GA, "member-a", { reason: "spam" }, SESSION, req)).rejects.toMatchObject({
       code: "conflict",
@@ -431,8 +441,24 @@ describe("suspendPerson", () => {
     expect(d.uow.state.mailboxHolds).toEqual([]);
     expect(d.uow.state.sessions.filter((x) => x.userId === "member-a")).toHaveLength(2);
     // Asked again once the other change is in (here it rolled back with the refused unit of work), both are suspended.
-    d.uow.state.mailboxes.push(mb("bbbbbbbb-0000-4000-8000-000000000009", ACCOUNT_B, "member-a", "active"));
+    d.uow.state.mailboxes.push(mb("cccccccc-0000-4000-8000-000000000009", ACCOUNT_C, "member-a", "active"));
     expect((await suspendPerson(d, GA, "member-a", { reason: "spam" }, SESSION, req)).mailboxes).toBe(2);
+  });
+
+  it("is 409 and marks nothing when they join another account before the locks are held", async () => {
+    const d = world();
+    d.uow.state.accounts.push({ id: ACCOUNT_C, name: "Third", plan: "free" });
+    let once = true;
+    recordLocks(d, () => {
+      if (!once) return;
+      once = false;
+      d.uow.state.memberships.push({ userId: "member-a", accountId: ACCOUNT_C, role: "member" });
+    });
+    await expect(suspendPerson(d, GA, "member-a", { reason: "spam" }, SESSION, req)).rejects.toMatchObject({
+      code: "conflict",
+    });
+    expect(d.uow.state.suspended).toEqual([]);
+    expect((await d.uow.run((r) => r.trust.get(ACCOUNT_A)))?.lastRestrictedAt).toBeNull();
   });
 
   it("two clicks at once suspend once: one 409, one success entry and one job per mailbox", async () => {
