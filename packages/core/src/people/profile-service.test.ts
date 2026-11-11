@@ -82,7 +82,8 @@ describe("updatePersonProfile", () => {
       target: { type: "person", id: "solo", label: "solo@a.test" },
       meta: { fields: ["jobTitle", "mobilePhone"], self: false },
     });
-    expect(JSON.stringify(s.audit)).not.toMatch(/Intern|555/);
+    // The entries' own ids and hashes are random hex and may hold "555"; only what was recorded is checked.
+    expect(JSON.stringify(s.audit.map((e) => [e.target, e.meta]))).not.toMatch(/Intern|555/);
   });
 
   it("clears fields left empty and writes nothing when nothing changed", async () => {
