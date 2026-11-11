@@ -137,6 +137,10 @@ describe("suspendAccount", () => {
     expect(JSON.stringify(accountEntry)).not.toContain("ticket 42");
     const platformEntry = s.audit.find((e) => e.scope === "platform" && e.action === "trust.suspended");
     expect(platformEntry?.meta).toMatchObject({ internalNote: "ticket 42", reasonCategory: "spam" });
+    // Never promoted automatically afterwards (ADR-0034 §2); the tier itself is unchanged, the other account untouched.
+    const trust = (id: string) => d.uow.run((r) => r.trust.get(id));
+    expect(await trust(ACCOUNT_A)).toMatchObject({ tier: "new", lastRestrictedAt: d.clock.now() });
+    expect((await trust(ACCOUNT_B))?.lastRestrictedAt).toBeNull();
   });
 
   it("is 403 without the permission (platform log only) and 404 for unknown accounts", async () => {
@@ -374,6 +378,20 @@ describe("suspendPerson", () => {
     const accountEntries = d.uow.state.audit.filter((e) => e.scope !== "platform");
     expect(JSON.stringify(accountEntries)).not.toContain("internal");
     expect(JSON.stringify(d.uow.state.audit)).not.toContain("member-a@example.test");
+  });
+
+  it("marks every account of theirs as restricted once, so none is promoted automatically, even after the lift", async () => {
+    const d = world();
+    const s = d.uow.state;
+    s.accounts.push({ id: MISSING_ACCOUNT, name: "Untouched", plan: "free" });
+    await suspendPerson(d, GA, "member-a", { reason: "abuse" }, SESSION, req);
+    const lastRestricted = (id: string) => d.uow.run(async (r) => (await r.trust.get(id))?.lastRestrictedAt);
+    // ACCOUNT_A holds their mailbox; ACCOUNT_B is one they belong to without one.
+    expect(await lastRestricted(ACCOUNT_A)).toEqual(d.clock.now());
+    expect(await lastRestricted(ACCOUNT_B)).toEqual(d.clock.now());
+    expect(await lastRestricted(MISSING_ACCOUNT)).toBeNull();
+    await liftPersonSuspension(d, GA, "member-a", SESSION, req);
+    expect(await lastRestricted(ACCOUNT_A)).toEqual(d.clock.now());
   });
 
   it("locks the accounts of their mailboxes in id order, then their login, before changing anything", async () => {

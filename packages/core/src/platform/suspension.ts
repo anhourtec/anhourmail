@@ -247,6 +247,8 @@ export async function suspendAccount(
         byUserId: actor.kind === "user" ? actor.userId : null,
       };
       await repos.suspensions.setAccount(accountId, record);
+      // Never promoted automatically afterwards, even once lifted (ADR-0034 §2).
+      await repos.trust.markRestricted(accountId, record.at);
       const held = await holdMailboxes(deps, repos, await repos.mailboxes.listByAccount(accountId), "account", {
         revokeAppPasswords: SUSPENSION_REVOKES_APP_PASSWORDS.includes(reason),
       });
@@ -365,19 +367,27 @@ export async function suspendPerson(
       const { reason, note } = parseSuspendInput(input);
       const mailboxes = await lockPerson(repos, userId);
       if (await repos.suspensions.person(userId)) throw new ConflictError("This person is already suspended.");
+      const at = deps.clock.now();
       await repos.suspensions.setPerson(userId, {
         reason,
         note,
-        at: deps.clock.now(),
+        at,
         byUserId: actor.kind === "user" ? actor.userId : null,
       });
+      // None of their accounts is promoted automatically afterwards, even once lifted (ADR-0034 §2): the accounts of
+      // their mailboxes (locked above) and the ones they belong to. The mark only moves forward, so no lock is needed
+      // for the second kind.
+      const memberships = await repos.access.memberships(userId);
+      for (const id of new Set([...mailboxes.map((m) => m.accountId), ...memberships.map((m) => m.accountId)])) {
+        await repos.trust.markRestricted(id, at);
+      }
       const sessionsRevoked = await repos.security.revokeOtherSessions(userId, "");
       const held = await holdMailboxes(deps, repos, mailboxes, "person", {
         revokeAppPasswords: SUSPENSION_REVOKES_APP_PASSWORDS.includes(reason),
       });
       const shared = { reason: reasonLabel(reason), reasonCategory: reason };
       // Each of their accounts' logs shows it too (rule 49), without the internal note.
-      const copies = (await repos.access.memberships(userId)).map((m) => ({
+      const copies = memberships.map((m) => ({
         accountId: m.accountId,
         meta: {
           ...shared,
