@@ -141,6 +141,10 @@ export const AUDIT_ACTIONS = [
   "trust.tier_changed",
   "trust.limits_changed",
   "trust.restricted",
+  // leaving restricted (staff review only), and staff's sending restriction of one mailbox (ADR-0034 §2, §6)
+  "trust.unrestricted",
+  "trust.mailbox_restricted",
+  "trust.mailbox_unrestricted",
   // the webmail held a new-tier mailbox's send to an outside address (ADR-0034 §3); the promotion job counts them
   "trust.send_held",
   "trust.suspended",

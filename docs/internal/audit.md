@@ -1,6 +1,6 @@
 # Audit
 
-Last updated: 2026-11-11 (`trust.send_held`, ADR-0034); 2026-11-06 (`auth.sign_up_refused` `disposable_email`, ADR-0033); 2026-11-05 (sign-up refusals `auth.sign_up_refused`; billing checkout, portal, changes, holds, timers, staff grants, comps, invite codes, re-sync, orphan dismissal and catalogue drift; `data.import_*`, the import batch and `data.contacts_imported`; settings part 2; suspension notes and chain-field visibility); 2026-11-04 (billing, ADR-0029 slices 5–7: the sync's `billing.*` entries and their meta, ingestion not audited, `billing.sync_failed` in the platform scope, `billing.ceiling_changed`, `address_ceiling` denials, `billing.suspended`/`billing.reactivated` retired); 2026-10-31 (`junk_rules.changed` meta `via`, `change`, `kind` and the shared-mailbox refusal, ADR-0027; password-first sign-in, ADR-0028: `auth.second_step_started`, `password+passkey`, password-only step-up; accepted exceptions: queue-only data migrations 0031/0032 and the bootstrap's file storage cleanup; names as one source: `account.profile_changed` `name`, `via: webmail`; `identity.changed` retired; 2026-10-30: `platform.mail_rules_upgraded` for the managed-script upgrade; mailbox delegation, ADR-0026: `delegation.sent_as`, `delegation.sent_on_behalf`, `delegation.send_failed`, `delegation.send_cancelled` and `delegation.tagged_copy_left` for sending from a delegated mailbox, slice 13; `delegation.mailbox_opened` for opening a delegated mailbox in the webmail; `delegation.granted` / `delegation.revoked` per change, `mailbox.converted_to_shared`, `MutationOutcome.also`; `account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
+Last updated: 2026-11-11 (`trust.send_held`, the trust service's `trust.tier_changed`, `trust.restricted`, `trust.unrestricted`, `trust.mailbox_restricted`, `trust.mailbox_unrestricted`, ADR-0034); 2026-11-06 (`auth.sign_up_refused` `disposable_email`, ADR-0033); 2026-11-05 (sign-up refusals `auth.sign_up_refused`; billing checkout, portal, changes, holds, timers, staff grants, comps, invite codes, re-sync, orphan dismissal and catalogue drift; `data.import_*`, the import batch and `data.contacts_imported`; settings part 2; suspension notes and chain-field visibility); 2026-11-04 (billing, ADR-0029 slices 5–7: the sync's `billing.*` entries and their meta, ingestion not audited, `billing.sync_failed` in the platform scope, `billing.ceiling_changed`, `address_ceiling` denials, `billing.suspended`/`billing.reactivated` retired); 2026-10-31 (`junk_rules.changed` meta `via`, `change`, `kind` and the shared-mailbox refusal, ADR-0027; password-first sign-in, ADR-0028: `auth.second_step_started`, `password+passkey`, password-only step-up; accepted exceptions: queue-only data migrations 0031/0032 and the bootstrap's file storage cleanup; names as one source: `account.profile_changed` `name`, `via: webmail`; `identity.changed` retired; 2026-10-30: `platform.mail_rules_upgraded` for the managed-script upgrade; mailbox delegation, ADR-0026: `delegation.sent_as`, `delegation.sent_on_behalf`, `delegation.send_failed`, `delegation.send_cancelled` and `delegation.tagged_copy_left` for sending from a delegated mailbox, slice 13; `delegation.mailbox_opened` for opening a delegated mailbox in the webmail; `delegation.granted` / `delegation.revoked` per change, `mailbox.converted_to_shared`, `MutationOutcome.also`; `account.member_removed` `mailboxesSignedOut`; data export and account deletion, ADR-0025; staff support access / act-as events and `on_behalf_of`; profile photo and webmail signature events). Decision: ADR-0010. Code: `packages/core/src/audit` (module + `AuditRepository` port), `packages/adapters` (Postgres + in-memory).
 
 Every meaningful action is recorded, tamper-evident, searchable and visible to the right people. Audit is a core module, not a logging side effect.
 
@@ -30,7 +30,7 @@ inside an act-as session also carries `on_behalf_of`. Mail-protocol sign-ins ing
 | `identity` | `identity.changed` |
 | `webmail` | `webmail.preferences_changed`, `webmail.signature_added`, `webmail.signature_changed`, `webmail.signature_removed`, `webmail.signature_defaults_changed`, `webmail.template_added`, `webmail.template_changed`, `webmail.template_removed`, `webmail.handoff_started`, `webmail.handoff_redeemed` |
 | `billing` | `billing.plan_changed`, `billing.payment_succeeded`, `billing.payment_failed`, `billing.refunded`, `billing.suspended`, `billing.reactivated`, `billing.state_changed`, `billing.addons_changed`, `billing.supporter_amount_changed`, `billing.cancel_scheduled`, `billing.cancel_undone`, `billing.dispute_opened`, `billing.dispute_closed`, `billing.holds_applied`, `billing.holds_lifted`, `billing.ceiling_changed`, `billing.sync_failed`, `billing.customer_created`, `billing.checkout_started`, `billing.portal_opened`, `billing.holds_changed`, `billing.subscription_ended`, `billing.staff_plan_granted`, `billing.staff_plan_revoked`, `billing.comp_redeemed`, `billing.resynced`, `billing.orphan_dismissed`, `billing.catalogue_drift`, `billing.catalogue_restored` |
-| `trust` | `trust.tier_changed`, `trust.limits_changed`, `trust.restricted`, `trust.send_held`, `trust.suspended`, `trust.unsuspended` |
+| `trust` | `trust.tier_changed`, `trust.limits_changed`, `trust.restricted`, `trust.unrestricted`, `trust.mailbox_restricted`, `trust.mailbox_unrestricted`, `trust.send_held`, `trust.suspended`, `trust.unsuspended` |
 | `abuse` | `abuse.report_received`, `abuse.report_resolved` |
 | `staff` | `staff.role_granted`, `staff.role_revoked`, `staff.act_as_started`, `staff.act_as_renewed`, `staff.act_as_ended`, `staff.account_viewed`, `staff.credentials_reset` |
 | `data` | `data.export_requested`, `data.export_ready`, `data.export_downloaded`, `data.export_expired`, `data.mail_exported`, `data.import_started`, `data.import_paused`, `data.import_resumed`, `data.import_cancelled`, `data.import_blocked`, `data.import_sync_stopped`, `data.import_finished`, `data.import_credentials_wiped`, `data.import_batch_created`, `data.contacts_imported`, `data.deletion_requested`, `data.deletion_cancelled`, `data.deletion_started`, `data.deleted` |
@@ -487,7 +487,30 @@ Trust tiers (ADR-0034): `trust.send_held` — the webmail held a send from a mai
 because a recipient is outside the addresses we host. Account scope (target `mailbox`, label the address), actor the
 person sending, result `denied`, error code `sending_held`, meta `externalRecipients` (a count only, never addresses,
 rule 24); at most one per mailbox per hour. The promotion job counts them per account (`trust` repository
-`promotionCandidates`). The other trust actions (staff tier changes, mailbox restrictions) come with the trust service.
+`promotionCandidates`).
+
+Trust tier changes go through `packages/core/src/trust/service.ts`, in the same unit of work as the account row and the
+`mailbox.ensure` jobs. Each entry is in the **account's own log** (rule 49) with a copy in the **platform** log that
+adds `accountId`; **neither carries the staff note** (never audited or logged by value). Reasons are shown in plain
+words (`reason`) with the category (`reasonCategory`). The tiers are `fromTier` / `toTier`: `from` and `to` are redacted
+everywhere as mail headers (ADR-0034 §2 named them `from` / `to`).
+
+- `trust.tier_changed` — a move that neither enters nor leaves `restricted`. Meta `fromTier`, `toTier`, `source`
+  (`staff`, `automatic`, `billing`), `reason?`, `reasonCategory?`, `mailboxesQueued`. By staff (`staffPath`, target
+  `account`, label the account name) or by the system: the promotion job (actor system `trust-promote`, source
+  `automatic`) and billing (recorded with billing's own entries, source `billing`); system promotions have no reason.
+- `trust.restricted` — staff moved the account to `restricted`. Meta `fromTier`, `source`, `reason`, `reasonCategory`,
+  `mailboxesQueued`. Also sets `last_restricted_at`.
+- `trust.unrestricted` — staff moved it off `restricted` (review only; the job and billing never do). Meta `toTier`,
+  `source`, `reason`, `reasonCategory`, `mailboxesQueued`.
+- `trust.mailbox_restricted` / `trust.mailbox_unrestricted` — staff restricted or lifted one mailbox's sending (target
+  `mailbox`, label the address). Meta `reason`, `reasonCategory`. Restricting also sets the account's
+  `last_restricted_at`.
+
+Refusals are `denied`: `step_up_required`, `act_as`, `tier_unavailable` (asking for `trusted`) in the account's log;
+`not_found` (unknown account, or a mailbox of another account) and `forbidden` in the platform log only. Bad input
+(no note, no reason where one is needed, an unknown tier) is `failed` `bad_request`; a tier that changed kind while the
+request ran, or a no-op, is `failed` `conflict`.
 
 Staff suspension (`platform.account.suspend`, roles.md guard rail 17): `trust.suspended` and `trust.unsuspended`, always
 by staff (`staffPath`), written through `mutation()` with `copies` so one unit of work records every scope. An
