@@ -35,7 +35,6 @@ async function signInWebmail(page: Page, address: string, password: string) {
   await expect(page.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible({ timeout: SIGN_IN_TIMEOUT });
 }
 
-/** Settings → Account → the Sending group (the folders are a drawer on phones). */
 /** Another group of the open Settings window (on a phone, back to the list of groups first). */
 async function settingsTab(settings: Locator, name: RegExp) {
   const back = settings.getByRole("button", { name: "Back to all settings" });
@@ -43,6 +42,7 @@ async function settingsTab(settings: Locator, name: RegExp) {
   await settings.getByRole("tab", { name }).click();
 }
 
+/** Settings → Account → the Sending group (the folders are a drawer on phones). */
 async function webmailSending(page: Page) {
   const nav = page.getByRole("navigation", { name: "Folders" });
   if (!(await nav.isVisible())) await page.getByRole("button", { name: "Toggle folders" }).click();
