@@ -309,6 +309,13 @@
       "when": 1794406232223,
       "tag": "0043_trust_tier",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1794406238959,
+      "tag": "0044_trust_tier_backfill",
+      "breakpoints": true
     }
   ]
 }
