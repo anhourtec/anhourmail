@@ -1,7 +1,7 @@
 # ADR-0034: Trust tiers stored on the customer account and enforced on every sending path
 
-**Status:** Accepted 2026-11-11 (building: slices 1–15 built, review findings 2, 3, 5, 6 addressed; first Phase 6
-slice)
+**Status:** Accepted 2026-11-11 (building: slices 1–15 built, review findings 2, 3, 5, 6 addressed, the relay hold
+closes public JMAP for `new`; first Phase 6 slice)
 
 ## Context
 
@@ -440,3 +440,81 @@ the rule below.
   suspension's platform audit entry keeps on purpose (audit meta shares the list).
 
 Out of scope here (a separate mail-infra batch): the public-JMAP route around `smtp_blocked` and a relay hold.
+
+## Update 2026-11-11: the relay hold closes public JMAP (security finding, high)
+
+**Two claims above were wrong.** The Context says "Stalwart's HTTP/JMAP listener is internal only … so the webmail BFF
+is the only JMAP sender", and §3 says "Residual risk: none on SMTP for held mailboxes". But `deploy/README.md` proxies
+`/jmap` on the public `imap.` host for mail, contact and calendar apps, `packages/shared/src/platform.ts` advertises
+JMAP there, and the `jmap` app-password scope allows `jmapEmailSubmissionCreate`. `smtp_blocked` denies only
+`emailSend`, so a `new` free mailbox could send to anyone over public JMAP (with its password or a `jmap` app password)
+past the BFF: no hold, no counters, no `trust.send_held`, and still promoted on schedule.
+`trust-access.int.test.ts` already showed a held mailbox submitting over `/jmap` with Basic auth.
+
+**Decision (coordinator): fix it on the mail server with the P4 relay hold.** Probes R1–R6 (`research/stalwart.md`
+"Relay hold", `relay-hold.int.test.ts`) verified what P4 left open:
+
+- Keys survive a restart and are in force at start, even one never reloaded; a refused or failed reload changes
+  nothing loaded; adding fails open until `ReloadLookupStores`, removing fails safe; 3,000 keys reload in 2 ms.
+- The hold covers SMTP and JMAP with the password and every app-password scope, and sign-ins by alias or in upper
+  case; a relay expression that fails to evaluate refuses.
+- The reload needs `actionReloadLookupStores` on top of `sysActionCreate`, so the key can't pause the queue (the worry
+  in the P1–P4 update was unfounded); but the lookup-key permissions cover the spam filter's lists too.
+
+Built:
+
+- **The list.** A mailbox whose effective tier is `new` or `restricted` (a mailbox restriction included) is a key in
+  `x:MemoryLookupKey` namespace `anhourmail-relay-hold` (its address, lower case), and `x:MtaStageRcpt.allowRelaying`
+  starts with `if key_exists('anhourmail-relay-hold', authenticated_as) then false`, else the default
+  (`desiredRelaying`, written by `applySendingPolicy` with the ceiling: dev plan and the deploy's bootstrap). Local
+  delivery is never relaying, so held mailboxes keep sending to hosted addresses on every path; an outside recipient
+  gets `550 5.1.2 Relay not allowed.` (SMTP RCPT, or `deliveryStatus` over JMAP). `restricted` is listed as defence in
+  depth behind `send_blocked`.
+- **`new` keeps `smtp_blocked`.** The plan was to drop it once restarts were shown to keep the keys (they do), so mail
+  apps of new accounts could send to hosted addresses. Not done: every relay refusal counts towards Stalwart's abuse
+  ban of the client's address and of the recipient (`abuseBanRate`, 35 a day, permanent; the counters survive
+  restarts), so a new person's phone or desktop mail app retrying outside recipients would get their address, or a
+  shared carrier or office address, banned from every protocol, webmail sign-in included. An SMTP AUTH refusal for a
+  missing permission doesn't count. Mail apps over SMTP stay closed for `new` (no change for users: §3's mail-app
+  notice stands); JMAP is closed to outside recipients by the hold. Revisit if the maintainer prefers mail-app sending
+  to hosted addresses and accepts a finite `abuseBanPeriod`.
+- **Who writes it: a new narrow key, `STALWART_HOLD_KEY` (account `svc-hold`, worker and scheduler).** Exactly
+  `sysMemoryLookupKey{Get,Query,Create,Destroy}`, `sysActionCreate`, `actionReloadLookupStores`, `sysMtaStageRcptGet`
+  (`HOLD_KEY_PERMISSIONS`). Not the provisioning key: adding permissions to it is a key change with a rotation (its
+  start-up scope check refuses the old key), and keeping lookup keys off the key that controls every account lets the
+  management proxy give this key one rule (the hold namespace, plain keys, that one action) without loosening the
+  provisioning key's. It is still used only through the worker's job path (rule 26): `mailbox.ensure` writes the list,
+  the reconciler reads it.
+- **`mailbox.ensure`, fail closed** (`stalwartMailServer(…, { hold })` in `packages/adapters/src/stalwart/index.ts`). A
+  mailbox going onto the list is listed (not yet in force), made `send_blocked` first if it could send, the list
+  reloaded and the relaying policy checked, and only then given its access (`smtp_blocked` for `new`). A new account is
+  created only after those steps, so a failure leaves nothing on the mail server and the retry starts clean (an account
+  created and then left unrecorded by a failed job would be refused as "already exists" by every retry; the first
+  integration run caught exactly that). A failure at any step leaves the mailbox unable to send at all and the job
+  retries (and in the end fails as usual); a retry that finds it short of its access reloads again. A listing that
+  fails also tightens it.
+  Coming off the list (promotion), the key is destroyed and the list reloaded before the new access is written, so a
+  failed reload is retried rather than forgotten. Without the hold key a held mailbox's job fails. Reloads are skipped
+  when nothing changed (a mailbox already listed and at its access) and coalesced within a process (`RelayHoldList`).
+  A purged mailbox's key is removed with it.
+- **Drift:** the reconciler compares the list with the tiers of settled mailboxes (`relayHoldMismatch`: `missing` and
+  `extra` of ours re-queued; strangers on our domains reported) and checks the policy is exactly the hold's (reported;
+  the bootstrap applies it). Not checked without the hold key.
+- **Residual:** a delegated send is held on the server by the signed-in (own) mailbox only; the BFF still holds it when
+  either mailbox is `new`. Between a promotion and its `mailbox.ensure` (seconds) the BFF already lets outside
+  recipients through while the server still holds them, so such a send is refused in `deliveryStatus` and counts
+  towards the visitor's abuse ban. Sieve redirects aren't authenticated sessions, so the hold doesn't apply to them (the
+  managed-script pause does).
+
+**Ops follow-ups (private repository):** issue `STALWART_HOLD_KEY` (`ensureServiceAccount` / `issueServiceKey` role
+`hold`) and give it to the worker and scheduler before deploying (the worker and scheduler refuse to start in
+production without it; held mailboxes' jobs fail without it); the management proxy allows that key only
+`x:MemoryLookupKey/set` create with `namespace: "anhourmail-relay-hold"`, `isGlobPattern: false` and a plain address,
+`destroy` of keys in that namespace, `x:MemoryLookupKey/get|query` filtered to that namespace, `x:Action/set` create of
+`ReloadLookupStores` only, and `x:MtaStageRcpt/get`; the bootstrap credential's `x:MtaStageRcpt/set` now also writes
+`allowRelaying`; make NGINX set `X-Forwarded-For` to the address it saw on `/jmap` and `/dav/*`, replacing a
+client's own (Stalwart trusts it, and a passed-on header would let a held account aim relay refusals, which count
+towards a permanent abuse ban, at someone else's address); run `job:mailbox-backfill` after the deploy so
+existing `new` and `restricted` mailboxes are listed; smoke checks: a held mailbox gets `550 5.7.1` at AUTH on 587,
+`550 5.1.2` for an outside recipient over public `/jmap` with its password and with a `jmap` app password, and its
+mail to a hosted address is delivered.
