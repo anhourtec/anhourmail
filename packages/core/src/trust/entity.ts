@@ -3,7 +3,7 @@
  * Trust tiers on the customer account (ADR-0034 §1). The account's tier is the one source for every sending path; a
  * mailbox's effective tier is its account's, made stricter by staff's sending restriction of that mailbox (§6).
  */
-import type { SuspensionReason } from "@anhourmail/shared/platform";
+import { isSuspensionReason, type SuspensionReason } from "@anhourmail/shared/platform";
 import { stricterTier, type TrustTier, type TrustTierSource } from "@anhourmail/shared/sending";
 
 import type { AuditAction } from "../audit/catalogue";
@@ -33,6 +33,26 @@ export type MailboxSendingRestriction = {
   note: string | null;
   byUserId: string | null;
 };
+
+/**
+ * A mailbox's restriction as stored, read by both adapters: restricted whenever it has a restriction time, whatever the
+ * stored reason. A reason the code no longer knows reads as `other`, never as "not restricted" (security review of
+ * ADR-0034 slices 1–11, finding 6).
+ */
+export function storedRestriction(row: {
+  at: Date | null;
+  reason: string | null;
+  note: string | null;
+  byUserId: string | null;
+}): MailboxSendingRestriction | null {
+  if (row.at === null) return null;
+  return {
+    at: row.at,
+    reason: isSuspensionReason(row.reason) ? row.reason : "other",
+    note: row.note,
+    byUserId: row.byUserId,
+  };
+}
 
 export type MailboxTrust = {
   mailboxId: string;

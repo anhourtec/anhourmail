@@ -8,6 +8,7 @@ import {
   type MailboxTrust,
   type PromotionCriteria,
   SEND_HELD_ACTION,
+  storedRestriction,
   type TrustRepository,
   type TrustTierChange,
 } from "@anhourmail/core/trust";
@@ -32,15 +33,12 @@ type MailboxRow = {
   by: string | null;
 };
 
-const restrictionOf = (r: MailboxRow): MailboxSendingRestriction | null => {
-  const reason = reasonOf(r.reason);
-  return r.at !== null && reason !== null ? { at: r.at, reason, note: r.note, byUserId: r.by } : null;
-};
+/** Restricted whenever `sending_restricted_at` is set (`storedRestriction`), as `standingByAddress` reads it. */
 const toMailboxTrust = (r: MailboxRow): MailboxTrust => ({
   mailboxId: r.id,
   accountId: r.accountId,
   address: r.address,
-  restriction: restrictionOf(r),
+  restriction: storedRestriction({ at: r.at, reason: r.reason, note: r.note, byUserId: r.by }),
 });
 
 const mailboxColumns = {

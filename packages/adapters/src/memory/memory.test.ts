@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { randomUUID } from "node:crypto";
 
+import { describe, expect, it } from "vitest";
+
+import type { SuspensionReason } from "@anhourmail/shared/platform";
+
 import { describeAdapterContract } from "../contract";
 import { MemoryUnitOfWork } from ".";
 
@@ -80,4 +84,38 @@ describeAdapterContract("memory", async () => {
       for (const x of input.stepUps ?? []) s.stepUps.push({ userId, ...x });
     },
   };
+});
+
+describe("memory trust: a stored restriction with a reason the code doesn't know", () => {
+  it("still reads as restricted (as other) in every reader", async () => {
+    const uow = new MemoryUnitOfWork();
+    const accountId = randomUUID();
+    const mailboxId = randomUUID();
+    uow.state.accounts.push({ id: accountId, name: "x", plan: "free" });
+    uow.state.mailboxes.push({
+      id: mailboxId,
+      accountId,
+      userId: null,
+      createdAt: new Date(0),
+      address: "x@retired.test",
+      quotaBytes: 1,
+      status: "active",
+      stalwartId: null,
+      lastError: null,
+      purgeAfter: null,
+    });
+    const at = new Date("2026-11-11T12:00:00Z");
+    // As a row written before a reason was retired from the code would read.
+    uow.state.mailboxRestrictions.push({
+      mailboxId,
+      at,
+      reason: "retired_reason" as SuspensionReason,
+      note: null,
+      byUserId: null,
+    });
+    const expected = { at, reason: "other", note: null, byUserId: null };
+    expect((await uow.run((r) => r.trust.mailbox(accountId, mailboxId)))?.restriction).toEqual(expected);
+    expect((await uow.run((r) => r.trust.mailboxes(accountId)))[0]?.restriction).toEqual(expected);
+    expect((await uow.run((r) => r.trust.standingByAddress("x@retired.test")))?.mailboxRestricted).toBe(true);
+  });
 });

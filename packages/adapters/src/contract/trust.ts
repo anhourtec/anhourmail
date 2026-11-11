@@ -12,6 +12,7 @@ import type { UnitOfWork } from "@anhourmail/core";
 import type { AuditEntryInput } from "@anhourmail/core/audit";
 import { defaultBilling } from "@anhourmail/core/billing";
 import type { MailboxSendingRestriction, TrustTierChange } from "@anhourmail/core/trust";
+import { SUSPENSION_REASONS, type SuspensionReason } from "@anhourmail/shared/platform";
 
 import type { AdapterFactory } from ".";
 
@@ -260,6 +261,33 @@ export function describeTrustContract(name: string, factory: AdapterFactory): vo
         expect((await uow.run((r) => r.trust.mailbox(a, one.mailboxId)))?.restriction).toEqual(noNote);
         expect(await uow.run((r) => r.trust.setMailboxRestriction(a, one.mailboxId, null))).toBe(true);
         expect((await uow.run((r) => r.trust.mailbox(a, one.mailboxId)))?.restriction).toBeNull();
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("a mailbox restriction reads as restricted in every reader, for every reason", async () => {
+      const { uow, cleanup, seedMail } = await factory();
+      try {
+        const tag = randomUUID().slice(0, 8);
+        const address = `r@trust-r-${tag}.test`;
+        const { mailboxId } = await seedMail({
+          domain: `trust-r-${tag}.test`,
+          address,
+          alias: `r-alias@trust-r-${tag}.test`,
+          quotaBytes: 1024,
+        });
+        const accountId = (await uow.run((r) => r.directory.getMailbox(mailboxId)))?.accountId ?? "";
+        for (const reason of Object.keys(SUSPENSION_REASONS) as SuspensionReason[]) {
+          const set = restriction({ reason, note: null, byUserId: null });
+          await uow.run((r) => r.trust.setMailboxRestriction(accountId, mailboxId, set));
+          expect((await uow.run((r) => r.trust.mailbox(accountId, mailboxId)))?.restriction).toEqual(set);
+          expect((await uow.run((r) => r.trust.mailboxes(accountId)))[0]?.restriction).toEqual(set);
+          expect((await uow.run((r) => r.trust.standingByAddress(address)))?.mailboxRestricted).toBe(true);
+        }
+        await uow.run((r) => r.trust.setMailboxRestriction(accountId, mailboxId, null));
+        expect((await uow.run((r) => r.trust.mailbox(accountId, mailboxId)))?.restriction).toBeNull();
+        expect((await uow.run((r) => r.trust.standingByAddress(address)))?.mailboxRestricted).toBe(false);
       } finally {
         await cleanup();
       }

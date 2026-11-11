@@ -8,6 +8,7 @@ import {
   type MailboxSendingRestriction,
   type MailboxTrust,
   SEND_HELD_ACTION,
+  storedRestriction,
   type TrustRepository,
 } from "@anhourmail/core/trust";
 import type { AccountRole } from "@anhourmail/shared/rbac";
@@ -59,7 +60,8 @@ export function memoryTrust(s: State): TrustRepository {
   };
   const restrictionOf = (mailboxId: string): MailboxSendingRestriction | null => {
     const r = s.mailboxRestrictions.find((x) => x.mailboxId === mailboxId);
-    return r ? clone({ at: r.at, reason: r.reason, note: r.note, byUserId: r.byUserId }) : null;
+    // Restricted whenever it has a time, as in Postgres (`storedRestriction`).
+    return r ? clone(storedRestriction({ at: r.at, reason: r.reason, note: r.note, byUserId: r.byUserId })) : null;
   };
   const toTrust = (m: Mailbox): MailboxTrust => ({
     mailboxId: m.id,
