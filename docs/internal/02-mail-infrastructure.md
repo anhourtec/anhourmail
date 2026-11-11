@@ -1,6 +1,6 @@
 # 02 — Mail infrastructure
 
-Last updated: 2026-11-05 (mail import: the IMAP-only import credential, IMAP probes, the training key and the run-65 fixes, ADR-0030); 2026-11-04 (the webmail tells the sender about unknown local recipients); 2026-10-31 (no file storage on customer mailboxes; the provisioning key's set narrows); 2026-10-30 (internal-mail marker and the inbound-headers script; send-on-behalf tag expiry, ADR-0026 slice 13). Research: `research/stalwart.md`, `research/deliverability.md`.
+Last updated: 2026-11-11 (the relay hold: `new` and `restricted` mailboxes send to hosted addresses only on SMTP and JMAP, the hold key, fail-closed `mailbox.ensure`; dev allows the forwarder's address past Stalwart's automatic bans); 2026-11-05 (mail import: the IMAP-only import credential, IMAP probes, the training key and the run-65 fixes, ADR-0030); 2026-11-04 (the webmail tells the sender about unknown local recipients); 2026-10-31 (no file storage on customer mailboxes; the provisioning key's set narrows); 2026-10-30 (internal-mail marker and the inbound-headers script; send-on-behalf tag expiry, ADR-0026 slice 13). Research: `research/stalwart.md`, `research/deliverability.md`.
 
 ## URL and hostname map
 
@@ -149,7 +149,29 @@ Free addresses are ordinary Stalwart user accounts created by the worker's `mail
 (the password the person chose, as an argon2id hash; a random unusable one when staff create it). The reconciler
 expects only the system accounts there besides the control plane's mailboxes; any other account on it is reported as
 drift. Names follow `packages/shared/src/addresses.ts` (4–32 characters, reserved names, no reuse across accounts).
-Sending limits for free mailboxes are still Phase 6 (03-anti-spam-and-abuse.md "Free-tier risk").
+Sending limits for free mailboxes are the trust tiers (ADR-0034; 03-anti-spam-and-abuse.md "Trust tiers"); a new free
+mailbox is on the relay hold ("Relay hold" below).
+
+## Relay hold (ADR-0034 update 2026-11-11)
+
+Mailboxes whose trust tier doesn't allow outside recipients (`new`, `restricted`, or a staff mailbox restriction) may
+send only to addresses the server hosts, **on every authenticated path**: SMTP submission and JMAP `EmailSubmission`,
+with the password or any app password. Mail apps can reach JMAP on the public `imap.` host, so the webmail BFF is not
+the only JMAP sender and the BFF's own hold is not enough. Verified in `research/stalwart.md` "Relay hold".
+
+- **How:** each held mailbox's address is a key in `x:MemoryLookupKey` namespace `anhourmail-relay-hold`, and
+  `x:MtaStageRcpt.allowRelaying` begins with `if key_exists('anhourmail-relay-hold', authenticated_as) then false`
+  (`packages/stalwart-client/src/relay-hold.ts`; written with the sending ceiling by `applySendingPolicy`: the dev plan
+  and the deploy's bootstrap). An outside recipient gets `550 5.1.2 Relay not allowed.` at RCPT, or in the JMAP
+  submission's `deliveryStatus`; local delivery is never relaying.
+- **`new` keeps `smtp_blocked`** as well: every relay refusal counts towards Stalwart's permanent abuse ban of the
+  client's address (35 a day), so mail apps of new accounts are refused at AUTH (which doesn't count) rather than at
+  each outside recipient. `restricted` is `send_blocked` and listed as defence in depth.
+- **Writes:** `mailbox.ensure` in the worker with the hold key (`STALWART_HOLD_KEY`), fail closed: listed, kept
+  `send_blocked` (a new account: not yet created) while the list is reloaded (`ReloadLookupStores`; a key isn't in
+  force before it) and the relaying policy is checked, then given its access. Off the list: unlisted and reloaded before its new access is written. Keys
+  persist in the data store and are in force from start-up.
+- **Drift:** the reconciler's `relayHoldMismatch` (list against the tiers; policy exactly the hold's).
 
 ## Stalwart configuration principles (v0.16.27)
 
@@ -157,7 +179,7 @@ Sending limits for free mailboxes are still Phase 6 (03-anti-spam-and-abuse.md "
 - Since v0.16 there is **no REST management API and no TOML**. Only `config.json` (the DataStore location) is on disk. Everything else is a JMAP object under `urn:stalwart:jmap` at `POST /jmap` (`x:Domain`, `x:Account`, `x:MtaRoute`, `x:MtaOutboundStrategy`, `x:NetworkListener`, `x:MtaOutboundThrottle`, `x:WebHook`, `x:Action`, …).
 - Directory changes apply immediately. Listener, route and expression changes need `x:Action ReloadSettings`.
 - All access goes through `packages/stalwart-client` (rule 21). Every write is an idempotent upsert by natural key.
-- **Production auth is four scoped API keys** (ADR-0017; ADR-0020 "Credential split", verified 2026-10-23 on
+- **Production auth is five scoped API keys** (ADR-0017; ADR-0020 "Credential split", verified 2026-10-23 on
   v0.16.27), never one credential that both creates accounts and acts inside one. Exact sets in
   `packages/stalwart-client/src/keys.ts`; each key is `Replace`-typed (`authenticate` is required — without it every
   request is 403), IP-restricted to the management network, expiring and rotated:
@@ -168,6 +190,7 @@ Sending limits for free mailboxes are still Phase 6 (03-anti-spam-and-abuse.md "
   | Operations (`STALWART_OPERATIONS_KEY`)     | `svc-ops`       | web               | `impersonate` + app passwords (`sysAppPassword{Create,Get,Query,Destroy}`, `sysApiKey{Get,Query}`) + the managed Sieve script (`jmapSieveScript{Get,Query,Create,Update,Validate}`, `jmapBlobUpload`, `jmapBlobGet`). No account, domain or DKIM access |
   | Audit (`STALWART_AUDIT_KEY`)               | `svc-audit`     | scheduler         | `impersonate` + `jmapSieveScript{Get,Query}` + `jmapBlobGet`: reads managed scripts for the hourly check                                                                                                                                                |
   | Training (`STALWART_TRAINING_KEY`)         | `svc-train`     | worker            | `impersonate` + `sysSpamTrainingSample{Get,Query,Destroy}`: removes the spam-training samples a mail import's APPENDs created (ADR-0030; ADR-0020 update). Nothing else                                                                                 |
+  | Hold (`STALWART_HOLD_KEY`)                 | `svc-hold`      | worker, scheduler | The relay hold's list (`sysMemoryLookupKey{Get,Query,Create,Destroy}`), `ReloadLookupStores` only (`sysActionCreate` + `actionReloadLookupStores`), `sysMtaStageRcptGet`. No account or mail access                                                     |
   - **Why the provisioning key holds mail permissions:** Stalwart lets a credential assign only permissions it holds,
     measured against the new account's effective set (role minus `disabledPermissions`; disabling needs nothing). The
     single key of earlier versions failed on staging with `not authorized to grant permissions: jmapPrincipalCreate, …
@@ -331,6 +354,12 @@ Verified 2026-10-29 on v0.16.27 (handoff item 14; `stack:verify` checks every ca
 - Stalwart and Mailpit sit on **`mailnet`, an `internal: true` Docker network** with no route to the internet. `mail-edge` (socat) forwards host ports (bound to `DEV_BIND_ADDRESS`, default 127.0.0.1) into that network, inbound only. Ports are in CLAUDE.md (43xxx scheme).
 - The dev plan (`infra/stalwart/dev-plan.ts`, applied by the seed) sets the outbound strategy so every non-local recipient routes to the **`mailpit` Relay route**. Local domains (`dev.test`, demo domains) deliver locally.
 - **Pyzor is disabled in dev only.** It is a network lookup, and Stalwart refuses to reload while it can't resolve. Production keeps it on.
+- **The forwarder's address is exempt from Stalwart's automatic bans in dev only** (`x:AllowedIp` for Docker's private
+  ranges, `DEV_ALLOWED_NETWORKS` in the dev plan). Every mail-port client reaches the dev server through `mail-edge`,
+  one address, and every refused recipient (unknown address, relay hold) and failed sign-in counts towards a ban of
+  it; a ban of that one address cut off every dev client and test, and lifting it didn't help while the day's counter
+  (kept in the data store) stayed over. HTTP requests carrying `X-Forwarded-For` (the webmail, tests' documentation
+  addresses) are still counted per client. Production has no allowed range.
 - The Stalwart admin WebUI bundle is pinned (v1.0.11, sha256-checked), served via `file://` `resourceUrl` from a read-only mount, because Stalwart has no egress. Stalwart needs one restart after the bundle changes.
-- `npm run stack:verify` proves it: alice → bob over JMAP; external recipient → Mailpit; `curl` from the Stalwart container to the internet fails; unknown local recipients get 550 at `RCPT` (25 and 465) while a throwaway catch-all domain accepts them, and a JMAP submission to one reports the 550 in `deliveryStatus`.
+- `npm run stack:verify` proves it: alice → bob over JMAP; external recipient → Mailpit; `curl` from the Stalwart container to the internet fails; unknown local recipients get 550 at `RCPT` (25 and 465) while a throwaway catch-all domain accepts them, and a JMAP submission to one reports the 550 in `deliveryStatus`; the relay hold is in `allowRelaying`, and a listed throwaway mailbox gets `550 5.1.2` for an outside recipient on 465 and over JMAP while its local mail is delivered.
 - Tests that need "external" delivery use a second local domain or Mailpit. Nothing leaves the machine (rule 19).

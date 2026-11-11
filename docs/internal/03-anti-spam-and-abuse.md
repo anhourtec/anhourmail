@@ -1,6 +1,6 @@
 # 03 — Anti-spam and abuse
 
-Last updated: 2026-11-11 (billing's promotion taken back on refunds, disputes and early plan ends; slices 12–15 built; trust tiers ADR-0034 slices 1–11 built; trust tiers designed, ADR-0034: stored on the account, `new`-tier external hold, mail-server gates); 2026-11-06 (disposable email addresses refused, ADR-0033); 2026-11-05 (sign-up proof-of-work and sign-up limits built, ADR-0031; suspension note readers, open sessions after a suspension and their mitigations); 2026-11-04 (the webmail reads `deliveryStatus` after a send). 2026-10-30. Research: `research/deliverability.md` §6–8, `research/market-and-legal.md` §4.
+Last updated: 2026-11-11 (the relay hold: `new` and `restricted` mailboxes send to hosted addresses only on SMTP and public JMAP alike; billing's promotion taken back on refunds, disputes and early plan ends; slices 12–15 built; trust tiers ADR-0034 slices 1–11 built; trust tiers designed, ADR-0034: stored on the account, `new`-tier external hold, mail-server gates); 2026-11-06 (disposable email addresses refused, ADR-0033); 2026-11-05 (sign-up proof-of-work and sign-up limits built, ADR-0031; suspension note readers, open sessions after a suspension and their mitigations); 2026-11-04 (the webmail reads `deliveryStatus` after a send). 2026-10-30. Research: `research/deliverability.md` §6–8, `research/market-and-legal.md` §4.
 
 Outbound abuse is the priority. One spammer on a shared IP hurts every user's inbox placement, and under CASL a host that knowingly helps spammers can be liable.
 
@@ -87,11 +87,16 @@ staff sending restriction. `new` → `standard` by the hourly promotion job (pri
 on a paid plan; staff set or restrict with `platform.trust.manage`; `restricted` leaves only by review; `trusted` is
 reserved until the mail server can hold per-tier numbers. A `new` mailbox sends only to addresses we host (webmail
 refuses outside recipients with `sending_held`) and can't use SMTP submission (`smtp_blocked`: `emailSend` denied on
-Stalwart); `restricted` is `send_blocked`. Every authenticated sender is also capped on Stalwart at the `standard`
+Stalwart); `restricted` is `send_blocked`. **Both are also on the mail server's relay hold** (ADR-0034 update
+2026-11-11, `02-mail-infrastructure.md` "Relay hold"): JMAP is reachable from mail apps on the public `imap.` host, and
+`smtp_blocked` leaves JMAP submission open for the webmail, so until the hold a `new` account could send anywhere over
+public JMAP past every webmail check. Now the mail server refuses outside recipients for listed accounts on every
+authenticated path (`550 5.1.2`), and `mailbox.ensure` lists a mailbox fail-closed (it can't send at all until the hold
+is in force). Every authenticated sender is also capped on Stalwart at the `standard`
 numbers. Built so far (2026-11-11, slices 1–15): the stored tier, `smtp_blocked` / `send_blocked` applied on the mail
 server, staff changes and mailbox restrictions in the trust service and their routes, promotion by payment and by the
 hourly job, the importer cap, the webmail's outside-recipient hold and per-tier limits, the managed scripts' pause of
-forwarding and replies, and the mail-server ceiling. Not yet: the console and staff screens (slices 16–18). Until
+forwarding and replies, the mail-server ceiling, and the relay hold. Not yet: the console and staff screens (slices 16–18). Until
 those are built, the table below and "Free-tier risk" describe the target.
 
 **A payment's promotion isn't a free pass (security review of slices 1–11, 2026-11-11).** Billing's `standard` goes
