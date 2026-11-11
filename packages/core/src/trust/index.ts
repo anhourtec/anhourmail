@@ -4,3 +4,4 @@ export type * from "./repository";
 export * from "./standing";
 export * from "./access";
 export * from "./service";
+export * from "./promote";
