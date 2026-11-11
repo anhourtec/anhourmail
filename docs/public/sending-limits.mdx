@@ -12,17 +12,39 @@ out of spam folders. Receiving mail is never limited by these levels.
 
 Every account starts at the first level. Limits rise automatically as the account ages in good standing.
 
+## See your level
+
+- **In the console:** the home page shows a **Sending** card for each of your accounts, with its level and limits.
+  Owners and admins see it; members see their own mailbox's level in the webmail.
+- **In the webmail:** **Settings → Account → Sending** shows the level of the mailbox you're in, its limits, and what
+  that means for its forwarding and automatic replies.
+
+Neither shows when a level will change: it changes on its own once the account is established, or straight away on a
+paid plan.
+
 ## New accounts
 
 A new account can send to addresses hosted on AnhourMail (free addresses and customers' own domains) from the first
 minute. Sending elsewhere, and sending from mail apps over SMTP, opens automatically once your account is established;
 a paid plan opens it straight away. Until then:
 
-- the webmail tells you before anything is sent: "New accounts can send to addresses hosted on AnhourMail for now";
+- the webmail tells you before anything is sent: "New accounts can send to addresses hosted on AnhourMail for now",
+  and lists the recipients that may be outside AnhourMail. Remove them and send again: the rest goes out at once, and
+  your draft is kept until then;
 - a mail app that sends over JMAP gets each outside recipient back as not delivered;
 - mail apps read your mail over IMAP and POP3 as usual, but signing in to send over SMTP is refused.
 
-Receiving mail from anyone works from the start.
+Receiving mail from anyone works from the start. Forwarding to an address outside AnhourMail waits too; automatic
+replies keep working. **App passwords** in the console says so for each mailbox.
+
+## When the webmail can't send
+
+| You see                                                           | What it means                                                 | What to do                                            |
+| ----------------------------------------------------------------- | ------------------------------------------------------------- | ----------------------------------------------------- |
+| "New accounts can send to addresses hosted on AnhourMail for now" | The account is new and a recipient is outside AnhourMail.     | Remove the outside recipients, or wait.               |
+| "You've reached your sending limit for now"                       | Your level's limit per hour or per day is used up.            | Try again later. Your draft is kept.                  |
+| "Sending is paused for this mailbox"                              | Sending is paused while we take a look (see below).           | Write to the support address shown to ask us to look. |
+| "Sending isn't available right now"                               | We couldn't check your limits just then, so nothing was sent. | Try again in a moment. Your draft is kept.            |
 
 ## Daily limits per mailbox and message size
 
@@ -43,5 +65,7 @@ law. The [Acceptable Use Policy](/legal/acceptable-use) has the details.
 
 ## If sending is paused
 
-If an account sends something unusual, sending may pause while we take a look. Receiving and reading mail keep
-working. You'll get an email explaining what happened and what to do next.
+If an account sends something unusual, sending may pause while we take a look, for the whole account or for one
+mailbox. Receiving and reading mail keep working; forwarding and automatic replies pause too. The console's
+**Sending** card says why, and where to write to ask us to look again. You'll get an email explaining what happened
+and what to do next.
