@@ -38,6 +38,7 @@ import {
   type DomainState,
   type JobClaim,
   type JobKind,
+  type JobStatus,
   type MailboxState,
   type MailDirectoryRepository,
   type ProvisioningJob,
@@ -473,6 +474,32 @@ class PgProvisioningRepository implements ProvisioningRepository {
       .orderBy(desc(provisioningJob.createdAt))
       .limit(1);
     return row ? toJob(row) : null;
+  }
+
+  async progressSince(
+    kind: JobKind,
+    subjectId: string,
+    since: Date,
+  ): Promise<{ succeededSince: boolean; queuedSince: boolean; latest: JobStatus | null }> {
+    const res = await this.x.execute<{
+      succeeded_since: boolean | null;
+      queued_since: boolean | null;
+      latest: string | null;
+    }>(sql`
+      select
+        bool_or(created_at >= ${since} and status = 'succeeded') as succeeded_since,
+        bool_or(created_at >= ${since}) as queued_since,
+        (array_agg(status order by created_at desc))[1] as latest
+      from provisioning_job
+      where kind = ${kind} and subject_id = ${subjectId}`);
+    const row = res.rows[0];
+    const latest = row?.latest ?? null;
+    return {
+      succeededSince: row?.succeeded_since === true,
+      queuedSince: row?.queued_since === true,
+      latest:
+        latest === "queued" || latest === "running" || latest === "succeeded" || latest === "failed" ? latest : null,
+    };
   }
 }
 

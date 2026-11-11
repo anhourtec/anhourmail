@@ -8,6 +8,7 @@ import type {
   DomainState,
   JobClaim,
   JobKind,
+  JobStatus,
   MailboxState,
   ProvisioningJob,
 } from "./types";
@@ -36,6 +37,15 @@ export type ProvisioningRepository = {
   get(id: string): Promise<ProvisioningJob | null>;
   /** The most recently queued job of this kind for this subject, whatever its status, or null. */
   latest(kind: JobKind, subjectId: string): Promise<ProvisioningJob | null>;
+  /**
+   * How far this kind of job for this subject has got since `since`: whether one queued at or after it has succeeded,
+   * whether any was queued at or after it, and the most recent job's status (null: there is none). One read.
+   */
+  progressSince(
+    kind: JobKind,
+    subjectId: string,
+    since: Date,
+  ): Promise<{ succeededSince: boolean; queuedSince: boolean; latest: JobStatus | null }>;
 };
 
 /** Desired mail configuration in the control plane (domains, mailboxes, aliases). */

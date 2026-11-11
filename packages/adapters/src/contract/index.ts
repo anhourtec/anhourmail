@@ -515,6 +515,36 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
       }
     });
 
+    it("provisioning: how far a subject's jobs have got since a moment (the webmail's relay-hold check)", async () => {
+      const { uow, cleanup } = await factory();
+      try {
+        const box = randomUUID();
+        // Wide margins: Postgres stamps the queue time with its own clock.
+        const hourAgo = new Date(Date.now() - 3_600_000);
+        const inAnHour = new Date(Date.now() + 3_600_000);
+        const progress = (since: Date) => uow.run((r) => r.provisioning.progressSince("mailbox.ensure", box, since));
+        expect(await progress(hourAgo)).toEqual({ succeededSince: false, queuedSince: false, latest: null });
+        const job = await uow.run((r) =>
+          r.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: box, runAfter: new Date() }),
+        );
+        expect(await progress(hourAgo)).toEqual({ succeededSince: false, queuedSince: true, latest: "queued" });
+        expect(await progress(inAnHour)).toEqual({ succeededSince: false, queuedSince: false, latest: "queued" });
+        const claim = await claimUntil(uow, job.id, new Date());
+        expect((await progress(hourAgo)).latest).toBe("running");
+        expect(await uow.run((r) => r.provisioning.complete(claim, new Date()))).toBe(true);
+        expect(await progress(hourAgo)).toEqual({ succeededSince: true, queuedSince: true, latest: "succeeded" });
+        expect(await progress(inAnHour)).toEqual({ succeededSince: false, queuedSince: false, latest: "succeeded" });
+        // Another kind or subject is never counted.
+        expect(await uow.run((r) => r.provisioning.progressSince("mailbox.password", box, hourAgo))).toEqual({
+          succeededSince: false,
+          queuedSince: false,
+          latest: null,
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("domains: another claim on a name, pending domains on the mail server, expired unverified domains", async () => {
       const { uow, cleanup } = await factory();
       try {

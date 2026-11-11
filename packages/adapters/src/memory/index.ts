@@ -96,7 +96,8 @@ export type MemoryState = {
   }[];
   userStates: Record<string, string>;
   /** `lockedAt`: when the claim holding a running job was taken (mirrors Postgres `locked_at`). */
-  jobs: (ProvisioningJob & { lockedAt?: Date | null })[];
+  /** `createdAt`: when it was queued (the enqueue's `runAfter`, which callers set to their clock's now). */
+  jobs: (ProvisioningJob & { lockedAt?: Date | null; createdAt?: Date })[];
   domains: CustomerDomain[];
   mailboxes: Mailbox[];
   aliases: MailAlias[];
@@ -334,7 +335,8 @@ function repositories(s: MemoryState): Repositories {
     },
   };
 
-  const toJob = ({ lockedAt: _lockedAt, ...job }: (typeof s.jobs)[number]): ProvisioningJob => clone(job);
+  const toJob = ({ lockedAt: _lockedAt, createdAt: _createdAt, ...job }: (typeof s.jobs)[number]): ProvisioningJob =>
+    clone(job);
   /** Records a claim's outcome only while that claim still holds the job (running, same lock token). */
   const finish = (claim: JobClaim, update: Partial<ProvisioningJob>): boolean => {
     const job = s.jobs.find((j) => j.id === claim.id);
@@ -357,7 +359,7 @@ function repositories(s: MemoryState): Repositories {
         runAfter,
         lockToken: null,
       };
-      s.jobs.push(job);
+      s.jobs.push({ ...job, createdAt: runAfter });
       return clone(job);
     },
     claimNext: async (now) => {
@@ -392,6 +394,15 @@ function repositories(s: MemoryState): Repositories {
     latest: async (kind, subjectId) => {
       const job = s.jobs.findLast((j) => j.kind === kind && j.subjectId === subjectId);
       return job ? toJob(job) : null;
+    },
+    progressSince: async (kind, subjectId, since) => {
+      const mine = s.jobs.filter((j) => j.kind === kind && j.subjectId === subjectId);
+      const recent = mine.filter((j) => (j.createdAt ?? j.runAfter) >= since);
+      return {
+        succeededSince: recent.some((j) => j.status === "succeeded"),
+        queuedSince: recent.length > 0,
+        latest: mine.at(-1)?.status ?? null,
+      };
     },
   };
 
