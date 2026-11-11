@@ -1,6 +1,6 @@
 # 08 — Operations
 
-Last updated: 2026-11-11 (the Sieve pause under a tier, the mail server's sending ceiling and its ops follow-ups, ADR-0034 slices 12–13; `job:trust-promote` and its `TRUST_PROMOTE_*` settings, trust tiers and their deploy note, ADR-0034); 2026-11-05 (the mail importer and its deploy gate, import pages and notify job, orphaned spam-training samples clean-up, the emergency session kill; no phone verification, ADR-0031); 2026-11-04 (webmail push through NGINX: buffering off, read timeout, caps); 2026-10-31 (file storage lockdown deploy step); 2026-10-30 (data export and account deletion jobs, ADR-0025).
+Last updated: 2026-11-11 (the worker's tier-change signal to the web app needs `REDIS_URL`; the Sieve pause under a tier, the mail server's sending ceiling and its ops follow-ups, ADR-0034 slices 12–13; `job:trust-promote` and its `TRUST_PROMOTE_*` settings, trust tiers and their deploy note, ADR-0034); 2026-11-05 (the mail importer and its deploy gate, import pages and notify job, orphaned spam-training samples clean-up, the emergency session kill; no phone verification, ADR-0031); 2026-11-04 (webmail push through NGINX: buffering off, read timeout, caps); 2026-10-31 (file storage lockdown deploy step); 2026-10-30 (data export and account deletion jobs, ADR-0025).
 
 ## Environments
 
@@ -229,7 +229,11 @@ pauses the managed script's redirects and replies the tier doesn't allow (all of
 redirects while `new`) after a staff change and about 30 s after each start (after the rules upgrade and the account
 Safe senders pass; logged `sending pause applied at start-up`, counts only, at most once a day while no tier changed).
 The reconciler counts a script that still sends against its tier (`unpausedSending` in `platform.reconciler_drift`); if
-it stays above 0, restart the web app to run the pass again.
+it stays above 0, restart the web app to run the pass again. A tier the worker's billing sync moves (a payment's
+promotion, or billing taking it back on a refund, a dispute or an early plan end) reaches the scripts through a Redis
+signal the web app polls every 15 s (log `sending pause signals taken`), so **the worker needs `REDIS_URL`** (the same
+Redis as the web app); without it the worker logs a warning at start and the scripts follow at the web app's next
+start.
 
 **The mail server's sending ceiling.** Every authenticated sender is limited on the mail server to the `standard`
 tier's published numbers (messages per hour and per day, recipients per message), the platform's system accounts
@@ -252,6 +256,8 @@ throttles.
   `x:MtaInboundThrottle/get` and `x:MtaStageRcpt/get` for that key. Until then the check is skipped and logged.
 - Smoke check after deploy: a `new` mailbox's SMTP AUTH on 587 answers `550 5.7.1`; the two throttles exist with the
   standard numbers.
+- The worker container gets `REDIS_URL` (the tier-change signal to the web app; no warning `no REDIS_URL` in its start
+  log).
 
 **Deploy note for the first release with tiers:** at deploy every mailbox of a `new` account becomes SMTP-held the next
 time its `mailbox.ensure` runs (run `job:mailbox-backfill` to apply it to all at once); accounts the 0044 backfill
