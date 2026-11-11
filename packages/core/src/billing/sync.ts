@@ -8,10 +8,12 @@
  * A provider outage never restricts anyone: a retryable provider error throws before anything is written, so the queue
  * retries with backoff and our state stays as it was. Nothing here deletes mail (rule 26).
  */
+import { BILLING } from "@anhourmail/shared/plans";
+
 import { onPlatformDomain } from "../mailboxes/platform";
 import { recordSystemChanges, type SystemChange } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
-import { promoteForPayment } from "../trust/service";
+import { promoteForPayment, revokeBillingPromotion } from "../trust/service";
 
 import type { AccountBilling, BillingEvent, PlanHold } from "./entity";
 import { computeHolds, type HoldResources } from "./holds";
@@ -21,6 +23,7 @@ import {
   type Derivation,
   deriveBilling,
   effectivePlan,
+  isPaidState,
   type PendingBillingEvent,
 } from "./lifecycle";
 import {
@@ -244,10 +247,44 @@ export async function applyDerivation(
       }
     }
   }
-  // A paying account sends as standard at once (ADR-0034 §2): `new` → `standard`, source billing, its mailboxes queued.
-  // Sticky (a later downgrade keeps it); a staff-set, restricted or once-restricted account is left alone.
-  const promoted = d.next.state === "active" ? await promoteForPayment(deps, r, accountId) : [];
-  return [...auditOf(accountId, d.next, d.changes, held), ...revoked, ...promoted];
+  const tier = await tierAfterBilling(deps, r, accountId, d);
+  return [...auditOf(accountId, d.next, d.changes, held), ...revoked, ...tier];
+}
+
+/**
+ * What a derivation does to the trust tier (ADR-0034 §2; security review of slices 1–11, finding 2), in the same unit
+ * of work under the account lock:
+ * - **A dispute** (open or lost, `disputedAt` set): the account is marked restricted (`last_restricted_at`, from when it
+ *   was first disputed, so nothing promotes it automatically again, whatever the dispute's outcome) and billing's
+ *   promotion is taken back.
+ * - **A refund** made at the provider (`charge.refunded`): billing's promotion is taken back. The console's refunds
+ *   take it back themselves.
+ * - **The paid plan ending** (a paid state to `free` or `lapsed`: a cancel, a lapse, a comp or grant ending) within the
+ *   refund window of the promotion: taken back. A promotion older than that is kept (it stays when the plan ends).
+ * - **Entering `active`, or a new payment while `active`:** a `new` account becomes `standard` (`promoteForPayment`).
+ *   Only then, so a refund that leaves the subscription live isn't undone by the next sync.
+ * Staff-set, automatic and restricted tiers are never touched either way.
+ */
+async function tierAfterBilling(
+  deps: Deps,
+  r: Repositories,
+  accountId: string,
+  d: Derivation,
+): Promise<SystemChange[]> {
+  if (d.next.disputedAt !== null) {
+    await r.trust.markRestricted(accountId, d.next.disputedAt);
+    return revokeBillingPromotion(deps, r, accountId, "dispute");
+  }
+  if (d.changes.some((c) => c.kind === "refunded")) return revokeBillingPromotion(deps, r, accountId, "refund");
+  if (d.changes.some((c) => c.kind === "state_changed" && isPaidState(c.from) && !isPaidState(c.to))) {
+    return revokeBillingPromotion(deps, r, accountId, "plan_ended", {
+      withinMs: BILLING.refundWindowDays * DAY_MS,
+    });
+  }
+  const paid = d.changes.some(
+    (c) => (c.kind === "state_changed" && c.to === "active") || c.kind === "payment_succeeded",
+  );
+  return d.next.state === "active" && paid ? promoteForPayment(deps, r, accountId) : [];
 }
 
 /**

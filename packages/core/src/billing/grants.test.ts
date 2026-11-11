@@ -129,8 +129,21 @@ describe("grantStaffPlan / endStaffPlan", () => {
     expect(w.s.mailboxes).toHaveLength(2); // nothing deleted
     expect(w.inAccount("billing.staff_plan_revoked")[0]?.meta).toMatchObject({ source: "staff", toState: "lapsed" });
     expect(w.inAccount("billing.plan_changed").at(-1)?.meta).toMatchObject({ fromPlan: "supporter", toPlan: "free" });
-    // Ending the grant keeps the promotion (sticky).
-    expect((await w.d.uow.run((r) => r.trust.get(ACCOUNT_A)))?.tier).toBe("standard");
+    // Ended inside the refund window of the promotion: the promotion goes too (finding 2 of the slices 1–11 review),
+    // recorded with the staff member's request like the rest of the grant's effects.
+    expect(await w.d.uow.run((r) => r.trust.get(ACCOUNT_A))).toMatchObject({ tier: "new", source: "default" });
+    expect(w.inAccount("trust.tier_changed").at(-1)).toMatchObject({
+      result: "success",
+      meta: { fromTier: "standard", toTier: "new", source: "default", cause: "plan_ended" },
+    });
+  });
+
+  it("a grant that ran past the refund window keeps its promotion when staff end it", async () => {
+    const w = world();
+    await grantStaffPlan(w.d, billingStaff, ACCOUNT_A, { plan: "plus" }, SESSION, req);
+    w.clock.set(new Date(w.clock.now().getTime() + 15 * DAY));
+    await endStaffPlan(w.d, billingStaff, ACCOUNT_A, SESSION, req);
+    expect(await w.d.uow.run((r) => r.trust.get(ACCOUNT_A))).toMatchObject({ tier: "standard", source: "billing" });
   });
 
   it("a grant on a lapsed account lifts every hold", async () => {

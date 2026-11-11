@@ -216,10 +216,122 @@ describe("billing.sync", () => {
     const sub = await w.provider.getSubscription(w.customerId);
     await w.provider.cancel({ subscriptionId: sub?.subscriptionId ?? "", when: "period_end", intentId: randomUUID() });
     await w.provider.advanceClock(366);
+    w.clock.set(new Date(w.clock.now().getTime() + 366 * DAY));
     await w.deliver();
     await syncAccountBilling(w.d, w.provider, w.accountId);
     expect((await w.billing())?.state).toBe("lapsed");
+    // A plan that ran past the refund window keeps its promotion when it ends.
     expect((await w.d.uow.run((r) => r.trust.get(w.accountId)))?.tier).toBe("standard");
+  });
+
+  describe("billing's promotion taken back (finding 2 of the slices 1–11 review)", () => {
+    const paid = async () => {
+      const w = await world();
+      await w.subscribe();
+      await w.deliver();
+      await syncAccountBilling(w.d, w.provider, w.accountId);
+      expect(await w.d.uow.run((r) => r.trust.get(w.accountId))).toMatchObject({ tier: "standard", source: "billing" });
+      w.d.uow.state.jobs = [];
+      return w;
+    };
+    const tierOf = (w: Awaited<ReturnType<typeof world>>) => w.d.uow.run((r) => r.trust.get(w.accountId));
+    const tierEntries = (w: Awaited<ReturnType<typeof world>>) =>
+      w.d.uow.state.audit.filter((e) => e.scope === `account:${w.accountId}` && e.action === "trust.tier_changed");
+
+    it("pay → standard → the plan ends inside the refund window → new, audited by the sync, mailboxes queued", async () => {
+      const w = await paid();
+      const sub = await w.provider.getSubscription(w.customerId);
+      await w.provider.cancel({ subscriptionId: sub?.subscriptionId ?? "", when: "now", intentId: randomUUID() });
+      w.clock.set(new Date(w.clock.now().getTime() + 13 * DAY));
+      await w.deliver();
+      await syncAccountBilling(w.d, w.provider, w.accountId);
+      expect((await w.billing())?.state).not.toBe("active");
+      expect(await tierOf(w)).toMatchObject({ tier: "new", source: "default", lastRestrictedAt: null });
+      const entry = tierEntries(w).at(-1);
+      expect(entry?.meta).toEqual({
+        fromTier: "standard",
+        toTier: "new",
+        source: "default",
+        cause: "plan_ended",
+        mailboxesQueued: 2,
+      });
+      expect(entry?.actor).toMatchObject({ type: "system", email: "billing-sync" });
+      expect(w.d.uow.state.jobs.filter((j) => j.kind === "mailbox.ensure")).toHaveLength(2);
+      // Paying again promotes again.
+      await w.subscribe();
+      await w.deliver();
+      await syncAccountBilling(w.d, w.provider, w.accountId);
+      expect(await tierOf(w)).toMatchObject({ tier: "standard", source: "billing" });
+    });
+
+    it("a refund at the provider while the subscription stays live → new, and the next syncs don't promote it", async () => {
+      const w = await paid();
+      await w.provider.refundLatest(w.customerId);
+      await w.deliver();
+      await syncAccountBilling(w.d, w.provider, w.accountId);
+      expect((await w.billing())?.state).toBe("active");
+      expect(await tierOf(w)).toMatchObject({ tier: "new", source: "default" });
+      expect(tierEntries(w).at(-1)?.meta).toMatchObject({ toTier: "new", cause: "refund" });
+      // Nothing new paid: later syncs leave it new.
+      await syncAccountBilling(w.d, w.provider, w.accountId);
+      await syncAccountBilling(w.d, w.provider, w.accountId);
+      expect((await tierOf(w))?.tier).toBe("new");
+    });
+
+    it("stolen card: a dispute → new and marked; once the dispute is won or the plan lapses, never promoted again", async () => {
+      for (const after of ["won", "lapse"] as const) {
+        const w = await paid();
+        await w.provider.openDispute(w.customerId);
+        await w.deliver();
+        await syncAccountBilling(w.d, w.provider, w.accountId);
+        expect((await w.billing())?.state).toBe("restricted");
+        const marked = await tierOf(w);
+        expect(marked).toMatchObject({ tier: "new", source: "default" });
+        expect(marked?.lastRestrictedAt).toBeInstanceOf(Date);
+        expect(tierEntries(w).at(-1)?.meta).toMatchObject({ toTier: "new", cause: "dispute" });
+        if (after === "won") {
+          await w.provider.closeDispute(w.customerId, "won");
+        } else {
+          const sub = await w.provider.getSubscription(w.customerId);
+          await w.provider.cancel({ subscriptionId: sub?.subscriptionId ?? "", when: "now", intentId: randomUUID() });
+        }
+        w.clock.set(new Date(w.clock.now().getTime() + 30 * DAY));
+        await w.deliver();
+        await syncAccountBilling(w.d, w.provider, w.accountId);
+        expect(after === "won" ? ["active"] : ["free", "lapsed"]).toContain((await w.billing())?.state);
+        expect((await tierOf(w))?.tier).toBe("new");
+        // The automatic job never picks it either.
+        const candidates = await w.d.uow.run((r) =>
+          r.trust.promotionCandidates({
+            createdBefore: w.clock.now(),
+            heldSince: new Date(0),
+            maxHeld: 100,
+            limit: 10,
+          }),
+        );
+        expect(candidates.map((c) => c.accountId)).not.toContain(w.accountId);
+      }
+    });
+
+    it("a dispute on an account staff set to standard marks it but leaves the staff tier alone", async () => {
+      const w = await paid();
+      await w.d.uow.run((r) =>
+        r.trust.setTier(w.accountId, {
+          tier: "standard",
+          since: w.clock.now(),
+          source: "staff",
+          reason: null,
+          note: null,
+          setBy: "ga",
+        }),
+      );
+      await w.provider.openDispute(w.customerId);
+      await w.deliver();
+      await syncAccountBilling(w.d, w.provider, w.accountId);
+      const t = await tierOf(w);
+      expect(t).toMatchObject({ tier: "standard", source: "staff" });
+      expect(t?.lastRestrictedAt).toBeInstanceOf(Date);
+    });
   });
 
   it("past due → retries exhausted → restricted: every mailbox's access is re-applied; paying lifts it", async () => {
