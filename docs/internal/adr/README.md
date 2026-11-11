@@ -37,3 +37,4 @@ One decision per file, numbered, never rewritten. A later ADR supersedes an earl
 | [0031](0031-sign-up-proof-of-work.md)                        | Sign-up proof-of-work and sign-up limits instead of SMS                        | Accepted (built 2026-11-05)                       |
 | [0032](0032-webmail-settings-part-2.md)                      | Webmail settings part 2: account-wide safe senders, mail rules, templates      | Accepted (built 2026-11-05)                       |
 | [0033](0033-disposable-email-addresses.md)                   | Refuse disposable email addresses (sign-up, invites, forwarding)               | Accepted (built 2026-11-06)                       |
+| [0034](0034-trust-tiers-stored-and-enforced.md)              | Trust tiers on the customer account, enforced in the BFF and on Stalwart       | Accepted (building, 2026-11-11)                   |
