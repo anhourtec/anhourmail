@@ -106,7 +106,11 @@ export const PERMISSIONS = {
   "platform.invites.manage": { scope: "platform", description: "Send and resend invites" },
   "platform.mailflow.read": { scope: "platform", description: "Read mail-flow logs (metadata only)" },
   "platform.abuse.manage": { scope: "platform", description: "Work the abuse queue, restrict, suspend" },
-  "platform.trust.manage": { scope: "platform", description: "Change trust tiers and sending limits", critical: true },
+  "platform.trust.manage": {
+    scope: "platform",
+    description: "Change an account's trust tier and restrict or lift a mailbox's sending",
+    critical: true,
+  },
   "platform.billing.manage": { scope: "platform", description: "Plans, refunds, subscription state", critical: true },
   "platform.audit.read": { scope: "platform", description: "Read the platform audit log" },
   "platform.audit.full_ip": {

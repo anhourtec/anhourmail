@@ -196,6 +196,16 @@ describe("permission matrix invariants", () => {
     ]);
   });
 
+  it("trust tier changes are for Global and Trust & Safety Administrators only (critical, ADR-0034)", () => {
+    expect(PLATFORM_ROLES.filter((r) => platformRoleCan(r, "platform.trust.manage"))).toEqual([
+      "global_admin",
+      "trust_safety_admin",
+    ]);
+    expect(isCritical("platform.trust.manage")).toBe(true);
+    // The staff read of a tier is every staff role that reads accounts; no account role holds either.
+    expect(PLATFORM_ROLES.filter((r) => platformRoleCan(r, "platform.accounts.read"))).not.toContain("reports_reader");
+  });
+
   it("full IPs in the platform audit are the Global Administrator's only (critical)", () => {
     expect(PLATFORM_ROLES.filter((r) => platformRoleCan(r, "platform.audit.full_ip"))).toEqual(["global_admin"]);
     expect(platformRoleCan("reports_reader", "platform.audit.read")).toBe(true);
