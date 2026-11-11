@@ -19,9 +19,9 @@ describeAdapterContract("postgres", async () => {
   return {
     uow: new PgUnitOfWork(db),
     cleanup: () => pool.end(),
-    createUser: async (email) => {
+    createUser: async (email, opts) => {
       const id = randomUUID();
-      await db.insert(schema.authUser).values({ id, name: email, email, emailVerified: true });
+      await db.insert(schema.authUser).values({ id, name: email, email, emailVerified: opts?.emailVerified ?? true });
       return id;
     },
     seedMail: async ({ domain, address, alias, quotaBytes }) => {

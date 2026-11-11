@@ -14,12 +14,14 @@ import type { DelegationRight } from "@anhourmail/shared/delegation";
 
 import { describeBillingContract } from "./billing";
 import { describeMailImportContract } from "./mail-imports";
+import { describeTrustContract } from "./trust";
 
 /** `createUser` makes a console user the adapter can reference (memberships need one in Postgres). */
 export type AdapterFactory = () => Promise<{
   uow: UnitOfWork;
   cleanup: () => Promise<void>;
-  createUser: (email: string) => Promise<string>;
+  /** `emailVerified` false: the person hasn't confirmed their sign-in email yet (default: confirmed). */
+  createUser: (email: string, opts?: { emailVerified?: boolean }) => Promise<string>;
   /** Seeds an active domain, an active mailbox and one alias; returns their ids. */
   seedMail: (input: { domain: string; address: string; alias: string; quotaBytes: number }) => Promise<{
     domainId: string;
@@ -2509,4 +2511,5 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
   });
   describeBillingContract(name, factory);
   describeMailImportContract(name, factory);
+  describeTrustContract(name, factory);
 }

@@ -9,8 +9,9 @@ describeAdapterContract("memory", async () => {
   return {
     uow,
     cleanup: async () => undefined,
-    createUser: async (email) => {
+    createUser: async (email, opts) => {
       uow.state.userEmails[`user-${email}`] = email;
+      if (opts?.emailVerified === false) uow.state.unverifiedEmails.push(`user-${email}`);
       return `user-${email}`;
     },
     seedMail: async ({ domain, address, alias, quotaBytes }) => {
