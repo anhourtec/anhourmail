@@ -30,7 +30,7 @@ export type ImporterConfig = {
   maxMessagesPerSecond: number;
   maxBytesPerSecond: number;
   maxMessageBytes: number;
-  /** Message caps per mailbox over 30 days by the starter's trust tier (`IMPORT_MESSAGE_CAPS`); unlisted: none. */
+  /** Message caps per mailbox over 30 days by its effective trust tier (`IMPORT_MESSAGE_CAPS`); unlisted: none. */
   messageCaps: ReadonlyMap<string, number>;
   idleMs: number;
   heartbeat: string;
