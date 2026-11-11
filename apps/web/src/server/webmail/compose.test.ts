@@ -606,7 +606,7 @@ describe("compose and send through the BFF", () => {
       standing: async (address) => {
         asked.push(address);
         if (block instanceof Error) throw block;
-        return { tier: "standard", billingBlock: block };
+        return { tier: "standard", billingBlock: block, heldOnServer: false };
       },
     });
     const { sessionId } = await t.svc.signIn("a@x.test", "right");
@@ -926,6 +926,23 @@ describe("sending limits and hand-made drafts", () => {
     expect(over).toBeLessThanOrEqual(MAX_RECIPIENTS);
     const big = await t.svc.saveDraft(sessionId, draft({ to: to(over, "z") }));
     await expect(t.svc.send(sessionId, big.id, "i1")).rejects.toThrow(/at most 50/);
+  });
+
+  it("standard but not yet applied on the mail server: outside recipients are held until its ensure has run", async () => {
+    const trust = fixedTrust("standard", ["x.test"], true);
+    const t = setup(undefined, undefined, undefined, undefined, trust);
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const out = await t.svc.saveDraft(sessionId, draft({ to: [{ email: "friend@outside.example" }] }));
+    await expect(t.svc.send(sessionId, out.id, "i1")).rejects.toMatchObject({ reason: "held" });
+    expect(trust.recorded).toEqual([{ address: "a@x.test", externalRecipients: 1 }]);
+    // Hosted recipients go, with the standard tier's numbers.
+    const hosted = await t.svc.saveDraft(
+      sessionId,
+      draft({ to: to(TRUST_TIERS.new.limits.recipientsPerMessage + 1, "s") }),
+    );
+    await expect(t.svc.send(sessionId, hosted.id, "i1")).resolves.toMatchObject({
+      submissionId: expect.any(String) as unknown,
+    });
   });
 
   it("new: a send with any recipient outside is held (403 sending_held), recorded with a count, nothing charged", async () => {

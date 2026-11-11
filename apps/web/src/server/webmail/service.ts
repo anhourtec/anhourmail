@@ -2417,19 +2417,14 @@ export class WebmailService {
     // The grant is confirmed (a mailbox they can't use is a 404 above, never this): billing or the trust tier may stop
     // the mailbox sent from, or the person's own (the Sender), before anything is made or audited as sent. Limits are
     // the stricter of the two tiers (ADR-0026 §6): neither loosens the other; held when either is held.
-    const theirTier = await this.#standing(want);
-    const myTier = await this.#standing(via);
-    if (theirTier === "restricted" || myTier === "restricted") throw new WebmailSendingRefusedError("paused");
-    const limits = delegatedLimits(theirTier, myTier);
+    const theirs = await this.#standing(want);
+    const mine = await this.#standing(via);
+    if (theirs.tier === "restricted" || mine.tier === "restricted") throw new WebmailSendingRefusedError("paused");
+    const limits = delegatedLimits(theirs.tier, mine.tier);
     if (check.rcptTo.length > limits.recipientsPerMessage) {
       throw new WebmailRefusedError(`A message can go to at most ${String(limits.recipientsPerMessage)} people.`);
     }
-    await this.#holdCheck(
-      check.rcptTo,
-      [...(externalHeld(theirTier) ? [want] : []), ...(externalHeld(myTier) ? [via] : [])],
-      via,
-      req,
-    );
+    await this.#holdCheck(check.rcptTo, [...(theirs.held ? [want] : []), ...(mine.held ? [via] : [])], via, req);
     const who = { mailboxId: d.mailboxId, granteeUserId: d.granteeUserId, via: d.via };
     const refused = async (): Promise<never> => {
       await this.#dropDelegated(sessionId, new Set([entry.username]));
@@ -3140,13 +3135,16 @@ export class WebmailService {
   }
 
   /**
-   * The mailbox's effective tier for a send, read now: refuses first (403 `billing_restricted`) when billing stops it.
-   * An address the control plane doesn't hold reads `restricted` (never looser than what we know).
+   * The mailbox's effective tier for a send, read now, and whether outside recipients are held: refuses first (403
+   * `billing_restricted`) when billing stops it. Held for a `new` tier, and also while the mail server may still hold
+   * the mailbox after its tier was loosened (`heldOnServer`: its `mailbox.ensure` hasn't applied yet). An address the
+   * control plane doesn't hold reads `restricted` (never looser than what we know).
    */
-  async #standing(address: string): Promise<TrustTier> {
+  async #standing(address: string): Promise<{ tier: TrustTier; held: boolean }> {
     const st = await this.#readStanding(address);
     if (st?.billingBlock) throw new WebmailBillingRestrictedError(st.billingBlock);
-    return st?.tier ?? "restricted";
+    const tier = st?.tier ?? "restricted";
+    return { tier, held: externalHeld(tier) || st?.heldOnServer === true };
   }
 
   /**
@@ -3227,7 +3225,7 @@ export class WebmailService {
     const s = await this.#pin(sessionId, shown);
     const account = s.accountId;
     // Read now, uncached (ADR-0034 §3): billing's block, then the tier — restricted sends nothing.
-    const tier = await this.#standing(s.username);
+    const { tier, held } = await this.#standing(s.username);
     if (tier === "restricted") throw new WebmailSendingRefusedError("paused");
     const limits = tierLimits(tier);
     const chosen = await this.#d.holdSeconds(s.username).catch(() => UNDO_SECONDS);
@@ -3261,7 +3259,7 @@ export class WebmailService {
     const check = sendCheck(draft, identity, drafts, limits);
     if (!check.ok) throw new WebmailRefusedError(check.message);
     // New accounts send only to addresses we host: refused before anything is charged.
-    if (externalHeld(tier)) await this.#holdCheck(check.rcptTo, [s.username], s.username, req);
+    if (held) await this.#holdCheck(check.rcptTo, [s.username], s.username, req);
 
     // Published trust-tier limits, per hour and per day, per mailbox and per session, one unit per recipient.
     // A quota store failure refuses (fail closed, rule 27).
