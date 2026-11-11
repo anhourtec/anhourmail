@@ -5,6 +5,11 @@ import { createHash } from "node:crypto";
 
 import { mailboxTier, outsideAddresses } from "@anhourmail/core/trust";
 import { applySendingPause, type ManagedScriptStore, pauseModeFor, redirectTargets } from "@anhourmail/core/webmail";
+import {
+  type AccountSignals,
+  redisAccountSignals,
+  SENDING_PAUSE_SIGNALS_KEY,
+} from "@anhourmail/server/account-signals";
 import { log } from "@anhourmail/server/log";
 import { redis } from "@anhourmail/server/redis";
 import type { TrustTier } from "@anhourmail/shared/sending";
@@ -18,8 +23,10 @@ import { bumpRulesVersion } from "./safe-senders";
  * automatic replies under a tier"): the mail server's send block doesn't stop a script's `redirect` or `vacation`, so a
  * `restricted` mailbox's script has both paused and a `new` one's redirects outside are paused (`sending-pause.ts`);
  * any other tier gets them back exactly as set. Only the web app holds the key that writes Sieve (ADR-0020), so this
- * runs here: in the background after a staff tier change or mailbox restriction (`scheduleSendingPause`), and once
- * after start-up for every mailbox (`applyAllSendingPauses`), which also catches a promotion the worker made. A
+ * runs here: in the background after a staff tier change or mailbox restriction, a refund or a plan change made in the
+ * console (`scheduleSendingPause`), after a billing sync in the worker moved a tier (its signal, polled by
+ * `startSendingPauseSignals`), and once after start-up for every mailbox (`applyAllSendingPauses`), which also catches
+ * a promotion by the hourly job and any signal lost. A
  * webmail save writes the pause itself (`saveMailRules`). Each write is a compare-and-swap on the Sieve state read; a
  * save that wins is checked again on the next pass. Counts only in logs.
  */
@@ -169,6 +176,49 @@ export function scheduleSendingPause(accountId: string): void {
       running.delete(accountId);
     }
   })();
+}
+
+const SIGNAL_POLL_MS = 15_000;
+const SIGNAL_BATCH = 100;
+const isId = (v: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+
+/**
+ * Takes a batch of the accounts the worker signalled (a billing sync moved their tier: a promotion, or a refund, a
+ * dispute or an early plan end taking it back; `@anhourmail/server/account-signals`) and schedules each one's pass.
+ * Anything that isn't an account id is dropped. Returns how many were scheduled.
+ */
+export async function takeSendingPauseSignals(
+  signals: AccountSignals,
+  schedule: (accountId: string) => void = scheduleSendingPause,
+): Promise<number> {
+  const ids = (await signals.take(SIGNAL_BATCH)).filter(isId);
+  for (const id of ids) schedule(id);
+  return ids.length;
+}
+
+/**
+ * At web-app start-up: polls the worker's signals every 15 s (unref'd, so it never keeps the process alive). Each
+ * signal goes to one web process (`SPOP`). Redis down: nothing is taken, and the start-up pass catches up.
+ */
+export function startSendingPauseSignals(): void {
+  let busy = false;
+  setInterval(() => {
+    if (busy) return;
+    busy = true;
+    void (async () => {
+      try {
+        const n = await takeSendingPauseSignals(redisAccountSignals(redis(), SENDING_PAUSE_SIGNALS_KEY));
+        if (n > 0) log.info("sending pause signals taken", { component: "webmail-sending-pause", accounts: n });
+      } catch (err) {
+        log.warn("sending pause signals not taken", {
+          component: "webmail-sending-pause",
+          errorName: err instanceof Error ? err.name : "unknown",
+        });
+      } finally {
+        busy = false;
+      }
+    })();
+  }, SIGNAL_POLL_MS).unref();
 }
 
 const DONE_KEY = "am:webmail:sending-pause:done:";

@@ -2,8 +2,9 @@
 import { describe, expect, it } from "vitest";
 
 import { type ManagedScriptStore, outboundCommands } from "@anhourmail/core/webmail";
+import { memoryAccountSignals } from "@anhourmail/server/account-signals";
 
-import { applyPauseToMailboxes, type PauseMailbox } from "./sending-pause-apply";
+import { applyPauseToMailboxes, type PauseMailbox, takeSendingPauseSignals } from "./sending-pause-apply";
 import { buildScript, DEFAULT_RULES, type MailRules } from "./sieve";
 
 const ctx = { identities: ["me@a.test"], contacts: [], authservIds: [], mailboxDomain: "a.test" };
@@ -110,5 +111,19 @@ describe("applying the trust tier to managed scripts (ADR-0034)", () => {
     const out = await applyPauseToMailboxes([box("n", "new")], t.s, () => Promise.reject(new Error("db down")));
     expect(out.failed).toBe(1);
     expect(t.writes).toEqual([]);
+  });
+});
+
+describe("the worker's signals (a billing sync moved a tier)", () => {
+  it("schedules each signalled account once and drops anything that isn't an account id", async () => {
+    const signals = memoryAccountSignals();
+    const a = "11111111-1111-4111-8111-111111111111";
+    const b = "22222222-2222-4222-8222-222222222222";
+    for (const id of [a, b, a, "not-an-id", "am:other"]) await signals.signal(id);
+    const scheduled: string[] = [];
+    expect(await takeSendingPauseSignals(signals, (id) => scheduled.push(id))).toBe(2);
+    expect(scheduled.sort()).toEqual([a, b]);
+    expect(signals.pending()).toEqual([]);
+    expect(await takeSendingPauseSignals(signals, (id) => scheduled.push(id))).toBe(0);
   });
 });
