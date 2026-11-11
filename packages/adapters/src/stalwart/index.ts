@@ -261,8 +261,9 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
         // a random secret nobody knows.
         password: initialPasswordHash ?? (await hashPassword(randomBytes(32).toString("base64url"))),
         quotaBytes,
-        // Suspension disables sign-in, sending and delivery; credentials and mail are kept (SUSPENDED_PERMISSIONS). Billing's
-        // send-blocked state keeps sign-in, reading and delivery (SEND_BLOCKED_PERMISSIONS); suspension wins.
+        // Suspension disables sign-in, sending and delivery; credentials and mail are kept (SUSPENDED_PERMISSIONS). The
+        // send-blocked state keeps sign-in, reading and delivery (SEND_BLOCKED_PERMISSIONS), and the SMTP-only hold of a
+        // new-tier mailbox keeps webmail sending too (SMTP_BLOCKED_PERMISSIONS); suspension wins.
         suspended,
         access: access ?? "active",
         ...(description === undefined ? {} : { description }),

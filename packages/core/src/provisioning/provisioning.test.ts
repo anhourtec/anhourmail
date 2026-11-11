@@ -117,6 +117,17 @@ function fakeMailServer(opts: { failTimes?: number; rsaLate?: number } = {}): Ma
   };
 }
 
+const trustRow = (accountId: string, tier: "new" | "standard" | "trusted" | "restricted", at: Date) => ({
+  accountId,
+  tier,
+  since: at,
+  source: "staff" as const,
+  reason: null,
+  note: null,
+  setBy: null,
+  lastRestrictedAt: null,
+});
+
 const ensureArgs = (address: string, quotaBytes: number) => ({
   externalId: null,
   initialPasswordHash: null,
@@ -1516,6 +1527,8 @@ describe("billing access on the mail server (ADR-0029 §5–6)", () => {
   it("a restricted account's mailbox is send-blocked; an active one isn't", async () => {
     const { d, clock } = setup();
     billingRow(d, "restricted", clock.now());
+    // A paid account is promoted to standard (ADR-0034 §2), so only billing limits it here.
+    d.uow.state.trust.push(trustRow("a1", "standard", clock.now()));
     const { mail, access } = recording();
     await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
     await runNextJob(d, mail);
@@ -1571,5 +1584,109 @@ describe("billing access on the mail server (ADR-0029 §5–6)", () => {
     await runNextJob(d, mail);
     expect(mail.catchAll.get("example.test")).toBeNull();
     expect(mail.domains).toEqual(["example.test"]);
+  });
+});
+
+describe("trust tier on the mail server (ADR-0034 §4)", () => {
+  /** The fake mail server, recording the suspension and access each ensure asked for, by address. */
+  function recording() {
+    const mail = fakeMailServer();
+    const calls: { address: string; suspended: boolean; access: string | undefined }[] = [];
+    const ensure = mail.ensureMailbox.bind(mail);
+    mail.ensureMailbox = async (input) => {
+      calls.push({ address: input.address, suspended: input.suspended, access: input.access });
+      return ensure(input);
+    };
+    return { mail, calls };
+  }
+  async function ensureOnce(d: ReturnType<typeof setup>["d"], mail: MailServer, subjectId = "m1") {
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId });
+    await runNextJob(d, mail);
+  }
+  function world(tier?: "new" | "standard" | "trusted" | "restricted") {
+    const t = setup();
+    t.d.uow.state.accounts.push({ id: "a1", name: "Acme", plan: "free", createdAt: t.clock.now() });
+    if (tier) t.d.uow.state.trust.push(trustRow("a1", tier, t.clock.now()));
+    return t;
+  }
+
+  it.each([
+    [undefined, "smtp_blocked"],
+    ["new", "smtp_blocked"],
+    ["standard", "active"],
+    ["trusted", "active"],
+    ["restricted", "send_blocked"],
+  ] as const)("account tier %s → %s", async (tier, expected) => {
+    const { d } = world(tier);
+    const { mail, calls } = recording();
+    await ensureOnce(d, mail);
+    expect(calls).toEqual([{ address: "owner@example.test", suspended: false, access: expected }]);
+  });
+
+  it("a mailbox restriction send-blocks that mailbox only; lifting it gives the account's access back", async () => {
+    const { d, clock } = world("standard");
+    d.uow.state.mailboxes.push({
+      ...d.uow.state.mailboxes[0]!,
+      id: "m2",
+      address: "other@example.test",
+    });
+    d.uow.state.mailboxRestrictions.push({
+      mailboxId: "m1",
+      at: clock.now(),
+      reason: "spam",
+      note: null,
+      byUserId: null,
+    });
+    const { mail, calls } = recording();
+    await ensureOnce(d, mail, "m1");
+    await ensureOnce(d, mail, "m2");
+    expect(calls.map((c) => c.access)).toEqual(["send_blocked", "active"]);
+    d.uow.state.mailboxRestrictions = [];
+    await ensureOnce(d, mail, "m1");
+    expect(calls.map((c) => c.access)).toEqual(["send_blocked", "active", "active"]);
+  });
+
+  it("another account's tier and restrictions never limit this account's mailbox", async () => {
+    const { d, clock } = world("standard");
+    d.uow.state.accounts.push({ id: "a2", name: "Other", plan: "free", createdAt: clock.now() });
+    d.uow.state.trust.push(trustRow("a2", "restricted", clock.now()));
+    d.uow.state.mailboxes.push({ ...d.uow.state.mailboxes[0]!, id: "m9", accountId: "a2", address: "x@other.test" });
+    d.uow.state.mailboxRestrictions.push({
+      mailboxId: "m9",
+      at: clock.now(),
+      reason: "spam",
+      note: null,
+      byUserId: null,
+    });
+    const { mail, calls } = recording();
+    await ensureOnce(d, mail);
+    expect(calls.map((c) => c.access)).toEqual(["active"]);
+  });
+
+  it("billing beats a standard tier, and a new tier never loosens a billing block", async () => {
+    const { d, clock } = world("standard");
+    d.uow.state.billing.push({ ...defaultBilling("a1", "plus", clock.now()), state: "restricted" });
+    const { mail, calls } = recording();
+    await ensureOnce(d, mail);
+    d.uow.state.trust = [trustRow("a1", "new", clock.now())];
+    await ensureOnce(d, mail);
+    expect(calls.map((c) => c.access)).toEqual(["send_blocked", "send_blocked"]);
+  });
+
+  it("a suspended mailbox is sent as suspended whatever its tier", async () => {
+    const { d } = world("standard");
+    d.uow.state.mailboxes[0]!.status = "suspended";
+    const { mail, calls } = recording();
+    await ensureOnce(d, mail);
+    expect(calls[0]).toMatchObject({ suspended: true });
+  });
+
+  it("reads the tier as it stands when the job runs, not when it was queued", async () => {
+    const { d, clock } = world("new");
+    const { mail, calls } = recording();
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    d.uow.state.trust = [trustRow("a1", "standard", clock.now())];
+    await runNextJob(d, mail);
+    expect(calls.map((c) => c.access)).toEqual(["active"]);
   });
 });

@@ -112,10 +112,12 @@ export type MailServer = {
      */
     suspended: boolean;
     /**
-     * What billing allows while not suspended (ADR-0029 §5–6): `send_blocked` keeps sign-in, reading and delivery but
-     * refuses SMTP submission and JMAP sending; `receive_blocked` also stops delivery. Omitted = `active`.
+     * What billing and the trust tier allow while not suspended (ADR-0029 §5–6, ADR-0034 §4): `smtp_blocked` refuses
+     * SMTP submission from mail apps only (JMAP sending, sign-in, reading and delivery stay); `send_blocked` keeps
+     * sign-in, reading and delivery but refuses SMTP submission and JMAP sending; `receive_blocked` also stops
+     * delivery. Omitted = `active`.
      */
-    access?: "active" | "send_blocked" | "receive_blocked";
+    access?: "active" | "smtp_blocked" | "send_blocked" | "receive_blocked";
     aliases: { address: string; enabled: boolean; description: string | null }[];
     /** The account's description: the mailbox's display name (Stalwart seeds the sending identity's name from it). */
     description?: string | null;

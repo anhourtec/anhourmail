@@ -9,6 +9,7 @@ import type { ImportTrainingSamples } from "../imports/ports";
 import { mailboxNameOf } from "../people/names";
 import { mutation } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
+import { mailboxSendAccess } from "../trust/access";
 import type { MailServer } from "./ports";
 import { backoffMs, type ClaimedJob, type JobKind, MAX_ATTEMPTS } from "./types";
 
@@ -240,7 +241,11 @@ async function apply(deps: Deps, mail: MailServer, job: ClaimedJob, handlers: Jo
     // Billing as it stands (ADR-0029 §5–6): the account's state and the plan holds on this mailbox and its aliases.
     const billingState = (await r.billing.get(state.accountId))?.state ?? "free";
     const holds = await r.billing.holds(state.accountId);
-    return { ...state, senderName: sender, billingState, holds };
+    // The trust tier as it stands (ADR-0034 §4): the account's, and staff's sending restriction of this mailbox. An
+    // account that can't be read takes the default tier (Postgres can't hold a mailbox without its account).
+    const accountTier = (await r.trust.get(state.accountId))?.tier ?? "new";
+    const mailboxRestricted = (await r.trust.mailbox(state.accountId, state.id))?.restriction != null;
+    return { ...state, senderName: sender, billingState, holds, accountTier, mailboxRestricted };
   });
   if (!mailbox) throw new Error("mailbox not found");
   const deleting = mailbox.status === "deleting";
@@ -261,20 +266,30 @@ async function apply(deps: Deps, mail: MailServer, job: ClaimedJob, handlers: Jo
   }
   const mailboxHold = mailbox.holds.find((h) => h.subjectType === "mailbox" && h.subjectId === mailbox.id) ?? null;
   const heldAliases = new Set(mailbox.holds.filter((h) => h.subjectType === "alias").map((h) => h.subjectId));
-  const billingAccess = billingMailboxAccess(mailbox.billingState, mailboxHold, deps.clock.now());
+  // Suspended and deleting mailboxes keep their mail but nobody can sign in, and their mail is refused.
+  const suspended = mailbox.status === "suspended" || deleting;
+  // The strictest of billing and the trust tier (ADR-0034 §4, `mailboxSendAccess`). A restricted account, a held
+  // mailbox or a restricted tier can't send (sign-in, reading and delivery stay); a `new` tier can't use SMTP
+  // submission from mail apps (the webmail keeps sending, and holds outside recipients itself). Receiving stays on past
+  // a held mailbox's window for now: the pinned mail server accepts mail for a receive-blocked account and then bounces
+  // it to the envelope sender, which for mail from outside is backscatter (rule 62; research/stalwart.md "Billing
+  // access states"); `mailboxSendAccess` applies that hold as send-blocked until held recipients are refused during the
+  // SMTP conversation. Suspension is passed on its own and wins on the mail server.
+  const sendAccess = mailboxSendAccess({
+    suspended: false,
+    billing: billingMailboxAccess(mailbox.billingState, mailboxHold, deps.clock.now()),
+    accountTier: mailbox.accountTier,
+    mailboxRestricted: mailbox.mailboxRestricted,
+  });
   const ensured = await mail.ensureMailbox({
     externalId: mailbox.stalwartId,
     // A new account gets the password chosen at creation; an existing one keeps its own (a reset has its own job).
     initialPasswordHash: creating ? mailbox.pendingPasswordHash : null,
     address: mailbox.address,
     quotaBytes: mailbox.quotaBytes,
-    // Suspended and deleting mailboxes keep their mail but nobody can sign in, and their mail is refused.
-    suspended: mailbox.status === "suspended" || deleting,
-    // A restricted account or a held mailbox can't send (sign-in, reading and delivery stay). Receiving stays on past a
-    // held mailbox's window for now: the pinned mail server accepts mail for a receive-blocked account and then bounces
-    // it to the envelope sender, which for mail from outside is backscatter (rule 62; research/stalwart.md "Billing
-    // access states"). It is applied once held recipients are refused during the SMTP conversation.
-    access: billingAccess === "receive_blocked" ? "send_blocked" : billingAccess,
+    suspended,
+    // Never `suspended` here (it isn't an input above); the narrowing keeps the port's type honest.
+    access: sendAccess === "suspended" ? "send_blocked" : sendAccess,
     // Stalwart names the identities it creates (first sign-in, a new alias) after it; existing ones are renamed by the
     // webmail on its next request (people/names.ts, ADR-0014 update 2026-10-31).
     description: mailbox.senderName,
