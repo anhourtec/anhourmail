@@ -27,6 +27,7 @@ import {
 import { domainAllowance, listDomains } from "@anhourmail/core/domains";
 import { listMailboxes, mailboxStoragePool } from "@anhourmail/core/mailboxes";
 import { type Availability, listPeople } from "@anhourmail/core/people";
+import { accountSending } from "@anhourmail/core/trust";
 import { MAX_MAILBOXES } from "@anhourmail/shared/plans";
 import { ROLE_LABELS } from "@anhourmail/shared/rbac";
 import { formatBytes, poolSummary, type StoragePool } from "@anhourmail/shared/storage";
@@ -40,6 +41,8 @@ import { StatusText, type Tone } from "@/components/console/status-text";
 import { ConsoleShell } from "@/components/console-shell";
 import { MailboxStatus } from "@/components/mailboxes/mailbox-status";
 import { UsageBar } from "@/components/mailboxes/storage-usage";
+import { NEW_ACCOUNTS_DOCS_PATH } from "@/components/sending/sending-copy";
+import { SendingCard } from "@/components/sending/sending-card";
 import { accountNames, requireUser } from "@/server/console-frame";
 import { container } from "@/server/container";
 import { env } from "@/server/env";
@@ -152,7 +155,7 @@ type Card = { id: string; icon: LucideIcon; title: string; text: string; href: s
 /** Everything the home page shows for one account, read through the services with the person's own permissions. */
 async function accountOverview(actor: UserActor, accountId: string) {
   const deps = container().deps;
-  const [mailboxes, pool, people, domains, allowance, aliases, audit] = await Promise.all([
+  const [mailboxes, pool, people, domains, allowance, aliases, audit, sending] = await Promise.all([
     can(actor, "mailbox.read", accountId) ? listMailboxes(deps, actor, accountId) : null,
     can(actor, "mailbox.read", accountId) ? mailboxStoragePool(deps, actor, accountId) : null,
     can(actor, "member.read", accountId) ? listPeople(deps, actor, accountId) : null,
@@ -160,11 +163,13 @@ async function accountOverview(actor: UserActor, accountId: string) {
     can(actor, "domain.read", accountId) ? domainAllowance(deps, actor, accountId) : null,
     can(actor, "alias.manage.own", accountId) ? listAliases(deps, actor, accountId) : null,
     can(actor, "audit.read", accountId) ? listAccountAudit(deps, actor, accountId, { limit: 6 }) : null,
+    // The account's sending tier and published limits (ADR-0034 §5): every account role but Member.
+    can(actor, "account.read", accountId) ? accountSending(deps, actor, accountId) : null,
   ]);
   // "Add a user" and "Invite someone": offered, shown disabled (full), or not at all — as in the sidebar.
   const actions = await peopleActions(actor, accountId);
   const suspended = actor.suspendedAccountIds?.includes(accountId) ?? false;
-  return { mailboxes, pool, people, domains, allowance, aliases, audit, actions, suspended };
+  return { mailboxes, pool, people, domains, allowance, aliases, audit, sending, actions, suspended };
 }
 
 type Overview = Awaited<ReturnType<typeof accountOverview>>;
@@ -537,6 +542,7 @@ export default async function ConsoleHome() {
   const platformAudit = can(actor, "platform.audit.read") ? await listPlatformAudit(deps, actor, { limit: 8 }) : null;
   const first = overviews[0];
   const freeDomain = platform().freeAddressDomain;
+  const newAccountsDocs = `${env().SITE_URL.replace(/\/$/, "")}${NEW_ACCOUNTS_DOCS_PATH}`;
   const cards = first ? recommendations(actor, first.accountId, first.o, freeDomain) : [];
   const base = current ? `/accounts/${current}` : "";
   const staff = actor.platformRoles.length > 0;
@@ -649,6 +655,9 @@ export default async function ConsoleHome() {
               </div>
               {o.mailboxes && o.pool && o.mailboxes.length > 0 && (
                 <AccountStorage pool={o.pool} count={o.mailboxes.length} />
+              )}
+              {o.sending && !o.suspended && (
+                <SendingCard accountId={accountId} sending={o.sending} docsHref={newAccountsDocs} />
               )}
               <AccountTabs actor={actor} accountId={accountId} o={o} />
             </div>

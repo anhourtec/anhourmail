@@ -3,7 +3,8 @@ import { Bone, ListSkeleton, SkeletonPage } from "@anhourmail/ui/skeletons";
 
 /**
  * Mirrors the console frame and the home page: the 48 px navy app bar (wordmark, centred search, avatar), the
- * left navigation (wide screens), then quick actions, the greeting, cards, the account's storage and the account tabs.
+ * left navigation (wide screens), then quick actions, the greeting, cards, the account's storage, its Sending card and
+ * the account tabs.
  */
 export default function Loading() {
   return (
@@ -42,6 +43,7 @@ export default function Loading() {
                 <Bone className="h-3.5 w-72 max-w-full" />
                 <Bone className="h-1.5 w-full rounded-full" />
               </div>
+              <Bone className="h-44 w-full max-w-2xl rounded-lg" />
               <div className="flex gap-5 border-b pb-2">
                 <Bone className="h-4 w-24" />
                 <Bone className="h-4 w-20" />
