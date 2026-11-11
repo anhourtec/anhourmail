@@ -80,6 +80,8 @@ const STATUS: Record<string, number> = {
   import_finished: 409,
   // A temporary-inbox address (ADR-0033) for sign-up, an invite or a forwarding target.
   disposable_email: 422,
+  // A new account's forward to an address we don't host, refused at set-up (ADR-0034 §3).
+  sending_held: 422,
 };
 
 export type RouteOptions = {
