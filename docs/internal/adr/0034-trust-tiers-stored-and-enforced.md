@@ -1,6 +1,6 @@
 # ADR-0034: Trust tiers stored on the customer account and enforced on every sending path
 
-**Status:** Accepted 2026-11-11 (building: slices 1–12 built; first Phase 6 slice)
+**Status:** Accepted 2026-11-11 (building: slices 1–13 built; first Phase 6 slice)
 
 ## Context
 
@@ -364,3 +364,21 @@ permission stops Sieve execution). So an account restricted by staff kept forwar
   signal to the web app; it must add one before it ships. Pinned on the real server in
   `apps/web/src/server/adapters/webmail-settings.int.test.ts` (restricted: neither the forward nor the reply goes
   out; new with an outside target: the reply runs, the forward doesn't; lifted: the exact script, forwarding works).
+
+## Update 2026-11-11: build slice 13
+
+Built: `applySendingPolicy` / `sendingPolicyDrift` (`packages/stalwart-client/src/sending.ts`) with the facts from
+`standardSendingPolicy` (`packages/shared/src/sending.ts`), called by the dev plan; the reconciler's `accessMismatch`
+(re-queued) and `sendingPolicyMismatch` (reported). Pinned on the real server in
+`packages/adapters/src/stalwart/sending-ceiling.int.test.ts`. Three details differ from §4 as written:
+
+- **Exempt accounts are named whole:** the platform's system accounts are `SYSTEM_MAILBOX_LOCAL_PARTS` on the platform
+  domain (`no-reply`, `postmaster`, the reporting addresses). `svc-*` is not in the expression: the expression language
+  of the pinned server has no documented `starts_with`, and service accounts have no password, so they can't submit.
+- **A changed throttle is replaced, not updated:** its `description` can't be written after creation.
+- **The reconciler's key can't read the ceiling yet:** the worker's provisioning key holds neither
+  `sysMtaInboundThrottleGet` nor `sysMtaStageRcptGet`, and keys are `Replace`-typed with exactly their set (adding them
+  is a key change with a rotation, and the start-up scope check would refuse the old key). The check is wired and runs
+  where the key can read (the dev admin, a future key); until the ops follow-up, the reconciler logs it as skipped and
+  the deploy's bootstrap is what keeps the ceiling in place. The reconciler's `accessMismatch` compares settled
+  `active` mailboxes only (a suspended one is compared by the suspension check).
