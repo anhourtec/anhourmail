@@ -1,6 +1,6 @@
 # ADR-0034: Trust tiers stored on the customer account and enforced on every sending path
 
-**Status:** Accepted 2026-11-11 (building: slices 1–15 built, review findings 2, 3, 5, 6 addressed, the relay hold
+**Status:** Accepted 2026-11-11 (building: slices 1–18 built, review findings 2, 3, 5, 6 addressed, the relay hold
 closes public JMAP for `new`; first Phase 6 slice)
 
 ## Context
@@ -518,3 +518,20 @@ towards a permanent abuse ban, at someone else's address); run `job:mailbox-back
 existing `new` and `restricted` mailboxes are listed; smoke checks: a held mailbox gets `550 5.7.1` at AUTH on 587,
 `550 5.1.2` for an outside recipient over public `/jmap` with its password and with a `jmap` app password, and its
 mail to a hosted address is delivered.
+
+## Update 2026-11-11: build slices 16–18 (the cards and the composer)
+
+Built: the console Sending card on the home page (`account.read`) and the mail-app notice on App passwords; the staff
+Trust card with Change tier and each mailbox's Restrict sending / Lift on Platform → account; the webmail's Settings →
+Account → Sending and the composer's message for each refusal. No route, permission or migration changed. Details that
+differ from §5 or that it left open:
+
+- **Who sees the Trust card:** every staff role that reads accounts (the staff read is `platform.accounts.read`), read
+  only; the notes with `platform.suspensionNotes.read`; the changes with `platform.trust.manage`. Not while acting as.
+- **Outside recipients of a held send are named in the browser,** from the draft, against the platform domains and the
+  domains of the person's own addresses; the server never names them (rule 24). Another customer's verified domain
+  can't be known there, so the composer says "may be outside" and the server's check is the one that counts.
+- **The webmail card shows the tier only** (`sendingTier`), not the restriction's reason: the reason stays on the
+  console card for `account.read` holders, with the appeal address on both.
+- **`App passwords`** reads each own mailbox's effective tier (`sendingStanding`) for its notice; the Mail apps page
+  §5 named is that page.
