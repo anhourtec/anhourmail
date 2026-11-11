@@ -1,7 +1,7 @@
 # ADR-0034: Trust tiers stored on the customer account and enforced on every sending path
 
 **Status:** Accepted 2026-11-11 (building: slices 1–18 built, review findings 2, 3, 5, 6 addressed, the relay hold
-closes public JMAP for `new`, second review's F1, F2, F3, F5 addressed; first Phase 6 slice)
+closes public JMAP for `new`, second review's F1, F2, F3, F4, F5, F8 addressed; first Phase 6 slice)
 
 ## Context
 
@@ -610,3 +610,48 @@ pass reads Postgres.
 checks, the hold key's proxy rules (now spelled out per method), NGINX setting X-Forwarded-For on every location that
 proxies to Stalwart, `REDIS_URL` for the scheduler too, the alert on `mailbox_restriction_overdue`, reading
 permissions for the reconciler's ban check, and the smoke checks.
+
+## Update 2026-11-11: second security review, findings F4 and F8
+
+**F4 (medium): a `new` account's automatic replies reached outside senders with no limit.** §3 kept `vacation` on for
+`new` ("one reply per sender per period, to people who wrote first"), but a Sieve reply isn't an authenticated session:
+the relay hold, the mail-server ceiling and the webmail's counters never see it, and a forged envelope sender aims it
+at anyone. Decision: while the mailbox's effective tier is `new`, automatic replies are paused.
+
+- **Which option:** the coordinator's first choice was "replies only to senders in the mailbox's contacts". The pinned
+  v0.16.27 has no extlists (`research/stalwart.md` "Sieve and automatic replies": `externalLists` null), so "in
+  contacts" can only be a list written into the script, as the existing "Only reply to my contacts" option does at save
+  time. The pause transform runs where the person's address book isn't available (the start-up, catch-up and staff
+  passes), and the contacts are chosen by the account's owner anyway (up to `MAX_CONTACT_ADDRESSES`), so they don't
+  bound a hostile owner. So the fallback is built: **every `vacation` is paused while `new`, contacts-only ones
+  included.**
+- **Where:** in the pause transform (`packages/core/src/webmail/sending-pause.ts`): mode `external` now pauses every
+  `vacation` as well as redirects outside our addresses. Same marker and wrapper, so lifting gives back the exact
+  script; the reconciler's `unpausedSending` counts an unpaused reply under `new`. Saving automatic replies stays
+  allowed while `new` (they start as saved once the account is established); `restricted` still refuses them at set-up.
+- **What users see:** the console and webmail Sending cards and Settings → Automatic replies say "Automatic replies are
+  paused until your account is established"; public docs `sending-limits` and `webmail-settings`.
+- **Pinned on the real server** (`apps/web/src/server/adapters/webmail-settings.int.test.ts`): with the `new` pause, mail
+  from an outside sender over port 25 gets no reply (nothing in Mailpit), nor does a hosted sender; lifted, the same
+  reply to another outside sender is caught by Mailpit.
+- **Deploy:** the web app's start-up pass rewrites every active mailbox's script, so existing `new` accounts' replies
+  pause at the deploy; promotion lifts them through the catch-up pass.
+
+**F8 (low): billing promoted on invoices with no real money.** `syncAccountBilling` promoted on entering `active` or on
+any newly paid invoice, so a 100 %-off code, an invoice paid from the credit balance, an add-on bought after a refund,
+a trial (`trialing` maps to `active`), a comp and a staff grant all promoted. Decision: promote only on a real charge.
+
+- `ProviderInvoice.chargedMinor` (port): what the invoice's payments took from a payment method through a succeeded
+  charge (the processor adapter sums `amount_captured` of each payment intent's latest charge; 0 when paid from the
+  credit balance or out of band). `realChargePaid` (`packages/core/src/billing/lifecycle.ts`) needs all of: the
+  subscription `active` (never `trialing`), its latest invoice newly paid with `billingReason` `subscription_create`
+  or `subscription_cycle`, `amountMinor > 0`, and `chargedMinor - refundedMinor > 0`. `Derivation.realCharge` carries
+  it; `tierAfterBilling` promotes only on it.
+- **Comps, staff grants and comp codes no longer promote** (§2 said "Stripe, comp or staff grant"): no money changes
+  hands, and Billing Administrators shouldn't move a trust tier; staff give `standard` with `platform.trust.manage`.
+  The grant and redeem routes no longer schedule the managed-script pass; ending a grant still does (it can take back a
+  promotion an earlier payment earned).
+- The take-backs are unchanged (refund, dispute, plan ending within `BILLING.refundWindowDays` of the promotion). The
+  public docs say so, with the refund window from `packages/shared` (already published on the pricing page).
+- Tests: `realChargePaid` cases and the four attack scenarios in `sync.test.ts` (a 100 %-off code, a credit-paid
+  invoice, an add-on after a refund, a trial), plus a real renewal that does promote.

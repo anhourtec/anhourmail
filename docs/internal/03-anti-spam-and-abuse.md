@@ -1,6 +1,6 @@
 # 03 — Anti-spam and abuse
 
-Last updated: 2026-11-11 (second security review: restrictions always land, a finite abuse ban; slices 16–18 built;
+Last updated: 2026-11-11 (second security review F4 and F8: a `new` account's automatic replies paused, billing promotes only on a real charge; second security review: restrictions always land, a finite abuse ban; slices 16–18 built;
 the relay hold: `new` and `restricted` mailboxes send to hosted addresses only on SMTP and public JMAP alike; billing's promotion taken back on refunds, disputes and early plan ends; slices 12–15 built; trust tiers ADR-0034 slices 1–11 built; trust tiers designed, ADR-0034: stored on the account, `new`-tier external hold, mail-server gates); 2026-11-06 (disposable email addresses refused, ADR-0033); 2026-11-05 (sign-up proof-of-work and sign-up limits built, ADR-0031; suspension note readers, open sessions after a suspension and their mitigations); 2026-11-04 (the webmail reads `deliveryStatus` after a send). 2026-10-30. Research: `research/deliverability.md` §6–8, `research/market-and-legal.md` §4.
 
 Outbound abuse is the priority. One spammer on a shared IP hurts every user's inbox placement, and under CASL a host that knowingly helps spammers can be liable.
@@ -85,7 +85,7 @@ The limits are the values in `packages/shared/src/sending.ts` (`TRUST_TIERS`); r
 **Design: ADR-0034 (accepted 2026-11-11, building — the first Phase 6 slice).** The tier is stored on the customer
 account (`customer_account.trust_tier`, replacing the unused `user_profile.trust_tier`), made stricter per mailbox by a
 staff sending restriction. `new` → `standard` by the hourly promotion job (private thresholds from config) or at once
-on a paid plan; staff set or restrict with `platform.trust.manage`; `restricted` leaves only by review; `trusted` is
+on a real payment for a plan (not a comp, grant, code, credit or trial); staff set or restrict with `platform.trust.manage`; `restricted` leaves only by review; `trusted` is
 reserved until the mail server can hold per-tier numbers. A `new` mailbox sends only to addresses we host (webmail
 refuses outside recipients with `sending_held`) and can't use SMTP submission (`smtp_blocked`: `emailSend` denied on
 Stalwart); `restricted` is `send_blocked`. **Both are also on the mail server's relay hold** (ADR-0034 update
@@ -113,13 +113,24 @@ back to `new` on a refund, on any dispute, and when the paid plan (a comp or sta
 refund window of the promotion; a dispute also marks the account so it is never promoted automatically again (staff
 review only). So "pay with a stolen card, refund or dispute, keep sending as standard" doesn't work. A person's
 suspension and the promotion job lock the same accounts, and the job checks every condition again under the lock.
+**Only a real charge promotes (second security review, finding F8, 2026-11-11).** Billing promotes only when an active,
+non-trial subscription's newly paid first or renewal invoice is above zero and was paid by a charge on a payment
+method, net of refunds (`realChargePaid`, `packages/core/src/billing/lifecycle.ts`). A 100 %-off code, an invoice paid
+from the credit balance or out of band, an add-on or proration bought after a refund, a trial, a comp, a staff grant
+and a comp code never promote; staff give `standard` with `platform.trust.manage`.
 
-| Tier         | Who                                          | Movement                                                                                                                    |
-| ------------ | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `new`        | Every new account                            | → `standard` automatically after an account-age and clean-history window (private threshold), or immediately on a paid plan |
-| `standard`   | Established free accounts, all paid accounts | → `trusted` after a longer clean paid history                                                                               |
-| `trusted`    | Long-standing paid accounts                  | Manual or automatic, reviewed                                                                                               |
-| `restricted` | Anyone, automatically or by Trust & Safety   | Sending paused (receive keeps working). Leaves only by Trust & Safety review.                                               |
+**A `new` account's automatic replies are paused (finding F4, 2026-11-11).** A Sieve `vacation` isn't an authenticated
+session, so neither the relay hold, the ceiling nor the webmail's counters see it, and forged senders could aim a free
+account's reply at anyone. The managed-script pause now wraps every `vacation` while `new` (as it does every
+`redirect` outside our addresses); lifting gives back the exact script. Contacts-only replies are paused too: the
+pinned server has no extlists, the transform can't read the address book, and the owner picks the contacts anyway.
+
+| Tier         | Who                                          | Movement                                                                                                                      |
+| ------------ | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `new`        | Every new account                            | → `standard` automatically after an account-age and clean-history window (private threshold), or on a real payment for a plan |
+| `standard`   | Established free accounts, all paid accounts | → `trusted` after a longer clean paid history                                                                                 |
+| `trusted`    | Long-standing paid accounts                  | Manual or automatic, reviewed                                                                                                 |
+| `restricted` | Anyone, automatically or by Trust & Safety   | Sending paused (receive keeps working). Leaves only by Trust & Safety review.                                                 |
 
 ### Free-tier risk (research recommendation, flagged to the owner)
 
