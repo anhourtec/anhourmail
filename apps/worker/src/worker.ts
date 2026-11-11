@@ -59,6 +59,15 @@ while (!stopping()) {
     if (job?.lockLost) {
       // This run's claim went stale and another worker took the job over: its outcome was discarded.
       l.warn("job lock lost", { jobId: job.id, kind: job.kind, attempt: job.attempts });
+    } else if (job?.overdue) {
+      // A restriction, hold or suspension that still hasn't reached the mail server past the normal attempts: it keeps
+      // retrying (never marked failed), and every such run raises an alert (08-operations "Trust tiers"). Ids only.
+      l.error("mailbox restriction not applied yet: still retrying", {
+        alert: "mailbox_restriction_overdue",
+        jobId: job.id,
+        mailboxId: job.subjectId,
+        attempt: job.attempts,
+      });
     } else if (job) l.info("job processed", { jobId: job.id, kind: job.kind, attempt: job.attempts });
     else await new Promise((r) => setTimeout(r, IDLE_MS));
   } catch (err) {
