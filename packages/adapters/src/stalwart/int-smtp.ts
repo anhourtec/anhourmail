@@ -4,6 +4,7 @@
  * changes, to see what a mail app that is already signed in can still do (e.g. after its account is suspended). Dev
  * certificates are self-signed: verification off, dev only. Never pointed at anything but the local dev server.
  */
+import net from "node:net";
 import tls from "node:tls";
 
 /**
@@ -55,4 +56,68 @@ export async function smtpSession(): Promise<{ send(line: string): Promise<strin
     },
     close: () => socket.destroy(),
   };
+}
+
+/**
+ * One scripted exchange on a dev mail port: sends `lines` one at a time, each after the previous reply, and resolves
+ * with every reply in order (the greeting first). `starttls` sends EHLO + STARTTLS first and upgrades in place;
+ * `implicit` is TLS from the start (465, 993). A reply the server sends just before closing is kept. Dev certificates
+ * are self-signed: verification off, dev only.
+ */
+export function smtpExchange(
+  port: number,
+  mode: "implicit" | "starttls" | "plain",
+  lines: readonly string[],
+): Promise<string[]> {
+  return new Promise((resolve) => {
+    let socket: net.Socket =
+      mode === "implicit"
+        ? tls.connect({ host: "127.0.0.1", port, rejectUnauthorized: false })
+        : net.connect({ host: "127.0.0.1", port });
+    const queue = mode === "starttls" ? ["EHLO int-test", "STARTTLS", ...lines] : [...lines];
+    const replies: string[] = [];
+    let buf = "";
+    let i = -1;
+    let upgraded = mode !== "starttls";
+    let timer: NodeJS.Timeout | undefined;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (buf.trim()) replies.push(buf.trim());
+      socket.destroy();
+      resolve(replies);
+    };
+    const next = () => {
+      i += 1;
+      if (i >= queue.length) {
+        finish();
+        return;
+      }
+      socket.write(`${queue[i] ?? ""}\r\n`);
+    };
+    const onData = (d: Buffer | string) => {
+      buf += d.toString();
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        replies.push(buf.trim());
+        buf = "";
+        if (!upgraded && queue[i] === "STARTTLS") {
+          upgraded = true;
+          socket.removeAllListeners("data");
+          const secure = tls.connect({ socket, rejectUnauthorized: false }, next);
+          secure.on("data", onData);
+          secure.on("error", finish);
+          socket = secure;
+          return;
+        }
+        next();
+      }, 250);
+    };
+    socket.on("data", onData);
+    socket.on("close", finish);
+    socket.on("error", finish);
+    setTimeout(finish, 45_000).unref();
+  });
 }
