@@ -1,6 +1,6 @@
 # ADR-0034: Trust tiers stored on the customer account and enforced on every sending path
 
-**Status:** Accepted 2026-11-11 (building; first Phase 6 slice)
+**Status:** Accepted 2026-11-11 (building: slices 1–11 built; first Phase 6 slice)
 
 ## Context
 
@@ -301,3 +301,29 @@ reload's cost with thousands of keys. Writing keys also needs `sysMemoryLookupKe
 checks, can replace `smtp_blocked` with a relay hold (held accounts keep sending to hosted addresses from mail apps),
 move the ceiling to per-tier throttles and open `trusted`. That would also answer open question 2 differently: the
 mail-app trade-off for new free accounts becomes avoidable rather than inherent.
+
+## Update 2026-11-11: build slices 6–11
+
+Built: `smtp_blocked` in `stalwart-client` (slice 6), `mailbox.ensure` applying `mailboxSendAccess` (7; pinned on the
+real server in `packages/adapters/src/stalwart/trust-access.int.test.ts`), the trust service (8), billing's promotion
+and suspension's `last_restricted_at` (9), the importer cap by the destination mailbox's tier (10, migration step B)
+and `job:trust-promote` (11). The decision is unchanged (`smtp_blocked` for `new`; the lookup-list relay hold stays a
+maintainer option, open question 2). Two facts above proved wrong and the build adapts:
+
+- **§5 "`account.read`, so every account role and act-as can read":** the Member role doesn't hold `account.read`
+  (every other account role and the act-as role do). The customer read (`accountSending`) keeps `account.read`, so a
+  Member gets 403 there; Members see their own mailbox's tier in the webmail's Settings → Account card (slice 18),
+  which reads the mailbox's effective tier. The console Sending card (slice 16) shows only to roles with `account.read`.
+- **§2 "Audit" meta `from` / `to`:** both are redacted keys everywhere (mail headers), so they would be stored as
+  `[redacted]`. The entries carry **`fromTier` / `toTier`** instead (as billing uses `fromState` / `toState`), plus
+  `source`, `reason` (plain words), `reasonCategory` and `mailboxesQueued`; `audit.md` lists them.
+
+Details the ADR left open, as built: every trust entry is in the account's log with a copy in the platform log, and
+neither carries the staff note; a staff move to the tier and source the account already has is a 409; a tier change
+that would change kind (into or out of `restricted`) between the first read and the lock is a 409; lifting a mailbox
+restriction needs a reason and a note like restricting it. A person's suspension marks every account of theirs (those
+holding their mailboxes and those they belong to). Billing promotes on any derivation that leaves the account
+`active` (also one that was active before this release and still `new`), never lowering a tier. A mailbox the
+importer can't match to its account reads `restricted`. `tier_unavailable` (422) needs its HTTP mapping with the
+routes (slice 14). `.env.example` carries development `TRUST_PROMOTE_*` values; outside production all three unset
+turns the job off, and production refuses to start the scheduler without them.
