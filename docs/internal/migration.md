@@ -35,6 +35,8 @@ docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 | #    | Migration                            | Commit    | Date       | Change                                                                                                            | Rollback        |
 | ---- | ------------------------------------ | --------- | ---------- | ----------------------------------------------------------------------------------------------------------------- | --------------- |
+| 0044 | `0044_trust_tier_backfill`           | —         | 2026-11-11 | Each account's trust tier from billing, the staff account, restricted owners; `last_restricted_at` (ADR-0034)     | Safe            |
+| 0043 | `0043_trust_tier`                    | —         | 2026-11-11 | `customer_account` trust tier columns, checks, promotion index; `mailbox.sending_restricted_*` (ADR-0034)         | Safe            |
 | 0042 | `0042_billing_catalogue`             | —         | 2026-11-05 | `billing_catalogue` table: the last check of the payment provider's prices against the plan facts (ADR-0029 §2)   | Safe            |
 | 0041 | `0041_mail_import`                   | —         | 2026-11-05 | `mail_import`, `mail_import_folder`, `mail_import_batch`: imports, progress, sealed secrets (ADR-0030)            | Safe            |
 | 0040 | `0040_webmail_template`              | —         | 2026-11-05 | `webmail_template` table: templates (canned replies) per mailbox, text only (ADR-0032 §3)                         | Safe            |
@@ -106,6 +108,40 @@ Each migration gets a section in this shape:
 - Data:
 - Rollback:
 ```
+
+### 0044_trust_tier_backfill · — · 2026-11-11 · Safe
+
+- Added: —
+- Changed: —
+- Removed: —
+- Data: custom SQL (ADR-0034 §1, migration A). Accounts still at the default source get, first match wins: an owner
+  whose `user_profile.trust_tier` is `restricted` → `restricted`, source `staff`; the platform staff account (it holds
+  a mailbox of a person with a platform role) → `standard`, source `staff`; billing state `active` or `past_due` →
+  `standard`, source `billing`; the rest stay `new`, source `default`. Then `last_restricted_at` = the latest of: now
+  for a restricted account, the account's or a member's current `suspended_at`, and the account's own successful
+  `trust.suspended` audit entries (a person's suspension is copied into each of their accounts' logs), so a suspended
+  and lifted account is never promoted automatically. Only rows still at the defaults are touched (idempotent: a
+  re-run updates 0 rows). No audit row (SQL migration; accepted exception in `audit.md`). Checked on a copy of the dev
+  database on 2026-11-11: 169 accounts → 113 `standard`/`billing`, 1 `standard`/`staff` (the staff account), 55 `new`
+  (1 with `last_restricted_at`, the suspended demo account).
+- Rollback: nothing to undo (older code ignores the columns; 0043's rollback drops them). Step B (the importer reads
+  the mailbox's effective tier) and step C (drop `user_profile.trust_tier`, Destructive, after a backup) follow.
+
+### 0043_trust_tier · — · 2026-11-11 · Safe
+
+- Added: `customer_account.trust_tier` (text not null default `new`, `CHECK` in `new`/`standard`/`trusted`/
+  `restricted`), `trust_tier_since` (timestamptz not null default now()), `trust_tier_source` (text not null default
+  `default`, `CHECK` in `default`/`automatic`/`billing`/`staff`), `trust_reason` (null or a `SUSPENSION_REASONS` key,
+  `CHECK`), `trust_note` (null or 1–2,000 characters, `CHECK`), `trust_set_by`, `last_restricted_at`; partial index
+  `customer_account_trust_promote_idx` on (trust_tier, created_at) where `trust_tier = 'new'`;
+  `mailbox.sending_restricted_at`, `sending_restricted_reason`, `sending_restricted_note`, `sending_restricted_by` (all
+  nullable; `CHECK`s: reason set exactly when `_at` is, reason a `SUSPENSION_REASONS` key, note 1–2,000 characters).
+  ADR-0034 §1 and §6.
+- Changed: —
+- Removed: —
+- Data: none (0044 backfills). Constant defaults, so adding the columns doesn't rewrite the tables; the checks scan
+  them once.
+- Rollback: drop the columns, the index and the checks. Nothing before this change reads them.
 
 ### 0042_billing_catalogue · — · 2026-11-05 · Safe
 
