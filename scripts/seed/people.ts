@@ -15,7 +15,7 @@ export type SeedPerson = {
   mailbox: boolean;
 };
 
-export type AccountKey = "family" | "group" | "free" | "supporter" | "suspended";
+export type AccountKey = "family" | "group" | "free" | "supporter" | "suspended" | "restricted" | "mailboxRestricted";
 
 export const ACCOUNTS: Record<AccountKey, { name: string; plan: PlanId; domain: string; ownDomain: boolean }> = {
   family: { name: "Demo Family", plan: "plus", domain: "demo-family.test", ownDomain: true },
@@ -23,6 +23,8 @@ export const ACCOUNTS: Record<AccountKey, { name: string; plan: PlanId; domain: 
   free: { name: "Free user", plan: "free", domain: "anhourmail.test", ownDomain: false },
   supporter: { name: "Supporter", plan: "supporter", domain: "anhourmail.test", ownDomain: false },
   suspended: { name: "Suspended account", plan: "plus", domain: "anhourmail.test", ownDomain: false },
+  restricted: { name: "Restricted sending", plan: "free", domain: "anhourmail.test", ownDomain: false },
+  mailboxRestricted: { name: "Restricted mailbox", plan: "free", domain: "anhourmail.test", ownDomain: false },
 };
 
 /** The account staff suspended (no mailbox, so nothing changes on the mail server): reason and staff-only note. */
@@ -34,6 +36,38 @@ export const SUSPENDED_ACCOUNT = {
 
 export const STAFF_DOMAIN = "anhourtec.test";
 export const FREE_DOMAIN = "anhourmail.test";
+
+/**
+ * The demo world's trust tiers (ADR-0034 build slice 20), set on every seed run so they reset to this: one account per
+ * tier state. `new` is staff-set so the hourly promotion job leaves it at New (a default New account older than the
+ * dev threshold would be promoted). Notes are staff-only.
+ */
+export const TRUST_DEMO: Record<
+  AccountKey,
+  { tier: "new" | "standard" | "restricted"; source: "staff" | "automatic"; reason?: "spam"; note?: string } | null
+> = {
+  family: { tier: "standard", source: "automatic" },
+  group: { tier: "standard", source: "automatic" },
+  supporter: { tier: "standard", source: "automatic" },
+  free: { tier: "new", source: "staff", note: "Demo: kept at New so the new-account hold can be tried (staff only)" },
+  restricted: {
+    tier: "restricted",
+    source: "staff",
+    reason: "spam",
+    note: "Demo: complaint spike on the last campaign (internal note, staff only)",
+  },
+  mailboxRestricted: { tier: "standard", source: "automatic" },
+  suspended: null,
+};
+
+/** The one mailbox staff restricted on its own (ADR-0034 §6), in an account that stays at Standard. */
+export const RESTRICTED_MAILBOX = {
+  account: "mailboxRestricted" as const,
+  address: `mailbox-restricted@${FREE_DOMAIN}`,
+  reason: "abuse" as const,
+  note: "Demo: reported for abuse (internal note, staff only)",
+};
+
 /** Shown in the console with its DNS records but never verified (not in Stalwart). */
 export const UNVERIFIED_DOMAIN = { account: "family" as const, name: "unverified-family.test" };
 
@@ -74,7 +108,12 @@ export function demoPeople(platformAdminEmail: string): SeedPerson[] {
       "Support Admin",
       "Customer lookup, credential resets, read-only support access (Platform → account → Open with support access)",
     ],
-    ["trust_safety_admin", "trust", "Trust & Safety Admin", "Abuse queue and trust tiers"],
+    [
+      "trust_safety_admin",
+      "trust",
+      "Trust & Safety Admin",
+      "Abuse queue and trust tiers: Platform → Customer accounts → Restricted sending / Restricted mailbox / Free user (Trust card, Change tier, mailbox Restrict sending; step-up)",
+    ],
     ["billing_admin", "billing", "Billing Admin (staff)", "Platform billing only"],
     ["reports_reader", "reports", "Reports Reader", "Platform audit log; read-only"],
   ];
@@ -102,7 +141,8 @@ export function demoPeople(platformAdminEmail: string): SeedPerson[] {
       name: "Free User",
       state: "free",
       account: { key: "free", role: "owner" },
-      tryThis: "Free plan: own account, no custom domains",
+      tryThis:
+        "Free plan: own account, no custom domains. Trust tier New: sends to AnhourMail addresses only, no SMTP from mail apps, automatic replies paused",
       mailbox: true,
     },
     {
@@ -120,6 +160,24 @@ export function demoPeople(platformAdminEmail: string): SeedPerson[] {
       suspended: true,
       account: { key: "group", role: "member" },
       tryThis: "Can't sign in: the console and the webmail refuse it with the suspension notice and the appeal address",
+      mailbox: true,
+    },
+    {
+      email: `restricted-owner@${FREE_DOMAIN}`,
+      name: "Restricted Sending Owner",
+      state: "free",
+      account: { key: "restricted", role: "owner" },
+      tryThis:
+        "Trust tier Restricted (staff, reason Sending spam): the Sending card says sending is paused with the appeal address; the webmail refuses every send, forwarding and automatic replies",
+      mailbox: true,
+    },
+    {
+      email: `mailbox-restricted@${FREE_DOMAIN}`,
+      name: "Restricted Mailbox Owner",
+      state: "free",
+      account: { key: "mailboxRestricted", role: "owner" },
+      tryThis:
+        "Account at Standard, but staff restricted this one mailbox's sending (reason Abuse): the webmail's Settings → Account shows it paused; Platform → the account → Mailboxes shows Restricted",
       mailbox: true,
     },
     {

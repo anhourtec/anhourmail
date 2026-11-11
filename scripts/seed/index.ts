@@ -39,6 +39,7 @@ import {
   parsePlatformDomain,
   platformFacts,
 } from "@anhourmail/shared";
+import { SUSPENSION_REASONS } from "@anhourmail/shared/platform";
 import { type StalwartManagement, stalwartDevAdmin } from "@anhourmail/stalwart-client";
 
 import { applyDevMailPlan, DEV_DOMAIN, DEV_MAILBOXES, devWebmailOrigins } from "../../infra/stalwart/dev-plan";
@@ -46,6 +47,7 @@ import { seedBillingDemo } from "./billing";
 import { type CredentialRow, writeCredentials } from "./credentials";
 import { seedImportSource } from "./import-source";
 import { seedRefusal } from "./guard";
+import { seedTrustTiers } from "./trust";
 import { demoQuotaBytes } from "./quota";
 import { importSampleContacts } from "./sample-contacts";
 import { importSampleMail, sampleIds } from "./sample-mail";
@@ -55,6 +57,7 @@ import {
   demoPeople,
   FREE_DOMAIN,
   INVITED,
+  RESTRICTED_MAILBOX,
   type SeedPerson,
   STAFF_DOMAIN,
   SUSPENDED_ACCOUNT,
@@ -410,7 +413,7 @@ for (const p of people) {
               kind: "masked" as const,
               description: "news.example",
             },
-          ].filter((a) => (p.account?.key !== "free" && p.account?.key !== "supporter") || a.kind === "masked")
+          ].filter((a) => (p.account ? ACCOUNTS[p.account.key].ownDomain : false) || a.kind === "masked")
         : [];
     await upsertMailbox(
       db,
@@ -771,6 +774,40 @@ if (demo) {
   const billingDemo = await seedBillingDemo({ db, deps, mgmt, newPassword, appUrl: APP_URL, log });
   rows.push(...billingDemo.rows);
   special.push(...billingDemo.special);
+  log("demo: trust tiers…");
+  special.push(...(await seedTrustTiers(db, deps, accountIds)));
+  // The staff restrictions in each account's own log (rule 49), once, when the account is new (append-only).
+  await deps.uow.run(async (r) => {
+    const staffActor = { type: "staff" as const, email: `trust@${STAFF_DOMAIN}`, role: "trust_safety_admin" as const };
+    const restrictedId = accountIds.get("restricted");
+    if (restrictedId && newAccounts.has("restricted")) {
+      await r.audit.append(
+        sample(
+          `account:${restrictedId}`,
+          "trust.restricted",
+          { type: "account", id: restrictedId, label: ACCOUNTS.restricted.name },
+          staffActor,
+          null,
+          { fromTier: "new", source: "staff", reason: SUSPENSION_REASONS.spam, reasonCategory: "spam" },
+        ),
+        new Date(),
+      );
+    }
+    const boxAccountId = accountIds.get(RESTRICTED_MAILBOX.account);
+    if (boxAccountId && newAccounts.has(RESTRICTED_MAILBOX.account)) {
+      await r.audit.append(
+        sample(
+          `account:${boxAccountId}`,
+          "trust.mailbox_restricted",
+          { type: "mailbox", id: null, label: RESTRICTED_MAILBOX.address },
+          staffActor,
+          null,
+          { reason: SUSPENSION_REASONS[RESTRICTED_MAILBOX.reason], reasonCategory: RESTRICTED_MAILBOX.reason },
+        ),
+        new Date(),
+      );
+    }
+  });
 }
 
 for (const name of DEV_MAILBOXES) {
