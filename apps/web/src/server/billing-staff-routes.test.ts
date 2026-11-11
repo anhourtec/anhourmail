@@ -177,7 +177,7 @@ describe("POST /api/accounts/:id/billing/redeem", () => {
     actor = owner;
     scheduled.length = 0;
     const ok = await redeemRoute(post(`/api/accounts/${ACCOUNT}/billing/redeem`, { code }), params());
-    expect(scheduled).toEqual([ACCOUNT]);
+    expect(scheduled).toEqual([]); // a comp never moves the trust tier (ADR-0034, finding F8)
     expect(ok.status).toBe(200);
     expect((await json(ok)).data).toMatchObject({ plan: "plus" });
   });
@@ -215,8 +215,7 @@ describe("staff billing routes", () => {
     );
     expect(granted.status).toBe(200);
     expect((await json(granted)).data).toMatchObject({ state: "active", plan: "plus" });
-    expect(scheduled.at(-1)).toBe(ACCOUNT); // the managed scripts follow the promoted tier
-    scheduled.length = 0;
+    expect(scheduled).toEqual([]); // a grant never promotes the trust tier (ADR-0034, finding F8)
     expect((await endGrantRoute(del(`/api/platform/accounts/${ACCOUNT}/billing/grant`), params())).status).toBe(200);
     expect(scheduled).toEqual([ACCOUNT]);
     expect((await endGrantRoute(del(`/api/platform/accounts/${ACCOUNT}/billing/grant`), params())).status).toBe(409);

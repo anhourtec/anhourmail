@@ -30,8 +30,7 @@ export const PUT = route(
       { sessionId },
       meta,
     );
-    // A grant may promote the trust tier: the managed scripts follow (outside forwarding back, ADR-0034).
-    scheduleSendingPause(accountId);
+    // A grant never promotes the trust tier (no money, ADR-0034 finding F8), so the managed scripts stay as they are.
     return ok(out);
   },
   { limit: "sensitive" },
@@ -43,7 +42,7 @@ export const DELETE = route(
     const { actor, sessionId } = await getActorAndSession(req.headers);
     const accountId = paramOf(params.accountId);
     const out = await endStaffPlan(container().deps, actor, accountId, { sessionId }, meta);
-    // Ended inside the refund window, the grant's trust tier goes too: the managed scripts follow (ADR-0034).
+    // Ended inside the refund window of an earlier paid promotion, the tier goes back: the scripts follow (ADR-0034).
     scheduleSendingPause(accountId);
     return ok(out);
   },

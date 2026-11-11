@@ -7,7 +7,6 @@ import { getActor } from "@/server/auth/actor";
 import { paramOf } from "@/server/billing";
 import { container } from "@/server/container";
 import { enforceLimit, ok, readJson, route } from "@/server/http/route";
-import { scheduleSendingPause } from "@/server/webmail/sending-pause-apply";
 
 const Body = z.object({ code: z.string().max(64) });
 
@@ -33,8 +32,7 @@ export const POST = route(
       { code: parsed.success ? parsed.data.code : null },
       meta,
     );
-    // A comp may promote the trust tier: the managed scripts follow (outside forwarding back, ADR-0034).
-    scheduleSendingPause(accountId);
+    // A comp never promotes the trust tier (no money, ADR-0034 finding F8), so the managed scripts stay as they are.
     return ok(out);
   },
   { limit: "inviteCodeRedeem" },
