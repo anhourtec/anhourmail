@@ -182,6 +182,10 @@ async function api<T>(path: string, init: RequestInit = {}, go: typeof fetch = p
       (res.status === 403 && body?.error?.code === "own_mailbox_only") ||
       // Billing stops this mailbox sending: the message says why and who can fix it (ADR-0029 §5).
       (res.status === 403 && body?.error?.code === "billing_restricted") ||
+      // The mailbox's trust tier (ADR-0034 §5): a new account held to addresses we host, or sending paused; and a
+      // forward to an outside address refused at set-up while held.
+      (res.status === 403 && (body?.error?.code === "sending_held" || body?.error?.code === "sending_paused")) ||
+      (res.status === 422 && body?.error?.code === "sending_held") ||
       (res.status === 503 && body?.error?.code === "send_unconfirmed");
     if (res.status === 400 || res.status === 413 || res.status === 429 || pending || explained) {
       throw new RefusedError(body?.error?.message ?? "That didn't work. Try again.");
