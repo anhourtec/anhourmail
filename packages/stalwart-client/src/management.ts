@@ -183,6 +183,19 @@ export const SEND_BLOCKED_PERMISSIONS = {
 } as const;
 
 /**
+ * A mailbox held from SMTP submission only (a `new`-tier account, ADR-0034 §3), verified on the pinned v0.16.27
+ * (2026-11-11, `sending-policy.int.test.ts` P1): `emailSend` alone refuses SMTP AUTH on 465 and 587 (`550 5.7.1`)
+ * while JMAP `EmailSubmission/set` keeps sending, so the webmail (the only JMAP sender, which enforces the external
+ * hold itself) still works. Sign-in, IMAP, POP3, CardDAV and delivery to it are untouched. A superset of
+ * `CUSTOMER_PERMISSIONS` and a subset of `SEND_BLOCKED_PERMISSIONS`.
+ */
+export const SMTP_BLOCKED_PERMISSIONS = {
+  "@type": "Merge",
+  enabledPermissions: {},
+  disabledPermissions: { ...CUSTOMER_DENIALS, emailSend: true },
+} as const;
+
+/**
  * Sending and delivery off, reading kept (a held mailbox past its receive window, ADR-0029 §6). Verified on v0.16.27:
  * `emailReceive` does **not** refuse at RCPT — the message is accepted (250 at RCPT and DATA), not delivered, and a
  * delivery-failure notice goes to the envelope sender, which for mail from the internet is backscatter. Callers must
@@ -195,10 +208,11 @@ export const RECEIVE_BLOCKED_PERMISSIONS = {
 } as const;
 
 /** What a customer mailbox may do on the mail server (most restrictive last). */
-export type MailboxAccess = "active" | "send_blocked" | "receive_blocked" | "suspended";
+export type MailboxAccess = "active" | "smtp_blocked" | "send_blocked" | "receive_blocked" | "suspended";
 
 const ACCESS_PERMISSIONS = {
   active: null,
+  smtp_blocked: SMTP_BLOCKED_PERMISSIONS,
   send_blocked: SEND_BLOCKED_PERMISSIONS,
   receive_blocked: RECEIVE_BLOCKED_PERMISSIONS,
   suspended: SUSPENDED_PERMISSIONS,
@@ -209,7 +223,10 @@ export function accessOf(p: { disabledPermissions?: Record<string, boolean> } | 
   const off = p?.disabledPermissions ?? {};
   if (off.authenticate === true) return "suspended";
   if (off.emailReceive === true) return "receive_blocked";
-  if (off.emailSend === true || off.jmapEmailSubmissionCreate === true) return "send_blocked";
+  // Either JMAP denial alone already stops the webmail sending, so it reads as send-blocked; `emailSend` alone is the
+  // SMTP-only hold.
+  if (off.jmapEmailSubmissionCreate === true) return "send_blocked";
+  if (off.emailSend === true) return "smtp_blocked";
   return "active";
 }
 

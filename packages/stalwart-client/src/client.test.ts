@@ -7,6 +7,7 @@ import {
   CUSTOMER_PERMISSIONS,
   RECEIVE_BLOCKED_PERMISSIONS,
   SEND_BLOCKED_PERMISSIONS,
+  SMTP_BLOCKED_PERMISSIONS,
   StalwartManagement,
   SUSPENDED_PERMISSIONS,
 } from "./management";
@@ -241,13 +242,22 @@ describe("StalwartManagement", () => {
     await m.upsertUser({ ...base, access: "active" });
     await m.upsertUser({ ...base, suspended: true, access: "active" });
     await m.upsertUser({ ...base, suspended: false, access: "send_blocked" });
+    await m.upsertUser({ ...base, access: "smtp_blocked" });
+    await m.upsertUser({ ...base, suspended: true, access: "smtp_blocked" });
     expect(updates.map((u) => u.u1?.permissions)).toEqual([
       SEND_BLOCKED_PERMISSIONS,
       RECEIVE_BLOCKED_PERMISSIONS,
       CUSTOMER_PERMISSIONS,
       SUSPENDED_PERMISSIONS,
       SEND_BLOCKED_PERMISSIONS,
+      SMTP_BLOCKED_PERMISSIONS,
+      SUSPENDED_PERMISSIONS,
     ]);
+    // SMTP-only hold (ADR-0034 P1): SMTP AUTH off, JMAP submission and sign-in kept.
+    expect(SMTP_BLOCKED_PERMISSIONS.disabledPermissions).toEqual({
+      ...CUSTOMER_PERMISSIONS.disabledPermissions,
+      emailSend: true,
+    });
     // SMTP AUTH (emailSend) and JMAP submission (verified: emailSend alone doesn't stop it) are both off; sign-in stays.
     expect(SEND_BLOCKED_PERMISSIONS.disabledPermissions).toMatchObject({
       ...CUSTOMER_PERMISSIONS.disabledPermissions,
@@ -267,7 +277,20 @@ describe("StalwartManagement", () => {
       accessOf(SEND_BLOCKED_PERMISSIONS),
       accessOf(RECEIVE_BLOCKED_PERMISSIONS),
       accessOf(SUSPENDED_PERMISSIONS),
-    ]).toEqual(["active", "active", "send_blocked", "receive_blocked", "suspended"]);
+      accessOf(SMTP_BLOCKED_PERMISSIONS),
+      // JMAP submission denied alone already stops the webmail, so it reads as send-blocked.
+      accessOf({ disabledPermissions: { jmapEmailSubmissionCreate: true } }),
+      accessOf({ disabledPermissions: { emailSend: false } }),
+    ]).toEqual([
+      "active",
+      "active",
+      "send_blocked",
+      "receive_blocked",
+      "suspended",
+      "smtp_blocked",
+      "send_blocked",
+      "active",
+    ]);
   });
 
   it("reads storage used for the given accounts only, name and usedDiskQuota only", async () => {
