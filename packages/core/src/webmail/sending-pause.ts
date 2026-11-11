@@ -5,7 +5,11 @@
  * `redirect` or `vacation` (research/stalwart.md "Billing access states"), so the script itself must:
  *
  * - `restricted` → every `redirect` and `vacation` is paused;
- * - `new` → only `redirect`s to addresses we don't host (the external hold); internal forwarding and replies run;
+ * - `new` → `redirect`s to addresses we don't host (the external hold) and every `vacation` (second security review,
+ *   finding F4: an automatic reply isn't an authenticated send, so neither the relay hold nor any send counter sees
+ *   it, and a forged sender would aim it at anyone). Internal forwarding runs. Replies aren't narrowed to the
+ *   mailbox's contacts instead: the pinned server has no extlists, so contacts can only be written into the script,
+ *   which this transform can't do without the person's address book (and the owner chooses those addresses anyway);
  * - `standard`, `trusted` → nothing is paused.
  *
  * A paused command stays in the script, wrapped in `if false { … }` after a fixed marker, so lifting the pause gives
@@ -18,7 +22,10 @@ import type { TrustTier } from "@anhourmail/shared/sending";
 
 export type SendingPauseMode = "none" | "external" | "all";
 
-/** What a mailbox's managed script may send, by its effective tier. */
+/**
+ * What a mailbox's managed script may send, by its effective tier: `all` pauses every redirect and automatic reply;
+ * `external` pauses redirects to addresses we don't host and every automatic reply.
+ */
 export function pauseModeFor(tier: TrustTier): SendingPauseMode {
   if (tier === "restricted") return "all";
   if (tier === "new") return "external";
@@ -135,11 +142,17 @@ export function applySendingPause(text: string, mode: SendingPauseMode, outside:
   if (mode === "none") return base;
   let out = base;
   for (const c of outboundCommands(base).reverse()) {
-    const pause = mode === "all" || (c.kind === "redirect" && (c.target === null || outside(c.target)));
-    if (!pause) continue;
+    if (!pausedBy(c, mode, outside)) continue;
     out = `${out.slice(0, c.start)}${PAUSE_OPEN}${out.slice(c.start, c.end)}${PAUSE_CLOSE}${out.slice(c.end)}`;
   }
   return out;
+}
+
+/** Whether `mode` pauses this command: everything for `all`; for `external`, replies and redirects leaving us. */
+function pausedBy(c: OutboundCommand, mode: SendingPauseMode, outside: (address: string) => boolean): boolean {
+  if (mode === "none") return false;
+  if (mode === "all" || c.kind === "vacation") return true;
+  return c.target === null || outside(c.target);
 }
 
 /** The redirect targets (lowercased, once each) a script names, paused or not: what `outside` must answer for. */
@@ -158,8 +171,5 @@ export function redirectTargets(text: string): string[] {
  * pause. Zero when the script is as the tier wants it.
  */
 export function unpausedOutbound(text: string, mode: SendingPauseMode, outside: (address: string) => boolean): number {
-  if (mode === "none") return 0;
-  return outboundCommands(text).filter(
-    (c) => !c.paused && (mode === "all" || (c.kind === "redirect" && (c.target === null || outside(c.target)))),
-  ).length;
+  return outboundCommands(text).filter((c) => !c.paused && pausedBy(c, mode, outside)).length;
 }

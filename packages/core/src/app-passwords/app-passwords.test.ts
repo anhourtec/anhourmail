@@ -624,7 +624,8 @@ describe("reconciling managed Sieve scripts", () => {
     expect((await reconcileManagedScripts(d, outsideRedirect)).unpausedSending).toBe(0);
     tierOf("new");
     expect((await reconcileManagedScripts(d, outsideRedirect)).unpausedSending).toBeGreaterThan(0);
-    expect((await reconcileManagedScripts(d, reply)).unpausedSending).toBe(0);
+    // An automatic reply runs only from Standard on (finding F4); an internal redirect runs while new.
+    expect((await reconcileManagedScripts(d, reply)).unpausedSending).toBeGreaterThan(0);
     expect((await reconcileManagedScripts(d, internalRedirect)).unpausedSending).toBe(0);
     tierOf("restricted");
     const report = await reconcileManagedScripts(d, reply);

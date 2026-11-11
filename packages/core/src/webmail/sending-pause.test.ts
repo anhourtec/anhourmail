@@ -32,7 +32,7 @@ const SCRIPT = [
 const outside = (a: string) => !a.endsWith("@hosted.test");
 
 describe("pauseModeFor", () => {
-  it("pauses everything while restricted, outside redirects while new, nothing otherwise", () => {
+  it("pauses everything while restricted, replies and outside redirects while new, nothing otherwise", () => {
     expect(pauseModeFor("restricted")).toBe("all");
     expect(pauseModeFor("new")).toBe("external");
     expect(pauseModeFor("standard")).toBe("none");
@@ -74,15 +74,32 @@ describe("applySendingPause", () => {
     expect(applySendingPause(paused, "all", outside)).toBe(paused);
   });
 
-  it("new: pauses only redirects to outside addresses; vacation and internal forwarding stay", () => {
+  it("new: pauses redirects to outside addresses and every automatic reply; internal forwarding stays", () => {
     const held = applySendingPause(SCRIPT, "external", outside);
     expect(outboundCommands(held).map((c) => [c.kind, c.paused])).toEqual([
-      ["vacation", false],
+      ["vacation", true],
       ["redirect", true],
       ["redirect", false],
     ]);
     expect(unpausedOutbound(held, "external", outside)).toBe(0);
-    expect(unpausedOutbound(SCRIPT, "external", outside)).toBe(1);
+    expect(unpausedOutbound(SCRIPT, "external", outside)).toBe(2);
+    // Lifting gives back exactly the script that was written (finding F4: the reply comes back with Standard).
+    expect(liftSendingPause(held)).toBe(SCRIPT);
+    expect(applySendingPause(held, "none", outside)).toBe(SCRIPT);
+    expect(applySendingPause(held, "external", outside)).toBe(held);
+  });
+
+  it("new: a contacts-only automatic reply is paused too (no extlists; the owner picks the contacts)", () => {
+    const text = [
+      'require ["envelope", "vacation"];',
+      'if envelope :all :comparator "i;unicode-casemap" :is "from" ["friend@outside.example"] {',
+      '    vacation :days 3 "Away";',
+      "  }",
+      "",
+    ].join("\n");
+    const held = applySendingPause(text, "external", outside);
+    expect(outboundCommands(held).map((c) => [c.kind, c.paused])).toEqual([["vacation", true]]);
+    expect(liftSendingPause(held)).toBe(text);
   });
 
   it("moves between modes exactly, and none lifts everything", () => {
