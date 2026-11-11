@@ -7,6 +7,8 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { EnsureIncompleteError } from "@anhourmail/core/provisioning";
+
 import {
   accessOf,
   desiredRelaying,
@@ -37,6 +39,10 @@ type Opts = {
   policy?: unknown;
   failAdd?: boolean;
   failReload?: boolean;
+  /** Writing this access fails. */
+  failWrite?: MailboxAccess;
+  /** Reading the account fails. */
+  failRead?: boolean;
 };
 
 /** Fakes of both clients that record what happens, in order. */
@@ -51,6 +57,7 @@ function fakes(opts: Opts = {}) {
     listUsers: async () => (state.access ? [{ id: "acc-1", address: ADDRESS }] : []),
     upsertUser: async (input: { access?: MailboxAccess; suspended?: boolean }) => {
       const access = input.suspended === true ? "suspended" : (input.access ?? "active");
+      if (opts.failWrite === access) throw new StalwartError("x:Account/set notUpdated", "set", {});
       log.push(`write ${access}`);
       state.access = access;
       return "acc-1";
@@ -59,6 +66,7 @@ function fakes(opts: Opts = {}) {
     transport: {
       getAll: async (object: string) => {
         if (object !== "x:Account") throw new Error(`unexpected ${object}`);
+        if (opts.failRead) throw new TypeError("fetch failed");
         return state.access ? [{ id: "acc-1", permissions: PERMS[state.access] }] : [];
       },
     },
@@ -211,6 +219,54 @@ describe("ensureMailbox and the relay hold (fail closed)", () => {
     await stalwartMailServer(f.mgmt, { hold: f.hold }).ensureMailbox(input("active", false, "acc-1"));
     expect(f.log).toEqual([`list ${ADDRESS}`, `unlist ${ADDRESS}`, "reload", "write active"]);
     expect(f.state.loaded.has(ADDRESS)).toBe(false);
+  });
+
+  it("says whether a failure left the account looser than wanted (core never gives up on those)", async () => {
+    const failure = async (
+      f: ReturnType<typeof fakes>,
+      args: Parameters<ReturnType<typeof stalwartMailServer>["ensureMailbox"]>[0],
+    ) => {
+      const err: unknown = await stalwartMailServer(f.mgmt, { hold: f.hold })
+        .ensureMailbox(args)
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+      expect(err).toBeInstanceOf(EnsureIncompleteError);
+      return (err as EnsureIncompleteError).looserThanWanted;
+    };
+    // A new mailbox whose reload failed: nothing was created, so nothing is open.
+    expect(await failure(fakes({ failReload: true }), input("smtp_blocked", true, null))).toBe(false);
+    // Couldn't list it, but it was made unable to send first: at least as strict as wanted.
+    expect(await failure(fakes({ existing: "active", failAdd: true }), input("smtp_blocked", true, "acc-1"))).toBe(
+      false,
+    );
+    // Listed and already send-blocked when the reload failed: can't send at all.
+    expect(await failure(fakes({ existing: "active", failReload: true }), input("smtp_blocked", true, "acc-1"))).toBe(
+      false,
+    );
+    // Already at its access but the reload (the one that would load its key) failed: may still relay.
+    expect(
+      await failure(
+        fakes({ existing: "smtp_blocked", listed: true, failReload: true }),
+        input("smtp_blocked", true, "acc-1"),
+      ),
+    ).toBe(true);
+    // A suspension whose write failed: still open.
+    expect(
+      await failure(fakes({ existing: "active", failWrite: "suspended" }), {
+        ...input("send_blocked", false, "acc-1"),
+        suspended: true,
+      }),
+    ).toBe(true);
+    // A promotion whose write failed: still stricter than wanted.
+    expect(
+      await failure(fakes({ existing: "smtp_blocked", failWrite: "active" }), input("active", false, "acc-1")),
+    ).toBe(false);
+    // The account couldn't be read at all: unknown.
+    expect(
+      await failure(fakes({ existing: "active", failRead: true }), input("send_blocked", false, "acc-1")),
+    ).toBeNull();
   });
 
   it("never names another namespace", () => {

@@ -10,7 +10,7 @@ import { randomBytes } from "node:crypto";
 import type { AppPasswordInventory, AppPasswordIssuer } from "@anhourmail/core/app-passwords";
 import type { ImportCredentialIssuer, ImportTrainingSamples } from "@anhourmail/core/imports";
 import type { MailboxUsageReader } from "@anhourmail/core/mailboxes";
-import type { MailServer, ServiceAccountInventory } from "@anhourmail/core/provisioning";
+import { EnsureIncompleteError, type MailServer, type ServiceAccountInventory } from "@anhourmail/core/provisioning";
 import type { ManagedScriptReader } from "@anhourmail/core/webmail";
 import { MANAGED_SIEVE_SCRIPT } from "@anhourmail/shared/webmail";
 import {
@@ -331,51 +331,80 @@ export function stalwartMailServer(mgmt: StalwartManagement, opts: { hold?: Stal
             }),
         });
       const want: MailboxAccess = suspended ? "suspended" : (access ?? "active");
-      if (!holdList) {
-        // No hold credential (one-off jobs): nothing to hold here, and a key left on the list only holds harder.
+      // What the account was left holding, for a failure (`EnsureIncompleteError`): its access as last read or written
+      // (undefined: not read yet), and whether this run's reload of the hold list went through.
+      let now: MailboxAccess | null | undefined;
+      let holdLoaded = false;
+      const looserThanWanted = async (): Promise<boolean | null> => {
+        if (known === null) return false; // nothing on the mail server yet, or created with `want` as the last step
+        if (now === undefined) now = await currentAccess(known).catch(() => undefined);
+        if (now === undefined) return null;
+        if (now === null) return false; // the account is gone: it can't do anything
+        // Able to send and not yet held by a reload of this run: an outside recipient may still be reachable.
+        const relayOpen = held && (now === "active" || now === "smtp_blocked") && !holdLoaded;
+        return looser(now, want) || relayOpen;
+      };
+      const apply = async () => {
+        if (!holdList) {
+          // No hold credential (one-off jobs): nothing to hold here, and a key left on the list only holds harder.
+          const externalId = await write(want);
+          now = want;
+          return {
+            externalId,
+            created: known === null,
+            passwordCredentialId: await mgmt.passwordCredentialId(externalId),
+          };
+        }
+        // The relay hold (research/stalwart.md "Relay hold"). Its list changes on the server only at a reload, and
+        // adding fails open until then. So a new mailbox is created only once it is listed, the list reloaded and the
+        // relaying policy checked (a failure leaves nothing on the mail server, and the retry starts clean); an existing
+        // one going onto the list is first made unable to send at all (unless it already can't), and given its access
+        // only after the reload and the check. A failure anywhere leaves it unable to send, and the job retries. Every
+        // run reloads the list, a mailbox already listed and holding its access included. Taking a mailbox off the list
+        // fails safe (it stays held until the reload), so it is unlisted and reloaded before its new access is written,
+        // for the same reason; `remove` reloads by itself when the address wasn't listed (its lookup wrote a key), which
+        // also runs a reload an earlier attempt owed.
+        let at: MailboxAccess | null = known === null ? null : await currentAccess(known);
+        now = at;
+        if (held) {
+          const preHold = stricter(want, "send_blocked");
+          const tighten = async () => {
+            if (at !== null && looser(at, preHold)) {
+              await write(preHold);
+              at = now = preHold;
+            }
+          };
+          let added: boolean;
+          try {
+            added = await holdList.add(address);
+          } catch (err) {
+            // Couldn't list it: still never leave it able to send.
+            await tighten();
+            throw err;
+          }
+          if (added || at !== want) await tighten();
+          // Reloaded every time (coalesced within the process): a key already stored may never have been loaded (an
+          // earlier attempt's reload failed, or it was written by hand), and a stored key that isn't loaded holds nothing.
+          await holdList.reload();
+          holdLoaded = true;
+          if ((at === null || looser(want, at)) && !(await holdList.inPlace())) throw new RelayHoldNotInPlaceError();
+        } else if (await holdList.remove(address)) {
+          await holdList.reload();
+        }
         const externalId = await write(want);
+        now = want;
         return {
           externalId,
           created: known === null,
           passwordCredentialId: await mgmt.passwordCredentialId(externalId),
         };
+      };
+      try {
+        return await apply();
+      } catch (err) {
+        // How far it got, so a restriction that didn't land is never given up (core `runClaimedJob`).
+        throw new EnsureIncompleteError(await looserThanWanted(), err);
       }
-      // The relay hold (research/stalwart.md "Relay hold"). Its list changes on the server only at a reload, and
-      // adding fails open until then. So a new mailbox is created only once it is listed, the list reloaded and the
-      // relaying policy checked (a failure leaves nothing on the mail server, and the retry starts clean); an existing
-      // one going onto the list is first made unable to send at all (unless it already can't), and given its access
-      // only after the reload and the check. A failure anywhere leaves it unable to send, and the job retries. Every
-      // run reloads the list, a mailbox already listed and holding its access included. Taking a mailbox off the list
-      // fails safe (it stays held until the reload), so it is unlisted and reloaded before its new access is written,
-      // for the same reason; `remove` reloads by itself when the address wasn't listed (its lookup wrote a key), which
-      // also runs a reload an earlier attempt owed.
-      let now: MailboxAccess | null = known === null ? null : await currentAccess(known);
-      if (held) {
-        const preHold = stricter(want, "send_blocked");
-        const tighten = async () => {
-          if (now !== null && looser(now, preHold)) {
-            await write(preHold);
-            now = preHold;
-          }
-        };
-        let added: boolean;
-        try {
-          added = await holdList.add(address);
-        } catch (err) {
-          // Couldn't list it: still never leave it able to send.
-          await tighten();
-          throw err;
-        }
-        if (added || now !== want) await tighten();
-        // Reloaded every time (coalesced within the process): a key already stored may never have been loaded (an
-        // earlier attempt's reload failed, or it was written by hand), and a stored key that isn't loaded holds nothing.
-        await holdList.reload();
-        if ((now === null || looser(want, now)) && !(await holdList.inPlace())) throw new RelayHoldNotInPlaceError();
-      } else {
-        if (await holdList.remove(address)) await holdList.reload();
-      }
-      const externalId = await write(want);
-      return { externalId, created: known === null, passwordCredentialId: await mgmt.passwordCredentialId(externalId) };
     },
 
     async setMailboxPassword({ externalId, address, passwordHash, grant }) {
