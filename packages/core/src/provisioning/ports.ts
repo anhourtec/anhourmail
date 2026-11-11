@@ -119,6 +119,12 @@ export type MailServer = {
      * delivery. Omitted = `active`.
      */
     access?: "active" | "smtp_blocked" | "send_blocked" | "receive_blocked";
+    /**
+     * On the relay hold (ADR-0034 update "relay hold"): sending only to addresses the mail server hosts, on every
+     * authenticated path (SMTP and JMAP, any credential). Applied fail-closed: the mailbox can't send at all until the
+     * hold is in force. Omitted = not held.
+     */
+    relayHold?: boolean;
     aliases: { address: string; enabled: boolean; description: string | null }[];
     /** The account's description: the mailbox's display name (Stalwart seeds the sending identity's name from it). */
     description?: string | null;
@@ -181,6 +187,11 @@ export type MailServer = {
    * fakes that don't model it.
    */
   sendingPolicyDrift?(policy: SendingCeiling): Promise<string[] | null>;
+  /**
+   * The relay hold as the mail server holds it: the addresses on its list (lower case) and whether its relaying policy
+   * is exactly the hold's. Null when this credential can't read it. Absent on fakes that don't model it.
+   */
+  relayHoldState?(): Promise<{ listed: string[]; policyInPlace: boolean } | null>;
 };
 
 /** A mailbox's access as the mail server holds it (`accessOf` in `@anhourmail/stalwart-client`). */

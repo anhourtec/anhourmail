@@ -10,7 +10,7 @@ import type { ImportTrainingSamples } from "../imports/ports";
 import { mailboxNameOf } from "../people/names";
 import { mutation } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
-import { mailboxSendAccess } from "../trust/access";
+import { mailboxRelayHold, mailboxSendAccess } from "../trust/access";
 import { desiredSendAccess } from "../trust/desired";
 import type { MailServer } from "./ports";
 import { backoffMs, type ClaimedJob, type JobKind, MAX_ATTEMPTS } from "./types";
@@ -298,6 +298,10 @@ async function apply(deps: Deps, mail: MailServer, job: ClaimedJob, handlers: Jo
     suspended,
     // Never `suspended` here (it isn't an input above); the narrowing keeps the port's type honest.
     access: sendAccess === "suspended" ? "send_blocked" : sendAccess,
+    // `new` and `restricted` may send only to hosted addresses, on every path the mail server sees (ADR-0034 update
+    // "relay hold"): this is what stops a `new` mailbox's JMAP submission to the internet. Whatever the status, so a
+    // resumed or restored mailbox is held from its first moment.
+    relayHold: mailboxRelayHold(mailbox.accountTier, mailbox.mailboxRestricted),
     // Stalwart names the identities it creates (first sign-in, a new alias) after it; existing ones are renamed by the
     // webmail on its next request (people/names.ts, ADR-0014 update 2026-10-31).
     description: mailbox.senderName,

@@ -8,6 +8,11 @@
  *   (`send_blocked`) > effective tier `new` (`smtp_blocked`: no SMTP submission from mail apps, webmail sending kept)
  *   > `active` (`standard`, `trusted`).
  *
+ * On top of the access state, a mailbox whose effective tier is `new` or `restricted` is on the mail server's relay
+ * hold (`mailboxRelayHold`): it may send only to addresses the server hosts, on every authenticated path. For `new`
+ * that is what closes JMAP submission to outside addresses (`smtp_blocked` leaves JMAP open for the webmail); for
+ * `restricted` it is defence in depth behind `send_blocked`.
+ *
  * Pure: no I/O. Webmail limits per tier are applied separately by the BFF (`TRUST_TIERS`).
  */
 import type { TrustTier } from "@anhourmail/shared/sending";
@@ -40,6 +45,12 @@ const TIER_ACCESS: Readonly<Record<TrustTier, MailboxSendAccess>> = {
   standard: "active",
   trusted: "active",
 };
+
+/** Whether the mailbox belongs on the mail server's relay hold: its effective tier doesn't allow outside recipients. */
+export function mailboxRelayHold(accountTier: TrustTier, mailboxRestricted: boolean): boolean {
+  const tier = effectiveTier(accountTier, mailboxRestricted);
+  return tier === "new" || tier === "restricted";
+}
 
 /** The access to apply on the mail server for a mailbox with these limits. */
 export function mailboxSendAccess(input: MailboxSendAccessInput): MailboxSendAccess {

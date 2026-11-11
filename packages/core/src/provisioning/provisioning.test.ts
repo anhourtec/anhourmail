@@ -1689,10 +1689,16 @@ describe("trust tier on the mail server (ADR-0034 §4)", () => {
   /** The fake mail server, recording the suspension and access each ensure asked for, by address. */
   function recording() {
     const mail = fakeMailServer();
-    const calls: { address: string; suspended: boolean; access: string | undefined }[] = [];
+    const calls: { address: string; suspended: boolean; access: string | undefined; relayHold: boolean | undefined }[] =
+      [];
     const ensure = mail.ensureMailbox.bind(mail);
     mail.ensureMailbox = async (input) => {
-      calls.push({ address: input.address, suspended: input.suspended, access: input.access });
+      calls.push({
+        address: input.address,
+        suspended: input.suspended,
+        access: input.access,
+        relayHold: input.relayHold,
+      });
       return ensure(input);
     };
     return { mail, calls };
@@ -1709,16 +1715,27 @@ describe("trust tier on the mail server (ADR-0034 §4)", () => {
   }
 
   it.each([
-    [undefined, "smtp_blocked"],
-    ["new", "smtp_blocked"],
-    ["standard", "active"],
-    ["trusted", "active"],
-    ["restricted", "send_blocked"],
-  ] as const)("account tier %s → %s", async (tier, expected) => {
+    [undefined, "smtp_blocked", true],
+    ["new", "smtp_blocked", true],
+    ["standard", "active", false],
+    ["trusted", "active", false],
+    ["restricted", "send_blocked", true],
+  ] as const)("account tier %s → %s, relay hold %s", async (tier, expected, relayHold) => {
     const { d } = world(tier);
     const { mail, calls } = recording();
     await ensureOnce(d, mail);
-    expect(calls).toEqual([{ address: "owner@example.test", suspended: false, access: expected }]);
+    expect(calls).toEqual([{ address: "owner@example.test", suspended: false, access: expected, relayHold }]);
+  });
+
+  it("a suspended mailbox of a new account stays on the relay hold, so a resume is held from its first moment", async () => {
+    const { d } = world("new");
+    const first = d.uow.state.mailboxes[0];
+    if (first) first.status = "suspended";
+    const { mail, calls } = recording();
+    await ensureOnce(d, mail);
+    expect(calls).toEqual([
+      { address: "owner@example.test", suspended: true, access: "smtp_blocked", relayHold: true },
+    ]);
   });
 
   it("a mailbox restriction send-blocks that mailbox only; lifting it gives the account's access back", async () => {
@@ -1739,9 +1756,11 @@ describe("trust tier on the mail server (ADR-0034 §4)", () => {
     await ensureOnce(d, mail, "m1");
     await ensureOnce(d, mail, "m2");
     expect(calls.map((c) => c.access)).toEqual(["send_blocked", "active"]);
+    expect(calls.map((c) => c.relayHold)).toEqual([true, false]);
     d.uow.state.mailboxRestrictions = [];
     await ensureOnce(d, mail, "m1");
     expect(calls.map((c) => c.access)).toEqual(["send_blocked", "active", "active"]);
+    expect(calls.map((c) => c.relayHold)).toEqual([true, false, false]);
   });
 
   it("another account's tier and restrictions never limit this account's mailbox", async () => {

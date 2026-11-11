@@ -5,7 +5,13 @@ import { TRUST_TIER_ORDER, type TrustTier } from "@anhourmail/shared/sending";
 
 import type { BillingMailboxAccess } from "../billing/lifecycle";
 
-import { MAILBOX_SEND_ACCESS, type MailboxSendAccess, mailboxSendAccess, stricterAccess } from "./access";
+import {
+  MAILBOX_SEND_ACCESS,
+  mailboxRelayHold,
+  type MailboxSendAccess,
+  mailboxSendAccess,
+  stricterAccess,
+} from "./access";
 
 const BILLING: readonly BillingMailboxAccess[] = ["active", "send_blocked", "receive_blocked"];
 const rank = (a: MailboxSendAccess) => MAILBOX_SEND_ACCESS.indexOf(a);
@@ -106,5 +112,29 @@ describe("stricterAccess", () => {
         expect(rank(s)).toBe(Math.max(rank(a), rank(b)));
       }
     }
+  });
+});
+
+describe('mailboxRelayHold (ADR-0034 update "relay hold")', () => {
+  it("holds new and restricted, and any tier of a restricted mailbox; never standard or trusted on their own", () => {
+    expect(TRUST_TIER_ORDER.map((t) => [t, mailboxRelayHold(t, false)])).toEqual(
+      TRUST_TIER_ORDER.map((t) => [t, t === "new" || t === "restricted"]),
+    );
+    for (const t of TRUST_TIER_ORDER) expect(mailboxRelayHold(t, true)).toBe(true);
+  });
+
+  it("every mailbox the server lets submit over JMAP with a tier that doesn't allow outside recipients is held", () => {
+    const cases = ALL.map((input) => ({
+      ...input,
+      access: mailboxSendAccess(input),
+      held: mailboxRelayHold(input.accountTier, input.mailboxRestricted),
+    }));
+    // `smtp_blocked` (JMAP submission open) only ever comes from tier `new`: always held.
+    expect(cases.filter((c) => c.access === "smtp_blocked" && !c.held)).toEqual([]);
+    expect(cases.some((c) => c.held && c.access === "smtp_blocked")).toBe(true);
+    // Not held: only unrestricted mailboxes of tiers that may send outside.
+    expect(
+      cases.filter((c) => !c.held && (c.mailboxRestricted || !["standard", "trusted"].includes(c.accountTier))),
+    ).toEqual([]);
   });
 });
