@@ -7,10 +7,14 @@
  * RFC 2142 addresses) are left out, so transactional mail is never throttled by it. Verified on v0.16.27: the throttle
  * answers `452 4.4.5` at MAIL FROM, the RCPT cap `455 4.5.3`.
  *
+ * It also writes `x:MtaStageRcpt.allowRelaying` with the relay hold first (`relay-hold.ts`): accounts on the hold list
+ * may send only to addresses the server hosts, on every authenticated path.
+ *
  * Numbers and names come from the caller (the deployment's facts); this module only writes and reads them. Idempotent:
  * objects are found again by their description, changed only when they differ, and settings are reloaded only then.
  */
 import type { StalwartManagement } from "./management";
+import { desiredRelaying, isDesiredRelaying } from "./relay-hold";
 
 export type SendingPolicy = {
   messagesPerHour: number;
@@ -125,20 +129,33 @@ const sameThrottle = (have: Throttle, want: DesiredThrottle): boolean =>
 
 const THROTTLE_FIELDS = ["description", "enable", "key", "match", "rate"];
 
-async function read(mgmt: StalwartManagement): Promise<{ throttles: Throttle[]; maxRecipients?: Expression }> {
+async function read(
+  mgmt: StalwartManagement,
+): Promise<{ throttles: Throttle[]; maxRecipients?: Expression; allowRelaying?: unknown }> {
   const [throttles, stages] = await Promise.all([
     mgmt.transport.getAll<Throttle>("x:MtaInboundThrottle", THROTTLE_FIELDS),
-    mgmt.transport.getAll<{ id: string; maxRecipients?: Expression }>(
+    mgmt.transport.getAll<{ id: string; maxRecipients?: Expression; allowRelaying?: unknown }>(
       "x:MtaStageRcpt",
-      ["maxRecipients"],
+      ["maxRecipients", "allowRelaying"],
       ["singleton"],
     ),
   ]);
-  const maxRecipients = stages[0]?.maxRecipients;
-  return maxRecipients === undefined ? { throttles } : { throttles, maxRecipients };
+  const stage = stages[0];
+  return {
+    throttles,
+    ...(stage?.maxRecipients === undefined ? {} : { maxRecipients: stage.maxRecipients }),
+    ...(stage?.allowRelaying === undefined ? {} : { allowRelaying: stage.allowRelaying }),
+  };
 }
 
-export type SendingPolicyResult = { created: number; updated: number; removed: number; recipientsChanged: boolean };
+export type SendingPolicyResult = {
+  created: number;
+  updated: number;
+  removed: number;
+  recipientsChanged: boolean;
+  /** `allowRelaying` was written (the relay hold wasn't in place as `desiredRelaying` has it). */
+  relayingChanged: boolean;
+};
 
 /**
  * Writes the ceiling: creates or corrects the two throttles (a duplicate of ours is removed), sets the RCPT cap, then
@@ -147,7 +164,13 @@ export type SendingPolicyResult = { created: number; updated: number; removed: n
 export async function applySendingPolicy(mgmt: StalwartManagement, p: SendingPolicy): Promise<SendingPolicyResult> {
   const want = desiredThrottles(p);
   const have = await read(mgmt);
-  const out: SendingPolicyResult = { created: 0, updated: 0, removed: 0, recipientsChanged: false };
+  const out: SendingPolicyResult = {
+    created: 0,
+    updated: 0,
+    removed: 0,
+    recipientsChanged: false,
+    relayingChanged: false,
+  };
   const create: Record<string, DesiredThrottle> = {};
   const destroy: string[] = [];
   want.forEach((w, i) => {
@@ -174,13 +197,20 @@ export async function applySendingPolicy(mgmt: StalwartManagement, p: SendingPol
     await mgmt.updateSingleton("x:MtaStageRcpt", { maxRecipients: cap });
     out.recipientsChanged = true;
   }
-  if (out.created + out.updated + out.removed > 0 || out.recipientsChanged) await mgmt.reloadSettings();
+  if (!isDesiredRelaying(have.allowRelaying)) {
+    await mgmt.updateSingleton("x:MtaStageRcpt", { allowRelaying: desiredRelaying() });
+    out.relayingChanged = true;
+  }
+  if (out.created + out.updated + out.removed > 0 || out.recipientsChanged || out.relayingChanged) {
+    await mgmt.reloadSettings();
+  }
   return out;
 }
 
 /**
  * What differs from the ceiling on the mail server, by name (`throttle-hour-missing`, `throttle-day-changed`,
- * `throttle-duplicate`, `max-recipients-changed`); empty when it is in place. Read only (the reconciler).
+ * `throttle-duplicate`, `max-recipients-changed`, `relaying-changed`); empty when it is in place. Read only (the
+ * reconciler).
  */
 export async function sendingPolicyDrift(mgmt: StalwartManagement, p: SendingPolicy): Promise<string[]> {
   const have = await read(mgmt);
@@ -194,5 +224,6 @@ export async function sendingPolicyDrift(mgmt: StalwartManagement, p: SendingPol
     if (ours.length > 1) out.push(`throttle-${name}-duplicate`);
   });
   if (!sameExpression(have.maxRecipients, desiredMaxRecipients(p))) out.push("max-recipients-changed");
+  if (!isDesiredRelaying(have.allowRelaying)) out.push("relaying-changed");
   return out;
 }

@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { StalwartManagement } from "./management";
+import { DEFAULT_RELAYING, desiredRelaying, RELAY_HOLD_CONDITION } from "./relay-hold";
 import {
   applySendingPolicy,
   coveredSender,
@@ -23,13 +24,19 @@ const POLICY: SendingPolicy = {
 type Row = Record<string, unknown> & { id: string };
 
 /** A fake management client holding the throttles and the RCPT stage, recording every write and reload. */
-function fake(throttles: Row[] = [], maxRecipients: unknown = { match: {}, else: "100" }) {
-  const state = { throttles: [...throttles], maxRecipients, sets: [] as unknown[], reloads: 0, next: 1 };
+function fake(
+  throttles: Row[] = [],
+  maxRecipients: unknown = { match: {}, else: "100" },
+  allowRelaying: unknown = { match: {}, else: DEFAULT_RELAYING },
+) {
+  const state = { throttles: [...throttles], maxRecipients, allowRelaying, sets: [] as unknown[], reloads: 0, next: 1 };
   const mgmt = {
     transport: {
       getAll: async (object: string) => {
         if (object === "x:MtaInboundThrottle") return state.throttles.map((t) => ({ ...t }));
-        if (object === "x:MtaStageRcpt") return [{ id: "singleton", maxRecipients: state.maxRecipients }];
+        if (object === "x:MtaStageRcpt") {
+          return [{ id: "singleton", maxRecipients: state.maxRecipients, allowRelaying: state.allowRelaying }];
+        }
         throw new Error(`unexpected ${object}`);
       },
       set: async (object: string, args: Record<string, unknown>) => {
@@ -50,7 +57,8 @@ function fake(throttles: Row[] = [], maxRecipients: unknown = { match: {}, else:
     },
     updateSingleton: async (object: string, fields: Record<string, unknown>) => {
       state.sets.push({ object, fields });
-      state.maxRecipients = fields.maxRecipients;
+      if ("maxRecipients" in fields) state.maxRecipients = fields.maxRecipients;
+      if ("allowRelaying" in fields) state.allowRelaying = fields.allowRelaying;
     },
     reloadSettings: async () => {
       state.reloads += 1;
@@ -110,12 +118,18 @@ describe("the authenticated-sender ceiling", () => {
       "throttle-hour-missing",
       "throttle-day-missing",
       "max-recipients-changed",
+      "relaying-changed",
     ]);
     expect(await applySendingPolicy(mgmt, POLICY)).toEqual({
       created: 2,
       updated: 0,
       removed: 0,
       recipientsChanged: true,
+      relayingChanged: true,
+    });
+    expect(state.allowRelaying).toEqual({
+      match: { "0": { if: RELAY_HOLD_CONDITION, then: "false" } },
+      else: "!is_empty(authenticated_as)",
     });
     expect(state.reloads).toBe(1);
     expect(state.throttles.map((t) => t.description)).toEqual([
@@ -130,6 +144,7 @@ describe("the authenticated-sender ceiling", () => {
       updated: 0,
       removed: 0,
       recipientsChanged: false,
+      relayingChanged: false,
     });
     expect(state.sets.length).toBe(writes);
     expect(state.reloads).toBe(1);
@@ -145,6 +160,7 @@ describe("the authenticated-sender ceiling", () => {
         { ...day, id: "d1", enable: false },
       ],
       desiredMaxRecipients(POLICY),
+      desiredRelaying(),
     );
     expect(await sendingPolicyDrift(mgmt, POLICY)).toEqual([
       "throttle-hour-changed",
@@ -156,6 +172,7 @@ describe("the authenticated-sender ceiling", () => {
       updated: 2,
       removed: 1,
       recipientsChanged: false,
+      relayingChanged: false,
     });
     expect(state.throttles.find((t) => t.id === "default")).toEqual(other);
     // Changed ones are replaced whole (a description can't be updated on the server); one of each is left.
@@ -174,11 +191,33 @@ describe("the authenticated-sender ceiling", () => {
         { ...day, id: "d", match: { match: {}, else: "true" } },
       ],
       { match: { "0": { if: "true", then: "50" } }, else: "100" },
+      desiredRelaying(),
     );
     expect(await sendingPolicyDrift(mgmt, POLICY)).toEqual([
       "throttle-hour-changed",
       "throttle-day-changed",
       "max-recipients-changed",
     ]);
+  });
+
+  it("puts the relay hold first in allowRelaying, replacing a branch that would allow held accounts before it", async () => {
+    const [hour, day] = desiredThrottles(POLICY);
+    const opened = {
+      match: { "0": { if: "true", then: "true" }, "1": { if: RELAY_HOLD_CONDITION, then: "false" } },
+      else: DEFAULT_RELAYING,
+    };
+    const { mgmt, state } = fake(
+      [
+        { ...hour, id: "h" },
+        { ...day, id: "d" },
+      ],
+      desiredMaxRecipients(POLICY),
+      opened,
+    );
+    expect(await sendingPolicyDrift(mgmt, POLICY)).toEqual(["relaying-changed"]);
+    expect(await applySendingPolicy(mgmt, POLICY)).toMatchObject({ relayingChanged: true, recipientsChanged: false });
+    expect(state.allowRelaying).toEqual(desiredRelaying());
+    expect(state.reloads).toBe(1);
+    expect(await sendingPolicyDrift(mgmt, POLICY)).toEqual([]);
   });
 });

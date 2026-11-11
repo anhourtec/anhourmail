@@ -63,9 +63,9 @@ beforeAll(async () => {
   const before = (
     await mgmt.transport.getAll<Throttle>("x:MtaInboundThrottle", ["description", "enable", "key", "match", "rate"])
   ).filter((t) => ours.has(t.description ?? ""));
-  const [stage] = await mgmt.transport.getAll<{ id: string; maxRecipients: unknown }>(
+  const [stage] = await mgmt.transport.getAll<{ id: string; maxRecipients: unknown; allowRelaying: unknown }>(
     "x:MtaStageRcpt",
-    ["maxRecipients"],
+    ["maxRecipients", "allowRelaying"],
     ["singleton"],
   );
   restore.push(async () => {
@@ -78,7 +78,10 @@ beforeAll(async () => {
         create: Object.fromEntries(before.map(({ id: _id, ...t }, i) => [`r${String(i)}`, t])),
       });
     }
-    await mgmt.updateSingleton("x:MtaStageRcpt", { maxRecipients: stage?.maxRecipients });
+    await mgmt.updateSingleton("x:MtaStageRcpt", {
+      maxRecipients: stage?.maxRecipients,
+      allowRelaying: stage?.allowRelaying,
+    });
     await mgmt.reloadSettings();
   });
 }, 120_000);
@@ -130,6 +133,7 @@ describe("the authenticated-sender ceiling on the mail server", () => {
       updated: 0,
       removed: 0,
       recipientsChanged: false,
+      relayingChanged: false,
     });
     expect(await sendingPolicyDrift(mgmt, policy)).toEqual([]);
     // The worker's provisioning key can't read it (no `sysMtaInboundThrottleGet`): the reconciler reports the check as
