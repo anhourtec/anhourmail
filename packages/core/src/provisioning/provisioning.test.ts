@@ -5,7 +5,7 @@ import { deps as makeDeps, fixedClock } from "../__tests__/helpers";
 import { defaultBilling } from "../billing/lifecycle";
 import type { MailServer, MailServerAccess } from "./ports";
 import { enqueueProvisioning, reconcile, requeueActiveMailboxes, runClaimedJob, runNextJob } from "./service";
-import { backoffMs, MAX_ATTEMPTS, STALE_RUNNING_MS } from "./types";
+import { backoffMs, EnsureIncompleteError, MAX_ATTEMPTS, STALE_RUNNING_MS, TIGHTEN_RETRY_MAX_MS } from "./types";
 
 type Box = {
   address: string;
@@ -387,7 +387,7 @@ describe("provisioning jobs", () => {
     expect(d.uow.state.mailboxes[0]).toMatchObject({ status: "failed" });
   });
 
-  it("a mailbox meant to be off stays off: a failed suspension or deletion keeps its status, and a re-run keeps it off", async () => {
+  it("a mailbox meant to be off stays off: a failing suspension or deletion keeps retrying and lands when it can", async () => {
     for (const intent of ["suspended", "deleting"] as const) {
       const { d, clock } = setup();
       const working = fakeMailServer();
@@ -400,20 +400,103 @@ describe("provisioning jobs", () => {
       if (intent === "deleting") d.uow.state.mailboxes[0]!.purgeAfter = new Date(clock.now().getTime() + 86_400_000);
       const refusing: MailServer = { ...working, ensureMailbox: () => Promise.reject(new Error("mail server down")) };
       await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
-      for (let i = 0; i < MAX_ATTEMPTS; i++) {
-        await runNextJob(d, refusing);
-        clock.set(new Date(clock.now().getTime() + backoffMs(i + 1)));
+      for (let i = 0; i < MAX_ATTEMPTS + 1; i++) {
+        const ran = await runNextJob(d, refusing);
+        // Past the normal attempts it is reported overdue (an alert), never given up.
+        expect(ran?.overdue ?? false).toBe(i + 1 >= MAX_ATTEMPTS);
+        clock.set(new Date(clock.now().getTime() + Math.min(backoffMs(i + 1), TIGHTEN_RETRY_MAX_MS)));
       }
-      // Not "failed": the intent (off) stays recorded, and so does the error.
+      // Not "failed": the intent (off) stays recorded, the job is still queued with its error, nothing was given up.
       expect(d.uow.state.mailboxes[0]).toMatchObject({ status: intent });
-      expect(d.uow.state.mailboxes[0]?.lastError).toContain("mail server down");
-      // A later run (the reconciler's re-queue, a backfill or migration 0032), with no password waiting, turns it off.
+      const job = d.uow.state.jobs.filter((j) => j.kind === "mailbox.ensure" && j.subjectId === "m1").at(-1);
+      expect(job).toMatchObject({ status: "queued", attempts: MAX_ATTEMPTS + 1 });
+      expect(job?.lastError).toContain("mail server down");
+      expect(d.uow.state.audit.some((e) => e.action === "platform.provisioning_failed")).toBe(false);
+      // Once the mail server answers again, the next retry, with no password waiting, turns it off.
       expect(d.uow.state.mailboxPasswords.find((p) => p.mailboxId === "m1")?.pendingHash ?? null).toBeNull();
-      await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
       while (await runNextJob(d, working));
       expect(working.boxes[0]?.suspended).toBe(true);
       expect(d.uow.state.mailboxes[0]?.status).toBe(intent);
     }
+  });
+
+  it("a restriction that keeps failing is retried for ever, capped, and never marks the mailbox failed", async () => {
+    const { d, clock } = setup();
+    const working = fakeMailServer();
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    d.uow.state.accounts.push({ id: "a1", name: "One", plan: "plus" });
+    d.uow.state.trust.push(trustRow("a1", "standard", new Date(0)));
+    while (await runNextJob(d, working));
+    // Staff restrict the account; the mail server refuses every write.
+    d.uow.state.trust[0]!.tier = "restricted";
+    const refusing: MailServer = { ...working, ensureMailbox: () => Promise.reject(new Error("mail server down")) };
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    const gaps: number[] = [];
+    for (let i = 0; i < MAX_ATTEMPTS + 4; i++) {
+      const ran = await runNextJob(d, refusing);
+      expect(ran?.overdue ?? false).toBe(i + 1 >= MAX_ATTEMPTS);
+      const job = d.uow.state.jobs.find((j) => j.kind === "mailbox.ensure" && j.status === "queued");
+      if (!job) throw new Error("the restriction's job was given up");
+      gaps.push(job.runAfter.getTime() - clock.now().getTime());
+      clock.set(job.runAfter);
+    }
+    expect(Math.max(...gaps)).toBe(TIGHTEN_RETRY_MAX_MS);
+    expect(d.uow.state.mailboxes[0]?.status).toBe("active");
+    expect(d.uow.state.audit.some((e) => e.action === "platform.provisioning_failed")).toBe(false);
+  });
+
+  it("gives up as usual when the mail server says it was left at least as strict as wanted", async () => {
+    const { d, clock } = setup();
+    const working = fakeMailServer();
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    while (await runNextJob(d, working));
+    d.uow.state.accounts.push({ id: "a1", name: "One", plan: "free" });
+    d.uow.state.trust.push(trustRow("a1", "new", new Date(0)));
+    const failing = (looser: boolean | null): MailServer => ({
+      ...working,
+      ensureMailbox: () => Promise.reject(new EnsureIncompleteError(looser, new Error("alias refused"))),
+    });
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      const ran = await runNextJob(d, failing(false));
+      expect(ran?.overdue).toBeUndefined();
+      clock.set(new Date(clock.now().getTime() + backoffMs(i + 1)));
+    }
+    expect(d.uow.state.mailboxes[0]?.status).toBe("failed");
+    // The cause's text is what is stored, not the wrapper's.
+    expect(d.uow.state.mailboxes[0]?.lastError).toBe("Error: alias refused");
+    // Said to be looser (or unknown while a hold was asked for): never given up.
+    for (const looser of [true, null]) {
+      d.uow.state.mailboxes[0]!.status = "active";
+      await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+      let last: Awaited<ReturnType<typeof runNextJob>> = null;
+      for (let i = 0; i < MAX_ATTEMPTS; i++) {
+        last = await runNextJob(d, failing(looser));
+        clock.set(new Date(clock.now().getTime() + TIGHTEN_RETRY_MAX_MS));
+      }
+      expect(last?.overdue).toBe(true);
+      expect(d.uow.state.mailboxes[0]?.status).toBe("active");
+      while (await runNextJob(d, working));
+    }
+  });
+
+  it("a loosening ensure that keeps failing gives up (the reconciler re-queues it)", async () => {
+    const { d, clock } = setup();
+    const working = fakeMailServer();
+    await enqueueProvisioning(d, { kind: "domain.ensure", subjectId: "d1" });
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    d.uow.state.accounts.push({ id: "a1", name: "One", plan: "plus" });
+    d.uow.state.trust.push(trustRow("a1", "standard", new Date(0)));
+    while (await runNextJob(d, working));
+    const refusing: MailServer = { ...working, ensureMailbox: () => Promise.reject(new Error("mail server down")) };
+    await enqueueProvisioning(d, { kind: "mailbox.ensure", subjectId: "m1" });
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      expect((await runNextJob(d, refusing))?.overdue).toBeUndefined();
+      clock.set(new Date(clock.now().getTime() + backoffMs(i + 1)));
+    }
+    expect(d.uow.state.mailboxes[0]?.status).toBe("failed");
   });
 
   it("turns off a catch-all whose mailbox ends up failed, and queues the domain", async () => {
@@ -835,6 +918,29 @@ describe("sending access and the sending ceiling on the mail server (ADR-0034 §
     expect((await reconcile(d, mail)).relayHoldMismatch).toEqual({ missing: [], extra: [], policyInPlace: true });
     state = null;
     expect((await reconcile(d, mail)).relayHoldMismatch).toBeNull();
+  });
+
+  it("compares failed mailboxes the mail server has (access and relay hold) and re-queues them", async () => {
+    const { d } = setup();
+    d.uow.state.mailboxes = [
+      { ...base, accountId: "a1", id: "m1", address: "gaveup@example.test", status: "failed", stalwartId: "x1" },
+      { ...base, accountId: "a1", id: "m2", address: "never@example.test", status: "failed", stalwartId: null },
+    ];
+    d.uow.state.accounts.push({ id: "a1", name: "One", plan: "free" });
+    // A restriction whose ensure gave up before this release: the server still has it open.
+    d.uow.state.trust.push(trustRow("a1", "restricted", new Date(0)));
+    const { mail, access } = accessServer();
+    await mail.ensureDomain("example.test");
+    await mail.ensureMailbox(ensureArgs("gaveup@example.test", 1));
+    access.set("gaveup@example.test", "active");
+    mail.relayHoldState = async () => ({ listed: ["never@example.test"], policyInPlace: true });
+    const report = await reconcile(d, mail);
+    expect(report.accessMismatch).toEqual([
+      { address: "gaveup@example.test", desired: "send_blocked", actual: "active" },
+    ]);
+    // Held (restricted) but not listed; the one never created has its own job, so its key isn't a stranger's.
+    expect(report.relayHoldMismatch).toEqual({ missing: ["gaveup@example.test"], extra: [], policyInPlace: true });
+    expect(d.uow.state.jobs.map((j) => j.subjectId)).toEqual(["m1"]);
   });
 
   it("reloads the relay hold's list before anything else, and counts a failed reload as drift", async () => {

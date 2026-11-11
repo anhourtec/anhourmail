@@ -13,7 +13,14 @@ import type { Deps, Repositories, RequestMeta } from "../ports";
 import { mailboxRelayHold, mailboxSendAccess } from "../trust/access";
 import { desiredRelayHold, desiredSendAccess } from "../trust/desired";
 import type { MailServer } from "./ports";
-import { backoffMs, type ClaimedJob, type JobKind, MAX_ATTEMPTS } from "./types";
+import {
+  backoffMs,
+  type ClaimedJob,
+  EnsureIncompleteError,
+  type JobKind,
+  MAX_ATTEMPTS,
+  TIGHTEN_RETRY_MAX_MS,
+} from "./types";
 
 const SYSTEM = { kind: "system", name: "provisioning" } as const;
 const req = (id: string): RequestMeta => ({ requestId: `job-${id}`, ip: null, userAgent: null });
@@ -43,7 +50,20 @@ class LockLostError extends Error {
  * transaction too. A takeover can then only land between `held` and the call itself, which the mail-server client's
  * request timeout (seconds) keeps far below the stale limit (minutes).
  */
-async function apply(deps: Deps, mail: MailServer, job: ClaimedJob, handlers: JobHandlers): Promise<void> {
+/**
+ * What a run learnt before it failed: `restricting` once a `mailbox.ensure` is about to ask the mail server for an
+ * existing account to be held, restricted or suspended (any access but `active`), so a failure that leaves it unknown
+ * whether that took is treated as one that would tighten.
+ */
+type RunContext = { restricting: boolean };
+
+async function apply(
+  deps: Deps,
+  mail: MailServer,
+  job: ClaimedJob,
+  handlers: JobHandlers,
+  ctx: RunContext,
+): Promise<void> {
   const confirm = async (r: Repositories) => {
     if (!(await r.provisioning.renew(job, deps.clock.now()))) throw new LockLostError();
   };
@@ -289,6 +309,10 @@ async function apply(deps: Deps, mail: MailServer, job: ClaimedJob, handlers: Jo
     accountTier: mailbox.accountTier,
     mailboxRestricted: mailbox.mailboxRestricted,
   });
+  const relayHold = mailboxRelayHold(mailbox.accountTier, mailbox.mailboxRestricted);
+  // An existing account asked to be anything but fully open: if this run fails without saying how far it got, it may
+  // be looser than wanted, and the job never gives up (`runClaimedJob`).
+  ctx.restricting = !creating && (suspended || sendAccess !== "active" || relayHold);
   const ensured = await mail.ensureMailbox({
     externalId: mailbox.stalwartId,
     // A new account gets the password chosen at creation; an existing one keeps its own (a reset has its own job).
@@ -301,7 +325,7 @@ async function apply(deps: Deps, mail: MailServer, job: ClaimedJob, handlers: Jo
     // `new` and `restricted` may send only to hosted addresses, on every path the mail server sees (ADR-0034 update
     // "relay hold"): this is what stops a `new` mailbox's JMAP submission to the internet. Whatever the status, so a
     // resumed or restored mailbox is held from its first moment.
-    relayHold: mailboxRelayHold(mailbox.accountTier, mailbox.mailboxRestricted),
+    relayHold,
     // Stalwart names the identities it creates (first sign-in, a new alias) after it; existing ones are renamed by the
     // webmail on its next request (people/names.ts, ADR-0014 update 2026-10-31).
     description: mailbox.senderName,
@@ -342,7 +366,20 @@ const isDue = (purgeAfter: Date | null, now: Date): boolean => purgeAfter !== nu
  * A job this worker ran. `lockLost`: its claim went stale while it ran and another worker took the job over, so this
  * run's outcome (done, retry or give up) was discarded and the newer claim decides (the caller logs it).
  */
-export type ProcessedJob = ClaimedJob & { lockLost: boolean };
+export type ProcessedJob = ClaimedJob & {
+  lockLost: boolean;
+  /**
+   * A `mailbox.ensure` that would tighten the mailbox (`EnsureIncompleteError.looserThanWanted`, or unknown while it
+   * asked for a restriction) failed again past `MAX_ATTEMPTS`: it is retried (capped at `TIGHTEN_RETRY_MAX_MS`), never
+   * marked failed, and the caller logs it for an alert every time.
+   */
+  overdue?: boolean;
+};
+
+/** Whether a failed `mailbox.ensure` may have left the account looser than the control plane wants. */
+const wouldTighten = (job: ClaimedJob, err: unknown, ctx: RunContext): boolean =>
+  job.kind === "mailbox.ensure" &&
+  (err instanceof EnsureIncompleteError ? (err.looserThanWanted ?? ctx.restricting) : ctx.restricting);
 
 /**
  * Claims and runs one job. Returns the job (or null when the queue is empty). Failures retry with backoff; the
@@ -442,14 +479,28 @@ export async function runClaimedJob(
   handlers: JobHandlers = {},
 ): Promise<ProcessedJob> {
   let owned = true;
+  const ctx: RunContext = { restricting: false };
   try {
-    await apply(deps, mail, job, handlers);
+    await apply(deps, mail, job, handlers, ctx);
     owned = await deps.uow.run((r) => r.provisioning.complete(job, deps.clock.now()));
   } catch (err) {
     // Taken over before a side effect: nothing of this run is recorded (the newer claim applies the latest state).
     if (err instanceof LockLostError) return { ...job, lockLost: true };
-    const error = describe(err);
+    const error = describe(err instanceof EnsureIncompleteError ? err.cause : err);
     const now = deps.clock.now();
+    if (job.attempts >= MAX_ATTEMPTS && wouldTighten(job, err, ctx)) {
+      // A restriction that hasn't reached the mail server is never given up (ADR-0034 security review F2): a failed
+      // mailbox drops out of the settled checks, and a restricted or demoted one would stay open. Keeps retrying.
+      owned = await deps.uow.run((r) =>
+        r.provisioning.retry(
+          job,
+          error,
+          new Date(now.getTime() + Math.min(backoffMs(job.attempts), TIGHTEN_RETRY_MAX_MS)),
+          now,
+        ),
+      );
+      return { ...job, lockLost: !owned, overdue: true };
+    }
     if (job.attempts >= MAX_ATTEMPTS) {
       await mutation(
         deps,
@@ -563,8 +614,9 @@ export type DriftReport = {
    */
   sieveLockMismatch: string[];
   /**
-   * Active mailboxes whose sending access on the mail server isn't what billing and the trust tier want now (ADR-0034
-   * §4, `desiredSendAccess`): e.g. an `ensure` that gave up after a tier change. Re-queued; `mailbox.ensure` writes it.
+   * Active mailboxes, and failed ones the mail server has, whose sending access there isn't what billing and the trust
+   * tier want now (ADR-0034 §4, `desiredSendAccess`): e.g. an `ensure` that gave up after a tier change. Re-queued;
+   * `mailbox.ensure` writes it.
    */
   accessMismatch: { address: string; desired: string; actual: string }[];
   /**
@@ -573,11 +625,11 @@ export type DriftReport = {
    */
   sendingPolicyMismatch: string[] | null;
   /**
-   * The relay hold (ADR-0034 update "relay hold") against the trust tiers, for settled mailboxes: `missing`, held but
-   * not on the list (re-queued: `mailbox.ensure` lists it, fail-closed); `extra`, on the list but not held (ours are
-   * re-queued; an address we don't know is reported only: holding it stops nothing we want); `policyInPlace` false
-   * when the server's relaying policy isn't exactly the hold's (reported; the deploy's bootstrap applies it). Null when
-   * the credential can't read it, or the adapter doesn't check it.
+   * The relay hold (ADR-0034 update "relay hold") against the trust tiers, for settled mailboxes and failed ones the
+   * mail server has: `missing`, held but not on the list (re-queued: `mailbox.ensure` lists it, fail-closed); `extra`,
+   * on the list but not held (ours are re-queued; an address we don't know is reported only: holding it stops nothing
+   * we want); `policyInPlace` false when the server's relaying policy isn't exactly the hold's (reported; the deploy's
+   * bootstrap applies it). Null when the credential can't read it, or the adapter doesn't check it.
    */
   relayHoldMismatch: { missing: string[]; extra: string[]; policyInPlace: boolean } | null;
   /**
@@ -680,10 +732,15 @@ export async function reconcile(
     report.sieveLockMismatch.push(m.address);
     if (!requeue.includes(m.id)) requeue.push(m.id);
   }
-  // Sending access of settled active mailboxes (a suspended one is compared above). What `mailbox.ensure` writes is
-  // never `receive_blocked` or `suspended` for an active mailbox, so either is drift too.
+  // Sending access of settled active mailboxes (a suspended one is compared above), and of failed ones the mail server
+  // has: an ensure that gave up (one that would have loosened it; one that would tighten never gives up) leaves the
+  // account as it was. What `mailbox.ensure` writes is never `receive_blocked` or `suspended` for either, so both are
+  // drift too.
   const haveAccess = new Map(mailboxes.map((m) => [m.address, m.access] as const));
-  const activeIds = settled.filter((m) => m.status === "active" && haveAccess.get(m.address) !== undefined);
+  const failedOnServer = desired.mailboxes.filter((m) => m.status === "failed" && m.provisioned);
+  const activeIds = [...settled.filter((m) => m.status === "active"), ...failedOnServer].filter(
+    (m) => haveAccess.get(m.address) !== undefined,
+  );
   if (activeIds.length > 0) {
     const now = deps.clock.now();
     const wanted = await deps.uow.run(async (r) => {
@@ -710,7 +767,7 @@ export async function reconcile(
   const hold = mail.relayHoldState ? await mail.relayHoldState() : null;
   if (hold) {
     const listed = new Set(hold.listed);
-    const onServer = settled.filter((m) => haveMailboxes.has(m.address));
+    const onServer = [...settled, ...failedOnServer].filter((m) => haveMailboxes.has(m.address));
     const wantHeld = await deps.uow.run(async (r) => {
       const out: { id: string; address: string; held: boolean }[] = [];
       for (const m of onServer) {
@@ -720,10 +777,11 @@ export async function reconcile(
       return out;
     });
     const ours = new Set(wantHeld.map((w) => w.address.toLowerCase()));
-    // Mailboxes still being set up (or failed) have a job of their own that writes their place on the list.
+    // Mailboxes still being set up have a job of their own that writes their place on the list, as do failed ones
+    // never created there (a failed one the server has is compared above).
     const inFlight = new Set(
       desired.mailboxes
-        .filter((m) => m.status === "provisioning" || m.status === "failed")
+        .filter((m) => m.status === "provisioning" || (m.status === "failed" && !m.provisioned))
         .map((m) => m.address.toLowerCase()),
     );
     const missing = wantHeld.filter((w) => w.held && !listed.has(w.address.toLowerCase()));

@@ -110,3 +110,25 @@ export type DesiredMailbox = {
 /** Retries back off 10 s, 20 s, 40 s, 80 s; the 5th failure gives up and alerts (audit). */
 export const MAX_ATTEMPTS = 5;
 export const backoffMs = (attempt: number): number => 10_000 * 2 ** Math.max(0, attempt - 1);
+
+/**
+ * A `mailbox.ensure` that would tighten what the mail server lets the mailbox do (a restriction, a hold, a suspension)
+ * never gives up: past `MAX_ATTEMPTS` it keeps retrying at most this far apart, and each such run is reported for an
+ * alert (`ProcessedJob.overdue`). Loosening ensures give up as usual (the reconciler finds and re-queues them).
+ */
+export const TIGHTEN_RETRY_MAX_MS = 5 * 60_000;
+
+/**
+ * Thrown by `MailServer.ensureMailbox` when it failed part-way, saying what it left behind: `looserThanWanted` is
+ * true when the account can still do something the control plane wants stopped (send, relay to the internet, sign
+ * in), false when it is at least as strict as wanted, null when that isn't known (the server couldn't be read).
+ */
+export class EnsureIncompleteError extends Error {
+  constructor(
+    readonly looserThanWanted: boolean | null,
+    override readonly cause: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = cause instanceof Error ? cause.name : "EnsureIncompleteError";
+  }
+}
