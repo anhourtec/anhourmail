@@ -169,10 +169,15 @@ export type ManagedScriptDrift = {
   unguardedForwarding: number;
   /**
    * Scripts that still redirect or reply where the mailbox's effective tier doesn't allow it (ADR-0034: every command
-   * while `restricted`, redirects outside while `new`; `sending-pause.ts`). Reported, not re-queued: the web app writes
-   * the pause after a tier change and at start-up.
+   * while `restricted`, redirects outside while `new`; `sending-pause.ts`). Not re-queued (the worker can't write
+   * Sieve): their accounts are handed to the web app (`unpausedAccounts`).
    */
   unpausedSending: number;
+  /**
+   * The accounts of those mailboxes (ids only, never logged): the scheduler signals each to the web app, which alone
+   * may write Sieve, and the web app re-applies the pause (ADR-0034 security review F5).
+   */
+  unpausedAccounts: string[];
   /** Mailboxes queued for `mailbox.ensure` (re-asserts the customer lock; never rewrites or deletes anything). */
   requeued: number;
   clean: boolean;
@@ -212,6 +217,7 @@ export async function reconcileManagedScripts(
     unreachable: 0,
     unguardedForwarding: 0,
     unpausedSending: 0,
+    unpausedAccounts: [],
     requeued: 0,
     clean: true,
   };
@@ -245,7 +251,10 @@ export async function reconcileManagedScripts(
       drift = true;
     }
     if (found.unguardedRedirect) out.unguardedForwarding += 1;
-    if (await sendsAgainstTier(deps, m, script.content)) out.unpausedSending += 1;
+    if (await sendsAgainstTier(deps, m, script.content)) {
+      out.unpausedSending += 1;
+      if (!out.unpausedAccounts.includes(m.accountId)) out.unpausedAccounts.push(m.accountId);
+    }
     if (drift) requeue.push(m.id);
   }
   out.requeued = requeue.length;

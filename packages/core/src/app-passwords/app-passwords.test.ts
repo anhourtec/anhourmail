@@ -634,9 +634,17 @@ describe("reconciling managed Sieve scripts", () => {
       action: "platform.reconciler_drift",
       meta: { unpausedSending: report.unpausedSending },
     });
+    // Their accounts, once each, for the scheduler to signal to the web app; never in the audit entry.
+    const accounts = [
+      ...new Set(
+        d.uow.state.mailboxes.filter((m) => m.status === "active" && m.stalwartId !== null).map((m) => m.accountId),
+      ),
+    ];
+    expect([...report.unpausedAccounts].sort()).toEqual(accounts.sort());
+    expect(JSON.stringify(d.uow.state.audit.at(-1))).not.toContain(accounts[0] ?? "-");
     // Paused as the web app writes it: clean on this count.
     const paused = script(`${PAUSE_OPEN}vacation "Away.";\n}\n`);
-    expect((await reconcileManagedScripts(d, paused)).unpausedSending).toBe(0);
+    expect(await reconcileManagedScripts(d, paused)).toMatchObject({ unpausedSending: 0, unpausedAccounts: [] });
   });
 
   it("is clean (no audit) when every script is ours, and counts a mailbox the server can't answer for", async () => {

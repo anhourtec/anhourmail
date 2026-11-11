@@ -8,7 +8,9 @@ import { stalwartAppPasswordInventory, stalwartManagedScripts } from "@anhourmai
 import { reconcileAppPasswords } from "@anhourmail/core/app-passwords";
 import { reconcile } from "@anhourmail/core/provisioning";
 import { reconcileManagedScripts, trustedAuthservIds } from "@anhourmail/core/webmail";
+import { redisAccountSignals, SENDING_PAUSE_SIGNALS_KEY } from "@anhourmail/server/account-signals";
 import { log } from "@anhourmail/server/log";
+import { redis } from "@anhourmail/server/redis";
 import {
   abuseBanPeriodFromEnv,
   hasStalwartCredential,
@@ -96,8 +98,27 @@ if (hasStalwartCredential("audit")) {
     workerPlatform().hosts.mx,
     process.env.NODE_ENV === "production",
   );
-  const scripts = await reconcileManagedScripts(deps, stalwartManagedScripts(stalwartAudit()), { authservIds });
+  const { unpausedAccounts, ...scripts } = await reconcileManagedScripts(
+    deps,
+    stalwartManagedScripts(stalwartAudit()),
+    { authservIds },
+  );
   l.at(scripts.clean ? "info" : "warn", "managed script reconcile finished", { ...scripts });
+  // Scripts that still forward or reply against their tier: the web app (the only process that may write Sieve)
+  // re-applies the pause for each account it is signalled, every run, until the scripts are in line (ADR-0034 security
+  // review F5). Without Redis they wait for the web app's own catch-up pass.
+  if (unpausedAccounts.length > 0) {
+    if (process.env.REDIS_URL) {
+      const signals = redisAccountSignals(redis(), SENDING_PAUSE_SIGNALS_KEY);
+      for (const id of unpausedAccounts) await signals.signal(id);
+      await redis()
+        .quit()
+        .catch(() => undefined);
+      l.info("sending pause signalled to the web app", { accounts: unpausedAccounts.length });
+    } else {
+      l.warn("sending pause not signalled: no REDIS_URL", { accounts: unpausedAccounts.length });
+    }
+  }
 } else {
   l.warn("managed script reconcile skipped: no audit credential in this process (STALWART_AUDIT_KEY, scheduler only)");
 }
