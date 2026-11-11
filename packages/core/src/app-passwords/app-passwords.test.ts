@@ -29,6 +29,7 @@ import type { Deps, UnitOfWork } from "../ports";
 import type { UserActor } from "../actor";
 import { forwardingGuard } from "../webmail/forwarding-guard";
 import { inspectManagedScript, reconcileManagedScripts, upgradeManagedScripts } from "../webmail/managed-script";
+import { PAUSE_OPEN } from "../webmail/sending-pause";
 import { appPasswordName, appPasswordProtocols } from "./entity";
 import type { AppPasswordInventory, AppPasswordIssuer } from "./ports";
 import {
@@ -595,6 +596,47 @@ describe("reconciling managed Sieve scripts", () => {
       meta: { unconfirmedRedirects: 2, scriptsNotOurs: 1, foreignScripts: 1, scriptsInactive: 1 },
     });
     expect(JSON.stringify(d.uow.state.audit.at(-1))).not.toContain("evil.test");
+  });
+
+  it("reports a script that still forwards or replies where the mailbox's tier doesn't allow it (no re-queue)", async () => {
+    const { d } = setup();
+    const tierOf = (tier: "new" | "standard" | "restricted") => {
+      // Every account the mailboxes are in, so each count is about the tier set here.
+      d.uow.state.trust = [...new Set(d.uow.state.mailboxes.map((m) => m.accountId))].map((accountId) => ({
+        accountId,
+        tier,
+        since: d.clock.now(),
+        source: "staff",
+        reason: null,
+        note: null,
+        setBy: null,
+        lastRestrictedAt: null,
+      }));
+    };
+    const internal = `copy@${d.platform.freeAddressDomain}`;
+    const script = (body: string) => ({
+      read: async () => ({ content: `${ours({ enabled: false, address: null })}${body}`, active: true }),
+    });
+    const outsideRedirect = script('redirect "copy@outside.example";\n');
+    const reply = script('vacation "Away.";\n');
+    const internalRedirect = script(`redirect "${internal}";\n`);
+    tierOf("standard");
+    expect((await reconcileManagedScripts(d, outsideRedirect)).unpausedSending).toBe(0);
+    tierOf("new");
+    expect((await reconcileManagedScripts(d, outsideRedirect)).unpausedSending).toBeGreaterThan(0);
+    expect((await reconcileManagedScripts(d, reply)).unpausedSending).toBe(0);
+    expect((await reconcileManagedScripts(d, internalRedirect)).unpausedSending).toBe(0);
+    tierOf("restricted");
+    const report = await reconcileManagedScripts(d, reply);
+    expect(report.unpausedSending).toBeGreaterThan(0);
+    expect(report.clean).toBe(false);
+    expect(d.uow.state.audit.at(-1)).toMatchObject({
+      action: "platform.reconciler_drift",
+      meta: { unpausedSending: report.unpausedSending },
+    });
+    // Paused as the web app writes it: clean on this count.
+    const paused = script(`${PAUSE_OPEN}vacation "Away.";\n}\n`);
+    expect((await reconcileManagedScripts(d, paused)).unpausedSending).toBe(0);
   });
 
   it("is clean (no audit) when every script is ours, and counts a mailbox the server can't answer for", async () => {

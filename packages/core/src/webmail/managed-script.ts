@@ -4,6 +4,9 @@ import { MANAGED_SIEVE_SETTINGS_PREFIX } from "@anhourmail/shared/webmail";
 import { mutation } from "../mutation";
 import type { Deps } from "../ports";
 import { forwardingGuard } from "./forwarding-guard";
+import { liftSendingPause, pauseModeFor, redirectTargets, unpausedOutbound } from "./sending-pause";
+import { outsideAddresses } from "../trust/hold";
+import { mailboxTier } from "../trust/standing";
 
 /**
  * Reads a mailbox's managed Sieve script on the mail server (adapter: the scheduler's read-only audit key) with whether
@@ -95,7 +98,9 @@ function tokenize(text: string): { code: string; strings: string[] } {
  * webmail writes (`apps/web/src/server/webmail/sieve.ts`). It doesn't rebuild the whole script: that needs the
  * mailbox's contacts, which the control plane doesn't read.
  */
-export function inspectManagedScript(text: string, expectedGuard?: string | null): ManagedScriptFindings {
+export function inspectManagedScript(script: string, expectedGuard?: string | null): ManagedScriptFindings {
+  // A command paused for the mailbox's tier (`sending-pause.ts`) is read as written: the pause is checked on its own.
+  const text = liftSendingPause(script);
   const line = text.split("\n").find((l) => l.startsWith(MANAGED_SIEVE_SETTINGS_PREFIX));
   let forwarding: ManagedScriptFindings["forwarding"] = null;
   if (line) {
@@ -162,6 +167,12 @@ export type ManagedScriptDrift = {
    * app's start-up upgrade fixes them).
    */
   unguardedForwarding: number;
+  /**
+   * Scripts that still redirect or reply where the mailbox's effective tier doesn't allow it (ADR-0034: every command
+   * while `restricted`, redirects outside while `new`; `sending-pause.ts`). Reported, not re-queued: the web app writes
+   * the pause after a tier change and at start-up.
+   */
+  unpausedSending: number;
   /** Mailboxes queued for `mailbox.ensure` (re-asserts the customer lock; never rewrites or deletes anything). */
   requeued: number;
   clean: boolean;
@@ -176,6 +187,14 @@ const RECONCILER = { kind: "system", name: "reconcile" } as const;
  * (`platform.reconciler_drift`, counts only) and re-queues `mailbox.ensure` for those mailboxes; never deletes or
  * rewrites a script (CLAUDE.md rule 26) — a person looks at it.
  */
+/** Whether an active script redirects or replies where the mailbox's effective tier doesn't allow it. */
+async function sendsAgainstTier(deps: Deps, m: { id: string; accountId: string }, content: string): Promise<boolean> {
+  const mode = pauseModeFor(await deps.uow.run((r) => mailboxTier(r, m.accountId, m.id)));
+  if (mode === "none") return false;
+  const out = new Set(mode === "external" ? await outsideAddresses(deps, redirectTargets(content)) : []);
+  return unpausedOutbound(content, mode, (a) => out.has(a)) > 0;
+}
+
 export async function reconcileManagedScripts(
   deps: Deps,
   reader: ManagedScriptReader,
@@ -192,6 +211,7 @@ export async function reconcileManagedScripts(
     inactive: 0,
     unreachable: 0,
     unguardedForwarding: 0,
+    unpausedSending: 0,
     requeued: 0,
     clean: true,
   };
@@ -225,11 +245,18 @@ export async function reconcileManagedScripts(
       drift = true;
     }
     if (found.unguardedRedirect) out.unguardedForwarding += 1;
+    if (await sendsAgainstTier(deps, m, script.content)) out.unpausedSending += 1;
     if (drift) requeue.push(m.id);
   }
   out.requeued = requeue.length;
   out.clean =
-    out.notOurs + out.unconfirmedRedirects + out.foreign + out.inactive + out.unreachable + out.unguardedForwarding ===
+    out.notOurs +
+      out.unconfirmedRedirects +
+      out.foreign +
+      out.inactive +
+      out.unreachable +
+      out.unguardedForwarding +
+      out.unpausedSending ===
     0;
   if (!out.clean) {
     const now = deps.clock.now();
@@ -257,6 +284,7 @@ export async function reconcileManagedScripts(
             scriptsInactive: out.inactive,
             mailboxesUnreachable: out.unreachable,
             unguardedForwarding: out.unguardedForwarding,
+            unpausedSending: out.unpausedSending,
             requeued: out.requeued,
           },
         };
