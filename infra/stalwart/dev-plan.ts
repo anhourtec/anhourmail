@@ -8,6 +8,8 @@ import { resolveSenderDelegationKey } from "@anhourmail/core/webmail";
 import { parsePlatformDomain } from "@anhourmail/shared/platform";
 import { standardSendingPolicy } from "@anhourmail/shared/sending";
 import {
+  abuseBanPeriodFromEnv,
+  applyAbuseBanPeriod,
   applyDefaultFolders,
   applySenderIdentityPolicy,
   applySendingPolicy,
@@ -32,7 +34,9 @@ import {
  *   the relay hold) counts towards a permanent abuse ban at 35 a day per address, and the counters live in the data
  *   store, surviving restarts until the UTC day ends. The private ranges Docker networks use are allowed
  *   (`x:AllowedIp`, `DEV_ALLOWED_NETWORKS`). HTTP requests that carry X-Forwarded-For (the webmail BFF, tests'
- *   documentation-range addresses) are still counted and banned per client. Dev only: production has no such entry.
+ *   documentation-range addresses) are still counted and banned per client. Dev only: production has no such entry
+ *   (its bootstrap refuses one, `assertNoPrivateAllowedIps`, and the reconciler reports one). A JMAP submission's refused
+ *   recipients never count (they run as a local session from 127.0.0.1); only SMTP sessions' do.
  * - The sender-identity script carries the send-on-behalf exception (ADR-0026 §8), keyed with `SENDER_DELEGATION_KEY`
  *   from `.env`, or the dev key derived from BETTER_AUTH_SECRET when unset (`resolveSenderDelegationKey`), so the web
  *   app and `stack:verify` compute the same tags. Production's bootstrap passes its own key (private ops repository).
@@ -140,6 +144,11 @@ export async function applyDevMailPlan(
     mgmt,
     standardSendingPolicy(opts.platformDomain ?? parsePlatformDomain(process.env.PLATFORM_DOMAIN)),
   );
+  // A finite abuse ban (STALWART_ABUSE_BAN_PERIOD_MS; unset: the server's own setting stays, which is permanent): an
+  // address banned for refused recipients is let back in on its own. Also a production setting (the deploy's
+  // bootstrap runs the same call, and checks that no private range is on the allow-list).
+  const banPeriod = abuseBanPeriodFromEnv(process.env);
+  if (banPeriod !== null) await applyAbuseBanPeriod(mgmt, banPeriod);
   await mgmt.reloadSettings();
 
   await upsertOAuthClient(mgmt, {

@@ -43,6 +43,9 @@
  *      over JMAP (`deliveryStatus`), while a local recipient is still delivered; nothing reaches Mailpit. Each run
  *      refuses one SMTP recipient from the dev forwarder (allowed in dev, `DEV_ALLOWED_NETWORKS`).
  *
+ *  12. Automatic bans: the abuse-ban period is `STALWART_ABUSE_BAN_PERIOD_MS` when that is set (the dev plan applies
+ *      it), and the allow-list holds the dev forwarder's private ranges only.
+ *
  *   npm run stack:verify      (after `npm run stack:up` and `npm run db:seed`)
  */
 import { execFileSync } from "node:child_process";
@@ -59,12 +62,19 @@ import {
   resolveSenderDelegationKey,
 } from "@anhourmail/core/webmail";
 import { JmapClient } from "@anhourmail/jmap-client";
-import { INTERNAL_MAIL_HEADER, isDesiredRelaying, RelayHoldList, stalwartDevAdmin } from "@anhourmail/stalwart-client";
+import {
+  abuseBanPeriod,
+  abuseBanPeriodFromEnv,
+  INTERNAL_MAIL_HEADER,
+  isDesiredRelaying,
+  RelayHoldList,
+  stalwartDevAdmin,
+} from "@anhourmail/stalwart-client";
 
 import { isInternalMail, ourAuthResultsHeader, trustedAuthservIds } from "../apps/web/src/server/webmail/original";
 import { buildScript, DEFAULT_RULES, dmarcPassRegex, upgradeManagedScript } from "../apps/web/src/server/webmail/sieve";
 import { MANAGED_SIEVE_SCRIPT } from "@anhourmail/shared/webmail";
-import { DEV_DOMAIN } from "../infra/stalwart/dev-plan";
+import { DEV_ALLOWED_NETWORKS, DEV_DOMAIN } from "../infra/stalwart/dev-plan";
 
 const base = process.env.STALWART_URL ?? "http://127.0.0.1:43080";
 const mailpit = `http://127.0.0.1:${process.env.MAILPIT_UI_PORT ?? "43026"}`;
@@ -1134,6 +1144,28 @@ await protocolCheck("JMAP submission: unknown local recipient reported as not de
         await list.reload();
       }
     }),
+  );
+}
+
+// 12. Automatic bans: the abuse ban is finite when the dev plan was given a period, and the dev allow-list holds only
+// the forwarder's private ranges (dev only; production's bootstrap refuses any private entry).
+{
+  const admin = stalwartDevAdmin();
+  const wanted = abuseBanPeriodFromEnv(process.env);
+  const period = await abuseBanPeriod(admin);
+  check(
+    "Automatic bans: the abuse-ban period is the configured one",
+    wanted === null || period === wanted,
+    wanted === null
+      ? "STALWART_ABUSE_BAN_PERIOD_MS unset: the server's own setting is kept"
+      : `server: ${String(period)}`,
+  );
+  const allowed = await admin.transport.getAll<{ id: string; address?: string }>("x:AllowedIp", ["address"]);
+  const devRanges = new Set<string>(DEV_ALLOWED_NETWORKS);
+  check(
+    "Automatic bans: the dev allow-list is the forwarder's private ranges and nothing else",
+    allowed.length > 0 && allowed.every((a) => devRanges.has(a.address ?? "")),
+    `${String(allowed.length)} entries`,
   );
 }
 
