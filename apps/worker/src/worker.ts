@@ -8,7 +8,9 @@ import { writeFileSync } from "node:fs";
 
 import { stalwartImportTrainingSamples } from "@anhourmail/adapters/stalwart";
 import { runNextJob } from "@anhourmail/core/provisioning";
+import { redisAccountSignals, SENDING_PAUSE_SIGNALS_KEY } from "@anhourmail/server/account-signals";
 import { log } from "@anhourmail/server/log";
+import { redis } from "@anhourmail/server/redis";
 import { SPAM_SAMPLE_HOLD_DEFAULT_MS, stalwartTraining } from "@anhourmail/stalwart-client";
 
 import { runtime } from "./runtime";
@@ -36,6 +38,14 @@ await verifyStalwartCredentials("worker");
 const hold = Number(process.env.STALWART_SPAM_SAMPLE_HOLD_MS ?? SPAM_SAMPLE_HOLD_DEFAULT_MS);
 if (!Number.isInteger(hold) || hold <= 0) throw new Error("STALWART_SPAM_SAMPLE_HOLD_MS must be a whole number of ms");
 const trainingSamples = stalwartImportTrainingSamples(stalwartTraining(), { holdMs: hold });
+// A billing sync that moved an account's trust tier tells the web app, which alone may write the managed scripts'
+// sending pause (ADR-0034; the provisioning key can't write Sieve).
+// Without Redis the scripts follow at the web app's next start-up pass instead.
+const sendingPause = process.env.REDIS_URL ? redisAccountSignals(redis(), SENDING_PAUSE_SIGNALS_KEY) : null;
+if (!sendingPause) l.warn("no REDIS_URL: trust tier changes reach managed scripts at the web app's next start");
+const tierChanged = async (accountId: string) => {
+  await sendingPause?.signal(accountId);
+};
 const beat = () => {
   writeFileSync(HEARTBEAT, new Date().toISOString());
 };
@@ -45,7 +55,7 @@ l.info("worker started");
 
 while (!stopping()) {
   try {
-    const job = await runNextJob(deps, mail, { billing: billing(), trainingSamples });
+    const job = await runNextJob(deps, mail, { billing: billing(), trainingSamples, tierChanged });
     if (job?.lockLost) {
       // This run's claim went stale and another worker took the job over: its outcome was discarded.
       l.warn("job lock lost", { jobId: job.id, kind: job.kind, attempt: job.attempts });
@@ -60,4 +70,8 @@ while (!stopping()) {
 
 clearInterval(heartbeat);
 await close();
+if (sendingPause)
+  await redis()
+    .quit()
+    .catch(() => undefined);
 l.info("worker stopped");
