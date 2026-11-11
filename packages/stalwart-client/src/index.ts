@@ -137,6 +137,16 @@ export {
   SENDER_ON_BEHALF_HEADER,
   senderIdentitySieve,
 } from "./sender";
+export {
+  applySendingPolicy,
+  coveredSender,
+  desiredMaxRecipients,
+  desiredThrottles,
+  SENDING_THROTTLE_DESCRIPTIONS,
+  type SendingPolicy,
+  sendingPolicyDrift,
+  type SendingPolicyResult,
+} from "./sending";
 
 const globalForStalwart = globalThis as unknown as {
   amStalwart?: Partial<Record<StalwartCredentialRole | "devAdmin", StalwartManagement>>;
