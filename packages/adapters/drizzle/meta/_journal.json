@@ -302,6 +302,13 @@
       "when": 1793854243189,
       "tag": "0042_billing_catalogue",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1794406232223,
+      "tag": "0043_trust_tier",
+      "breakpoints": true
     }
   ]
 }

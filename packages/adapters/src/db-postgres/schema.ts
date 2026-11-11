@@ -196,23 +196,58 @@ export const userProfile = pgTable("user_profile", {
 });
 
 /** A customer account (a person, a family or a small group). */
-export const customerAccount = pgTable("customer_account", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  name: text("name").notNull(),
-  plan: text("plan").notNull().default("free"),
-  status: text("status").notNull().default("active"),
-  /**
-   * Staff suspension (`platform.account.suspend`; status `suspended` while set): reason category, staff-only note
-   * (never shown to the customer), when and by whom.
-   */
-  suspensionReason: text("suspension_reason"),
-  suspensionNote: text("suspension_note"),
-  suspendedAt: timestamp("suspended_at", { withTimezone: true }),
-  suspendedBy: text("suspended_by"),
-  /** What everyone in the account must use to sign in: none | two_factor | passkey (shared/security.ts). */
-  signInPolicy: text("sign_in_policy").notNull().default("none"),
-  createdAt: createdAt(),
-});
+export const customerAccount = pgTable(
+  "customer_account",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    plan: text("plan").notNull().default("free"),
+    status: text("status").notNull().default("active"),
+    /**
+     * Staff suspension (`platform.account.suspend`; status `suspended` while set): reason category, staff-only note
+     * (never shown to the customer), when and by whom.
+     */
+    suspensionReason: text("suspension_reason"),
+    suspensionNote: text("suspension_note"),
+    suspendedAt: timestamp("suspended_at", { withTimezone: true }),
+    suspendedBy: text("suspended_by"),
+    /** What everyone in the account must use to sign in: none | two_factor | passkey (shared/security.ts). */
+    signInPolicy: text("sign_in_policy").notNull().default("none"),
+    /**
+     * The account's sending tier (ADR-0034 §1; shared `TRUST_TIERS`): new | standard | trusted | restricted. The one
+     * source for every sending path; a mailbox's effective tier is this, made stricter by its own sending restriction.
+     */
+    trustTier: text("trust_tier").notNull().default("new"),
+    trustTierSince: timestamp("trust_tier_since", { withTimezone: true }).notNull().defaultNow(),
+    /** How it got the tier (shared `TRUST_TIER_SOURCES`): default | automatic | billing | staff (frozen for the job). */
+    trustTierSource: text("trust_tier_source").notNull().default("default"),
+    /** A `SUSPENSION_REASONS` key when staff set the tier (shown to the customer in plain words). */
+    trustReason: text("trust_reason"),
+    /** Staff-only note (never shown to the customer, logged or audited by value; `platform.suspensionNotes.read`). */
+    trustNote: text("trust_note"),
+    /** The staff user id that set it (`source = staff`). */
+    trustSetBy: text("trust_set_by"),
+    /** Last restriction or staff suspension of the account or one of its people: no automatic promotion once set. */
+    lastRestrictedAt: timestamp("last_restricted_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    // Accounts the promotion job looks at (`job:trust-promote`): `new` ones, oldest first.
+    index("customer_account_trust_promote_idx")
+      .on(t.trustTier, t.createdAt)
+      .where(sql`${t.trustTier} = 'new'`),
+    check("customer_account_trust_tier", sql`${t.trustTier} in ('new', 'standard', 'trusted', 'restricted')`),
+    check(
+      "customer_account_trust_tier_source",
+      sql`${t.trustTierSource} in ('default', 'automatic', 'billing', 'staff')`,
+    ),
+    check(
+      "customer_account_trust_reason",
+      sql`${t.trustReason} is null or ${t.trustReason} in ('spam', 'abuse', 'phishing', 'payment', 'legal', 'other')`,
+    ),
+    check("customer_account_trust_note", sql`${t.trustNote} is null or char_length(${t.trustNote}) between 1 and 2000`),
+  ],
+);
 
 export const accountMembership = pgTable(
   "account_membership",
@@ -353,10 +388,31 @@ export const mailbox = pgTable(
     storageUsedBytes: bigint("storage_used_bytes", { mode: "number" }),
     /** When `storage_used_bytes` was measured. */
     storageCheckedAt: timestamp("storage_checked_at", { withTimezone: true }),
+    /**
+     * Staff's sending restriction of this one mailbox (ADR-0034 §6, a compromised mailbox in an otherwise fine
+     * account): when, the reason category (`SUSPENSION_REASONS` key, shown), a staff-only note (never shown, logged or
+     * audited by value) and the staff user id. All null while not restricted.
+     */
+    sendingRestrictedAt: timestamp("sending_restricted_at", { withTimezone: true }),
+    sendingRestrictedReason: text("sending_restricted_reason"),
+    sendingRestrictedNote: text("sending_restricted_note"),
+    sendingRestrictedBy: text("sending_restricted_by"),
     createdAt: createdAt(),
   },
   (t) => [
     index("mailbox_account_idx").on(t.accountId),
+    check(
+      "mailbox_sending_restricted",
+      sql`(${t.sendingRestrictedAt} is null) = (${t.sendingRestrictedReason} is null)`,
+    ),
+    check(
+      "mailbox_sending_restricted_reason",
+      sql`${t.sendingRestrictedReason} is null or ${t.sendingRestrictedReason} in ('spam', 'abuse', 'phishing', 'payment', 'legal', 'other')`,
+    ),
+    check(
+      "mailbox_sending_restricted_note",
+      sql`${t.sendingRestrictedNote} is null or char_length(${t.sendingRestrictedNote}) between 1 and 2000`,
+    ),
     // The target of composite foreign keys that tie a row to a mailbox of the same account (`mailbox_delegation`).
     unique("mailbox_account_id_unique").on(t.accountId, t.id),
     index("mailbox_purge_idx")
