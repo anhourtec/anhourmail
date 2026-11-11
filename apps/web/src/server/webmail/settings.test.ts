@@ -1186,6 +1186,20 @@ describe("settings and the mailbox's trust tier (ADR-0034)", () => {
       WebmailUnavailableError,
     );
   });
+
+  it("the settings window gets the mailbox's effective tier for the Account card, and only the tier", async () => {
+    for (const tier of ["new", "standard", "restricted"] as const) {
+      const t = await setup(fixedTrust(tier));
+      expect((await t.settings.overview(t.sessionId)).sending).toEqual({ tier });
+    }
+  });
+
+  it("a tier that can't be read leaves the card unavailable, not the whole window", async () => {
+    const t = await setup({ ...fixedTrust(), standing: () => Promise.reject(new Error("db down")) });
+    const o = await t.settings.overview(t.sessionId);
+    expect(o.sending).toBeNull();
+    expect(o.address).toBe("a@x.test");
+  });
 });
 
 describe("templates", () => {

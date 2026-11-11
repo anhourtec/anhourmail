@@ -38,6 +38,7 @@ import { cleanTemplate } from "./template-html";
 import { isJmapId } from "./view";
 import type { DisposableEmailCheck } from "@anhourmail/core/security";
 import { externalHeld, SendingHeldError } from "@anhourmail/core/trust";
+import type { TrustTier } from "@anhourmail/shared/sending";
 
 /**
  * Webmail settings (docs/internal/05-webmail.md "Settings"): the one place that joins the control plane
@@ -104,6 +105,11 @@ export type SettingsOverview = {
   rulesState: RulesState;
   /** The forwarding target and whether its owner confirmed it (control plane). */
   forwardingTarget: ForwardingView | null;
+  /**
+   * The mailbox's effective sending tier now (its account's, `restricted` while the mailbox itself is restricted;
+   * ADR-0034 §5) for the Account card; null when it couldn't be read. Only the tier: the card shows its published facts.
+   */
+  sending: { tier: TrustTier } | null;
 };
 
 /** A sender name: one line, no characters that change how it's read in a header (the service checks the rest). */
@@ -241,7 +247,7 @@ export class WebmailSettings {
 
   async overview(sessionId: string): Promise<SettingsOverview> {
     const address = await this.#address(sessionId);
-    const [preferences, identities, quota, rules, forwardingTarget, sender, accountSafe] = await Promise.all([
+    const [preferences, identities, quota, rules, forwardingTarget, sender, accountSafe, sending] = await Promise.all([
       this.d.settings.preferences(address),
       this.d.mail.identities(sessionId),
       this.d.mail.quota(sessionId),
@@ -249,6 +255,11 @@ export class WebmailSettings {
       this.d.settings.forwarding(address),
       this.d.senderNames.get(address),
       this.d.accountSafe?.(address) ?? Promise.resolve([]),
+      // A failed read shows the card as unavailable rather than failing the whole window (sending still checks it).
+      this.d.mail.sendingTier(address).then(
+        (tier) => ({ tier }),
+        () => null,
+      ),
     ]);
     return {
       accountId: rules.accountId,
@@ -261,6 +272,7 @@ export class WebmailSettings {
       accountSafe: [...accountSafe],
       rulesState: rules.state,
       forwardingTarget,
+      sending,
     };
   }
 
