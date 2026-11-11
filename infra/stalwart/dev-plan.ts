@@ -5,9 +5,12 @@ import path from "node:path";
 
 import { hashPassword } from "@anhourmail/adapters/auth";
 import { resolveSenderDelegationKey } from "@anhourmail/core/webmail";
+import { parsePlatformDomain } from "@anhourmail/shared/platform";
+import { standardSendingPolicy } from "@anhourmail/shared/sending";
 import {
   applyDefaultFolders,
   applySenderIdentityPolicy,
+  applySendingPolicy,
   backfillArchiveFolders,
   type StalwartManagement,
   upsertOAuthClient,
@@ -63,7 +66,7 @@ export async function ensureWebUiBundle(): Promise<void> {
 
 export async function applyDevMailPlan(
   mgmt: StalwartManagement,
-  opts: { mailboxPassword: string; webmailOrigins: string[]; senderDelegationKey?: string },
+  opts: { mailboxPassword: string; webmailOrigins: string[]; senderDelegationKey?: string; platformDomain?: string },
 ): Promise<{ domainId: string; restartNeeded: boolean }> {
   await ensureWebUiBundle();
   let restartNeeded = await mgmt.setWebUiResource(`file:///opt/anhourmail/${WEBUI_FILE}`);
@@ -107,6 +110,13 @@ export async function applyDevMailPlan(
   // Every account opened from now on gets Archive (role `archive`) from Stalwart; the built-in default doesn't create
   // one. Also a production setting (applied by the deploy's bootstrap with its administrator credential).
   await applyDefaultFolders(mgmt);
+  // One sending ceiling for every authenticated sender (ADR-0034 §4): the standard tier's numbers per hour and per day
+  // and its recipients per message, leaving out the platform's own system accounts (transactional mail). Also a
+  // production setting (the deploy's bootstrap runs the same call).
+  await applySendingPolicy(
+    mgmt,
+    standardSendingPolicy(opts.platformDomain ?? parsePlatformDomain(process.env.PLATFORM_DOMAIN)),
+  );
   await mgmt.reloadSettings();
 
   await upsertOAuthClient(mgmt, {
