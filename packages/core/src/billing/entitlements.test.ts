@@ -162,6 +162,7 @@ describe("refundEligibility (ADR-0029 §9)", () => {
     paidAt: new Date(NOW.getTime() - 14 * DAY),
     billingReason: "subscription_create",
     refundedMinor: 0,
+    chargedMinor: 900,
     storageBlocks: 0,
     extraMailboxes: 0,
     periodEnd: null,

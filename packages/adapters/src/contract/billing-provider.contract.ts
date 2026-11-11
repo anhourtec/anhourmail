@@ -128,6 +128,8 @@ export function describeBillingProviderContract(name: string, factory: () => Pro
           refundedMinor: 0,
         });
         expect(sub.latestInvoice?.paidAt).toBeInstanceOf(Date);
+        // Paid by a charge on the card, so it counts as money for the trust tier (ADR-0034, finding F8).
+        expect(sub.latestInvoice?.chargedMinor).toBe(sub.latestInvoice?.amountMinor);
         // What the invoice billed, read from its lines (run-62 F1): the add-on quantities and the period.
         expect(sub.latestInvoice).toMatchObject({ storageBlocks: 2, extraMailboxes: 0 });
         expect(sub.latestInvoice?.periodEnd?.getTime()).toBe(sub.currentPeriodEnd.getTime());

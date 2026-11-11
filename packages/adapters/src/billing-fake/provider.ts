@@ -202,6 +202,8 @@ export function createFakeBillingProvider(opts: FakeBillingOptions): FakeBilling
             paidAt: inv.paidAt === null ? null : new Date(inv.paidAt),
             billingReason: inv.billingReason,
             refundedMinor: inv.refundedMinor,
+            // The fake charges the card for every paid invoice unless a test says it was paid otherwise.
+            chargedMinor: inv.status === "paid" ? (inv.chargedMinor ?? inv.amountMinor) : 0,
             storageBlocks: inv.storageBlocks ?? null,
             extraMailboxes: inv.extraMailboxes ?? null,
             periodEnd: inv.periodEnd === undefined ? null : new Date(inv.periodEnd),

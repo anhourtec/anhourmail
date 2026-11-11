@@ -116,7 +116,18 @@ const invoicePaymentSchema = z.object({
 });
 const paymentIntentSchema = z.object({
   id,
-  latest_charge: z.union([id, z.object({ id, amount_refunded: z.number().int() })]).nullable(),
+  latest_charge: z
+    .union([
+      id,
+      z.object({
+        id,
+        amount_refunded: z.number().int(),
+        // What the charge took from the payment method; missing reads as nothing charged (never promotes, F8).
+        amount_captured: z.number().int().optional(),
+        status: z.string().optional(),
+      }),
+    ])
+    .nullable(),
 });
 const disputeSchema = z.object({ id, status: z.string() });
 
@@ -201,17 +212,21 @@ export function createStripeBillingProvider(config: StripeConfig, opts: StripeAd
 
   async function invoiceFacts(inv: z.infer<typeof invoiceSchema>): Promise<{
     refundedMinor: number;
+    /** Captured by succeeded charges on the invoice's payment intents: a credit-balance or out-of-band payment has none. */
+    chargedMinor: number;
     disputed: boolean;
     disputeLost: boolean;
     disputes: { id: string; status: DisputeOutcome }[];
   }> {
-    if (inv.status !== "paid") return { refundedMinor: 0, disputed: false, disputeLost: false, disputes: [] };
+    if (inv.status !== "paid")
+      return { refundedMinor: 0, chargedMinor: 0, disputed: false, disputeLost: false, disputes: [] };
     const payments = await http.get(
       "/invoice_payments",
       { invoice: inv.id, status: "paid", limit: 10 },
       list(invoicePaymentSchema),
     );
     let refundedMinor = 0;
+    let chargedMinor = 0;
     let disputed = false;
     let disputeLost = false;
     const found: { id: string; status: DisputeOutcome }[] = [];
@@ -224,7 +239,10 @@ export function createStripeBillingProvider(config: StripeConfig, opts: StripeAd
         paymentIntentSchema,
       );
       const charge = intent.latest_charge;
-      if (charge !== null && typeof charge !== "string") refundedMinor += charge.amount_refunded;
+      if (charge !== null && typeof charge !== "string") {
+        refundedMinor += charge.amount_refunded;
+        if (charge.status === "succeeded") chargedMinor += charge.amount_captured ?? 0;
+      }
       const disputes = await http.get("/disputes", { payment_intent: intent.id, limit: 10 }, list(disputeSchema));
       for (const d of disputes.data) {
         const outcome = disputeOutcome(d.status);
@@ -233,7 +251,7 @@ export function createStripeBillingProvider(config: StripeConfig, opts: StripeAd
         else if (outcome === "lost") disputeLost = true;
       }
     }
-    return { refundedMinor, disputed, disputeLost, disputes: found };
+    return { refundedMinor, chargedMinor, disputed, disputeLost, disputes: found };
   }
 
   async function toProvider(sub: StripeSubscription): Promise<ProviderSubscription> {
@@ -269,6 +287,7 @@ export function createStripeBillingProvider(config: StripeConfig, opts: StripeAd
         paidAt: inv.status_transitions.paid_at === null ? null : at(inv.status_transitions.paid_at),
         billingReason: billingReason(inv.billing_reason),
         refundedMinor: facts.refundedMinor,
+        chargedMinor: facts.chargedMinor,
         ...invoiceLines(inv),
       };
     }

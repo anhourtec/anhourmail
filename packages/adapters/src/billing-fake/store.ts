@@ -35,6 +35,11 @@ export type FakeInvoice = {
   paidAt: number | null;
   billingReason: ProviderInvoice["billingReason"];
   refundedMinor: number;
+  /**
+   * What a charge on the card paid (absent: the whole amount once paid). 0 models an invoice paid from the credit
+   * balance or out of band (ADR-0034, finding F8).
+   */
+  chargedMinor?: number;
   /** The add-on quantities and period end the invoice billed (absent on states saved before they were recorded). */
   storageBlocks?: number;
   extraMailboxes?: number;

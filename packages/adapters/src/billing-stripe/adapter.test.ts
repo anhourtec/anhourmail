@@ -69,11 +69,16 @@ const subscription = (over: Record<string, unknown> = {}) => ({
   latest_invoice: paidInvoice,
   ...over,
 });
-const paymentRoutes = (refunded = 0, disputes: string[] = []) => ({
+const paymentRoutes = (refunded = 0, disputes: string[] = [], captured = 2300) => ({
   "GET /invoice_payments": {
     json: { data: [{ payment: { type: "payment_intent", payment_intent: "pi_1" } }], has_more: false },
   },
-  "GET /payment_intents/pi_1": { json: { id: "pi_1", latest_charge: { id: "ch_1", amount_refunded: refunded } } },
+  "GET /payment_intents/pi_1": {
+    json: {
+      id: "pi_1",
+      latest_charge: { id: "ch_1", amount_refunded: refunded, amount_captured: captured, status: "succeeded" },
+    },
+  },
   "GET /disputes": {
     json: { data: disputes.map((status, i) => ({ id: `dp_${String(i)}`, status })), has_more: false },
   },
@@ -119,6 +124,7 @@ describe("processor adapter: reading a subscription", () => {
         paidAt: NOW,
         billingReason: "subscription_create",
         refundedMinor: 500,
+        chargedMinor: 2300,
         // No lines on this invoice: the sync falls back to the subscription's quantities.
         storageBlocks: null,
         extraMailboxes: null,

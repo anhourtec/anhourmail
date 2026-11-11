@@ -32,6 +32,12 @@ export type ProviderInvoice = {
   billingReason: "subscription_create" | "subscription_cycle" | "other";
   refundedMinor: number;
   /**
+   * What the invoice's payments took from a payment method (card, bank) through a charge, before refunds. 0 when it
+   * wasn't paid, or was paid from the customer's credit balance or marked paid out of band: only this counts as money
+   * when billing promotes an account's trust tier (ADR-0034, finding F8).
+   */
+  chargedMinor: number;
+  /**
    * The add-on quantities the invoice billed (its storage-block and extra-mailbox lines), or null when they can't be
    * read: a paid first or renewal invoice sets the capacity paid for the period from these, never from the live
    * subscription (which may have changed since it was billed).
