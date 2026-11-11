@@ -147,9 +147,10 @@ describe("staff suspension against Stalwart", () => {
       userId: memberId,
       expiresAt: new Date(Date.now() + 3600_000),
     });
+    // Mail apps send over SMTP only from a standard account (ADR-0034 §3); the tests below need them to.
     const [account] = await db
       .insert(schema.customerAccount)
-      .values({ name: `susp ${tag}`, plan: "plus" })
+      .values({ name: `susp ${tag}`, plan: "plus", trustTier: "standard", trustTierSource: "staff" })
       .returning();
     if (!account) throw new Error("account not created");
     accountId = account.id;

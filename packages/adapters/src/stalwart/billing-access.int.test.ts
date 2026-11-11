@@ -286,9 +286,10 @@ async function inboundRcpt(): Promise<string> {
 
 describe("billing on the stack: webhook → billing_event → billing.sync → mailbox.ensure on Stalwart", () => {
   it("records each event once, syncs, restricts sending on every protocol, keeps reading and receiving, restores", async () => {
+    // Mail apps send over SMTP only from a standard account (ADR-0034 §3); the tests below need them to.
     const [account] = await db
       .insert(schema.customerAccount)
-      .values({ name: `billing ${tag}`, plan: "free" })
+      .values({ name: `billing ${tag}`, plan: "free", trustTier: "standard", trustTierSource: "staff" })
       .returning();
     if (!account) throw new Error("account not created");
     accountId = account.id;

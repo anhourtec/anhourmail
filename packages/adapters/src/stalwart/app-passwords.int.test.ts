@@ -221,9 +221,10 @@ const sessionStatus = async (secret: string): Promise<number> =>
 describe("app passwords on Stalwart", () => {
   it("issue, sign in by protocol, stay limited, stop while suspended and after revoking", async () => {
     for (const b of await bans()) bansBefore.add(b.id);
+    // Mail apps send over SMTP only from a standard account (ADR-0034 §3); the tests below need them to.
     const [account] = await db
       .insert(schema.customerAccount)
-      .values({ name: `apw ${tag}`, plan: "plus" })
+      .values({ name: `apw ${tag}`, plan: "plus", trustTier: "standard", trustTierSource: "staff" })
       .returning();
     if (!account) throw new Error("account not created");
     accountId = account.id;
