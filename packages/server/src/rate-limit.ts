@@ -90,6 +90,9 @@ export const LIMITS = {
   // Staff suspend / lift (`platform.account.suspend`): each one emails customers and queues mail-server jobs for every
   // mailbox in scope. Fail closed (it changes who can sign in).
   staffSuspend: { limit: 30, windowSec: 3600, by: "caller", failMode: "closed" },
+  // Staff trust tier changes and mailbox sending restrictions (`platform.trust.manage`, ADR-0034): each queues a
+  // mail-server job per mailbox and rewrites managed scripts. Fail closed, like a suspension.
+  staffTrust: { limit: 30, windowSec: 3600, by: "caller", failMode: "closed" },
   // "Send the confirmation link again": each call emails the person's sign-in address.
   emailVerification: { limit: 5, windowSec: 3600, by: "caller", failMode: "closed" },
   // Confirmation emails per address, however they're asked for (sign-up, a sign-in with the right password but an
