@@ -1,6 +1,6 @@
 # 03 — Anti-spam and abuse
 
-Last updated: 2026-11-06 (disposable email addresses refused, ADR-0033); 2026-11-05 (sign-up proof-of-work and sign-up limits built, ADR-0031; suspension note readers, open sessions after a suspension and their mitigations); 2026-11-04 (the webmail reads `deliveryStatus` after a send). 2026-10-30. Research: `research/deliverability.md` §6–8, `research/market-and-legal.md` §4.
+Last updated: 2026-11-11 (trust tiers designed, ADR-0034: stored on the account, `new`-tier external hold, mail-server gates); 2026-11-06 (disposable email addresses refused, ADR-0033); 2026-11-05 (sign-up proof-of-work and sign-up limits built, ADR-0031; suspension note readers, open sessions after a suspension and their mitigations); 2026-11-04 (the webmail reads `deliveryStatus` after a send). 2026-10-30. Research: `research/deliverability.md` §6–8, `research/market-and-legal.md` §4.
 
 Outbound abuse is the priority. One spammer on a shared IP hurts every user's inbox placement, and under CASL a host that knowingly helps spammers can be liable.
 
@@ -80,6 +80,15 @@ Server-side only, never only in the UI (rule 27). There are two layers:
 ### Trust tiers
 
 The limits are the values in `packages/shared/src/sending.ts` (`TRUST_TIERS`); refer to it, don't copy numbers here.
+
+**Design: ADR-0034 (accepted 2026-11-11, building — the first Phase 6 slice).** The tier is stored on the customer
+account (`customer_account.trust_tier`, replacing the unused `user_profile.trust_tier`), made stricter per mailbox by a
+staff sending restriction. `new` → `standard` by the hourly promotion job (private thresholds from config) or at once
+on a paid plan; staff set or restrict with `platform.trust.manage`; `restricted` leaves only by review; `trusted` is
+reserved until the mail server can hold per-tier numbers. A `new` mailbox sends only to addresses we host (webmail
+refuses outside recipients with `sending_held`) and can't use SMTP submission (`smtp_blocked`: `emailSend` denied on
+Stalwart); `restricted` is `send_blocked`. Every authenticated sender is also capped on Stalwart at the `standard`
+numbers. Until it is built, the table below and "Free-tier risk" describe the target.
 
 | Tier         | Who                                          | Movement                                                                                                                    |
 | ------------ | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
