@@ -7,6 +7,7 @@ import { getActor } from "@/server/auth/actor";
 import { paramOf } from "@/server/billing";
 import { container } from "@/server/container";
 import { enforceLimit, ok, readJson, route } from "@/server/http/route";
+import { scheduleSendingPause } from "@/server/webmail/sending-pause-apply";
 
 const Body = z.object({ code: z.string().max(64) });
 
@@ -24,15 +25,17 @@ export const POST = route(
     if (parsed.success && normaliseInviteCode(parsed.data.code) !== null) {
       await enforceLimit("inviteCodeRedeemIp", `ip:${meta.ip ?? "direct"}`);
     }
-    return ok(
-      await redeemInviteCode(
-        container().deps,
-        actor,
-        paramOf(params.accountId),
-        { code: parsed.success ? parsed.data.code : null },
-        meta,
-      ),
+    const accountId = paramOf(params.accountId);
+    const out = await redeemInviteCode(
+      container().deps,
+      actor,
+      accountId,
+      { code: parsed.success ? parsed.data.code : null },
+      meta,
     );
+    // A comp may promote the trust tier: the managed scripts follow (outside forwarding back, ADR-0034).
+    scheduleSendingPause(accountId);
+    return ok(out);
   },
   { limit: "inviteCodeRedeem" },
 );

@@ -54,6 +54,13 @@ const member = person("member-1", ACCOUNT, "member");
 const outsider = person("outsider-1", OTHER, "owner");
 let actor: Actor = owner;
 
+const scheduled: string[] = [];
+vi.mock("@/server/webmail/sending-pause-apply", () => ({
+  scheduleSendingPause: (accountId: string) => {
+    scheduled.push(accountId);
+  },
+}));
+
 vi.mock("@/server/auth/actor", () => ({
   getActor: async () => actor,
   getActorAndSession: async () => ({ actor, sessionId: actor.kind === "user" ? SESSION : null }),
@@ -317,7 +324,11 @@ describe("plan and add-on changes, cancel and refund routes (ADR-0029 §9)", () 
     expect((await call("cancel")).status).toBe(200);
     await syncAccountBilling({ uow, clock: systemClock, platform: PUBLIC_PLATFORM }, fake, ACCOUNT);
     expect((await call("undo-cancel")).status).toBe(200);
+    scheduled.length = 0;
     expect((await call("refund")).status).toBe(200);
+    // The refund took billing's trust tier back: the managed scripts follow (ADR-0034, finding 2 of the review).
+    expect(scheduled).toEqual([ACCOUNT]);
+    expect((await uow.run((r) => r.trust.get(ACCOUNT)))?.tier).toBe("new");
     actor = member;
     expect((await call("refund")).status).toBe(403);
   });

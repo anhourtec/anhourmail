@@ -7,6 +7,7 @@ import { getActorAndSession } from "@/server/auth/actor";
 import { billingContext, paramOf } from "@/server/billing";
 import { container } from "@/server/container";
 import { ok, readOptionalJson, route } from "@/server/http/route";
+import { scheduleSendingPause } from "@/server/webmail/sending-pause-apply";
 
 const Body = z.object({ endSubscription: z.boolean().optional() });
 
@@ -20,17 +21,19 @@ export const POST = route(
   async ({ req, meta }, params) => {
     const { actor, sessionId } = await getActorAndSession(req.headers);
     const parsed = Body.safeParse((await readOptionalJson(req)) ?? {});
-    return ok(
-      await staffRefund(
-        container().deps,
-        billingContext(),
-        actor,
-        paramOf(params.accountId),
-        { endSubscription: parsed.success ? parsed.data.endSubscription : false },
-        { sessionId },
-        meta,
-      ),
+    const accountId = paramOf(params.accountId);
+    const out = await staffRefund(
+      container().deps,
+      billingContext(),
+      actor,
+      accountId,
+      { endSubscription: parsed.success ? parsed.data.endSubscription : false },
+      { sessionId },
+      meta,
     );
+    // A refund takes billing's trust tier back: the managed scripts follow (ADR-0034).
+    scheduleSendingPause(accountId);
+    return ok(out);
   },
   { limit: "sensitive" },
 );

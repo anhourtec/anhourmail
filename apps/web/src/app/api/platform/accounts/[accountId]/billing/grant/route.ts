@@ -7,6 +7,7 @@ import { getActorAndSession } from "@/server/auth/actor";
 import { paramOf } from "@/server/billing";
 import { container } from "@/server/container";
 import { ok, readJson, route } from "@/server/http/route";
+import { scheduleSendingPause } from "@/server/webmail/sending-pause-apply";
 
 /** Shape only; the service checks the plan and the number of days. */
 const Body = z.object({ plan: z.string().max(20).optional(), days: z.union([z.number(), z.null()]).optional() });
@@ -20,16 +21,18 @@ export const PUT = route(
   async ({ req, meta }, params) => {
     const { actor, sessionId } = await getActorAndSession(req.headers);
     const parsed = Body.safeParse((await readJson(req)) ?? {});
-    return ok(
-      await grantStaffPlan(
-        container().deps,
-        actor,
-        paramOf(params.accountId),
-        parsed.success ? parsed.data : { plan: "invalid" },
-        { sessionId },
-        meta,
-      ),
+    const accountId = paramOf(params.accountId);
+    const out = await grantStaffPlan(
+      container().deps,
+      actor,
+      accountId,
+      parsed.success ? parsed.data : { plan: "invalid" },
+      { sessionId },
+      meta,
     );
+    // A grant may promote the trust tier: the managed scripts follow (outside forwarding back, ADR-0034).
+    scheduleSendingPause(accountId);
+    return ok(out);
   },
   { limit: "sensitive" },
 );
@@ -38,7 +41,11 @@ export const PUT = route(
 export const DELETE = route(
   async ({ req, meta }, params) => {
     const { actor, sessionId } = await getActorAndSession(req.headers);
-    return ok(await endStaffPlan(container().deps, actor, paramOf(params.accountId), { sessionId }, meta));
+    const accountId = paramOf(params.accountId);
+    const out = await endStaffPlan(container().deps, actor, accountId, { sessionId }, meta);
+    // Ended inside the refund window, the grant's trust tier goes too: the managed scripts follow (ADR-0034).
+    scheduleSendingPause(accountId);
+    return ok(out);
   },
   { limit: "sensitive" },
 );
