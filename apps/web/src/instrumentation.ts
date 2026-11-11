@@ -20,5 +20,13 @@ export async function register(): Promise<void> {
   const { RULES_UPGRADE_DELAY_MS, upgradeMailRules } = await import("./server/webmail/rules-upgrade");
   // Then the account-wide Safe senders reach mailboxes a cut-short background pass missed (ADR-0032 §1).
   const { applyAllAccountSafeSenders } = await import("./server/webmail/account-safe-apply");
-  setTimeout(() => void upgradeMailRules().then(() => applyAllAccountSafeSenders()), RULES_UPGRADE_DELAY_MS).unref();
+  // Then each script follows its mailbox's trust tier (redirects and replies paused or back, ADR-0034).
+  const { applyAllSendingPauses } = await import("./server/webmail/sending-pause-apply");
+  setTimeout(
+    () =>
+      void upgradeMailRules()
+        .then(() => applyAllAccountSafeSenders())
+        .then(() => applyAllSendingPauses()),
+    RULES_UPGRADE_DELAY_MS,
+  ).unref();
 }
