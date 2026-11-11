@@ -84,6 +84,7 @@ vi.mock("@/server/webmail/sending-pause-apply", () => ({
 
 let uow: MemoryUnitOfWork;
 let counter: Counter;
+let mailer: ReturnType<typeof memoryMailer>;
 
 beforeEach(() => {
   vi.stubEnv("APP_URL", APP);
@@ -119,10 +120,11 @@ beforeEach(() => {
     uow.state.stepUps.push({ userId: a.userId, sessionId: SESSION, expiresAt: new Date("2099-01-01") });
   }
   counter = memoryCounter();
+  mailer = memoryMailer();
   setContainerForTests({
     deps: { uow, clock: systemClock, platform: PUBLIC_PLATFORM },
     counter,
-    mailer: memoryMailer(),
+    mailer,
     dns: { lookup: async () => [] },
     passwords: { hash: async () => "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA" },
     breaches: memoryBreachedPasswords(),
@@ -240,6 +242,55 @@ describe("PUT /api/platform/accounts/:accountId/trust", () => {
     expect(res.status).toBe(429);
     expect(LIMITS.staffTrust.failMode).toBe("closed");
     expect(scheduled).toEqual([]);
+  });
+});
+
+describe("the restriction notice (ADR-0034 build slice 19)", () => {
+  beforeEach(() => {
+    uow.state.memberships.push(
+      { userId: "owner-1", accountId: ACCOUNT, role: "owner" },
+      { userId: "member-1", accountId: ACCOUNT, role: "member" },
+    );
+    uow.state.userEmails["member-1"] = "member-1@example.test";
+  });
+
+  it("restricting the account emails its Owner the reason and the appeal address, never the note; once a day", async () => {
+    expect((await setTier({ tier: "restricted", reason: "spam", note: NOTE })).status).toBe(200);
+    expect(mailer.sent.map((m) => m.to)).toEqual(["owner-1@example.test"]);
+    const mail = mailer.sent[0];
+    expect(mail?.subject).toBe("Sending from your AnhourMail account is paused");
+    expect(mail?.text).toContain('Reason: "Sending spam"');
+    expect(mail?.text).toContain("support@");
+    expect(`${mail?.text ?? ""}${mail?.html ?? ""}`).not.toContain("abuse ticket");
+    expect(uow.state.audit.filter((e) => e.action === "trust.restriction_notice_sent")).toHaveLength(1);
+    // Lifted and restricted again the same day, or a mailbox restricted: nobody is emailed again.
+    expect((await setTier({ tier: "standard", reason: "other", note: NOTE })).status).toBe(200);
+    expect((await setTier({ tier: "restricted", reason: "spam", note: NOTE })).status).toBe(200);
+    expect((await restrict({ restricted: true, reason: "abuse", note: NOTE })).status).toBe(200);
+    expect(mailer.sent).toHaveLength(1);
+  });
+
+  it("restricting one mailbox emails the Owner which mailbox and why; lifting it emails nobody", async () => {
+    expect((await restrict({ restricted: true, reason: "abuse", note: NOTE })).status).toBe(200);
+    expect(mailer.sent.map((m) => [m.to, m.subject])).toEqual([
+      ["owner-1@example.test", "Sending from one of your mailboxes is paused"],
+    ]);
+    expect(mailer.sent[0]?.text).toContain('Mailbox: "me@acme.test"');
+    expect((await restrict({ restricted: false, reason: "other", note: NOTE })).status).toBe(200);
+    expect(mailer.sent).toHaveLength(1);
+  });
+
+  it("a refused change emails nobody, and a mail failure still answers 200 (logged by error name only)", async () => {
+    actor = support;
+    expect((await setTier({ tier: "restricted", reason: "spam", note: NOTE })).status).toBe(403);
+    expect(mailer.sent).toEqual([]);
+    actor = trustSafety;
+    const logged: string[] = [];
+    setLogSinkForTests((line) => logged.push(line));
+    mailer.send = () => Promise.reject(new TypeError("smtp down"));
+    expect((await setTier({ tier: "restricted", reason: "spam", note: NOTE })).status).toBe(200);
+    expect(logged.join("\n")).toContain("restriction notice failed");
+    expect(logged.join("\n")).not.toContain("owner-1@");
   });
 });
 

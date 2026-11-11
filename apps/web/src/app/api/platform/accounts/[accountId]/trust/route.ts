@@ -6,6 +6,7 @@ import { setAccountTier, staffAccountTrust } from "@anhourmail/core/trust";
 import { getActor, getActorAndSession } from "@/server/auth/actor";
 import { container } from "@/server/container";
 import { ok, readJson, route } from "@/server/http/route";
+import { sendRestrictionNotices } from "@/server/mail/restriction-email";
 import { scheduleSendingPause } from "@/server/webmail/sending-pause-apply";
 
 const str = (v: string | string[] | undefined) => (typeof v === "string" ? v : "");
@@ -32,8 +33,9 @@ export const GET = route(async ({ req }, params) => {
  * `{ tier: "new" | "standard" | "restricted", reason?, note, automatic? }`. A fresh step-up (403 `step_up_required`),
  * never while acting as someone (403); a reason category to restrict and to move off `restricted`; a note always;
  * `trusted` is 422 `tier_unavailable`; unknown accounts 404; the same tier and source 409. Afterwards each mailbox's
- * managed script follows the new tier (redirects and replies paused or back). The body is never logged: the note is
- * staff-only. `staffTrust` tier (fail closed).
+ * managed script follows the new tier (redirects and replies paused or back), and a restriction emails the account's
+ * Owners and administrators the reason category and the appeal address (never the note; at most one a day). The body
+ * is never logged: the note is staff-only. `staffTrust` tier (fail closed).
  */
 export const PUT = route(
   async ({ req, meta }, params) => {
@@ -50,6 +52,13 @@ export const PUT = route(
       meta,
     );
     scheduleSendingPause(accountId);
+    // Restricted now: its Owners and administrators are told (at most once a day; the service decides who).
+    if (out.reason !== null) {
+      await sendRestrictionNotices(
+        out.notify.map((n) => n.email),
+        { restricted: "account", reason: out.reason },
+      );
+    }
     return ok({
       tier: out.to,
       from: out.from,

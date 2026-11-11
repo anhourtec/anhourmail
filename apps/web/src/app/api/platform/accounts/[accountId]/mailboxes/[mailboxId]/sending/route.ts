@@ -6,6 +6,7 @@ import { setMailboxRestriction } from "@anhourmail/core/trust";
 import { getActorAndSession } from "@/server/auth/actor";
 import { container } from "@/server/container";
 import { ok, readJson, route } from "@/server/http/route";
+import { sendRestrictionNotices } from "@/server/mail/restriction-email";
 import { scheduleSendingPause } from "@/server/webmail/sending-pause-apply";
 
 const str = (v: string | string[] | undefined) => (typeof v === "string" ? v : "");
@@ -20,8 +21,9 @@ const Restrict = z.object({
 /**
  * Staff: restrict or lift one mailbox's sending (`platform.trust.manage`, ADR-0034 §6): `{ restricted, reason, note }`.
  * The same step-up, act-as and reason rules as the account's tier; a mailbox that isn't this account's is 404; already
- * in that state 409. Afterwards the mailbox's managed script follows (redirects and replies paused or back). The body
- * is never logged. `staffTrust` tier (fail closed).
+ * in that state 409. Afterwards the mailbox's managed script follows (redirects and replies paused or back), and a
+ * restriction emails the account's Owners and administrators (at most one a day per account). The body is never
+ * logged. `staffTrust` tier (fail closed).
  */
 export const PUT = route(
   async ({ req, meta }, params) => {
@@ -39,6 +41,11 @@ export const PUT = route(
       meta,
     );
     scheduleSendingPause(accountId);
+    // Restricted now: the account's Owners and administrators are told (at most once a day; the service decides who).
+    await sendRestrictionNotices(
+      out.notify.map((n) => n.email),
+      { restricted: "mailbox", address: out.address, reason: out.reason },
+    );
     return ok({ address: out.address, restricted: out.restricted, reason: out.reason });
   },
   { limit: "staffTrust" },
