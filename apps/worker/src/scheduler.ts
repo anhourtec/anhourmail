@@ -10,6 +10,7 @@ import { writeFileSync } from "node:fs";
 import { log } from "@anhourmail/server/log";
 
 import { checkStalwartSettings, verifyStalwartCredentials } from "./stalwart";
+import { checkTrustPromoteSettings } from "./trust";
 
 type Job = {
   name: string;
@@ -84,6 +85,8 @@ export const JOBS: readonly Job[] = [
   { name: "import-notify", script: "job:import-notify", everyMs: 60_000, timeoutMs: 2 * 60_000, enabled: true },
   // Storage used per mailbox for the console (sizes only, read with the provisioning key; keeps the last good value).
   { name: "storage-usage", script: "job:storage-usage", everyMs: 10 * 60_000, timeoutMs: 5 * 60_000, enabled: true },
+  // ADR-0034 §2: established accounts in good standing promoted from new to standard (thresholds from TRUST_PROMOTE_*).
+  { name: "trust-promote", script: "job:trust-promote", everyMs: 3600_000, timeoutMs: 10 * 60_000, enabled: true },
 ];
 
 /** The environment a job's process gets: the audit key only for jobs that declare it (`stalwartKeys`). */
@@ -152,6 +155,8 @@ if (process.env.SCHEDULER_DRY_RUN !== "true") {
   // The jobs it spawns inherit this environment: the provisioning key and the read-only audit key, nothing else, each
   // exactly its documented set (ADR-0020 "Credential split").
   checkStalwartSettings("scheduler");
+  // The promotion job's thresholds (ADR-0034 §2): production refuses to start without them.
+  checkTrustPromoteSettings();
   await verifyStalwartCredentials("scheduler");
   await loop();
 }

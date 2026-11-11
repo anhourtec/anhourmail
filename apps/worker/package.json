@@ -29,6 +29,7 @@
     "job:billing-reconcile": "tsx src/jobs/billing-reconcile.ts",
     "job:billing-timers": "tsx src/jobs/billing-timers.ts",
     "job:billing-catalogue": "tsx src/jobs/billing-catalogue.ts",
+    "job:trust-promote": "tsx src/jobs/trust-promote.ts",
     "job:bootstrap-admin": "tsx --env-file-if-exists=../../.env src/jobs/bootstrap-admin.ts"
   },
   "dependencies": {
