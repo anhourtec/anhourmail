@@ -172,14 +172,22 @@ async function headersOf(svc: WebmailService, sessionId: string, subject: string
   return (list[0]?.headers ?? []).map((h) => ({ name: h.name, value: h.value.trim() }));
 }
 
-/** Inbound SMTP on port 25, as another mail server would deliver (dev only: the dev domain, no egress). */
-async function deliverInbound(to: string, subject: string, extra = ""): Promise<string[]> {
+/**
+ * Inbound SMTP on port 25, as another mail server would deliver (dev only: the dev domain, no egress). `from` is the
+ * outside sender (envelope and header), `someone@sender-<run>.test` by default.
+ */
+async function deliverInbound(
+  to: string,
+  subject: string,
+  extra = "",
+  from = `someone@sender-${run}.test`,
+): Promise<string[]> {
   const lines = [
     "EHLO sender.test",
-    `MAIL FROM:<someone@sender-${run}.test>`,
+    `MAIL FROM:<${from}>`,
     `RCPT TO:<${to}>`,
     "DATA",
-    `${extra}From: someone@sender-${run}.test\r\nTo: ${to}\r\nSubject: ${subject}\r\n\r\nhello\r\n.`,
+    `${extra}From: ${from}\r\nTo: ${to}\r\nSubject: ${subject}\r\n\r\nhello\r\n.`,
     "QUIT",
   ];
   return new Promise((resolve) => {
@@ -215,6 +223,19 @@ async function deliverInbound(to: string, subject: string, extra = ""): Promise<
     socket.on("error", finish);
     setTimeout(finish, 15_000).unref();
   });
+}
+
+const MAILPIT = `http://localhost:${process.env.MAILPIT_UI_PORT ?? "43026"}`;
+
+/** Mailpit messages to `to`, polled for up to `ms` (dev and CI only: every outside recipient is caught there). */
+async function caughtFor(to: string, ms = 5_000): Promise<number> {
+  const until = Date.now() + ms;
+  for (;;) {
+    const r = await fetch(`${MAILPIT}/api/v1/search?query=${encodeURIComponent(`to:"${to}"`)}`);
+    const found = ((await r.json()) as { messages?: unknown[] }).messages ?? [];
+    if (found.length > 0 || Date.now() > until) return found.length;
+    await new Promise((res) => setTimeout(res, 500));
+  }
 }
 
 async function send(svc: WebmailService, sessionId: string, from: string, to: string, subject: string) {
@@ -526,14 +547,30 @@ describe("webmail settings on the dev Stalwart", () => {
     expect(await headersOf(mail, targetSession, quiet)).toEqual([]);
     expect(await headersOf(mail, senderSession, `Paused away ${run}`)).toEqual([]);
 
-    // New with the target outside (the predicate says so): only the redirect stays paused; the reply runs.
+    // New with the target outside (the predicate says so): the redirect stays paused, and so does the automatic reply
+    // (second security review, finding F4), to a hosted sender and to an outside one alike.
+    // Straight from the script as written (lifted first), so the pause below is new's own.
+    expect((await applyPauseToMailboxes([{ ...ownerBox, tier: "standard" }], store, async () => [])).updated).toBe(1);
     const held = await applyPauseToMailboxes([{ ...ownerBox, tier: "new" }], store, async (a) => [...a]);
-    expect(held.updated).toBe(1);
-    const replyOnly = `int-held ${run}`;
-    await send(mail, senderSession, sender.address, owner.address, replyOnly);
-    expect(await waitFor(mail, senderSession, `Paused away ${run}`)).toContain("inbox");
-    await new Promise((r) => setTimeout(r, 3000));
-    expect(await headersOf(mail, targetSession, replyOnly)).toEqual([]);
+    expect(held).toMatchObject({ updated: 1, failed: 0 });
+    expect(outboundCommands((await store.read(account))?.content ?? "").map((c) => [c.kind, c.paused])).toEqual([
+      ["vacation", true],
+      ["redirect", true],
+    ]);
+    const heldInside = `int-held ${run}`;
+    const heldOutside = `int-held-outside ${run}`;
+    const outsideNew = `away-new-${run}@sender-${run}.test`;
+    await send(mail, senderSession, sender.address, owner.address, heldInside);
+    expect(
+      (await deliverInbound(owner.address, heldOutside, "", outsideNew)).some((r) => r.startsWith("250 2.0.0")),
+    ).toBe(true);
+    expect(await waitFor(mail, ownerSession, heldInside)).toContain("inbox");
+    expect(await waitFor(mail, ownerSession, heldOutside)).toContain("inbox");
+    await new Promise((r) => setTimeout(r, 4000));
+    expect(await headersOf(mail, targetSession, heldInside)).toEqual([]);
+    expect(await headersOf(mail, senderSession, `Paused away ${run}`)).toEqual([]);
+    // Nothing reached the outside sender: Mailpit catches every outside recipient in dev, and has nothing for it.
+    expect(await caughtFor(outsideNew, 3_000)).toBe(0);
 
     // Lifted: exactly the script that was written before, and forwarding works again.
     expect((await applyPauseToMailboxes([{ ...ownerBox, tier: "standard" }], store, async () => [])).updated).toBe(1);
@@ -541,6 +578,16 @@ describe("webmail settings on the dev Stalwart", () => {
     const again = `int-lifted ${run}`;
     await send(mail, senderSession, sender.address, owner.address, again);
     expect(await waitFor(mail, targetSession, again)).toContain("inbox");
+    // And the automatic reply runs again: to the hosted sender, and to an outside sender (caught by Mailpit), which
+    // shows the check above would have seen a reply had one gone out.
+    expect(await waitFor(mail, senderSession, `Paused away ${run}`)).toContain("inbox");
+    const outsideStandard = `away-standard-${run}@sender-${run}.test`;
+    expect(
+      (await deliverInbound(owner.address, `int-lifted-outside ${run}`, "", outsideStandard)).some((r) =>
+        r.startsWith("250 2.0.0"),
+      ),
+    ).toBe(true);
+    expect(await caughtFor(outsideStandard, 20_000)).toBeGreaterThan(0);
 
     await settings.saveVacation(
       ownerSession,
