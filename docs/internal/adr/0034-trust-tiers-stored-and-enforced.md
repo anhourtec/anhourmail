@@ -1,6 +1,6 @@
 # ADR-0034: Trust tiers stored on the customer account and enforced on every sending path
 
-**Status:** Accepted 2026-11-11 (building: slices 1–11 built; first Phase 6 slice)
+**Status:** Accepted 2026-11-11 (building: slices 1–12 built; first Phase 6 slice)
 
 ## Context
 
@@ -327,3 +327,40 @@ holding their mailboxes and those they belong to). Billing promotes on any deriv
 importer can't match to its account reads `restricted`. `tier_unavailable` (422) needs its HTTP mapping with the
 routes (slice 14). `.env.example` carries development `TRUST_PROMOTE_*` values; outside production all three unset
 turns the job off, and production refuses to start the scheduler without them.
+
+## Update 2026-11-11: build slice 12, and forwarding and automatic replies under a tier
+
+Built: the webmail reads the stored standing uncached for every send and delegated send (`403 sending_paused`,
+`403 sending_held` with `trust.send_held`, limits from the tier, `429 sending_limit`, 503 when the tier, the
+hosted-domain check or the counters can't be read). A delegated send's tiers are read only after its grant is
+confirmed (before that the draft is checked for shape only), so a refusal never tells anything about an address the
+person can't use.
+
+**A fact this ADR relied on was incomplete (security review of slices 1–11).** §3 said an existing redirect "is left out
+of the generated script, as for `restricted`" and §4 that `mailbox.ensure`'s access state stops a restricted mailbox
+sending. But the managed script is only written when the person saves their settings, and the mail server's send
+block doesn't stop a Sieve `redirect` or `vacation` (`research/stalwart.md` "Billing access states": no account
+permission stops Sieve execution). So an account restricted by staff kept forwarding and replying. Decision:
+
+- **The script itself pauses what the tier doesn't allow:** every `redirect` and `vacation` while `restricted`, and
+  only redirects to addresses we don't host while `new` (internal forwarding and automatic replies keep working, as
+  §3 says). Each paused command is wrapped in `if false { … }` after a fixed marker line
+  (`packages/core/src/webmail/sending-pause.ts`); the settings line is never touched, so lifting the tier gives back
+  exactly the script that was written, without the person's contacts (which the control plane can't read). The
+  transform only touches code, never a quoted string or a comment.
+- **Who writes it:** every webmail save (`saveMailRules`), and for scripts nobody saves, the web app: in the
+  background after a staff tier change or mailbox restriction (`scheduleSendingPause`, called by the slice-14
+  routes), and once after start-up for every active mailbox (`applyAllSendingPauses`), which also brings back a
+  `new` account's paused outside redirects after the worker promotes it. Each write is a compare-and-swap on the
+  Sieve state read; a save that wins is checked again on the next pass.
+- **Not in `mailbox.ensure`:** the worker's provisioning key has no `impersonate` and can't write Sieve, and only the
+  web app's operations key may (ADR-0020 credential split). Giving the worker that key would undo the split, so the
+  pause is written by the web app instead.
+- **Drift:** the reconciler (audit key, read-only) counts a script that still redirects or replies against its tier
+  (`unpausedSending` in `platform.reconciler_drift`); reported, not re-queued. Its other checks read a paused script
+  as the script it was.
+- **Open:** a tier change made outside the web app that restricts (the later automatic restriction by detection,
+  which runs as SYSTEM in the worker) reaches scripts only at the next web start-up or save until it gets its own
+  signal to the web app; it must add one before it ships. Pinned on the real server in
+  `apps/web/src/server/adapters/webmail-settings.int.test.ts` (restricted: neither the forward nor the reply goes
+  out; new with an outside target: the reply runs, the forward doesn't; lifted: the exact script, forwarding works).
