@@ -136,6 +136,8 @@ export type Derivation = {
   processedEventIds: string[];
   /** Tracked disputes that are new or changed by this derivation (the sync writes them). */
   disputes: BillingDispute[];
+  /** This derivation saw real money for the plan (`realChargePaid`): the only payment that promotes the trust tier. */
+  realCharge: boolean;
 };
 
 const byCreated = (a: PendingBillingEvent, b: PendingBillingEvent) =>
@@ -271,6 +273,25 @@ const newlyPaid = (previous: AccountBilling, sub: ProviderSubscription): boolean
   const inv = sub.latestInvoice;
   return inv?.status === "paid" && (inv.id !== previous.lastInvoiceId || previous.lastInvoiceStatus !== "paid");
 };
+
+/**
+ * Whether this sync saw real money for the plan (ADR-0034, second security review, finding F8): the only thing that
+ * lets billing promote a `new` account to `standard`. All must hold:
+ * - the subscription is `active` (a trial, past due or paused one never promotes, whatever its invoice);
+ * - its latest invoice was newly paid, for the subscription itself (`subscription_create` or `subscription_cycle`: an
+ *   add-on, a proration or a manual invoice never promotes, so a cheap add-on after a refund can't buy it back);
+ * - the invoice's amount is above zero (a 100 %-off code or a zero-priced trial invoice is not money);
+ * - a charge on a payment method paid for it, net of refunds already made (an invoice paid from the credit balance or
+ *   marked paid out of band has no charge).
+ * Comps, staff grants and comp codes never promote: no money changes hands (staff set a tier with `platform.trust.manage`).
+ */
+export function realChargePaid(previous: AccountBilling, sub: ProviderSubscription | null): boolean {
+  if (sub?.status !== "active" || !newlyPaid(previous, sub)) return false;
+  const inv = sub.latestInvoice;
+  if (inv === null) return false;
+  if (inv.billingReason !== "subscription_create" && inv.billingReason !== "subscription_cycle") return false;
+  return inv.amountMinor > 0 && inv.chargedMinor - inv.refundedMinor > 0;
+}
 
 /**
  * Computes the account's next billing row from the previous one, the provider's live subscription (null = none), the
@@ -445,7 +466,13 @@ export function deriveBilling(
   if (next.state === "lapsed" && previous.state !== "lapsed") changes.push({ kind: "holds_needed" });
   if (previous.state === "lapsed" && isPaidState(next.state)) changes.push({ kind: "holds_lifted" });
 
-  return { next, changes, processedEventIds: sorted.map((e) => e.id), disputes: tracking.changed };
+  return {
+    next,
+    changes,
+    processedEventIds: sorted.map((e) => e.id),
+    disputes: tracking.changed,
+    realCharge: realChargePaid(previous, live),
+  };
 }
 
 /**

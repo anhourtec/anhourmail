@@ -110,12 +110,9 @@ describe("grantStaffPlan / endStaffPlan", () => {
     expect(w.inAccount("billing.state_changed")[0]?.meta).toMatchObject({ toState: "active", reason: "comp_started" });
     expect(w.inAccount("billing.plan_changed")[0]?.meta).toMatchObject({ fromPlan: "free", toPlan: "plus" });
     expect(w.inPlatform("billing.staff_plan_granted")).toHaveLength(1);
-    // A comp makes the account paid, so it is promoted to standard at once (ADR-0034 §2), by the staff member's request.
-    expect(await w.d.uow.run((r) => r.trust.get(ACCOUNT_A))).toMatchObject({ tier: "standard", source: "billing" });
-    expect(w.inAccount("trust.tier_changed")[0]).toMatchObject({
-      result: "success",
-      meta: { fromTier: "new", toTier: "standard", source: "billing" },
-    });
+    // A comp is no money: the trust tier stays `new` (ADR-0034, finding F8); staff set a tier with platform.trust.manage.
+    expect(await w.d.uow.run((r) => r.trust.get(ACCOUNT_A))).toMatchObject({ tier: "new", source: "default" });
+    expect(w.inAccount("trust.tier_changed")).toEqual([]);
   });
 
   it("grants with no end date as a staff grant; ending it drops to Free and holds what doesn't fit", async () => {
@@ -129,17 +126,23 @@ describe("grantStaffPlan / endStaffPlan", () => {
     expect(w.s.mailboxes).toHaveLength(2); // nothing deleted
     expect(w.inAccount("billing.staff_plan_revoked")[0]?.meta).toMatchObject({ source: "staff", toState: "lapsed" });
     expect(w.inAccount("billing.plan_changed").at(-1)?.meta).toMatchObject({ fromPlan: "supporter", toPlan: "free" });
-    // Ended inside the refund window of the promotion: the promotion goes too (finding 2 of the slices 1–11 review),
-    // recorded with the staff member's request like the rest of the grant's effects.
+    // A grant never promoted the tier (finding F8), so ending it has nothing to take back.
     expect(await w.d.uow.run((r) => r.trust.get(ACCOUNT_A))).toMatchObject({ tier: "new", source: "default" });
-    expect(w.inAccount("trust.tier_changed").at(-1)).toMatchObject({
-      result: "success",
-      meta: { fromTier: "standard", toTier: "new", source: "default", cause: "plan_ended" },
-    });
+    expect(w.inAccount("trust.tier_changed")).toEqual([]);
   });
 
-  it("a grant that ran past the refund window keeps its promotion when staff end it", async () => {
+  it("ending a grant leaves a tier staff set, or one a real payment earned before, alone", async () => {
     const w = world();
+    await w.d.uow.run((r) =>
+      r.trust.setTier(ACCOUNT_A, {
+        tier: "standard",
+        source: "billing",
+        since: w.clock.now(),
+        reason: null,
+        note: null,
+        setBy: null,
+      }),
+    );
     await grantStaffPlan(w.d, billingStaff, ACCOUNT_A, { plan: "plus" }, SESSION, req);
     w.clock.set(new Date(w.clock.now().getTime() + 15 * DAY));
     await endStaffPlan(w.d, billingStaff, ACCOUNT_A, SESSION, req);

@@ -20,7 +20,13 @@ import { runNextJob } from "../provisioning/service";
 
 import { defaultBilling } from "./lifecycle";
 import { ingestBillingEvent } from "./ingest";
-import { type BillingProvider, BillingProviderError, type ProviderEvent } from "./ports";
+import {
+  type BillingProvider,
+  BillingProviderError,
+  type ProviderEvent,
+  type ProviderInvoice,
+  type ProviderSubscription,
+} from "./ports";
 import { reconcileBilling, resolveOrphanEvent, syncAccountBilling } from "./sync";
 
 const SECRET = fakeWebhookSecret("sync-test-seed");
@@ -331,6 +337,107 @@ describe("billing.sync", () => {
       const t = await tierOf(w);
       expect(t).toMatchObject({ tier: "standard", source: "staff" });
       expect(t?.lastRestrictedAt).toBeInstanceOf(Date);
+    });
+  });
+
+  describe("only real money promotes (second security review, finding F8)", () => {
+    /** The fake's subscription with its latest invoice (and status) rewritten, as the processor would report it. */
+    const reporting = (
+      w: Awaited<ReturnType<typeof world>>,
+      over: { status?: ProviderSubscription["status"]; invoice?: Partial<ProviderInvoice> },
+    ): BillingProvider => ({
+      ...w.provider,
+      getSubscription: async (customerId) => {
+        const sub = await w.provider.getSubscription(customerId);
+        if (!sub?.latestInvoice) return sub;
+        return {
+          ...sub,
+          status: over.status ?? sub.status,
+          latestInvoice: { ...sub.latestInvoice, ...over.invoice },
+        };
+      },
+    });
+    const tierOf = (w: Awaited<ReturnType<typeof world>>) => w.d.uow.run((r) => r.trust.get(w.accountId));
+    const promoted = (w: Awaited<ReturnType<typeof world>>) =>
+      w.d.uow.state.audit.some((e) => e.action === "trust.tier_changed" && e.meta.toTier === "standard");
+
+    it("a 100 %-off code: the plan is active, the tier stays new", async () => {
+      const w = await world();
+      await w.subscribe();
+      await w.deliver();
+      await syncAccountBilling(w.d, reporting(w, { invoice: { amountMinor: 0, chargedMinor: 0 } }), w.accountId);
+      expect((await w.billing())?.state).toBe("active");
+      expect(await tierOf(w)).toMatchObject({ tier: "new", source: "default" });
+      expect(promoted(w)).toBe(false);
+    });
+
+    it("an invoice paid from the credit balance: the plan is active, the tier stays new", async () => {
+      const w = await world();
+      await w.subscribe();
+      await w.deliver();
+      await syncAccountBilling(w.d, reporting(w, { invoice: { chargedMinor: 0 } }), w.accountId);
+      expect((await w.billing())?.state).toBe("active");
+      expect((await tierOf(w))?.tier).toBe("new");
+      expect(promoted(w)).toBe(false);
+    });
+
+    it("a trial: active from the provider's point of view, never promoted", async () => {
+      const w = await world();
+      await w.subscribe();
+      await w.deliver();
+      await syncAccountBilling(
+        w.d,
+        reporting(w, { status: "trialing", invoice: { amountMinor: 0, chargedMinor: 0 } }),
+        w.accountId,
+      );
+      expect((await w.billing())?.state).toBe("active");
+      expect((await tierOf(w))?.tier).toBe("new");
+      // Even a charged invoice on a trialing subscription doesn't promote.
+      const again = await world();
+      await again.subscribe();
+      await again.deliver();
+      await syncAccountBilling(again.d, reporting(again, { status: "trialing" }), again.accountId);
+      expect((await tierOf(again))?.tier).toBe("new");
+    });
+
+    it("an add-on bought after a refund doesn't buy the promotion back", async () => {
+      const w = await world();
+      await w.subscribe();
+      await w.deliver();
+      await syncAccountBilling(w.d, w.provider, w.accountId);
+      expect((await tierOf(w))?.tier).toBe("standard");
+      await w.provider.refundLatest(w.customerId);
+      await w.deliver();
+      await syncAccountBilling(w.d, w.provider, w.accountId);
+      expect((await tierOf(w))?.tier).toBe("new");
+      const sub = await w.provider.getSubscription(w.customerId);
+      await w.provider.changeSubscription({
+        subscriptionId: sub?.subscriptionId ?? "",
+        intentId: randomUUID(),
+        storageBlocks: 3,
+        proration: "charge_now",
+      });
+      await w.deliver();
+      await syncAccountBilling(w.d, w.provider, w.accountId);
+      const after = await w.provider.getSubscription(w.customerId);
+      // A new, paid, charged invoice, but for an add-on.
+      expect(after?.latestInvoice).toMatchObject({ status: "paid", billingReason: "other" });
+      expect(after?.latestInvoice?.chargedMinor).toBeGreaterThan(0);
+      expect(await w.billing()).toMatchObject({ state: "active", lastInvoiceId: after?.latestInvoice?.id });
+      expect((await tierOf(w))?.tier).toBe("new");
+    });
+
+    it("the next real renewal charge does promote", async () => {
+      const w = await world();
+      await w.subscribe();
+      await w.deliver();
+      await syncAccountBilling(w.d, reporting(w, { invoice: { chargedMinor: 0 } }), w.accountId);
+      expect((await tierOf(w))?.tier).toBe("new");
+      await w.provider.renewNow(w.customerId);
+      await w.deliver();
+      await syncAccountBilling(w.d, w.provider, w.accountId);
+      expect((await w.provider.getSubscription(w.customerId))?.latestInvoice?.billingReason).toBe("subscription_cycle");
+      expect(await tierOf(w)).toMatchObject({ tier: "standard", source: "billing" });
     });
   });
 

@@ -10,6 +10,7 @@ import {
   effectivePlan,
   isPaidState,
   type PendingBillingEvent,
+  realChargePaid,
   restrictedTimedOut,
 } from "./lifecycle";
 import type { DisputeOutcome, ProviderSubscription, ProviderSubStatus } from "./ports";
@@ -58,6 +59,7 @@ const sub = (over: Partial<ProviderSubscription> = {}): ProviderSubscription => 
     paidAt: T0,
     billingReason: "subscription_create",
     refundedMinor: 0,
+    chargedMinor: 900,
     // Unreadable lines by default: the sync falls back to the subscription's quantities and period.
     storageBlocks: null,
     extraMailboxes: null,
@@ -584,6 +586,59 @@ describe("deriveBilling: transitions", () => {
     const b = deriveBilling(paid(), sub(), [ev("customer.subscription.updated")], ctx());
     expect(a).toEqual(b);
     expect(a.changes).toEqual([]);
+  });
+});
+
+describe("realChargePaid: only real money promotes the trust tier (ADR-0034, finding F8)", () => {
+  const inv = (over: Partial<NonNullable<ProviderSubscription["latestInvoice"]>> = {}) =>
+    sub({ latestInvoice: { ...sub().latestInvoice!, id: "in_new", ...over } });
+
+  it("a charged first or renewal invoice of an active subscription is real money", () => {
+    expect(realChargePaid(free(), inv())).toBe(true);
+    expect(realChargePaid(paid(), inv({ billingReason: "subscription_cycle" }))).toBe(true);
+    // A partial credit with the rest charged is still money from a payment method.
+    expect(realChargePaid(free(), inv({ chargedMinor: 1 }))).toBe(true);
+    expect(deriveBilling(free(), inv(), [], ctx()).realCharge).toBe(true);
+  });
+
+  it("a 100 %-off code: a zero invoice, nothing charged", () => {
+    expect(realChargePaid(free(), inv({ amountMinor: 0, chargedMinor: 0 }))).toBe(false);
+    expect(deriveBilling(free(), inv({ amountMinor: 0, chargedMinor: 0 }), [], ctx())).toMatchObject({
+      next: { state: "active" },
+      realCharge: false,
+    });
+  });
+
+  it("an invoice paid from the credit balance or marked paid out of band has no charge", () => {
+    expect(realChargePaid(free(), inv({ chargedMinor: 0 }))).toBe(false);
+  });
+
+  it("an invoice whose charge was refunded in full is not money", () => {
+    expect(realChargePaid(free(), inv({ refundedMinor: 900 }))).toBe(false);
+  });
+
+  it("an add-on, a proration or a manual invoice never promotes", () => {
+    expect(realChargePaid(paid(), inv({ billingReason: "other" }))).toBe(false);
+  });
+
+  it("a trial never promotes, nor does a subscription that isn't active", () => {
+    for (const status of ["trialing", "past_due", "unpaid", "paused", "incomplete"] as const) {
+      expect(realChargePaid(free(), inv())).toBe(true);
+      expect(realChargePaid(free(), sub({ ...inv(), status }))).toBe(false);
+    }
+    expect(
+      deriveBilling(free(), sub({ ...inv({ amountMinor: 0, chargedMinor: 0 }), status: "trialing" }), [], ctx()),
+    ).toMatchObject({ next: { state: "active" }, realCharge: false });
+  });
+
+  it("an invoice already seen, an unpaid one, none, or no subscription never promotes", () => {
+    expect(realChargePaid(paid(), sub())).toBe(false);
+    expect(realChargePaid(free(), inv({ status: "open" }))).toBe(false);
+    expect(realChargePaid(free(), sub({ latestInvoice: null }))).toBe(false);
+    expect(realChargePaid(free(), null)).toBe(false);
+    expect(
+      deriveBilling(paid({ planSource: "comp", compUntil: new Date(NOW.getTime() + DAY) }), null, [], ctx()),
+    ).toMatchObject({ next: { state: "active", planSource: "comp" }, realCharge: false });
   });
 });
 

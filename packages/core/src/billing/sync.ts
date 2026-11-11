@@ -262,8 +262,10 @@ export async function applyDerivation(
  *   take it back themselves.
  * - **The paid plan ending** (a paid state to `free` or `lapsed`: a cancel, a lapse, a comp or grant ending) within the
  *   refund window of the promotion: taken back. A promotion older than that is kept (it stays when the plan ends).
- * - **Entering `active`, or a new payment while `active`:** a `new` account becomes `standard` (`promoteForPayment`).
- *   Only then, so a refund that leaves the subscription live isn't undone by the next sync.
+ * - **Real money for the plan while `active`** (`realChargePaid`: a charged, non-zero first or renewal invoice of an
+ *   active, non-trial subscription; second security review, finding F8): a `new` account becomes `standard`
+ *   (`promoteForPayment`). Only then, so a refund that leaves the subscription live isn't undone by the next sync, and
+ *   a comp, a staff grant, a 100 %-off code, a credit-paid invoice, an add-on or a trial never promotes.
  * Staff-set, automatic and restricted tiers are never touched either way.
  */
 async function tierAfterBilling(
@@ -282,10 +284,7 @@ async function tierAfterBilling(
       withinMs: BILLING.refundWindowDays * DAY_MS,
     });
   }
-  const paid = d.changes.some(
-    (c) => (c.kind === "state_changed" && c.to === "active") || c.kind === "payment_succeeded",
-  );
-  return d.next.state === "active" && paid ? promoteForPayment(deps, r, accountId) : [];
+  return d.next.state === "active" && d.realCharge ? promoteForPayment(deps, r, accountId) : [];
 }
 
 const REFUND = { kind: "system", name: "billing-refund" } as const;
