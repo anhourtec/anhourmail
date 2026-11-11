@@ -27,6 +27,12 @@ import {
  * - Pyzor is a network lookup service; the isolated dev network can't reach it, and Stalwart refuses to
  *   reload while it is enabled. Dev only — production keeps it on (rule 20 is about production filtering).
  * - The admin WebUI bundle is served from a pinned local file because Stalwart can't download it.
+ * - Every mail-port client reaches the dev Stalwart through the `mail-edge` forwarder, one address on `mailnet`, so
+ *   Stalwart's automatic bans would cut every dev client and test off at once: a refused recipient (unknown address,
+ *   the relay hold) counts towards a permanent abuse ban at 35 a day per address, and the counters live in the data
+ *   store, surviving restarts until the UTC day ends. The private ranges Docker networks use are allowed
+ *   (`x:AllowedIp`, `DEV_ALLOWED_NETWORKS`). HTTP requests that carry X-Forwarded-For (the webmail BFF, tests'
+ *   documentation-range addresses) are still counted and banned per client. Dev only: production has no such entry.
  * - The sender-identity script carries the send-on-behalf exception (ADR-0026 §8), keyed with `SENDER_DELEGATION_KEY`
  *   from `.env`, or the dev key derived from BETTER_AUTH_SECRET when unset (`resolveSenderDelegationKey`), so the web
  *   app and `stack:verify` compute the same tags. Production's bootstrap passes its own key (private ops repository).
@@ -43,6 +49,21 @@ export function devWebmailOrigins(webmailUrl: string | undefined, webmailDevPort
 }
 
 export const DEV_DOMAIN = "dev.test";
+
+/** Docker's private address ranges: the dev forwarder's address on `mailnet` is one of them (dev only). */
+export const DEV_ALLOWED_NETWORKS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] as const;
+const DEV_ALLOWED_REASON = "Dev: mail-port clients reach Stalwart through the mail-edge forwarder";
+
+/** Adds the dev forwarder's ranges to `x:AllowedIp` (never removes anything). True when it added one. */
+async function allowDevForwarder(mgmt: StalwartManagement): Promise<boolean> {
+  const have = await mgmt.transport.getAll<{ id: string; address: string }>("x:AllowedIp", ["address"]);
+  const missing = DEV_ALLOWED_NETWORKS.filter((n) => !have.some((h) => h.address === n));
+  if (missing.length === 0) return false;
+  await mgmt.transport.set("x:AllowedIp", {
+    create: Object.fromEntries(missing.map((address, i) => [`a${String(i)}`, { address, reason: DEV_ALLOWED_REASON }])),
+  });
+  return true;
+}
 export const DEV_MAILBOXES = ["alice", "bob"] as const;
 
 const WEBUI_VERSION = "v1.0.11";
@@ -71,6 +92,7 @@ export async function applyDevMailPlan(
   await ensureWebUiBundle();
   let restartNeeded = await mgmt.setWebUiResource(`file:///opt/anhourmail/${WEBUI_FILE}`);
   await mgmt.updateSingleton("x:SpamPyzor", { enable: false });
+  await allowDevForwarder(mgmt);
   await mgmt.upsertRelayRoute({
     name: "mailpit",
     description: "Dev: every remote recipient goes to Mailpit",
@@ -111,8 +133,9 @@ export async function applyDevMailPlan(
   // one. Also a production setting (applied by the deploy's bootstrap with its administrator credential).
   await applyDefaultFolders(mgmt);
   // One sending ceiling for every authenticated sender (ADR-0034 §4): the standard tier's numbers per hour and per day
-  // and its recipients per message, leaving out the platform's own system accounts (transactional mail). Also a
-  // production setting (the deploy's bootstrap runs the same call).
+  // and its recipients per message, leaving out the platform's own system accounts (transactional mail); and the relay
+  // hold first in `allowRelaying` (ADR-0034 update "relay hold": accounts on its list send to hosted addresses only).
+  // Also a production setting (the deploy's bootstrap runs the same call).
   await applySendingPolicy(
     mgmt,
     standardSendingPolicy(opts.platformDomain ?? parsePlatformDomain(process.env.PLATFORM_DOMAIN)),
