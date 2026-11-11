@@ -102,8 +102,8 @@ promotion once set). Partial index `customer_account_trust_promote_idx` on (trus
 promotion job. A mailbox's own sending restriction (one compromised mailbox in a fine account) is
 `mailbox.sending_restricted_at`, `_reason` (`SUSPENSION_REASONS` key; set exactly when `_at` is, `CHECK`), `_note`
 (staff-only, 1–2,000 characters) and `_by`; its **effective tier** is the account's tier made stricter by it
-(`restricted` while set). `user_profile.trust_tier` (per person, never written) is read by nothing new and is dropped in
-migration C after a backup.
+(`restricted` while set). `user_profile.trust_tier` (per person, never written) is read by nothing since step B (the importer caps by the
+destination mailbox's effective tier, 2026-11-11) and is dropped in migration C after a backup.
 
 **Add a user** (migration 0018; `packages/core/src/mailboxes/add-user.ts`): `mailbox.display_name` (a custom sender
 name; "Add a user" leaves it null so the mailbox follows the person's name — "Names" below) and `mailbox.must_change_password` (webmail first-sign-in step);

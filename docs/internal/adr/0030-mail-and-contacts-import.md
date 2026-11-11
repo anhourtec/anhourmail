@@ -822,6 +822,14 @@ production Stalwart bootstrap must apply and reload the marker-stripping Sieve s
 questions below are still open; the code builds their defaults. Not built, by this decision: OAuth sources, CardDAV
 contacts and calendar import.
 
+**Update (2026-11-11): the message cap follows the destination mailbox's tier (ADR-0034 migration step B).** The cap
+in "(3) Message caps by trust tier" no longer reads the starter's `user_profile.trust_tier` (never written, so every
+import got the `new` cap): it reads the destination mailbox's effective tier — its account's
+`customer_account.trust_tier`, `restricted` while staff restrict that mailbox's sending — in the runner's unit of work
+(`trust/standing.ts` `mailboxTier`; a mailbox that isn't the account's reads `restricted`). `imports.trustTier` is
+gone from the repository. `IMPORT_MESSAGE_CAPS` keeps its shape; a paid or promoted account now gets the `standard`
+cap.
+
 ## Questions for the maintainer (defaults this ADR builds)
 
 1. **OAuth sources are deferred**, so business mailboxes at the largest provider that refuses password IMAP can't be

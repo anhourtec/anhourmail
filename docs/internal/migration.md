@@ -125,7 +125,8 @@ Each migration gets a section in this shape:
   database on 2026-11-11: 169 accounts → 113 `standard`/`billing`, 1 `standard`/`staff` (the staff account), 55 `new`
   (1 with `last_restricted_at`, the suspended demo account).
 - Rollback: nothing to undo (older code ignores the columns; 0043's rollback drops them). Step B (the importer reads
-  the mailbox's effective tier) and step C (drop `user_profile.trust_tier`, Destructive, after a backup) follow.
+  the mailbox's effective tier) is code only, no migration: done 2026-11-11 (nothing reads `user_profile.trust_tier`
+  since). Step C (drop `user_profile.trust_tier`, Destructive, after a backup) follows in a later release.
 
 ### 0043_trust_tier · — · 2026-11-11 · Safe
 
