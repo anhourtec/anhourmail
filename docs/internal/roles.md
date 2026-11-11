@@ -1,6 +1,6 @@
 # Roles and permissions
 
-Last updated: 2026-11-11 (guard rail 24: trust tier routes, `platform.trust.manage` for Global and Trust & Safety, step-up, never act-as, notes by `platform.suspensionNotes.read`; matrix description only); 2026-11-05 (Billing's Usage tab and the person menu's Billing entry follow `billing.read`, matrix unchanged; who may check out, change, cancel and refund; Platform billing routes and invite codes, ADR-0029; `mailbox.import.own` / `mailbox.import.any` and Import mail in the navigation, ADR-0030; settings part 2 permissions, ADR-0032; the suspension notes permission and guard rail 17); 2026-11-04 (guard rail 20: billing ceilings and the staff address-ceiling override route, the public signed billing webhook, ADR-0029 slices 5–7, matrix unchanged); 2026-10-31 (delegates can't change a shared mailbox's Safe senders, ADR-0027, matrix unchanged; password-first sign-in and password-only step-up, ADR-0028, matrix unchanged; webmail sender name route; names edited through the profile rule; matrix unchanged; 2026-10-30: mailbox delegation, ADR-0026: mailboxes shared with the person in the webmail; console routes and RBAC harness rows; `delegation.manage.any` for User Administrators with guard rail 8; data export and account deletion, ADR-0025; staff support access / act-as, ADR-0023; profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
+Last updated: 2026-11-11 (guard rail 24: billing staff reach `standard` through grants and comp codes, accepted as a staff vouch, bounded by the refund window; guard rail 24: trust tier routes, `platform.trust.manage` for Global and Trust & Safety, step-up, never act-as, notes by `platform.suspensionNotes.read`; matrix description only); 2026-11-05 (Billing's Usage tab and the person menu's Billing entry follow `billing.read`, matrix unchanged; who may check out, change, cancel and refund; Platform billing routes and invite codes, ADR-0029; `mailbox.import.own` / `mailbox.import.any` and Import mail in the navigation, ADR-0030; settings part 2 permissions, ADR-0032; the suspension notes permission and guard rail 17); 2026-11-04 (guard rail 20: billing ceilings and the staff address-ceiling override route, the public signed billing webhook, ADR-0029 slices 5–7, matrix unchanged); 2026-10-31 (delegates can't change a shared mailbox's Safe senders, ADR-0027, matrix unchanged; password-first sign-in and password-only step-up, ADR-0028, matrix unchanged; webmail sender name route; names edited through the profile rule; matrix unchanged; 2026-10-30: mailbox delegation, ADR-0026: mailboxes shared with the person in the webmail; console routes and RBAC harness rows; `delegation.manage.any` for User Administrators with guard rail 8; data export and account deletion, ADR-0025; staff support access / act-as, ADR-0023; profile photos; first-sign-in password gate, console page statuses, mailbox handovers, Add a user availability)
 
 **Source of truth: `packages/shared/src/rbac`.** That code is canonical: the permission list, the role → permission matrix, critical-permission flags and guard rails. The UI (what to show), the API (what to allow) and the RBAC harness (`npm run test:rbac`) all derive from it. This document explains the matrix for people. If the two disagree, the code wins, and this file is updated in the same change (rule 35).
 
@@ -403,6 +403,16 @@ Naming: `<resource>.<verb>`. Each permission has a scope: `self` (any signed-in 
     words while restricted — never the note, who set it or what promotes it; another account's id is **404**; a Member
     sees their own mailbox's tier in the webmail instead. Matrix: the description of `platform.trust.manage` now names
     what it does; no permission or grant changed.
+    **Billing staff reach `standard` without `platform.trust.manage` (accepted, security review of slices 1–11,
+    finding 3; maintainer-side decision 2026-11-11).** A staff grant (`platform.billing.manage` ★: Global and Billing
+    Administrators) and a comp code (made with `platform.billing.manage` ★ and a step-up, single use, redeemed on the Billing page with
+    `billing.manage` or at sign-up)
+    make the account paid, and a paid `new` account is promoted to `standard` with source `billing`. That is accepted as
+    a staff vouch: both need a staff member with a critical permission and a fresh step-up. It is bounded the same way
+    as a payment: the promotion is taken back to `new` when the grant or comp ends (staff end it, or it runs out) within
+    the 14-day refund window of the promotion, on a refund and on any dispute (a dispute also marks the account, so the
+    automatic job never promotes it). A grant that ran longer than the window keeps `standard` when it ends, as a paid
+    plan does. Billing staff can never set `restricted` or lift it, and never move a staff-set tier.
 
 ## Webmail
 
