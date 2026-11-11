@@ -149,6 +149,19 @@ export {
   relayHoldKey,
 } from "./relay-hold";
 export {
+  ABUSE_BAN_PERIOD_ENV,
+  ABUSE_BAN_PERIOD_MAX_MS,
+  ABUSE_BAN_PERIOD_MIN_MS,
+  abuseBanPeriod,
+  abuseBanPeriodFromEnv,
+  applyAbuseBanPeriod,
+  assertNoPrivateAllowedIps,
+  overlapsPrivateNetwork,
+  parseNetwork,
+  PRIVATE_NETWORKS,
+  privateAllowedIps,
+} from "./security";
+export {
   applySendingPolicy,
   coveredSender,
   desiredMaxRecipients,
