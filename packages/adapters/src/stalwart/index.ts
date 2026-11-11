@@ -14,11 +14,15 @@ import type { MailServer, ServiceAccountInventory } from "@anhourmail/core/provi
 import type { ManagedScriptReader } from "@anhourmail/core/webmail";
 import { MANAGED_SIEVE_SCRIPT } from "@anhourmail/shared/webmail";
 import {
+  accessOf,
   accountTrainingSamples,
   destroyTrainingSamples,
   holdMismatch,
   importSamples,
   LEGACY_SERVICE_ACCOUNT,
+  type MailboxAccess,
+  RelayHoldList,
+  isDesiredRelaying,
   samplesMadeBefore,
   scopesOf,
   sendingPolicyDrift,
@@ -199,12 +203,51 @@ const RSA_KEY_WAIT_TRIES = 20;
 const RSA_KEY_WAIT_MS = 250;
 const isRsaKey = (k: { value: string }) => /(^|;)\s*k=rsa\s*(;|$)/i.test(k.value);
 
+/** A method-level `forbidden` (the credential lacks the permission). */
+const isForbidden = (err: unknown): boolean =>
+  err instanceof StalwartError &&
+  err.kind === "method" &&
+  (err.detail as { type?: unknown } | undefined)?.type === "forbidden";
+
+/** Least to most restrictive, as the mail server holds them (`accessOf`). */
+const ACCESS_ORDER: readonly MailboxAccess[] = [
+  "active",
+  "smtp_blocked",
+  "send_blocked",
+  "receive_blocked",
+  "suspended",
+];
+const stricter = (a: MailboxAccess, b: MailboxAccess): MailboxAccess =>
+  ACCESS_ORDER.indexOf(a) >= ACCESS_ORDER.indexOf(b) ? a : b;
+const looser = (a: MailboxAccess, than: MailboxAccess): boolean => ACCESS_ORDER.indexOf(a) < ACCESS_ORDER.indexOf(than);
+
+/** The relay hold isn't in the mail server's `allowRelaying`: a held mailbox is left unable to send at all. */
+export class RelayHoldNotInPlaceError extends Error {
+  constructor() {
+    super("the mail server's relaying policy has no relay hold; held mailboxes stay send-blocked");
+    this.name = "RelayHoldNotInPlaceError";
+  }
+}
+
 /**
  * The MailServer port with the provisioning key (worker and scheduler): domains, accounts, aliases, suspension and
  * app-password revocation through `x:Account.credentials`. It never needs owner access to a mailbox: the managed Sieve
  * script is written (and made active) by the web app with the operations key.
+ *
+ * `hold` is the hold key's client (`stalwartHold`, `HOLD_KEY_PERMISSIONS`): the relay hold's list (ADR-0034 update
+ * "relay hold"). Without it a mailbox that must be held is refused (the job fails and retries), never left open, and
+ * the reconciler's hold check reports "not checked".
  */
-export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
+export function stalwartMailServer(mgmt: StalwartManagement, opts: { hold?: StalwartManagement } = {}): MailServer {
+  const holdList = opts.hold ? new RelayHoldList(opts.hold) : null;
+  /** The account's access on the server now, or null when there is none with that id. */
+  const currentAccess = async (id: string): Promise<MailboxAccess | null> => {
+    const [account] = await mgmt.transport.getAll<{
+      id: string;
+      permissions?: { disabledPermissions?: Record<string, boolean> };
+    }>("x:Account", ["permissions"], [id]);
+    return account ? accessOf(account.permissions) : null;
+  };
   return {
     async ensureDomain(name, catchAllAddress) {
       return {
@@ -244,6 +287,7 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
       quotaBytes,
       suspended,
       access,
+      relayHold,
       aliases,
       description,
     }) {
@@ -256,33 +300,81 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
       if (initialPasswordHash !== null && !initialPasswordHash.startsWith("$argon2id$")) {
         throw new Error("mailbox passwords reach the mail server only as argon2id hashes");
       }
-      const externalId = await mgmt.upsertUser({
-        name: local,
-        domain,
-        // Used only when the account is new (resetPassword is false): the password chosen at creation (its hash), or
-        // a random secret nobody knows.
-        password: initialPasswordHash ?? (await hashPassword(randomBytes(32).toString("base64url"))),
-        quotaBytes,
-        // Suspension disables sign-in, sending and delivery; credentials and mail are kept (SUSPENDED_PERMISSIONS). The
-        // send-blocked state keeps sign-in, reading and delivery (SEND_BLOCKED_PERMISSIONS), and the SMTP-only hold of a
-        // new-tier mailbox keeps webmail sending too (SMTP_BLOCKED_PERMISSIONS); suspension wins.
-        suspended,
-        access: access ?? "active",
-        ...(description === undefined ? {} : { description }),
-        // A turned-off alias isn't sent at all, so the server refuses it as an unknown recipient and won't accept
-        // it as a sender, without relying on how it treats a disabled alias. The address stays held in Postgres.
-        aliases: aliases
-          .filter((a) => a.enabled)
-          .map((a) => {
-            const [name, aliasDomain] = split(a.address);
-            return {
-              name,
-              domain: aliasDomain,
-              enabled: true,
-              ...(a.description ? { description: a.description } : {}),
-            };
-          }),
-      });
+      const held = relayHold === true;
+      if (held && !holdList) throw new Error("no relay hold credential: a held mailbox can't be applied");
+      const write = async (writeAccess: MailboxAccess) =>
+        mgmt.upsertUser({
+          name: local,
+          domain,
+          // Used only when the account is new (resetPassword is false): the password chosen at creation (its hash), or
+          // a random secret nobody knows.
+          password: initialPasswordHash ?? (await hashPassword(randomBytes(32).toString("base64url"))),
+          quotaBytes,
+          // Suspension disables sign-in, sending and delivery; credentials and mail are kept (SUSPENDED_PERMISSIONS).
+          // The send-blocked state keeps sign-in, reading and delivery (SEND_BLOCKED_PERMISSIONS), and the SMTP-only
+          // hold of a new-tier mailbox keeps webmail sending too (SMTP_BLOCKED_PERMISSIONS); suspension wins.
+          suspended: writeAccess === "suspended",
+          ...(writeAccess === "suspended" ? {} : { access: writeAccess }),
+          ...(description === undefined ? {} : { description }),
+          // A turned-off alias isn't sent at all, so the server refuses it as an unknown recipient and won't accept
+          // it as a sender, without relying on how it treats a disabled alias. The address stays held in Postgres.
+          aliases: aliases
+            .filter((a) => a.enabled)
+            .map((a) => {
+              const [name, aliasDomain] = split(a.address);
+              return {
+                name,
+                domain: aliasDomain,
+                enabled: true,
+                ...(a.description ? { description: a.description } : {}),
+              };
+            }),
+        });
+      const want: MailboxAccess = suspended ? "suspended" : (access ?? "active");
+      if (!holdList) {
+        // No hold credential (one-off jobs): nothing to hold here, and a key left on the list only holds harder.
+        const externalId = await write(want);
+        return {
+          externalId,
+          created: known === null,
+          passwordCredentialId: await mgmt.passwordCredentialId(externalId),
+        };
+      }
+      // The relay hold (research/stalwart.md "Relay hold"). Its list changes on the server only at a reload, and
+      // adding fails open until then. So a new mailbox is created only once it is listed, the list reloaded and the
+      // relaying policy checked (a failure leaves nothing on the mail server, and the retry starts clean); an existing
+      // one going onto the list is first made unable to send at all (unless it already can't), and given its access
+      // only after the reload and the check. A failure anywhere leaves it unable to send; the job retries, and a retry
+      // that finds the mailbox still short of its access reloads again. A mailbox already listed and holding its access
+      // is left as it is (no reload). Taking a mailbox off the list fails safe (it stays held until the reload), so it
+      // is unlisted and reloaded before its new access is written, for the same reason.
+      let now: MailboxAccess | null = known === null ? null : await currentAccess(known);
+      if (held) {
+        const preHold = stricter(want, "send_blocked");
+        const tighten = async () => {
+          if (now !== null && looser(now, preHold)) {
+            await write(preHold);
+            now = preHold;
+          }
+        };
+        let added: boolean;
+        try {
+          added = await holdList.add(address);
+        } catch (err) {
+          // Couldn't list it: still never leave it able to send.
+          await tighten();
+          throw err;
+        }
+        if (added || now !== want) {
+          await tighten();
+          await holdList.reload();
+          if ((now === null || looser(want, now)) && !(await holdList.inPlace())) throw new RelayHoldNotInPlaceError();
+        }
+      } else {
+        const removed = await holdList.remove(address);
+        if (removed || (now !== null && now !== want)) await holdList.reload();
+      }
+      const externalId = await write(want);
       return { externalId, created: known === null, passwordCredentialId: await mgmt.passwordCredentialId(externalId) };
     },
 
@@ -307,6 +399,8 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
         throw new Error("mail server account no longer matches this mailbox; not destroying it");
       }
       await mgmt.destroy("x:Account", account.id);
+      // Its place on the relay hold goes with it (a later owner of the address gets theirs from their own ensure).
+      if (holdList && (await holdList.remove(address))) await holdList.reload();
     },
 
     async removeDomain(name) {
@@ -332,16 +426,23 @@ export function stalwartMailServer(mgmt: StalwartManagement): MailServer {
         access: u.access,
       }));
     },
+    // Read only, with the hold key. Null (not checked) without it, or when it is refused.
+    async relayHoldState() {
+      if (!holdList) return null;
+      try {
+        const [listed, relaying] = await Promise.all([holdList.list(), holdList.relaying()]);
+        return { listed, policyInPlace: isDesiredRelaying(relaying) };
+      } catch (err) {
+        if (isForbidden(err)) return null;
+        throw err;
+      }
+    },
     // Read only; a key without `sysMtaInboundThrottleGet` / `sysMtaStageRcptGet` answers `forbidden`: not checked.
     async sendingPolicyDrift(policy) {
       try {
         return await sendingPolicyDrift(mgmt, policy);
       } catch (err) {
-        const type =
-          err instanceof StalwartError && err.kind === "method"
-            ? (err.detail as { type?: unknown } | undefined)?.type
-            : null;
-        if (type === "forbidden") return null;
+        if (isForbidden(err)) return null;
         throw err;
       }
     },
