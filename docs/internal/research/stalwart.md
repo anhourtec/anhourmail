@@ -331,12 +331,45 @@ What P4 makes possible (verified in the same test):
 - **A per-account throttle:** an `authenticatedAs` throttle whose `match` is `key_exists('<ns>', authenticated_as)`
   limits listed accounts only (1 / h: second MAIL FROM `452`, an unlisted account unaffected).
 
-Not verified yet (needed before relying on lookup lists for enforcement): that keys survive a Stalwart restart and are
+Not verified yet at the time (since verified, see "Relay hold" below): that keys survive a Stalwart restart and are
 loaded at start without `ReloadLookupStores`; what happens to expressions when a reload fails; the cost of
-`ReloadLookupStores` with thousands of keys. Permissions: lookup keys need `sysMemoryLookupKey{Create,Destroy,Get}` and
-the reload `sysActionCreate`, which also allows every other `x:Action` (pause the queue, reload settings); none of our
-service keys holds them today. Avoid `key_get(…) || 100` as a value expression: an unlisted account got a cap of 1.
-Whether Sieve can read lookup keys after `ReloadLookupStores` (ADR-0026 P9 tried only `ReloadSettings`) is untested.
+`ReloadLookupStores` with thousands of keys. Avoid `key_get(…) || 100` as a value expression: an unlisted account got a
+cap of 1. Whether Sieve can read lookup keys after `ReloadLookupStores` (ADR-0026 P9 tried only `ReloadSettings`) is
+untested.
+
+### Relay hold (verified on the pinned v0.16.27, 2026-11-11)
+
+Probes R1–R6 in `packages/adapters/src/stalwart/relay-hold.int.test.ts` (throwaway domain and accounts, a run-scoped
+namespace in `allowRelaying`, the original written back; R6 restarts the dev container and runs only with
+`RELAY_HOLD_RESTART_PROBE=1`). `allowRelaying` = `if key_exists('<ns>', authenticated_as) then false`, else the default
+`!is_empty(authenticated_as)`. As built: `packages/stalwart-client/src/relay-hold.ts` (namespace
+`anhourmail-relay-hold`).
+
+| #   | Question                                                         | Result                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R1  | Every authenticated path, for an account with customer permissions | SMTP AUTH `235`, outside RCPT `550 5.1.2 Relay not allowed.`, local RCPT `250`. JMAP `EmailSubmission/set` with the password **and** with a `jmap`-scope app password: created, `deliveryStatus` `550 5.1.2 Relay not allowed.`, nothing reaches Mailpit; a local recipient is delivered. An `smtp`-scope app password on 587: AUTH `235`, outside RCPT `550 5.1.2`. Unlisted accounts relay.                  |
+| R2  | Other spellings of the sign-in                                   | Basic sign-in with an alias (the User role's `authenticateWithAlias`) and in upper case: both held. `authenticated_as` is the account's own name.                                                                                                                                                                                                                                                                 |
+| R3  | Reload not run, refused, or with bad input                       | A key written but not reloaded doesn't hold (**adding fails open** until the reload). `ReloadSettings` neither loads a new key nor drops loaded ones. A destroyed key keeps holding until the reload (**removing fails safe**). A refused reload (`forbidden`) changes nothing loaded. A glob key `[` is accepted and the reload still succeeds, loaded keys unaffected. Stalwart's code: the reload is synchronous and a reload with errors answers `notCreated`; a relay expression that fails to evaluate counts as **refused** (`unwrap_or(false)`). |
+| R4  | Cost with 3,000 keys                                             | Writing 3,000 keys in six `/set` calls of 500: 0.3 s. `ReloadLookupStores`: 2 ms (three runs). RCPT answers unchanged.                                                                                                                                                                                                                                                                                         |
+| R5  | The narrowest key                                                | `sysMemoryLookupKey{Get,Query,Create,Destroy}`, `sysActionCreate` **and `actionReloadLookupStores`**: Stalwart checks a permission per action type (`action<Type>`: without it `forbidden` "Insufficient permissions to perform action of type ReloadLookupStores"), so the key can't `PauseMtaQueue`, `ResumeMtaQueue`, `ReloadSettings` or `InvalidateCaches`. It can't read `x:Account` or write `x:MtaStageRcpt`; with `sysMtaStageRcptGet` it reads `allowRelaying`. **The lookup permissions cover every namespace**, the spam filter's included (`trusted-domains`, `blocked-domains`, `spam-traps`, `url-redirectors` are views of the same object): it could add a trusted domain. Only a proxy can keep it to one namespace. |
+| R6  | Restart                                                          | After `docker compose restart stalwart`: a key loaded before **and a key written but never reloaded** both hold at start without a reload; unlisted accounts relay. Keys live in the data store.                                                                                                                                                                                                         |
+
+Also found:
+
+- **Every refused recipient counts towards a permanent IP ban.** Stalwart's `rcpt_error` (unknown recipient or relay
+  refused) calls `is_rcpt_fail2banned`, which counts per client address **and per recipient address** against
+  `x:Security.abuseBanRate` (default 35 per day, fixed UTC-day window; `abuseBanPeriod` null = permanent) and bans the
+  client's address once either is over (`crates/common/src/network/security.rs`). Counters are in the in-memory store,
+  which defaults to the data store, so they **survive restarts**; loopback and `x:AllowedIp` are exempt. In dev every
+  mail-port client is the `mail-edge` forwarder's one address: two probe runs banned it (`rcptToFailure`), and lifting
+  the ban didn't help until the UTC day ended because the counter stayed over. The dev plan now allows Docker's
+  private ranges (`DEV_ALLOWED_NETWORKS`, dev only). Production consequence: a mail app of a held account that keeps
+  trying outside recipients would get the person's address banned from every protocol (and everyone behind the same
+  NAT), and 35 refusals of one recipient across all held accounts would ban whoever comes next; so `new` keeps
+  `smtp_blocked` (an AUTH refusal for a missing permission doesn't count) and the hold covers JMAP.
+- `x:MemoryLookupKey/query` filters by `namespace` only (`key` and `text` are `unsupportedFilter`); a duplicate
+  create is refused with `primaryKeyViolation` and the existing key's `objectId`, which `RelayHoldList` uses to add and
+  remove with one or two calls whatever the list's size.
 
 **The ceiling as built (ADR-0034 slice 13, 2026-11-11; `packages/adapters/src/stalwart/sending-ceiling.int.test.ts`):**
 two `authenticatedAs` throttles with the standard tier's numbers (50 / h, 200 / day) and `match` `!is_empty(authenticated_as)
