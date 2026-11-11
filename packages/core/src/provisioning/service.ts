@@ -11,7 +11,7 @@ import { mailboxNameOf } from "../people/names";
 import { mutation } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 import { mailboxRelayHold, mailboxSendAccess } from "../trust/access";
-import { desiredSendAccess } from "../trust/desired";
+import { desiredRelayHold, desiredSendAccess } from "../trust/desired";
 import type { MailServer } from "./ports";
 import { backoffMs, type ClaimedJob, type JobKind, MAX_ATTEMPTS } from "./types";
 
@@ -572,6 +572,14 @@ export type DriftReport = {
    * bootstrap applies it). Null when the credential can't read it, or the mail server adapter doesn't check it.
    */
   sendingPolicyMismatch: string[] | null;
+  /**
+   * The relay hold (ADR-0034 update "relay hold") against the trust tiers, for settled mailboxes: `missing`, held but
+   * not on the list (re-queued: `mailbox.ensure` lists it, fail-closed); `extra`, on the list but not held (ours are
+   * re-queued; an address we don't know is reported only: holding it stops nothing we want); `policyInPlace` false
+   * when the server's relaying policy isn't exactly the hold's (reported; the deploy's bootstrap applies it). Null when
+   * the credential can't read it, or the adapter doesn't check it.
+   */
+  relayHoldMismatch: { missing: string[]; extra: string[]; policyInPlace: boolean } | null;
   clean: boolean;
 };
 
@@ -637,6 +645,7 @@ export async function reconcile(
     sieveLockMismatch: [],
     accessMismatch: [],
     sendingPolicyMismatch: null,
+    relayHoldMismatch: null,
     clean: true,
   };
   // Settled states only: a provisioning or failed mailbox has a job (or an error) of its own.
@@ -688,6 +697,40 @@ export async function reconcile(
   report.sendingPolicyMismatch = mail.sendingPolicyDrift
     ? await mail.sendingPolicyDrift(standardSendingPolicy(deps.platform.domain))
     : null;
+  // The relay hold: the list against the tiers of settled mailboxes on the server, and the relaying policy.
+  const hold = mail.relayHoldState ? await mail.relayHoldState() : null;
+  if (hold) {
+    const listed = new Set(hold.listed);
+    const onServer = settled.filter((m) => haveMailboxes.has(m.address));
+    const wantHeld = await deps.uow.run(async (r) => {
+      const out: { id: string; address: string; held: boolean }[] = [];
+      for (const m of onServer) {
+        const state = await r.directory.getMailbox(m.id);
+        if (state) out.push({ id: m.id, address: m.address, held: await desiredRelayHold(r, state.accountId, m.id) });
+      }
+      return out;
+    });
+    const ours = new Set(wantHeld.map((w) => w.address.toLowerCase()));
+    // Mailboxes still being set up (or failed) have a job of their own that writes their place on the list.
+    const inFlight = new Set(
+      desired.mailboxes
+        .filter((m) => m.status === "provisioning" || m.status === "failed")
+        .map((m) => m.address.toLowerCase()),
+    );
+    const missing = wantHeld.filter((w) => w.held && !listed.has(w.address.toLowerCase()));
+    const extraOurs = wantHeld.filter((w) => !w.held && listed.has(w.address.toLowerCase()));
+    for (const w of [...missing, ...extraOurs]) if (!requeue.includes(w.id)) requeue.push(w.id);
+    report.relayHoldMismatch = {
+      missing: missing.map((w) => w.address),
+      // Ours that shouldn't be held, and addresses on our domains that no settled mailbox of ours has (e.g. written by
+      // hand). A key on a domain we don't know holds an account that isn't ours (the unknown-domain report covers it).
+      extra: [
+        ...extraOurs.map((w) => w.address),
+        ...hold.listed.filter((a) => !ours.has(a) && !inFlight.has(a) && wantDomains.has(domainOf(a))),
+      ],
+      policyInPlace: hold.policyInPlace,
+    };
+  }
   report.clean =
     report.missingOnMailServer.domains.length +
       report.missingOnMailServer.mailboxes.length +
@@ -697,7 +740,12 @@ export async function reconcile(
       report.suspensionMismatch.length +
       report.sieveLockMismatch.length +
       report.accessMismatch.length +
-      (report.sendingPolicyMismatch?.length ?? 0) ===
+      (report.sendingPolicyMismatch?.length ?? 0) +
+      (report.relayHoldMismatch
+        ? report.relayHoldMismatch.missing.length +
+          report.relayHoldMismatch.extra.length +
+          (report.relayHoldMismatch.policyInPlace ? 0 : 1)
+        : 0) ===
     0;
 
   if (!report.clean) {
@@ -728,6 +776,9 @@ export async function reconcile(
             sieveLockMismatches: report.sieveLockMismatch.length,
             accessMismatches: report.accessMismatch.length,
             sendingPolicyMismatches: report.sendingPolicyMismatch?.length ?? 0,
+            relayHoldMissing: report.relayHoldMismatch?.missing.length ?? 0,
+            relayHoldExtra: report.relayHoldMismatch?.extra.length ?? 0,
+            relayHoldPolicyMissing: report.relayHoldMismatch?.policyInPlace === false ? 1 : 0,
             requeued: requeue.length,
           },
         };

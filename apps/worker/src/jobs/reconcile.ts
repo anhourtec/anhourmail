@@ -34,6 +34,14 @@ l.at(report.clean ? "info" : "warn", "reconcile finished", {
   // Sending access per mailbox (re-queued) and the ceiling for every authenticated sender (report only; ADR-0034 §4).
   accessMismatches: report.accessMismatch.length,
   sendingPolicyMismatch: report.sendingPolicyMismatch?.join(",") ?? "not checked",
+  // The relay hold (ADR-0034 update "relay hold"): counts only, never addresses. Needs the hold key.
+  relayHold: report.relayHoldMismatch
+    ? {
+        missing: report.relayHoldMismatch.missing.length,
+        extra: report.relayHoldMismatch.extra.length,
+        policyInPlace: report.relayHoldMismatch.policyInPlace,
+      }
+    : "not checked",
 });
 if (report.sendingPolicyMismatch === null) {
   // The provisioning key can't read the throttles until the ops follow-up gives it (or the reconciler's key)

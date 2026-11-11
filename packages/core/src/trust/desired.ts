@@ -8,7 +8,14 @@
 import { billingMailboxAccess } from "../billing/lifecycle";
 import type { Repositories } from "../ports";
 
-import { mailboxSendAccess, type MailboxSendAccess } from "./access";
+import { mailboxRelayHold, mailboxSendAccess, type MailboxSendAccess } from "./access";
+
+/** Whether the mailbox belongs on the relay hold now (`mailboxRelayHold`), read as `mailbox.ensure` reads it. */
+export async function desiredRelayHold(r: Repositories, accountId: string, mailboxId: string): Promise<boolean> {
+  const accountTier = (await r.trust.get(accountId))?.tier ?? "new";
+  const mailboxRestricted = (await r.trust.mailbox(accountId, mailboxId))?.restriction != null;
+  return mailboxRelayHold(accountTier, mailboxRestricted);
+}
 
 export async function desiredSendAccess(
   r: Repositories,

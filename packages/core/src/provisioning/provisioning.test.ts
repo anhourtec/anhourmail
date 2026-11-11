@@ -796,6 +796,47 @@ describe("sending access and the sending ceiling on the mail server (ADR-0034 §
     ]);
   });
 
+  it("compares the relay hold with the tiers: re-queues ours, reports strangers and a missing policy", async () => {
+    const { d } = setup();
+    d.uow.state.mailboxes = [
+      { ...base, accountId: "a1", id: "m1", address: "held@example.test", status: "active", stalwartId: "x1" },
+      { ...base, accountId: "a2", id: "m2", address: "open@example.test", status: "active", stalwartId: "x2" },
+      { ...base, accountId: "a1", id: "m3", address: "fine@example.test", status: "suspended", stalwartId: "x3" },
+      { ...base, accountId: "a1", id: "m4", address: "setup@example.test", status: "provisioning", stalwartId: null },
+    ];
+    d.uow.state.accounts.push({ id: "a1", name: "One", plan: "free" }, { id: "a2", name: "Two", plan: "plus" });
+    d.uow.state.trust.push(trustRow("a1", "new", new Date(0)), trustRow("a2", "standard", new Date(0)));
+    const { mail } = accessServer();
+    await mail.ensureDomain("example.test");
+    for (const a of ["held", "open"]) await mail.ensureMailbox(ensureArgs(`${a}@example.test`, 1));
+    await mail.ensureMailbox({ ...ensureArgs("fine@example.test", 1), suspended: true });
+    let state: { listed: string[]; policyInPlace: boolean } | null = {
+      // `held` is missing; `open` (standard) shouldn't be there; `setup` has its own job; the stranger is on our domain;
+      // a key on a domain we don't know is someone else's.
+      listed: ["open@example.test", "fine@example.test", "setup@example.test", "x@example.test", "y@elsewhere.test"],
+      policyInPlace: false,
+    };
+    mail.relayHoldState = async () => state;
+    const report = await reconcile(d, mail);
+    expect(report.relayHoldMismatch).toEqual({
+      missing: ["held@example.test"],
+      extra: ["open@example.test", "x@example.test"],
+      policyInPlace: false,
+    });
+    expect(report.clean).toBe(false);
+    expect(d.uow.state.jobs.map((j) => j.subjectId).sort()).toEqual(["m1", "m2"]);
+    expect(d.uow.state.audit.at(-1)?.meta).toMatchObject({
+      relayHoldMissing: 1,
+      relayHoldExtra: 2,
+      relayHoldPolicyMissing: 1,
+    });
+    // In line: clean for the hold. Unreadable (no hold credential): not checked, not counted.
+    state = { listed: ["held@example.test", "fine@example.test"], policyInPlace: true };
+    expect((await reconcile(d, mail)).relayHoldMismatch).toEqual({ missing: [], extra: [], policyInPlace: true });
+    state = null;
+    expect((await reconcile(d, mail)).relayHoldMismatch).toBeNull();
+  });
+
   it("reports the ceiling's drift by name (report only, nothing re-queued); unreadable is not counted", async () => {
     const { d } = setup();
     let answer: string[] | null = ["throttle-hour-missing", "max-recipients-changed"];
