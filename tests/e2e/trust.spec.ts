@@ -6,7 +6,7 @@
  * then back) and a mailbox's Restrict sending / Lift behind the step-up; the customer seeing sending paused in the
  * console and the composer. Each browser project has its own Free account (scripts/e2e-fixtures.ts).
  */
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 import { e2eUsers, expect, SIGN_IN_TIMEOUT, signIn, signOut, test, urls } from "./fixtures";
 
@@ -36,6 +36,13 @@ async function signInWebmail(page: Page, address: string, password: string) {
 }
 
 /** Settings → Account → the Sending group (the folders are a drawer on phones). */
+/** Another group of the open Settings window (on a phone, back to the list of groups first). */
+async function settingsTab(settings: Locator, name: RegExp) {
+  const back = settings.getByRole("button", { name: "Back to all settings" });
+  if (await back.isVisible()) await back.click();
+  await settings.getByRole("tab", { name }).click();
+}
+
 async function webmailSending(page: Page) {
   const nav = page.getByRole("navigation", { name: "Folders" });
   if (!(await nav.isVisible())) await page.getByRole("button", { name: "Toggle folders" }).click();
@@ -101,6 +108,7 @@ test("a new account: the Owner sees the Sending card and the mail-app notice, a 
   await expect(card).toContainText("New");
   await expect(card).toContainText("You can send to addresses hosted on AnhourMail.");
   await expect(card).toContainText("Mail apps can't send yet.");
+  await expect(card).toContainText("Automatic replies are paused until your account is established.");
   await expect(card.getByRole("link", { name: "What new accounts can send" })).toHaveAttribute(
     "href",
     /\/docs\/sending-limits#new-accounts$/,
@@ -121,9 +129,16 @@ test("the webmail: Settings shows the tier; a held send names the outside recipi
 }, info) => {
   const t = trustOf(info.project.name);
   await signInWebmail(page, t.mailbox, t.mailboxPassword);
-  const { sending } = await webmailSending(page);
+  const { settings, sending } = await webmailSending(page);
   await expect(sending).toContainText("New");
-  await expect(sending).toContainText("Forwarding to an address outside AnhourMail waits until then too.");
+  await expect(sending).toContainText(
+    "Automatic replies, and forwarding to an address outside AnhourMail, are paused until your account is established.",
+  );
+  // Automatic replies say it where they're set up too (ADR-0034, finding F4).
+  await settingsTab(settings, /^Automatic replies/);
+  await expect(settings.getByTestId("replies-held")).toContainText(
+    "Automatic replies are paused until your account is established.",
+  );
   await closeSettings(page);
 
   const composer = await compose(page, [t.mailbox, OUTSIDE], `Held ${Date.now().toString(36)}`);

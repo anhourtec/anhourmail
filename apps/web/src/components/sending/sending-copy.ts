@@ -65,9 +65,9 @@ export function sendingCopy(
           "You can send to addresses hosted on AnhourMail. Sending to addresses outside AnhourMail opens automatically once your account is established.",
         notes: [
           "Mail apps can't send yet. They read your mail as usual, and sending from them opens at the same time.",
-          ...(opts.settings
-            ? ["Forwarding to an address outside AnhourMail waits until then too. Automatic replies keep working."]
-            : []),
+          opts.settings
+            ? "Automatic replies, and forwarding to an address outside AnhourMail, are paused until your account is established."
+            : "Automatic replies are paused until your account is established.",
         ],
       };
     case "restricted":

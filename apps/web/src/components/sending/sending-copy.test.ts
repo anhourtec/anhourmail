@@ -18,10 +18,15 @@ describe("Sending card copy (ADR-0034 §5)", () => {
     expect(c.appeal).toBeNull();
   });
 
-  it("new in the webmail also says what it pauses in Forwarding, and keeps automatic replies", () => {
+  it("new: automatic replies are paused until established; the webmail adds outside forwarding (finding F4)", () => {
+    expect(sendingCopy("new", { subject: "account" }).notes).toContain(
+      "Automatic replies are paused until your account is established.",
+    );
     const notes = sendingCopy("new", { subject: "mailbox", settings: true }).notes.join(" ");
-    expect(notes).toMatch(/Forwarding to an address outside AnhourMail waits/);
-    expect(notes).toMatch(/Automatic replies keep working/);
+    expect(notes).toMatch(
+      /Automatic replies, and forwarding to an address outside AnhourMail, are paused until your account is established/,
+    );
+    expect(notes).not.toMatch(/keep working/);
   });
 
   it("restricted: paused, no limits, the reason in plain words and the appeal address", () => {

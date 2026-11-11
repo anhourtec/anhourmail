@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 "use client";
 
-import { ExternalLink, HardDrive, LogOut, MailCheck, Plus, TriangleAlert, X } from "lucide-react";
+import { ExternalLink, HardDrive, Info, LogOut, MailCheck, Plus, TriangleAlert, X } from "lucide-react";
 import { type SyntheticEvent, useEffect, useId, useState } from "react";
 
 import type { SignatureSet } from "@anhourmail/shared/signatures";
@@ -137,6 +137,8 @@ export function RepliesPanel({
   const [status, setStatus] = useState<Status>(null);
   const [busy, setBusy] = useState(false);
   const id = useId();
+  // A new account's automatic replies are paused in the script until it is established (ADR-0034, finding F4).
+  const held = data.sending?.tier === "new";
 
   const save = async (e: SyntheticEvent) => {
     e.preventDefault();
@@ -156,7 +158,14 @@ export function RepliesPanel({
         timeZone,
       );
       onSaved({ ...data, rules: { ...data.rules, vacation }, rulesState: "active" });
-      setStatus({ tone: "ok", text: enabled ? "Automatic replies are on." : "Automatic replies are off." });
+      setStatus({
+        tone: "ok",
+        text: !enabled
+          ? "Automatic replies are off."
+          : held
+            ? "Automatic replies are on. They're paused until your account is established."
+            : "Automatic replies are on.",
+      });
     } catch (err) {
       setStatus({ tone: "error", text: messageOf(err) });
     } finally {
@@ -167,6 +176,17 @@ export function RepliesPanel({
   return (
     <form onSubmit={(e) => void save(e)} className="flex flex-col gap-6" aria-label="Automatic replies">
       <RulesOff data={data} />
+      {held && (
+        <p
+          role="note"
+          data-testid="replies-held"
+          className="am-small flex gap-2 rounded-lg border bg-accent px-3 py-2.5 text-foreground"
+        >
+          <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+          Automatic replies are paused until your account is established. You can set them up now; they start on their
+          own then.
+        </p>
+      )}
       <Group
         title="Automatic replies"
         description="Answer mail while you're away. Each sender gets one reply every few days; junk and blocked senders get none."
