@@ -309,6 +309,35 @@ stage (`x:MtaStageRcpt.script`, an expression naming the script, default `false`
 the provisioning job maintains, or the `rewrite` expression. Suspension (`SUSPENDED_PERMISSIONS`, which also denies
 `emailReceive`) has the same accept-then-bounce behaviour today (see "Suspending an account").
 
+### Trust tiers on the mail server (verified on the pinned v0.16.27, 2026-11-11)
+
+ADR-0034 probes P1–P4, pinned in `packages/adapters/src/stalwart/sending-policy.int.test.ts` (throwaway domain and
+accounts; every expression scoped to them by `authenticated_as == …` or a run-scoped lookup namespace and written back
+afterwards). Outside recipients are on a made-up domain that dev routes to Mailpit.
+
+| #   | Question                                                                                     | Result                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| P1  | `smtp_blocked` (`CUSTOMER_DENIALS` + `emailSend` only)                                       | As on 2026-11-04 ("Billing access states"): the provisioning key may write it; SMTP AUTH on 465 and 587 → `550 5.7.1 Your account is not authorized to use this service.`; JMAP `EmailSubmission/set` is created and the message delivered (caught by Mailpit); IMAP LOGIN + SELECT work; mail to it on port 25 is delivered.                                                                                                                         |
+| P2  | An `x:MtaInboundThrottle` keyed `{ authenticatedAs }`: where it answers, what it counts       | Answers at **MAIL FROM** with `452 4.4.5 Rate limit exceeded, try again later.` (not 451; later commands get `503 5.5.1 MAIL is required first.`). It counts **MAIL transactions**, not recipients: one message to two recipients counts once, and a `MAIL FROM` followed by `RSET` (no DATA) counts too. 465, 587 and JMAP submission share one allowance. A JMAP submission over it is **not created**: `notCreated` `forbiddenMailFrom` "Server rejected MAIL-FROM: 452 4.4.5 Rate limit exceeded, try again later." (the draft stays). |
+| P3  | `x:MtaStageRcpt.maxRecipients` for an authenticated session                                  | An `if authenticated_as == … then 50` branch: recipients 1–50 `250 2.1.5 OK`, the 51st and later `455 4.5.3 Too many recipients.` (the session stays open). Port 25 from another server in the same minute: 52 recipients all `250`. Takes effect after `ReloadSettings`.                                                                                                                                                                                  |
+| P4  | Can an MTA-stage expression (not Sieve) read `x:MemoryLookupKey` with `key_exists`?           | **Yes, after `x:Action` `ReloadLookupStores`.** A key created through management is not seen until that action runs (`ReloadSettings` isn't enough; 3 s later still not seen), and a destroyed key keeps matching until it runs again. Then `key_exists('<namespace>', authenticated_as)` matches the listed account only. `x:MemoryLookupKeyValue` works the same way with `key_get('<namespace>', authenticated_as) == '<value>'`. |
+
+What P4 makes possible (verified in the same test):
+
+- **A relay hold per account:** `allowRelaying` = `if key_exists('<ns>', authenticated_as) then false`, else the
+  default `!is_empty(authenticated_as)`. A listed account's outside recipient → `550 5.1.2 Relay not allowed.` at RCPT,
+  a local recipient in the same transaction `250`; over JMAP the submission is created and `deliveryStatus` shows
+  `550 5.1.2 Relay not allowed.` for the outside recipient, while a local one is delivered. Unlisted accounts relay.
+- **A per-account throttle:** an `authenticatedAs` throttle whose `match` is `key_exists('<ns>', authenticated_as)`
+  limits listed accounts only (1 / h: second MAIL FROM `452`, an unlisted account unaffected).
+
+Not verified yet (needed before relying on lookup lists for enforcement): that keys survive a Stalwart restart and are
+loaded at start without `ReloadLookupStores`; what happens to expressions when a reload fails; the cost of
+`ReloadLookupStores` with thousands of keys. Permissions: lookup keys need `sysMemoryLookupKey{Create,Destroy,Get}` and
+the reload `sysActionCreate`, which also allows every other `x:Action` (pause the queue, reload settings); none of our
+service keys holds them today. Avoid `key_get(…) || 100` as a value expression: an unlisted account got a cap of 1.
+Whether Sieve can read lookup keys after `ReloadLookupStores` (ADR-0026 P9 tried only `ReloadSettings`) is untested.
+
 ### App passwords (verified on the pinned v0.16.27, 2026-10-22)
 
 Throwaway `apppw-probe.test` domain and accounts, destroyed afterwards (ADR-0020):
@@ -575,7 +604,8 @@ These defaults live on the `Jmap` singleton [S38]:
   every `Sender:` header (group syntax and `<>` count 0), while `address :is` is true when any one matches;
   `header.sender.addr` keeps a source route (`@relay:bob@…`). Field names with a space or tab before the colon, or in
   mixed case, are parsed as the real header. A compile error's `SetError.description` quotes the script text.
-  `x:MemoryLookupKey` + `key_exists` was not readable from Sieve (P9). `x:SieveSystemScript.contents` is stored without
+  `x:MemoryLookupKey` + `key_exists` was not readable from Sieve (P9, after `ReloadSettings` only; MTA-stage expressions
+  do read it after `ReloadLookupStores`, see "Trust tiers on the mail server"). `x:SieveSystemScript.contents` is stored without
   its final newline.
 
 ### JMAP Contacts (verified on the pinned v0.16.27, 2026-10-22)
@@ -889,7 +919,8 @@ For ADR-0030, with a throwaway domain and customer account and the real service 
 - **Relay / smarthost:** `MtaRoute` `@type: "Relay"` with `address`, `port`, `protocol` (smtp/lmtp), `implicitTls`, `allowInvalidCerts`, `authUsername`, `authSecret` [S31].
 - **Per-sender throttling:** `MtaOutboundThrottle` with `key {"sender":true}` or `{"senderDomain":true}` [S30].
   - Messages over the limit **stay queued** rather than being rejected.
-  - Inbound throttles return `451 4.4.5` and can key on `authenticatedAs`. Use this to cap submissions per user [S30].
+  - Inbound throttles can key on `authenticatedAs` to cap submissions per user [S30]. Verified on v0.16.27
+    (2026-11-11, "Trust tiers on the mail server"): `452 4.4.5` at MAIL FROM, counting MAIL transactions.
 - **Queues:** virtual queues, delivery schedules, priority, delayed delivery and queue quotas [S27][S32].
 - **DKIM signing:** `SenderAuth.dkimSignDomain` expression. The documented default signs with every `DkimSignature` of `sender_domain` when the sender is authenticated and the domain is local [S21].
 - **MTA-STS and DANE (outbound):** `MtaTlsStrategy` fields `startTls`, `dane`, `mtaSts`, each `optional|require|disable` (default `optional`), plus `allowInvalidCerts` [S33]. MTA-STS policy publishing and TLS-RPT are supported [S27].
