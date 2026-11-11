@@ -51,6 +51,38 @@ const mailboxColumns = {
   by: mailbox.sendingRestrictedBy,
 };
 
+/**
+ * Every condition an account must meet to be promoted automatically (ADR-0034 §2), for `promotionCandidates` and,
+ * under the account lock, `qualifiesForPromotion`. The query joins `account_billing` on the account.
+ */
+const promotable = (c: Omit<PromotionCriteria, "limit">) => {
+  const a = customerAccount;
+  return and(
+    // The partial index `customer_account_trust_promote_idx` covers this filter and the candidates' order.
+    eq(a.trustTier, "new"),
+    ne(a.trustTierSource, "staff"),
+    isNull(a.lastRestrictedAt),
+    sql`${a.createdAt} < ${c.createdBefore.toISOString()}::timestamptz`,
+    eq(a.status, "active"),
+    isNull(a.suspendedAt),
+    sql`coalesce(${accountBilling.state}, 'free') not in ('restricted', 'lapsed')`,
+    sql`not exists (
+      select 1 from ${accountMembership} m join ${userProfile} p on p.user_id = m.user_id
+      where m.account_id = ${a.id} and p.suspended
+    )`,
+    sql`exists (select 1 from ${accountMembership} m where m.account_id = ${a.id} and m.role = 'owner')`,
+    sql`not exists (
+      select 1 from ${accountMembership} m join ${authUser} u on u.id = m.user_id
+      where m.account_id = ${a.id} and m.role = 'owner' and not u.email_verified
+    )`,
+    sql`(
+      select count(*) from ${auditLog} l
+      where l.scope = 'account:' || ${a.id}::text and l.action = ${SEND_HELD_ACTION}
+        and l.at >= ${c.heldSince.toISOString()}::timestamptz
+    ) < ${c.maxHeld}`,
+  );
+};
+
 /** Trust tiers on `customer_account` and `mailbox` (ADR-0034); every statement is scoped to one account. */
 export class PgTrustRepository implements TrustRepository {
   constructor(private readonly x: Executor) {}
@@ -109,40 +141,24 @@ export class PgTrustRepository implements TrustRepository {
 
   async promotionCandidates(c: PromotionCriteria): Promise<{ accountId: string; createdAt: Date }[]> {
     if (c.limit <= 0) return [];
-    const a = customerAccount;
     const rows = await this.x
-      .select({ accountId: a.id, createdAt: a.createdAt })
-      .from(a)
-      .leftJoin(accountBilling, eq(accountBilling.accountId, a.id))
-      .where(
-        and(
-          // The partial index `customer_account_trust_promote_idx` covers this filter and the order.
-          eq(a.trustTier, "new"),
-          ne(a.trustTierSource, "staff"),
-          isNull(a.lastRestrictedAt),
-          sql`${a.createdAt} < ${c.createdBefore.toISOString()}::timestamptz`,
-          eq(a.status, "active"),
-          isNull(a.suspendedAt),
-          sql`coalesce(${accountBilling.state}, 'free') not in ('restricted', 'lapsed')`,
-          sql`not exists (
-            select 1 from ${accountMembership} m join ${userProfile} p on p.user_id = m.user_id
-            where m.account_id = ${a.id} and p.suspended
-          )`,
-          sql`exists (select 1 from ${accountMembership} m where m.account_id = ${a.id} and m.role = 'owner')`,
-          sql`not exists (
-            select 1 from ${accountMembership} m join ${authUser} u on u.id = m.user_id
-            where m.account_id = ${a.id} and m.role = 'owner' and not u.email_verified
-          )`,
-          sql`(
-            select count(*) from ${auditLog} l
-            where l.scope = 'account:' || ${a.id}::text and l.action = ${SEND_HELD_ACTION}
-              and l.at >= ${c.heldSince.toISOString()}::timestamptz
-          ) < ${c.maxHeld}`,
-        ),
-      )
-      .orderBy(asc(a.createdAt), asc(a.id))
+      .select({ accountId: customerAccount.id, createdAt: customerAccount.createdAt })
+      .from(customerAccount)
+      .leftJoin(accountBilling, eq(accountBilling.accountId, customerAccount.id))
+      .where(promotable(c))
+      .orderBy(asc(customerAccount.createdAt), asc(customerAccount.id))
       .limit(c.limit);
     return rows;
+  }
+
+  async qualifiesForPromotion(accountId: string, c: Omit<PromotionCriteria, "limit">): Promise<boolean> {
+    if (!isId(accountId)) return false;
+    const rows = await this.x
+      .select({ id: customerAccount.id })
+      .from(customerAccount)
+      .leftJoin(accountBilling, eq(accountBilling.accountId, customerAccount.id))
+      .where(and(eq(customerAccount.id, accountId), promotable(c)));
+    return rows.length > 0;
   }
 
   async mailboxes(accountId: string): Promise<MailboxTrust[]> {

@@ -7,6 +7,7 @@ import {
   type AccountTrust,
   type MailboxSendingRestriction,
   type MailboxTrust,
+  type PromotionCriteria,
   SEND_HELD_ACTION,
   storedRestriction,
   type TrustRepository,
@@ -72,6 +73,26 @@ export function memoryTrust(s: State): TrustRepository {
   const ownMailbox = (accountId: string, mailboxId: string) =>
     s.mailboxes.find((m) => m.id === mailboxId && m.accountId === accountId);
 
+  /** Every condition of `promotionCandidates` for one account (false for an unknown one), as in Postgres. */
+  const promotable = (accountId: string, c: Omit<PromotionCriteria, "limit">): boolean => {
+    const a = account(accountId);
+    const t = rowOf(accountId);
+    if (!a || t?.tier !== "new" || t.source === "staff" || t.lastRestrictedAt !== null) return false;
+    if ((a.createdAt ?? EPOCH) >= c.createdBefore) return false;
+    if ((a.status ?? "active") !== "active" || s.accountSuspensions[a.id] !== undefined) return false;
+    const members = s.memberships.filter((m) => m.accountId === a.id);
+    if (members.some((m) => s.personSuspensions[m.userId] !== undefined)) return false;
+    const owners = members.filter((m) => m.role === "owner");
+    if (owners.length === 0 || owners.some((o) => s.unverifiedEmails.includes(o.userId))) return false;
+    const state = s.billing.find((b) => b.accountId === a.id)?.state ?? "free";
+    if (state === "restricted" || state === "lapsed") return false;
+    const held = s.audit.filter(
+      (e) =>
+        e.scope === `account:${a.id}` && e.action === SEND_HELD_ACTION && Date.parse(e.at) >= c.heldSince.getTime(),
+    ).length;
+    return held < c.maxHeld;
+  };
+
   return {
     get: async (accountId) => rowOf(accountId),
 
@@ -89,31 +110,14 @@ export function memoryTrust(s: State): TrustRepository {
       write({ ...current, lastRestrictedAt: new Date(at) });
     },
 
-    promotionCandidates: async ({ createdBefore, heldSince, maxHeld, limit }) => {
-      const out: { accountId: string; createdAt: Date }[] = [];
-      for (const a of s.accounts) {
-        const t = rowOf(a.id);
-        const createdAt = a.createdAt ?? EPOCH;
-        if (t?.tier !== "new" || t.source === "staff" || t.lastRestrictedAt !== null) continue;
-        if (createdAt >= createdBefore) continue;
-        if ((a.status ?? "active") !== "active" || s.accountSuspensions[a.id] !== undefined) continue;
-        const members = s.memberships.filter((m) => m.accountId === a.id);
-        if (members.some((m) => s.personSuspensions[m.userId] !== undefined)) continue;
-        const owners = members.filter((m) => m.role === "owner");
-        if (owners.length === 0 || owners.some((o) => s.unverifiedEmails.includes(o.userId))) continue;
-        const state = s.billing.find((b) => b.accountId === a.id)?.state ?? "free";
-        if (state === "restricted" || state === "lapsed") continue;
-        const held = s.audit.filter(
-          (e) =>
-            e.scope === `account:${a.id}` && e.action === SEND_HELD_ACTION && Date.parse(e.at) >= heldSince.getTime(),
-        ).length;
-        if (held >= maxHeld) continue;
-        out.push({ accountId: a.id, createdAt: new Date(createdAt) });
-      }
-      return out
+    promotionCandidates: async ({ limit, ...criteria }) =>
+      s.accounts
+        .filter((a) => promotable(a.id, criteria))
+        .map((a) => ({ accountId: a.id, createdAt: new Date(a.createdAt ?? EPOCH) }))
         .sort((x, y) => x.createdAt.getTime() - y.createdAt.getTime() || x.accountId.localeCompare(y.accountId))
-        .slice(0, Math.max(0, limit));
-    },
+        .slice(0, Math.max(0, limit)),
+
+    qualifiesForPromotion: async (accountId, criteria) => promotable(accountId, criteria),
 
     mailboxes: async (accountId) =>
       s.mailboxes

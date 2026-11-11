@@ -27,6 +27,11 @@ export type TrustRepository = {
    * its log since `heldSince`.
    */
   promotionCandidates(criteria: PromotionCriteria): Promise<{ accountId: string; createdAt: Date }[]>;
+  /**
+   * Whether one account meets every `promotionCandidates` condition now (false for an unknown id). The promotion job
+   * asks again under the account lock, so a change made since the list was read is never promoted past.
+   */
+  qualifiesForPromotion(accountId: string, criteria: Omit<PromotionCriteria, "limit">): Promise<boolean>;
   /** The account's mailboxes with their sending restrictions, by address. */
   mailboxes(accountId: string): Promise<MailboxTrust[]>;
   /** One mailbox of the account, or null when it isn't one (another account's id reads as unknown). */

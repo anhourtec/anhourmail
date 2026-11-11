@@ -198,6 +198,26 @@ export function describeTrustContract(name: string, factory: AdapterFactory): vo
         for (let i = 1; i < found.length; i++) {
           expect(found[i]?.createdAt.getTime()).toBeGreaterThanOrEqual(found[i - 1]?.createdAt.getTime() ?? 0);
         }
+        // The same answer for one account at a time (the job asks again under the account lock).
+        const criteria = {
+          createdBefore: new Date(Date.now() + MINUTE),
+          heldSince: new Date(Date.now() - 60 * MINUTE),
+          maxHeld: 2,
+        };
+        const qualifying = new Set(found.map((c) => c.accountId));
+        for (const id of ours) {
+          expect(await uow.run((r) => r.trust.qualifiesForPromotion(id, criteria))).toBe(qualifying.has(id));
+        }
+        expect(await uow.run((r) => r.trust.qualifiesForPromotion(randomUUID(), criteria))).toBe(false);
+        expect(await uow.run((r) => r.trust.qualifiesForPromotion("not-an-id", criteria))).toBe(false);
+        expect(
+          await uow.run((r) =>
+            r.trust.qualifiesForPromotion(eligible.id, {
+              ...criteria,
+              createdBefore: new Date(Date.now() - 24 * 60 * MINUTE),
+            }),
+          ),
+        ).toBe(false);
         // Too young: none of this run's accounts were created a day ago.
         const old = await candidates(new Date(Date.now() - 24 * 60 * MINUTE));
         expect(old.filter((c) => ours.has(c.accountId))).toEqual([]);
