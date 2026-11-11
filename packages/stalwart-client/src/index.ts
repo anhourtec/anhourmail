@@ -139,6 +139,16 @@ export {
   senderIdentitySieve,
 } from "./sender";
 export {
+  DEFAULT_RELAYING,
+  desiredRelaying,
+  isDesiredRelaying,
+  isRelayHoldInPlace,
+  RELAY_HOLD_CONDITION,
+  RELAY_HOLD_NAMESPACE,
+  RelayHoldList,
+  relayHoldKey,
+} from "./relay-hold";
+export {
   applySendingPolicy,
   coveredSender,
   desiredMaxRecipients,
