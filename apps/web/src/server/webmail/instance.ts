@@ -24,6 +24,7 @@ import { openPushChannel } from "@anhourmail/jmap-client/push";
 import { keyRingFromEnv } from "@anhourmail/server/keyring";
 import { type FailureStore, redisFailureStore, redisSlidingQuota } from "@anhourmail/server/rate-limit";
 import { redis } from "@anhourmail/server/redis";
+import { requestContext } from "@anhourmail/server/request-context";
 
 import { managedSieve } from "../adapters/stalwart";
 import { stalwartHandoffSignIn, stalwartOAuthPort } from "../adapters/stalwart-oauth";
@@ -39,6 +40,7 @@ import { type SessionKv, WebmailSessionStore } from "./session-store";
 import { type OAuthPort, WebmailService } from "./service";
 import { WebmailSettings } from "./settings";
 import { WEBMAIL_COOKIE_NAMES } from "../host-routing";
+import { currentClientAddress } from "../http/client-address";
 import { timed } from "../http/server-timing";
 
 /**
@@ -133,6 +135,16 @@ const timedRefresh = (port: OAuthPort): OAuthPort => ({
 
 let instance: WebmailService | null = null;
 
+/**
+ * Dev only: the address forwarded when a request has none (a direct hit without the dev proxy, or work outside a
+ * request), so Stalwart never counts against the dev forwarder every client shares. Production forwards only what
+ * NGINX supplied.
+ */
+const devFallbackIp = (): string | null => (env().NODE_ENV === "production" ? null : "127.0.0.1");
+
+/** The trusted address of the current request, as every webmail request to the mail server carries it. */
+const visitorAddress = async (): Promise<string | null> => (await currentClientAddress()) ?? devFallbackIp();
+
 /** The webmail BFF service (lazy, one per server process; rebuilt when this module reloads in dev). */
 export function webmail(): WebmailService {
   if (!instance) {
@@ -204,6 +216,10 @@ export function webmail(): WebmailService {
       // The send-on-behalf key, read at use (production requires it at start-up; never in the worker).
       onBehalfKey: senderDelegationKey,
       stalwartUrl,
+      // X-Forwarded-For on every JMAP, upload, download and session request, so Stalwart's per-client limits and its
+      // failed sign-in ban follow the visitor and never the web app's own address (ADR-0034 update "the webmail's
+      // client address").
+      clientAddress: visitorAddress,
       access: mailboxAccessGate(),
       quota: redisSlidingQuota(redis()),
       // The mailbox's trust tier and billing's block (ADR-0034 §3, ADR-0029 §5), read fresh for every send; which
@@ -255,6 +271,8 @@ export function webmailPush(): PushHub {
       openPushChannel({
         url: webmail().pushUrl,
         authorization: `Bearer ${target.accessToken}`,
+        // The visitor whose push stream opened it (the push route runs inside `route()`).
+        clientAddress: requestContext()?.clientIp ?? devFallbackIp(),
         dataTypes: ["Email", "Mailbox"],
         ...handlers,
       }),

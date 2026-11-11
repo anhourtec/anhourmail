@@ -26,6 +26,7 @@ import {
   type WebmailRefusal,
 } from "@anhourmail/core/webmail";
 import { externalHeld, type SendHeldInput, SENDING_HELD_MESSAGE, type SendingStanding } from "@anhourmail/core/trust";
+import { withClientAddress } from "@anhourmail/jmap-client/client-address";
 import { log } from "@anhourmail/server/log";
 import type { SlidingQuotaStore } from "@anhourmail/server/rate-limit";
 import type { TrustTier } from "@anhourmail/shared/sending";
@@ -376,6 +377,13 @@ export type WebmailDeps = {
    */
   trust: WebmailTrust;
   fetch?: typeof fetch;
+  /**
+   * The end user's address for the current request (the web app's trusted-proxy logic, never a header the user set),
+   * sent as `X-Forwarded-For` on every request to the mail server (`@anhourmail/jmap-client/client-address`): Stalwart
+   * applies its per-client rate limit and failed sign-in ban to it, which would otherwise all land on the web app's
+   * own address. Null: no header (and any passed-on one removed).
+   */
+  clientAddress?: () => string | null | Promise<string | null>;
   queue?: UserQueue;
   now?: () => number;
   /** Refresh when the access token has less than this left (ms). */
@@ -580,6 +588,7 @@ export class WebmailService {
   constructor(deps: WebmailDeps) {
     this.#d = {
       fetch: fetch,
+      clientAddress: () => null,
       authservIds: () => [],
       queue: new UserQueue(),
       now: Date.now,
@@ -594,6 +603,9 @@ export class WebmailService {
       ...deps,
     };
     this.#base = deps.stalwartUrl.replace(/\/+$/, "");
+    // Every request to the mail server carries the visitor's address (the deferred work below too: it runs in the
+    // context of the request that scheduled it).
+    this.#d.fetch = withClientAddress(this.#d.fetch, this.#d.clientAddress);
     // Deferred work (the end of an undo hold, contacts auto-save) runs outside any pin of the request that scheduled
     // it (`pin.ts`), on the session as it is then.
     const defer = this.#d.defer;

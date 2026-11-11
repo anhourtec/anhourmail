@@ -391,12 +391,13 @@ function setup(
     oauth?: Partial<OAuthPort>;
     handoffSignIn?: (target: { address: string; externalId: string }) => Promise<OAuthTokens>;
     consoleSessionAlive?: (userId: string, sessionId: string) => Promise<boolean>;
+    clientAddress?: () => string | null | Promise<string | null>;
   } = {},
 ) {
   let now = 1_000_000;
   const kv = memoryKv(() => now);
   const store = new WebmailSessionStore(kv, ring(), { now: () => now });
-  const calls: { url: string; auth: string | null; body: string }[] = [];
+  const calls: { url: string; auth: string | null; body: string; forwardedFor: string | null }[] = [];
   const upstream: Upstream =
     opts.upstream ??
     ((url) =>
@@ -409,6 +410,7 @@ function setup(
       url,
       auth: new Headers(init?.headers).get("authorization"),
       body: typeof init?.body === "string" ? init.body : "",
+      forwardedFor: new Headers(init?.headers).get("x-forwarded-for"),
     });
     return upstream(url, init ?? {});
   }) as typeof fetch;
@@ -439,6 +441,7 @@ function setup(
     sleep: async () => undefined,
     ...(opts.handoffSignIn ? { handoffSignIn: opts.handoffSignIn } : {}),
     ...(opts.consoleSessionAlive ? { consoleSessionAlive: opts.consoleSessionAlive } : {}),
+    ...(opts.clientAddress ? { clientAddress: opts.clientAddress } : {}),
   });
   return {
     svc,
@@ -460,6 +463,22 @@ const body = {
 const CONSOLE = { userId: "person-1", sessionId: "console-session-1" };
 
 describe("WebmailService", () => {
+  it("sends the visitor's address on every request to the mail server, and none when there is none", async () => {
+    let visitor: string | null = "203.0.113.20";
+    const t = setup({ clientAddress: async () => visitor });
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    await t.svc.jmap(sessionId, body);
+    visitor = "2001:db8::20";
+    await t.svc.jmap(sessionId, body);
+    visitor = null;
+    await t.svc.jmap(sessionId, body);
+    expect(t.calls.map((c) => c.forwardedFor)).toEqual(["203.0.113.20", "203.0.113.20", "2001:db8::20", null]);
+    // Without a provider: never a header.
+    const u = setup();
+    await u.svc.signIn("a@x.test", "right");
+    expect(u.calls.map((c) => c.forwardedFor)).toEqual([null]);
+  });
+
   it("signs in once with the password, stores tokens server-side and proxies with the bearer token", async () => {
     const t = setup();
     const { sessionId, session: s } = await t.svc.signIn("a@x.test", "right");
