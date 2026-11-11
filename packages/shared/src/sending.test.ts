@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 
+import { SYSTEM_MAILBOX_LOCAL_PARTS } from "./addresses";
 import {
   isStaffSettableTrustTier,
   isTrustTier,
   isTrustTierSource,
+  OTHER_RECIPIENTS_PER_MESSAGE,
   STAFF_SETTABLE_TRUST_TIERS,
+  standardSendingPolicy,
   stricterTier,
   TRUST_TIER_ORDER,
   TRUST_TIER_SOURCES,
@@ -58,5 +61,20 @@ describe("trust tiers (ADR-0034)", () => {
     expect(isStaffSettableTrustTier("trusted")).toBe(false);
     expect(isStaffSettableTrustTier("default")).toBe(false);
     expect(isStaffSettableTrustTier(undefined)).toBe(false);
+  });
+});
+
+describe("standardSendingPolicy", () => {
+  it("is the standard tier's numbers, leaving out the platform's system accounts", () => {
+    const p = standardSendingPolicy(" Platform.TEST ");
+    expect(p).toMatchObject({
+      messagesPerHour: TRUST_TIERS.standard.limits.messagesPerHour,
+      messagesPerDay: TRUST_TIERS.standard.limits.messagesPerDay,
+      recipientsPerMessage: TRUST_TIERS.standard.limits.recipientsPerMessage,
+      otherRecipientsPerMessage: OTHER_RECIPIENTS_PER_MESSAGE,
+      exempt: { domain: "platform.test" },
+    });
+    expect(p.exempt.localParts).toEqual([...SYSTEM_MAILBOX_LOCAL_PARTS]);
+    expect(p.exempt.localParts).toContain("no-reply");
   });
 });

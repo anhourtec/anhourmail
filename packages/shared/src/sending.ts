@@ -4,6 +4,7 @@
  * How an account moves between tiers, and what triggers `restricted`, is internal (docs/internal/03-anti-spam-and-abuse.md)
  * and is never published (CLAUDE.md rule 33). Enforcement is server-side: our checks + Stalwart throttles (rule 27).
  */
+import { SYSTEM_MAILBOX_LOCAL_PARTS } from "./addresses";
 
 export type TrustTier = "new" | "standard" | "trusted" | "restricted";
 
@@ -80,6 +81,27 @@ export const STAFF_SETTABLE_TRUST_TIERS = ["new", "standard", "restricted"] as c
 export type StaffSettableTrustTier = (typeof STAFF_SETTABLE_TRUST_TIERS)[number];
 export const isStaffSettableTrustTier = (v: unknown): v is StaffSettableTrustTier =>
   typeof v === "string" && (STAFF_SETTABLE_TRUST_TIERS as readonly string[]).includes(v);
+
+/** The recipients-per-message cap for sessions the mail-server ceiling doesn't cover (port 25; Stalwart's default). */
+export const OTHER_RECIPIENTS_PER_MESSAGE = 100;
+
+/**
+ * The mail server's one ceiling for every authenticated sender (ADR-0034 §4): the `standard` tier's published numbers,
+ * leaving out the deployment's own system accounts on its platform domain (its transactional sender and the reporting
+ * addresses, `SYSTEM_MAILBOX_LOCAL_PARTS`), so transactional mail is never throttled by it. Applied by
+ * `applySendingPolicy` (`@anhourmail/stalwart-client`) from the dev plan and the deploy's bootstrap; read back by the
+ * reconciler.
+ */
+export function standardSendingPolicy(platformDomain: string) {
+  const { messagesPerHour, messagesPerDay, recipientsPerMessage } = TRUST_TIERS.standard.limits;
+  return {
+    messagesPerHour,
+    messagesPerDay,
+    recipientsPerMessage,
+    otherRecipientsPerMessage: OTHER_RECIPIENTS_PER_MESSAGE,
+    exempt: { domain: platformDomain.trim().toLowerCase(), localParts: [...SYSTEM_MAILBOX_LOCAL_PARTS] },
+  };
+}
 
 /**
  * Bulk and newsletter mail (decision 2026-10-21): never on the base plans; available only through the paid
