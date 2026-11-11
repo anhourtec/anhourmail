@@ -40,6 +40,7 @@ export function SettingsWindow({
   preferences,
   folders,
   consoleHref,
+  sendingHelpHref,
   shortcuts,
   onChange,
   onIdentitiesChanged,
@@ -51,6 +52,8 @@ export function SettingsWindow({
   preferences: WebmailPreferences;
   folders: Folder[];
   consoleHref: string;
+  /** The public docs' "New accounts" section (Account → Sending). */
+  sendingHelpHref?: string | undefined;
   shortcuts: readonly [string, string][];
   onChange: (patch: Partial<WebmailPreferences>) => void;
   onIdentitiesChanged: (list: Identity[]) => void;
@@ -184,6 +187,7 @@ export function SettingsWindow({
             data={data}
             client={client}
             consoleHref={consoleHref}
+            sendingHelpHref={sendingHelpHref}
             onIdentities={identities}
             onSignOut={onSignOut}
           />

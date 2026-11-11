@@ -25,6 +25,7 @@ import {
 } from "../mail-client";
 import { areaClass, Choice, fieldClass, Group, Note, Row, smallPrimary, smallSecondary, Toggle } from "./controls";
 import { ChangePasswordForm } from "./password-form";
+import { SendingSection } from "./sending-section";
 import { SignaturesSection } from "./signatures-panel";
 import { TemplatesSection } from "./templates-panel";
 
@@ -603,6 +604,7 @@ export function AccountPanel({
   data,
   client,
   consoleHref,
+  sendingHelpHref,
   onIdentities,
   onSignOut,
 }: {
@@ -611,6 +613,8 @@ export function AccountPanel({
   data: SettingsOverview;
   client: MailClient;
   consoleHref: string;
+  /** The public docs' "New accounts" section, linked from the Sending card while the mailbox is new. */
+  sendingHelpHref?: string | undefined;
   onIdentities: (list: Identity[]) => void;
   onSignOut: () => void;
 }) {
@@ -790,6 +794,8 @@ export function AccountPanel({
           </a>
         </div>
       </Group>
+
+      <SendingSection tier={data.sending?.tier ?? null} docsHref={sendingHelpHref} />
 
       <Group title="Storage">
         <div className="flex flex-col gap-2 px-4 py-3">
