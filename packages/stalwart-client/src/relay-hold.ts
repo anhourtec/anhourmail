@@ -92,9 +92,13 @@ function existingId(err: unknown): string | null {
  * (`reload`).
  *
  * Membership is looked up by writing: `x:MemoryLookupKey/query` filters by namespace only (a filter on `key` is
- * `unsupportedFilter`) and a duplicate create is refused with the existing key's id, so `add` and `remove` each cost one
- * or two calls whatever the list's size. A key written and destroyed again by `remove` was never loaded (no reload ran
- * in between), so the probe changes nothing the server enforces.
+ * `unsupportedFilter`) and a duplicate create is refused with the existing key's id, so `add` and `remove` each cost a
+ * call or two whatever the list's size (reading the whole list instead would cost every non-held mailbox's
+ * `mailbox.ensure` a page of every held address). `remove` of an address that wasn't listed therefore writes a key and
+ * destroys it again; another process's reload can land in between and load it, and nothing would ever unload it (the
+ * stored list no longer has it, so no check sees it). So `remove` reloads after destroying a key it wrote itself:
+ * whatever a reload in between loaded is gone again before it returns, and it throws (the caller retries) when that
+ * reload fails.
  */
 export class RelayHoldList {
   #running: Promise<void> | null = null;
@@ -122,10 +126,15 @@ export class RelayHoldList {
     return (await this.#create(relayHoldKey(address))).created;
   }
 
-  /** Takes the address off the list. True when it was there (it keeps holding until the next reload). */
+  /**
+   * Takes the address off the list. True when it was there: it keeps holding until the next reload, which the caller
+   * runs before it relaxes anything. When it wasn't there, the key this call wrote to find out is destroyed and the list
+   * reloaded here, so the lookup is never left loaded (see the class comment).
+   */
   async remove(address: string): Promise<boolean> {
     const { id, created } = await this.#create(relayHoldKey(address));
     await this.mgmt.transport.set("x:MemoryLookupKey", { destroy: [id] });
+    if (created) await this.reload();
     return !created;
   }
 

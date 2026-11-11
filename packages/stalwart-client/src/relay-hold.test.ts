@@ -20,7 +20,15 @@ type Key = { id: string; namespace: string; key: string; isGlobPattern: boolean 
  * A fake management client with Stalwart's lookup-key behaviour (verified on v0.16.27): a duplicate create is refused
  * with `primaryKeyViolation` and the existing key's id, and what the server enforces changes only on a reload.
  */
-function fake(opts: { allowRelaying?: unknown; failReload?: () => boolean; reloadMs?: number } = {}) {
+function fake(
+  opts: {
+    allowRelaying?: unknown;
+    failReload?: () => boolean;
+    reloadMs?: number;
+    /** Another process's reload, landing right after a key is written. */
+    reloadElsewhereAfterCreate?: boolean;
+  } = {},
+) {
   const state = {
     keys: [] as Key[],
     loaded: new Set<string>(),
@@ -56,6 +64,9 @@ function fake(opts: { allowRelaying?: unknown; failReload?: () => boolean; reloa
           state.keys.push({ ...k, id });
           state.writes.push(`create ${k.key}`);
           created[ref] = { id };
+          if (opts.reloadElsewhereAfterCreate) {
+            state.loaded = new Set(state.keys.filter((x) => x.namespace === RELAY_HOLD_NAMESPACE).map((x) => x.key));
+          }
         }
         for (const id of args.destroy ?? []) {
           state.writes.push(`destroy ${state.keys.find((k) => k.id === id)?.key ?? id}`);
@@ -148,11 +159,26 @@ describe("RelayHoldList", () => {
     expect(state.writes).toEqual([
       "create held@example.test",
       "destroy held@example.test",
-      // The probe: written and destroyed again with no reload between, so never enforced.
+      // The probe: written, destroyed again, then reloaded so nothing it might have been loaded as stays.
       "create other@example.test",
       "destroy other@example.test",
     ]);
-    expect(state.reloads).toBe(0);
+    // Only the probe reloads here; taking a listed key off leaves the reload to the caller (before it relaxes anything).
+    expect(state.reloads).toBe(1);
+  });
+
+  it("never leaves its probe loaded, even when another process reloads in between", async () => {
+    const { mgmt, state } = fake({ reloadElsewhereAfterCreate: true });
+    const list = new RelayHoldList(mgmt);
+    expect(await list.remove("standard@example.test")).toBe(false);
+    expect(state.keys).toEqual([]);
+    expect(state.loaded.has("standard@example.test")).toBe(false);
+  });
+
+  it("throws when the reload after its probe fails (the caller retries; nothing stays loaded by it then)", async () => {
+    const { mgmt, state } = fake({ reloadElsewhereAfterCreate: true, failReload: () => true });
+    await expect(new RelayHoldList(mgmt).remove("standard@example.test")).rejects.toThrow(/notCreated/);
+    expect(state.keys).toEqual([]);
   });
 
   it("passes on any other refusal", async () => {
