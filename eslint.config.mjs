@@ -127,7 +127,13 @@ export default tseslint.config(
           paths: [
             {
               name: "@anhourmail/stalwart-client",
-              importNames: ["stalwartProvisioning", "stalwartAudit", "stalwartTraining", "stalwartDevAdmin"],
+              importNames: [
+                "stalwartProvisioning",
+                "stalwartAudit",
+                "stalwartTraining",
+                "stalwartHold",
+                "stalwartDevAdmin",
+              ],
               message: "The web app holds the operations key only (ADR-0020 'Credential split').",
             },
           ],
@@ -175,6 +181,7 @@ export default tseslint.config(
                 "stalwartOperations",
                 "stalwartAudit",
                 "stalwartTraining",
+                "stalwartHold",
                 "stalwartDevAdmin",
                 "StalwartManagement",
                 "StalwartTransport",

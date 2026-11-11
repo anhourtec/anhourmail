@@ -25,6 +25,7 @@ import {
   OPERATIONS_KEY_PERMISSIONS,
   PROVISIONING_KEY_PERMISSIONS,
   SERVICE_CREDENTIALS,
+  HOLD_KEY_PERMISSIONS,
   TRAINING_KEY_PERMISSIONS,
   USER_ROLE_PERMISSIONS,
 } from "./keys";
@@ -109,7 +110,27 @@ describe("key permission sets", () => {
       "svc-ops",
       "svc-audit",
       "svc-train",
+      "svc-hold",
     ]);
+  });
+
+  it("gives the hold key the relay hold's list, one action and a read of the RCPT stage: no account, mail or queue", () => {
+    expect([...HOLD_KEY_PERMISSIONS]).toEqual([
+      "actionReloadLookupStores",
+      "authenticate",
+      "sysActionCreate",
+      "sysMemoryLookupKeyCreate",
+      "sysMemoryLookupKeyDestroy",
+      "sysMemoryLookupKeyGet",
+      "sysMemoryLookupKeyQuery",
+      "sysMtaStageRcptGet",
+    ]);
+    expect(
+      HOLD_KEY_PERMISSIONS.filter((n) =>
+        /impersonate|^sys(Account|Domain)|^jmap|^action(?!ReloadLookupStores)/.test(n),
+      ),
+    ).toEqual([]);
+    expect(SERVICE_CREDENTIALS.hold).toMatchObject({ env: "STALWART_HOLD_KEY", usedBy: "worker and scheduler" });
   });
 
   it("gives the training key training samples only: no mail, accounts, credentials or classifier", () => {

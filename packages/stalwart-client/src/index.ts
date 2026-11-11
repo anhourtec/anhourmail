@@ -84,6 +84,7 @@ export {
   SERVICE_CREDENTIALS,
   type ServiceCredential,
   type StalwartCredentialRole,
+  HOLD_KEY_PERMISSIONS,
   TRAINING_KEY_PERMISSIONS,
   USER_ROLE_PERMISSIONS,
 } from "./keys";
@@ -166,9 +167,9 @@ function baseUrl(env: Record<string, string | undefined>): string {
 
 /**
  * The management client for one credential (`keys.ts`), configured from the environment: its own key
- * (`STALWART_PROVISIONING_KEY`, `STALWART_OPERATIONS_KEY`, `STALWART_AUDIT_KEY` or `STALWART_TRAINING_KEY`), or —
- * outside production only — the dev recovery admin (`STALWART_DEV_ADMIN_USER` / `_PASSWORD`), which stands in for all
- * four in development.
+ * (`STALWART_PROVISIONING_KEY`, `STALWART_OPERATIONS_KEY`, `STALWART_AUDIT_KEY`, `STALWART_TRAINING_KEY` or
+ * `STALWART_HOLD_KEY`), or — outside production only — the dev recovery admin (`STALWART_DEV_ADMIN_USER` /
+ * `_PASSWORD`), which stands in for all of them in development.
  */
 function forRole(role: StalwartCredentialRole): StalwartManagement {
   const cache = (globalForStalwart.amStalwart ??= {});
@@ -205,6 +206,8 @@ export const stalwartOperations = (): StalwartManagement => forRole("operations"
 export const stalwartAudit = (): StalwartManagement => forRole("audit");
 /** Worker: finds and destroys the spam-training samples a mail import created (ADR-0030), nothing else. */
 export const stalwartTraining = (): StalwartManagement => forRole("training");
+/** Worker and scheduler: the relay hold's list and its reload, nothing else (`HOLD_KEY_PERMISSIONS`). */
+export const stalwartHold = (): StalwartManagement => forRole("hold");
 
 /** Whether this process has a credential for `role` (its key, or the dev admin outside production). */
 export function hasStalwartCredential(role: StalwartCredentialRole): boolean {

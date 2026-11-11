@@ -147,7 +147,29 @@ export const TRAINING_KEY_PERMISSIONS: readonly string[] = unique([
   "sysSpamTrainingSampleDestroy",
 ]);
 
-export type StalwartCredentialRole = "provisioning" | "operations" | "audit" | "training";
+/**
+ * Worker and scheduler: the relay hold's list (ADR-0034 update "relay hold"; research/stalwart.md "Relay hold").
+ * Writes and reads `x:MemoryLookupKey` (one key per held account) and runs exactly one `x:Action`, `ReloadLookupStores`:
+ * Stalwart checks a permission per action type on top of `sysActionCreate` (verified on v0.16.27: without
+ * `actionReloadLookupStores` the reload is `forbidden`, and with only it `PauseMtaQueue` and `ReloadSettings` are),
+ * so this key can't pause the queue or reload settings. Reads `x:MtaStageRcpt` so the reconciler sees the
+ * `allowRelaying` expression. No account, domain, credential or mail access. Lookup keys are one server-wide object
+ * whose other namespaces are the spam filter's lists (`trusted-domains`, `blocked-domains`, `spam-traps`,
+ * `url-redirectors`), which the permission doesn't separate: the production management proxy lets this key touch the
+ * hold's namespace only.
+ */
+export const HOLD_KEY_PERMISSIONS: readonly string[] = unique([
+  "authenticate",
+  "sysMemoryLookupKeyGet",
+  "sysMemoryLookupKeyQuery",
+  "sysMemoryLookupKeyCreate",
+  "sysMemoryLookupKeyDestroy",
+  "sysActionCreate",
+  "actionReloadLookupStores",
+  "sysMtaStageRcptGet",
+]);
+
+export type StalwartCredentialRole = "provisioning" | "operations" | "audit" | "training" | "hold";
 
 export type ServiceCredential = {
   /** The service account's name (local part, on the deployment's system domain). */
@@ -177,6 +199,12 @@ export const SERVICE_CREDENTIALS: Readonly<Record<StalwartCredentialRole, Servic
     env: "STALWART_TRAINING_KEY",
     usedBy: "worker",
     permissions: TRAINING_KEY_PERMISSIONS,
+  },
+  hold: {
+    account: "svc-hold",
+    env: "STALWART_HOLD_KEY",
+    usedBy: "worker and scheduler",
+    permissions: HOLD_KEY_PERMISSIONS,
   },
 };
 
