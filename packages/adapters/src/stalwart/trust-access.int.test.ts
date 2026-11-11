@@ -288,6 +288,26 @@ describe("trust tiers through mailbox.ensure on Stalwart (ADR-0034 §3–4)", ()
     expect(await authReply(P587)).toMatch(ACCEPTED);
   });
 
+  it("a key stored but never loaded holds once the reconciler's first step reloads, and the next ensure clears it", async () => {
+    // The standard mailbox from above, off the list. A key written without a reload (a failed reload, another
+    // process's lookup caught by a reload) doesn't hold: the stored list says held, the server lets it relay.
+    const { created } = await keys.hold.transport.set("x:MemoryLookupKey", {
+      create: { k: { namespace: RELAY_HOLD_NAMESPACE, key: address, isGlobPattern: false } },
+    });
+    expect(created.k?.id).toBeTruthy();
+    expect(await jmapSend(`stored only ${tag}`, outside("stored"))).toMatch(/^250 /);
+    // The reconciler reloads first, so what it compares is what holds.
+    expect(await mail.reloadRelayHold?.()).toBe(true);
+    expect(await jmapSend(`loaded ${tag}`, outside("loaded"))).toBe(RELAY_REFUSED);
+    // The mailbox's ensure (the reconciler re-queues an extra key of ours) takes it off and reloads before it opens.
+    const [row] = await db.select().from(schema.mailbox).where(eq(schema.mailbox.address, address));
+    if (!row) throw new Error("mailbox row missing");
+    await enqueueProvisioning(deps, { kind: "mailbox.ensure", subjectId: row.id });
+    await drain(row.id);
+    expect(await listed()).toBe(false);
+    expect(await jmapSend(`cleared ${tag}`, outside("cleared"))).toMatch(/^250 /);
+  });
+
   it("fails closed: without the relay hold in the relaying policy a new mailbox isn't created", async () => {
     const [stage] = await mgmt.transport.getAll<{ id: string; allowRelaying: unknown }>(
       "x:MtaStageRcpt",

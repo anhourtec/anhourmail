@@ -344,10 +344,11 @@ export function stalwartMailServer(mgmt: StalwartManagement, opts: { hold?: Stal
       // adding fails open until then. So a new mailbox is created only once it is listed, the list reloaded and the
       // relaying policy checked (a failure leaves nothing on the mail server, and the retry starts clean); an existing
       // one going onto the list is first made unable to send at all (unless it already can't), and given its access
-      // only after the reload and the check. A failure anywhere leaves it unable to send; the job retries, and a retry
-      // that finds the mailbox still short of its access reloads again. A mailbox already listed and holding its access
-      // is left as it is (no reload). Taking a mailbox off the list fails safe (it stays held until the reload), so it
-      // is unlisted and reloaded before its new access is written, for the same reason.
+      // only after the reload and the check. A failure anywhere leaves it unable to send, and the job retries. Every
+      // run reloads the list, a mailbox already listed and holding its access included. Taking a mailbox off the list
+      // fails safe (it stays held until the reload), so it is unlisted and reloaded before its new access is written,
+      // for the same reason; `remove` reloads by itself when the address wasn't listed (its lookup wrote a key), which
+      // also runs a reload an earlier attempt owed.
       let now: MailboxAccess | null = known === null ? null : await currentAccess(known);
       if (held) {
         const preHold = stricter(want, "send_blocked");
@@ -365,14 +366,13 @@ export function stalwartMailServer(mgmt: StalwartManagement, opts: { hold?: Stal
           await tighten();
           throw err;
         }
-        if (added || now !== want) {
-          await tighten();
-          await holdList.reload();
-          if ((now === null || looser(want, now)) && !(await holdList.inPlace())) throw new RelayHoldNotInPlaceError();
-        }
+        if (added || now !== want) await tighten();
+        // Reloaded every time (coalesced within the process): a key already stored may never have been loaded (an
+        // earlier attempt's reload failed, or it was written by hand), and a stored key that isn't loaded holds nothing.
+        await holdList.reload();
+        if ((now === null || looser(want, now)) && !(await holdList.inPlace())) throw new RelayHoldNotInPlaceError();
       } else {
-        const removed = await holdList.remove(address);
-        if (removed || (now !== null && now !== want)) await holdList.reload();
+        if (await holdList.remove(address)) await holdList.reload();
       }
       const externalId = await write(want);
       return { externalId, created: known === null, passwordCredentialId: await mgmt.passwordCredentialId(externalId) };
@@ -435,6 +435,16 @@ export function stalwartMailServer(mgmt: StalwartManagement, opts: { hold?: Stal
       } catch (err) {
         if (isForbidden(err)) return null;
         throw err;
+      }
+    },
+    // The reconciler's first step: what is stored is what holds from here on (a failure is reported, not thrown).
+    async reloadRelayHold() {
+      if (!holdList) return null;
+      try {
+        await holdList.reload();
+        return true;
+      } catch {
+        return false;
       }
     },
     // Read only; a key without `sysMtaInboundThrottleGet` / `sysMtaStageRcptGet` answers `forbidden`: not checked.

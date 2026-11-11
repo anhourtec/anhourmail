@@ -143,10 +143,19 @@ describe("ensureMailbox and the relay hold (fail closed)", () => {
     expect(f.log).toEqual([`list ${ADDRESS}`, "write send_blocked", "reload", "write smtp_blocked"]);
   });
 
-  it("writes only the access when the mailbox is already held as it should be (no reload)", async () => {
+  it("reloads and writes the access when the mailbox is already held as it should be (no tightening)", async () => {
     const f = fakes({ existing: "smtp_blocked", listed: true });
     await stalwartMailServer(f.mgmt, { hold: f.hold }).ensureMailbox(input("smtp_blocked", true, "acc-1"));
-    expect(f.log).toEqual(["write smtp_blocked"]);
+    expect(f.log).toEqual(["reload", "write smtp_blocked"]);
+  });
+
+  it("loads a key that was stored but never loaded, even when the access is already what it should be", async () => {
+    // A restricted mailbox: its earlier attempt listed it and its reload failed; it was already send-blocked.
+    const f = fakes({ existing: "send_blocked", listed: true });
+    f.state.loaded.clear();
+    await stalwartMailServer(f.mgmt, { hold: f.hold }).ensureMailbox(input("send_blocked", true, "acc-1"));
+    expect(f.log).toEqual(["reload", "write send_blocked"]);
+    expect(f.state.loaded.has(ADDRESS)).toBe(true);
   });
 
   it("leaves the mailbox unable to send when listing, the reload or the policy fails; a retry finishes it", async () => {
@@ -192,15 +201,16 @@ describe("ensureMailbox and the relay hold (fail closed)", () => {
     const h = fakes({ existing: "smtp_blocked" });
     h.state.loaded.add(ADDRESS);
     await stalwartMailServer(h.mgmt, { hold: h.hold }).ensureMailbox(input("active", false, "acc-1"));
-    // The probe for the key writes and destroys it (never loaded), then the reload the failed attempt owed.
+    // The lookup writes and destroys the key, then reloads: that is also the reload the failed attempt owed.
     expect(h.log).toEqual([`list ${ADDRESS}`, `unlist ${ADDRESS}`, "reload", "write active"]);
     expect(h.state.loaded.has(ADDRESS)).toBe(false);
   });
 
-  it("needs no reload for a mailbox that was never held", async () => {
+  it("reloads after looking up a mailbox that was never held, so its lookup key is never left loaded", async () => {
     const f = fakes({ existing: "active" });
     await stalwartMailServer(f.mgmt, { hold: f.hold }).ensureMailbox(input("active", false, "acc-1"));
-    expect(f.log).toEqual([`list ${ADDRESS}`, `unlist ${ADDRESS}`, "write active"]);
+    expect(f.log).toEqual([`list ${ADDRESS}`, `unlist ${ADDRESS}`, "reload", "write active"]);
+    expect(f.state.loaded.has(ADDRESS)).toBe(false);
   });
 
   it("never names another namespace", () => {
