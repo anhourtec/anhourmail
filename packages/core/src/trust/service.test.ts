@@ -448,16 +448,23 @@ describe("promoteForPayment (billing, ADR-0034 §2)", () => {
   });
 });
 
+/** The job's criteria (`runTrustPromotion`): accounts created before now, fewer than 3 held sends in the last day. */
+const CRITERIA = {
+  createdBefore: new Date("2026-10-21T12:00:00Z"),
+  heldSince: new Date("2026-10-20T12:00:00Z"),
+  maxHeld: 3,
+};
+
 describe("promoteEstablished (the promotion job's step)", () => {
   it("promotes a candidate with source automatic", async () => {
     const d = world();
-    const changes = await d.uow.run((r) => promoteEstablished(d, r, ACCOUNT_A));
+    const changes = await d.uow.run((r) => promoteEstablished(d, r, ACCOUNT_A, CRITERIA));
     expect(changes[0]?.meta).toMatchObject({ fromTier: "new", toTier: "standard", source: "automatic" });
     expect((await trustOf(d, ACCOUNT_A))?.source).toBe("automatic");
   });
 
   it("skips an account that stopped qualifying: suspended, billing restricted or lapsed, restricted, staff-set", async () => {
-    const setups: ((d: World) => void)[] = [
+    const setups: ((d: World) => void | Promise<void>)[] = [
       (d) => {
         const a = d.uow.state.accounts.find((x) => x.id === ACCOUNT_A);
         if (a) a.status = "suspended";
@@ -470,15 +477,47 @@ describe("promoteEstablished (the promotion job's step)", () => {
       (d) => {
         setRow(d, { accountId: ACCOUNT_A, source: "staff" });
       },
+      // Checked again under the lock too (finding 5): a member suspended, an owner's email unconfirmed, held sends.
+      (d) => {
+        d.uow.state.personSuspensions["member-a"] = { reason: "spam", note: null, at: d.clock.now(), byUserId: "ga" };
+      },
+      (d) => d.uow.state.unverifiedEmails.push("owner-a"),
+      async (d) => {
+        for (let i = 0; i < 3; i++) {
+          await d.uow.run((r) =>
+            r.audit.append(
+              {
+                scope: `account:${ACCOUNT_A}`,
+                action: "trust.send_held",
+                actor: { type: "user", userId: "member-a", email: null, role: "member", accountId: ACCOUNT_A },
+                onBehalfOf: null,
+                target: { type: "mailbox", id: M_ACTIVE, label: null },
+                result: "denied",
+                errorCode: "sending_held",
+                requestId: `held-${String(i)}`,
+                ip: null,
+                userAgent: null,
+                meta: { externalRecipients: 1 },
+              },
+              d.clock.now(),
+            ),
+          );
+        }
+      },
+      (d) => {
+        d.uow.state.memberships = d.uow.state.memberships.filter(
+          (m) => m.role !== "owner" || m.accountId !== ACCOUNT_A,
+        );
+      },
     ];
     for (const setup of setups) {
       const d = world();
-      setup(d);
-      expect(await d.uow.run((r) => promoteEstablished(d, r, ACCOUNT_A))).toEqual([]);
+      await setup(d);
+      expect(await d.uow.run((r) => promoteEstablished(d, r, ACCOUNT_A, CRITERIA))).toEqual([]);
       expect((await trustOf(d, ACCOUNT_A))?.tier).toBe("new");
     }
     const d = world();
-    expect(await d.uow.run((r) => promoteEstablished(d, r, MISSING))).toEqual([]);
+    expect(await d.uow.run((r) => promoteEstablished(d, r, MISSING, CRITERIA))).toEqual([]);
   });
 });
 

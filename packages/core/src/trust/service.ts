@@ -42,7 +42,7 @@ import type { MailboxStatus } from "../mailboxes/entity";
 import { authorizeAudited, mutation, type MutationOutcome, type SystemChange } from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 
-import type { AccountTrust, MailboxSendingRestriction } from "./entity";
+import type { AccountTrust, MailboxSendingRestriction, PromotionCriteria } from "./entity";
 
 /** Longest staff note kept (characters). */
 export const TRUST_NOTE_MAX = 2000;
@@ -395,17 +395,23 @@ async function promote(
 
 /**
  * The promotion job's step for one candidate (`promotionCandidates`), in the caller's unit of work: takes the account
- * lock, then checks again what may have changed since the candidates were listed (a staff tier, a restriction, a
- * suspension, billing restricted or lapsed) before promoting it to `standard` with source `automatic`. Returns the
- * audit entry to record as the system; none when the account no longer qualifies.
+ * lock, then checks again every condition the candidates were listed by (`qualifiesForPromotion`: a staff tier, a
+ * restriction, the account's or a member's suspension, billing restricted or lapsed, an owner's unconfirmed email, the
+ * held sends) before promoting it to `standard` with source `automatic`. A person's suspension locks every account of
+ * theirs first, so it is either seen here or made after this commits (security review of ADR-0034 slices 1–11,
+ * finding 5). Returns the audit entry to record as the system; none when the account no longer qualifies.
  */
-export async function promoteEstablished(deps: Deps, r: Repositories, accountId: string): Promise<SystemChange[]> {
+export async function promoteEstablished(
+  deps: Deps,
+  r: Repositories,
+  accountId: string,
+  criteria: Omit<PromotionCriteria, "limit">,
+): Promise<SystemChange[]> {
   await r.accounts.lock(accountId);
   const account = await r.accounts.get(accountId);
   const current = await r.trust.get(accountId);
   if (!account || !current || account.status !== "active" || !systemMayPromote(current)) return [];
-  const billing = (await r.billing.get(accountId))?.state;
-  if (billing === "restricted" || billing === "lapsed") return [];
+  if (!(await r.trust.qualifiesForPromotion(accountId, criteria))) return [];
   return promote(deps, r, current, "automatic");
 }
 

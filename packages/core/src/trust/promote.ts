@@ -35,20 +35,14 @@ export type TrustPromoteRun = {
 export async function runTrustPromotion(deps: Deps, settings: TrustPromoteSettings): Promise<TrustPromoteRun> {
   const now = deps.clock.now();
   const since = new Date(now.getTime() - settings.minAgeHours * HOUR_MS);
-  const candidates = await deps.uow.run((r) =>
-    r.trust.promotionCandidates({
-      createdBefore: since,
-      heldSince: since,
-      maxHeld: settings.maxHeld,
-      limit: settings.batch,
-    }),
-  );
+  const criteria = { createdBefore: since, heldSince: since, maxHeld: settings.maxHeld };
+  const candidates = await deps.uow.run((r) => r.trust.promotionCandidates({ ...criteria, limit: settings.batch }));
   const run: TrustPromoteRun = { candidates: candidates.length, promoted: 0, skipped: 0, failed: 0 };
   for (const { accountId } of candidates) {
     const req: RequestMeta = { requestId: `trust-promote-${accountId}`, ip: null, userAgent: null };
     try {
       const promoted = await deps.uow.run(async (r) => {
-        const changes = await promoteEstablished(deps, r, accountId);
+        const changes = await promoteEstablished(deps, r, accountId, criteria);
         await recordSystemChanges(deps, r, SYSTEM, req, changes);
         return changes.length > 0;
       });
