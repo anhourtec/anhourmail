@@ -12,6 +12,7 @@ import {
   parseTrustNote,
   promoteEstablished,
   promoteForPayment,
+  revokeBillingPromotion,
   setAccountTier,
   setMailboxRestriction,
   staffAccountTrust,
@@ -445,6 +446,70 @@ describe("promoteForPayment (billing, ADR-0034 §2)", () => {
     expect(await d.uow.run((r) => promoteForPayment(d, r, ACCOUNT_A))).toEqual([]);
     expect((await trustOf(d, ACCOUNT_A))?.tier).toBe("new");
     expect(ensures(d)).toEqual([]);
+  });
+});
+
+describe("revokeBillingPromotion (finding 2 of the slices 1–11 review)", () => {
+  it("takes billing's standard back to new / default, queues the usable mailboxes and returns a system entry", async () => {
+    const d = world();
+    setRow(d, { accountId: ACCOUNT_A, tier: "standard", source: "billing", since: d.clock.now() });
+    const changes = await d.uow.run((r) => revokeBillingPromotion(d, r, ACCOUNT_A, "refund"));
+    expect(changes).toEqual([
+      {
+        action: "trust.tier_changed",
+        accountId: ACCOUNT_A,
+        target: { type: "account", id: ACCOUNT_A },
+        meta: { fromTier: "standard", toTier: "new", source: "default", cause: "refund", mailboxesQueued: 2 },
+      },
+    ]);
+    expect(await trustOf(d, ACCOUNT_A)).toMatchObject({ tier: "new", source: "default", since: d.clock.now() });
+    expect(ensures(d).sort()).toEqual([M_ACTIVE, M_FAILED].sort());
+    // Again: nothing more (idempotent).
+    expect(await d.uow.run((r) => revokeBillingPromotion(d, r, ACCOUNT_A, "refund"))).toEqual([]);
+  });
+
+  it("never touches a tier billing didn't give: staff, automatic, default, restricted", async () => {
+    const cases: Partial<AccountTrust>[] = [
+      { tier: "standard", source: "staff" },
+      { tier: "standard", source: "automatic" },
+      { tier: "new", source: "default" },
+      { tier: "new", source: "staff" },
+      { tier: "restricted", source: "staff" },
+    ];
+    for (const row of cases) {
+      const d = world();
+      setRow(d, { accountId: ACCOUNT_A, ...row });
+      expect(await d.uow.run((r) => revokeBillingPromotion(d, r, ACCOUNT_A, "dispute"))).toEqual([]);
+      expect(await trustOf(d, ACCOUNT_A)).toMatchObject(row);
+      expect(ensures(d)).toEqual([]);
+    }
+    const d = world();
+    expect(await d.uow.run((r) => revokeBillingPromotion(d, r, MISSING, "dispute"))).toEqual([]);
+  });
+
+  it("withinMs: only a promotion at most that old", async () => {
+    const d = world();
+    const day = 86_400_000;
+    setRow(d, {
+      accountId: ACCOUNT_A,
+      tier: "standard",
+      source: "billing",
+      since: new Date(d.clock.now().getTime() - 15 * day),
+    });
+    expect(
+      await d.uow.run((r) => revokeBillingPromotion(d, r, ACCOUNT_A, "plan_ended", { withinMs: 14 * day })),
+    ).toEqual([]);
+    expect((await trustOf(d, ACCOUNT_A))?.tier).toBe("standard");
+    setRow(d, {
+      accountId: ACCOUNT_A,
+      tier: "standard",
+      source: "billing",
+      since: new Date(d.clock.now().getTime() - 14 * day),
+    });
+    expect(
+      await d.uow.run((r) => revokeBillingPromotion(d, r, ACCOUNT_A, "plan_ended", { withinMs: 14 * day })),
+    ).toHaveLength(1);
+    expect((await trustOf(d, ACCOUNT_A))?.tier).toBe("new");
   });
 });
 

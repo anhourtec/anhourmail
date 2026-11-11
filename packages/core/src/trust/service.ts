@@ -11,8 +11,9 @@
  *   Unknown accounts and mailboxes of another account are 404. `automatic: true` (only `new` or `standard`) leaves the
  *   job and billing free to move the account again; otherwise the staff source freezes it.
  * - **The system** promotes `new` → `standard`: the hourly job for established accounts in good standing (source
- *   `automatic`), and billing when the account enters `active` (source `billing`). Neither touches a staff-set tier, a
- *   `restricted` account or an account ever restricted.
+ *   `automatic`), and billing when the account enters `active` or pays (source `billing`). Neither touches a staff-set
+ *   tier, a `restricted` account or an account ever restricted. Billing takes its own promotion back on a refund, a
+ *   dispute, or a plan that ends inside the refund window (`revokeBillingPromotion`).
  *
  * The staff note is staff-only: never in an audit entry, a log line or anything a customer reads (`accountSending`).
  * Every entry is in the account's own log (rule 49) with a copy in the platform log; the reason is shown in plain words.
@@ -371,6 +372,47 @@ export async function promoteForPayment(deps: Deps, r: Repositories, accountId: 
   // A suspended account isn't promoted by paying (nor by a comp or a grant) while suspended.
   if (account?.status !== "active" || !current || !systemMayPromote(current)) return [];
   return promote(deps, r, current, "billing");
+}
+
+/** Why billing takes its promotion back (audit meta `cause`). */
+export type BillingTierLoss = "refund" | "dispute" | "plan_ended";
+
+/**
+ * Takes billing's promotion back (security review of ADR-0034 slices 1–11, finding 2): inside the caller's unit of
+ * work, under the account lock it holds, an account whose tier came from billing (`standard`, source `billing`) goes
+ * back to `new` with source `default`, and its mailboxes are queued so the mail server follows. A staff-set, automatic
+ * or restricted tier is never touched. `withinMs` limits it to a promotion at most that old (a plan that ended inside
+ * the refund window). Returns the `trust.tier_changed` entry for the caller to record as the system; none when nothing
+ * changed. The caller schedules the managed-script pause (the web app) or signals it (the worker).
+ */
+export async function revokeBillingPromotion(
+  deps: Deps,
+  r: Repositories,
+  accountId: string,
+  cause: BillingTierLoss,
+  opts: { withinMs?: number } = {},
+): Promise<SystemChange[]> {
+  const current = await r.trust.get(accountId);
+  if (current?.source !== "billing" || current.tier === "restricted" || current.tier === "new") return [];
+  const now = deps.clock.now();
+  if (opts.withinMs !== undefined && now.getTime() - current.since.getTime() > opts.withinMs) return [];
+  await r.trust.setTier(accountId, {
+    tier: "new",
+    since: now,
+    source: "default",
+    reason: null,
+    note: null,
+    setBy: null,
+  });
+  const mailboxesQueued = await ensureMailboxes(deps, r, accountId);
+  return [
+    {
+      action: "trust.tier_changed",
+      accountId,
+      target: { type: "account", id: accountId },
+      meta: { fromTier: current.tier, toTier: "new", source: "default", cause, mailboxesQueued },
+    },
+  ];
 }
 
 async function promote(
