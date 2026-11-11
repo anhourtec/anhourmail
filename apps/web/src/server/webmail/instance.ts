@@ -18,7 +18,7 @@ import {
   WebmailSignaturesService,
   WebmailTemplatesService,
 } from "@anhourmail/core/webmail";
-import { billingSendBlock } from "@anhourmail/core/billing";
+import { outsideAddresses, recordSendHeld, sendingStanding } from "@anhourmail/core/trust";
 import { setWebmailSenderName, webmailSenderName, webmailSendingNames } from "@anhourmail/core/people";
 import { openPushChannel } from "@anhourmail/jmap-client/push";
 import { keyRingFromEnv } from "@anhourmail/server/keyring";
@@ -206,8 +206,15 @@ export function webmail(): WebmailService {
       stalwartUrl,
       access: mailboxAccessGate(),
       quota: redisSlidingQuota(redis()),
-      // Billing's own sending refusal (ADR-0029 §5): restricted accounts and held mailboxes, read fresh for every send.
-      billingSendBlock: (address) => timed("db", () => billingSendBlock(container().deps, address)),
+      // The mailbox's trust tier and billing's block (ADR-0034 §3, ADR-0029 §5), read fresh for every send; which
+      // recipients are outside the addresses we host; and the held-send record (at most one per mailbox an hour).
+      trust: {
+        standing: (address) => timed("db", () => sendingStanding(container().deps, address)),
+        outside: (addresses) => timed("db", () => outsideAddresses(container().deps, addresses)),
+        held: async (input, req) => {
+          await recordSendHeld(container().deps, input, req);
+        },
+      },
       // The undo-send hold each mailbox chose in its settings.
       holdSeconds: async (address) => (await settingsService().preferences(address)).undoSeconds,
       // The managed Sieve script is written with management credentials (internal network only, rule 21), never

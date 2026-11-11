@@ -17,7 +17,13 @@ import {
   withUploadSlot,
 } from "./http";
 import { REFUSED_HEADER } from "./pin";
-import { WebmailConflictError, WebmailNotFoundError, WebmailSenderBlockedError } from "./service";
+import {
+  WebmailConflictError,
+  WebmailNotFoundError,
+  WebmailQuotaError,
+  WebmailSenderBlockedError,
+  WebmailSendingRefusedError,
+} from "./service";
 
 describe("upload slots and capped bodies", () => {
   it("runs at most MAX_UPLOADS uploads at once and asks the rest to retry", async () => {
@@ -121,5 +127,27 @@ describe("delivery reports", () => {
     expect(res?.status).toBe(404);
     expect(res?.headers.get(REFUSED_HEADER)).toBeNull();
     expect(await res?.json()).toEqual({ error: { code: "not_found", message: "Nothing to show for this message." } });
+  });
+});
+
+describe("trust tier refusals (ADR-0034 §5)", () => {
+  it("answers a held send 403 sending_held, a paused one 403 sending_paused and a used-up limit 429 sending_limit", async () => {
+    const held = webmailErrorResponse(new WebmailSendingRefusedError("held"));
+    expect(held?.status).toBe(403);
+    expect(await held?.json()).toEqual({
+      error: {
+        code: "sending_held",
+        message:
+          "New accounts can send to addresses hosted on AnhourMail for now. Sending elsewhere opens automatically once your account is established.",
+      },
+    });
+    const paused = webmailErrorResponse(new WebmailSendingRefusedError("paused"));
+    expect(paused?.status).toBe(403);
+    expect(await paused?.json()).toEqual({
+      error: { code: "sending_paused", message: "Sending is paused for this mailbox. Receiving mail keeps working." },
+    });
+    const limit = webmailErrorResponse(new WebmailQuotaError("You've reached your sending limit for now."));
+    expect(limit?.status).toBe(429);
+    expect(await limit?.json()).toMatchObject({ error: { code: "sending_limit" } });
   });
 });

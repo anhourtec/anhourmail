@@ -39,6 +39,7 @@ import {
   WebmailSignedOutError,
 } from "./service";
 import { memoryKv, type WebmailSession, WebmailSessionStore } from "./session-store";
+import { fixedTrust } from "./__tests__/trust";
 
 const MAIL = "urn:ietf:params:jmap:mail";
 const CORE = "urn:ietf:params:jmap:core";
@@ -161,6 +162,7 @@ function setup() {
     stalwartUrl: "http://stalwart:8080",
     access,
     quota: memorySlidingQuota(),
+    trust: fixedTrust(),
     sieve: {
       read: async () => null,
       write: async (accountId) => {

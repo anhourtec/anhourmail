@@ -16,8 +16,11 @@ import {
   draftBody,
   draftEmail,
   draftProblem,
+  delegatedLimits,
   MAX_RECIPIENTS,
   sendCheck,
+  SHAPE_LIMITS,
+  tierLimits,
   senderName,
   type StoredDraft,
   UNDO_SECONDS,
@@ -31,11 +34,14 @@ import {
   WebmailQuotaError,
   WebmailRefusedError,
   WebmailBillingRestrictedError,
+  WebmailSendingRefusedError,
   WebmailService,
+  type WebmailTrust,
   WebmailSignInError,
   WebmailUnavailableError,
 } from "./service";
 import { memoryKv, WebmailSessionStore } from "./session-store";
+import { fixedTrust } from "./__tests__/trust";
 
 beforeEach(() => {
   setLogSinkForTests(() => undefined);
@@ -46,6 +52,22 @@ afterEach(() => {
 
 const MAIL = "urn:ietf:params:jmap:mail";
 const identity = { id: "i1", name: "Alex", email: "a@x.test" };
+
+describe("tier limits", () => {
+  it("are the published numbers of the tier; a delegated send takes the stricter of two, field by field", () => {
+    for (const t of ["new", "standard", "trusted", "restricted"] as const)
+      expect(tierLimits(t)).toEqual(TRUST_TIERS[t].limits);
+    expect(delegatedLimits("standard", "new")).toEqual(TRUST_TIERS.new.limits);
+    expect(delegatedLimits("new", "standard")).toEqual(TRUST_TIERS.new.limits);
+    expect(delegatedLimits("standard", "restricted").messagesPerDay).toBe(0);
+  });
+
+  it("shape limits pause nothing and cap recipients at the input ceiling", () => {
+    expect(SHAPE_LIMITS.recipientsPerMessage).toBe(MAX_RECIPIENTS);
+    expect(SHAPE_LIMITS.messagesPerDay).toBeGreaterThan(0);
+    expect(SHAPE_LIMITS.messagesPerHour).toBeGreaterThan(0);
+  });
+});
 
 describe("draft validation", () => {
   const base = { identityId: "i1", subject: "Hi", text: "Hello" };
@@ -463,7 +485,7 @@ function setup(
   quota: SlidingQuotaStore = memorySlidingQuota(),
   holdSeconds?: (address: string) => Promise<number>,
   senderName?: (address: string) => Promise<{ name: string | null; masked?: readonly string[] } | null>,
-  billingSendBlock?: (address: string) => Promise<"restricted" | "held" | null>,
+  trust: WebmailTrust = fixedTrust(),
 ) {
   const fake = fakeStalwart();
   const deferred: { fn: () => void; ms: number }[] = [];
@@ -495,6 +517,7 @@ function setup(
     stalwartUrl: "http://stalwart",
     access: { state: async (a) => (allowed(a) ? "ok" : "suspended") },
     quota,
+    trust,
     sieve: { read: async () => null, write: async () => true },
     confirmedForward: async () => null,
     fetch: fake.fetchImpl,
@@ -506,7 +529,6 @@ function setup(
     },
     ...(holdSeconds ? { holdSeconds } : {}),
     ...(senderName ? { senderName } : {}),
-    ...(billingSendBlock ? { billingSendBlock } : {}),
   });
   return { svc, deferred, afterHold, sleeps, ...fake };
 }
@@ -579,10 +601,13 @@ describe("compose and send through the BFF", () => {
     let block: "restricted" | "held" | null | Error = "restricted";
     const asked: string[] = [];
     const quota = memorySlidingQuota();
-    const t = setup(undefined, quota, undefined, undefined, async (address) => {
-      asked.push(address);
-      if (block instanceof Error) throw block;
-      return block;
+    const t = setup(undefined, quota, undefined, undefined, {
+      ...fixedTrust(),
+      standing: async (address) => {
+        asked.push(address);
+        if (block instanceof Error) throw block;
+        return { tier: "standard", billingBlock: block };
+      },
     });
     const { sessionId } = await t.svc.signIn("a@x.test", "right");
     const d = await t.svc.saveDraft(sessionId, draft());
@@ -869,7 +894,8 @@ describe("sending limits and hand-made drafts", () => {
   });
 
   it("charges the new tier's hourly limit by recipients, per mailbox, and refuses beyond it", async () => {
-    const t = setup();
+    // A new account writing to addresses we host (x.test): held to nothing, limited by the new tier's numbers.
+    const t = setup(undefined, undefined, undefined, undefined, fixedTrust("new", ["x.test"]));
     const { sessionId } = await t.svc.signIn("a@x.test", "right");
     for (const tag of ["a", "b"]) {
       const d = await t.svc.saveDraft(sessionId, draft({ to: to(4, tag) }));
@@ -886,6 +912,87 @@ describe("sending limits and hand-made drafts", () => {
     const other = await t.svc.signIn("a@x.test", "right");
     const d2 = await t.svc.saveDraft(other.sessionId, draft({ to: to(1, "e") }));
     await expect(t.svc.send(other.sessionId, d2.id, "i1")).rejects.toBeInstanceOf(WebmailQuotaError);
+  });
+
+  it("standard: the standard tier's numbers apply, and outside recipients are fine", async () => {
+    const t = setup(undefined, undefined, undefined, undefined, fixedTrust("standard", ["x.test"]));
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const d = await t.svc.saveDraft(sessionId, draft({ to: [{ email: "friend@outside.example" }] }));
+    await expect(t.svc.send(sessionId, d.id, "i1")).resolves.toMatchObject({
+      submissionId: expect.any(String) as unknown,
+    });
+    // 51 recipients: within the input ceiling (the trusted tier's 100), over standard's 50.
+    const over = TRUST_TIERS.standard.limits.recipientsPerMessage + 1;
+    expect(over).toBeLessThanOrEqual(MAX_RECIPIENTS);
+    const big = await t.svc.saveDraft(sessionId, draft({ to: to(over, "z") }));
+    await expect(t.svc.send(sessionId, big.id, "i1")).rejects.toThrow(/at most 50/);
+  });
+
+  it("new: a send with any recipient outside is held (403 sending_held), recorded with a count, nothing charged", async () => {
+    const trust = fixedTrust("new", ["x.test"]);
+    const quota = memorySlidingQuota();
+    const t = setup(undefined, quota, undefined, undefined, trust);
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const d = await t.svc.saveDraft(
+      sessionId,
+      draft({
+        to: [{ email: "s@x.test" }],
+        cc: [{ email: "One@Outside.example" }],
+        bcc: [{ email: "two@else.example" }],
+      }),
+    );
+    const refused = await t.svc.send(sessionId, d.id, "i1").catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(WebmailSendingRefusedError);
+    expect(refused).toMatchObject({
+      reason: "held",
+      message: expect.stringMatching(/^New accounts can send/) as unknown,
+    });
+    expect(trust.recorded).toEqual([{ address: "a@x.test", externalRecipients: 2 }]);
+    expect(JSON.stringify(trust.recorded)).not.toContain("outside.example");
+    expect(t.state.calls.some((c) => c.startsWith("submit "))).toBe(false);
+    // Nothing was charged: the hour's whole allowance is still there for hosted recipients.
+    const hosted = await t.svc.saveDraft(
+      sessionId,
+      draft({ to: to(TRUST_TIERS.new.limits.recipientsPerMessage, "h") }),
+    );
+    await expect(t.svc.send(sessionId, hosted.id, "i1")).resolves.toMatchObject({
+      submissionId: expect.any(String) as unknown,
+    });
+  });
+
+  it("restricted: refused before the draft is read (403 sending_paused); an address we don't hold reads restricted", async () => {
+    for (const trust of [fixedTrust("restricted"), { ...fixedTrust(), standing: async () => null }]) {
+      const t = setup(undefined, undefined, undefined, undefined, trust);
+      const { sessionId } = await t.svc.signIn("a@x.test", "right");
+      const d = await t.svc.saveDraft(sessionId, draft());
+      await expect(t.svc.send(sessionId, d.id, "i1")).rejects.toMatchObject({
+        name: "WebmailSendingRefusedError",
+        reason: "paused",
+      });
+      expect(t.state.calls.some((c) => c.startsWith("submit "))).toBe(false);
+    }
+  });
+
+  it("fails closed when the tier or the hosted-domain check can't be read (503)", async () => {
+    const down = () => Promise.reject(new Error("db down"));
+    for (const trust of [
+      { ...fixedTrust(), standing: down },
+      { ...fixedTrust("new", ["x.test"]), outside: down },
+    ]) {
+      const t = setup(undefined, undefined, undefined, undefined, trust);
+      const { sessionId } = await t.svc.signIn("a@x.test", "right");
+      const d = await t.svc.saveDraft(sessionId, draft({ to: [{ email: "s@x.test" }] }));
+      await expect(t.svc.send(sessionId, d.id, "i1")).rejects.toBeInstanceOf(WebmailUnavailableError);
+      expect(t.state.calls.some((c) => c.startsWith("submit "))).toBe(false);
+    }
+  });
+
+  it("a held send whose record fails is still refused", async () => {
+    const trust = { ...fixedTrust("new", ["x.test"]), held: () => Promise.reject(new Error("audit down")) };
+    const t = setup(undefined, undefined, undefined, undefined, trust);
+    const { sessionId } = await t.svc.signIn("a@x.test", "right");
+    const d = await t.svc.saveDraft(sessionId, draft({ to: [{ email: "x@outside.example" }] }));
+    await expect(t.svc.send(sessionId, d.id, "i1")).rejects.toBeInstanceOf(WebmailSendingRefusedError);
   });
 
   it("fails closed when the quota store is down", async () => {
@@ -936,6 +1043,7 @@ describe("session writes are compare-and-set", () => {
       stalwartUrl: "http://stalwart",
       access: { state: async () => "ok" as const },
       quota: memorySlidingQuota(),
+      trust: fixedTrust(),
       sieve: { read: async () => null, write: async () => true },
       confirmedForward: async () => null,
       fetch: fake.fetchImpl,

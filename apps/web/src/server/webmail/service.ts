@@ -3,6 +3,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import { DelegatedMailboxRefusedError, type RequestMeta } from "@anhourmail/core";
 import {
+  applySendingPause,
   type ConsoleBinding,
   CredentialSlotTakenError,
   type DelegatedEntry,
@@ -18,12 +19,16 @@ import {
   onBehalfExpires,
   onBehalfTag,
   OnBehalfTagError,
+  pauseModeFor,
+  redirectTargets,
   sendMode,
   type WebmailAccess,
   type WebmailRefusal,
 } from "@anhourmail/core/webmail";
+import { externalHeld, type SendHeldInput, SENDING_HELD_MESSAGE, type SendingStanding } from "@anhourmail/core/trust";
 import { log } from "@anhourmail/server/log";
 import type { SlidingQuotaStore } from "@anhourmail/server/rate-limit";
+import type { TrustTier } from "@anhourmail/shared/sending";
 import { decodeCsvBytes } from "@anhourmail/shared/csv";
 import type { ImportCsvField } from "@anhourmail/shared/import";
 import { DELEGATED_MAILBOXES_PER_PERSON } from "@anhourmail/shared/plans";
@@ -39,12 +44,12 @@ import {
   MAX_ATTACHMENTS,
   MAX_TEXT_CHARS,
   MAX_UPLOAD_BYTES,
-  delegatedSendingLimits,
+  delegatedLimits,
   sendCheck,
   senderName,
-  sendingLimits,
-  sendingTier,
+  SHAPE_LIMITS,
   sendWindows,
+  tierLimits,
   type StoredDraft,
   UNDO_SECONDS,
 } from "./compose";
@@ -135,7 +140,22 @@ export class WebmailBlockedError extends Error {
     super(message);
   }
 }
-/** The mailbox's sending limit for now is used up (per hour / per day, by recipients). → 429 */
+/** What a person is told while their mailbox's trust tier is `restricted` (ADR-0034 §5). */
+export const SENDING_PAUSED_MESSAGE = "Sending is paused for this mailbox. Receiving mail keeps working.";
+
+/**
+ * The mailbox's trust tier stops this send (ADR-0034 §3, §5): `held` — a recipient is outside the addresses we host
+ * while the tier is `new` (403 `sending_held`); `paused` — the tier is `restricted` (403 `sending_paused`). Reading
+ * and receiving go on. Nothing is submitted or charged.
+ */
+export class WebmailSendingRefusedError extends Error {
+  override readonly name = "WebmailSendingRefusedError";
+  constructor(readonly reason: "held" | "paused") {
+    super(reason === "held" ? SENDING_HELD_MESSAGE : SENDING_PAUSED_MESSAGE);
+  }
+}
+
+/** The mailbox's sending limit for now is used up (per hour / per day, by recipients). → 429 `sending_limit` */
 export class WebmailQuotaError extends Error {
   override readonly name = "WebmailQuotaError";
 }
@@ -351,11 +371,10 @@ export type WebmailDeps = {
   /** Sliding send quotas (Redis in the app). Failures refuse sending (fail closed). */
   quota: SlidingQuotaStore;
   /**
-   * Billing's sending check for a mailbox, by its address (core `billingSendBlock`, ADR-0029 §5): its account is
-   * restricted, or it is held after a lapse. Asked before every send; a failure refuses the send (fail closed, rule
-   * 27). Absent: nothing is refused here (the mail server still refuses).
+   * Trust tiers and billing's block (ADR-0034 §3, ADR-0029 §5), read for every send and rules write: never cached, and
+   * any failure refuses (fail closed, rule 27).
    */
-  billingSendBlock?: (address: string) => Promise<"restricted" | "held" | null>;
+  trust: WebmailTrust;
   fetch?: typeof fetch;
   queue?: UserQueue;
   now?: () => number;
@@ -396,6 +415,19 @@ export type WebmailDeps = {
    */
   authservIds?: () => readonly string[];
 };
+
+/** What the webmail asks the control plane about a mailbox's sending (core `trust`). */
+export type WebmailTrust = {
+  /** The mailbox's effective tier and billing's block (core `sendingStanding`); null for an address we don't hold. */
+  standing(address: string): Promise<SendingStanding | null>;
+  /** The addresses outside the ones we host (core `outsideAddresses`). */
+  outside(addresses: readonly string[]): Promise<string[]>;
+  /** Records a held send (core `recordSendHeld`: at most once per mailbox per hour, a count only). */
+  held(input: SendHeldInput, req: RequestMeta): Promise<void>;
+};
+
+/** The request a send is audited with when the caller gave none. */
+const NO_REQUEST: RequestMeta = { requestId: "webmail-send", ip: null, userAgent: null };
 
 const MAIL = "urn:ietf:params:jmap:mail";
 const SUBMISSION = "urn:ietf:params:jmap:submission";
@@ -559,7 +591,6 @@ export class WebmailService {
       holdSeconds: async () => UNDO_SECONDS,
       rulesWritten: async () => undefined,
       accountSafeSenders: async () => [],
-      billingSendBlock: async () => null,
       ...deps,
     };
     this.#base = deps.stalwartUrl.replace(/\/+$/, "");
@@ -2351,8 +2382,6 @@ export class WebmailService {
     const ownAccount = s.accountId;
     const via = s.username.toLowerCase();
     const want = from.trim().toLowerCase();
-    // The stricter of the shared mailbox's tier and the sender's own (ADR-0026 §6): neither loosens the other.
-    const limits = delegatedSendingLimits(want, s.username);
     const chosen = await this.#d.holdSeconds(s.username).catch(() => UNDO_SECONDS);
     const hold = Number.isInteger(chosen) && chosen >= 1 && chosen <= 60 ? chosen : UNDO_SECONDS;
     const [identity, roles, ownIdentities] = await Promise.all([
@@ -2363,7 +2392,8 @@ export class WebmailService {
     if (!roles.drafts) throw new WebmailUnavailableError("no Drafts folder");
     const draft = await this.#fullDraft(sessionId, draftId, ownAccount);
     if (!draft) throw new WebmailRefusedError("Only a saved draft can be sent.");
-    const check = sendCheck(draft, identity, roles.drafts, limits);
+    // The draft's shape only: the tiers aren't read before the grant is confirmed (they'd tell about any address).
+    const check = sendCheck(draft, identity, roles.drafts, SHAPE_LIMITS);
     if (!check.ok) throw new WebmailRefusedError(check.message);
     const input = this.#rebuild(draft, identityId);
     // The Sender is the active mailbox's own address, named as the From picker names it (its own identity's name).
@@ -2372,10 +2402,22 @@ export class WebmailService {
     const entry = await this.#delegatedFor(sessionId, via, want, "send", req, beforeOpen);
     const d = entry.delegated;
     if (!d) throw new WebmailDelegationRefusedError("not granted");
-    // The grant is confirmed (a mailbox they can't use is a 404 above, never this): billing may stop the mailbox sent
-    // from, or the person's own (the Sender), before anything is made or audited as sent.
-    await this.#billingAllowsSend(want);
-    await this.#billingAllowsSend(via);
+    // The grant is confirmed (a mailbox they can't use is a 404 above, never this): billing or the trust tier may stop
+    // the mailbox sent from, or the person's own (the Sender), before anything is made or audited as sent. Limits are
+    // the stricter of the two tiers (ADR-0026 §6): neither loosens the other; held when either is held.
+    const theirTier = await this.#standing(want);
+    const myTier = await this.#standing(via);
+    if (theirTier === "restricted" || myTier === "restricted") throw new WebmailSendingRefusedError("paused");
+    const limits = delegatedLimits(theirTier, myTier);
+    if (check.rcptTo.length > limits.recipientsPerMessage) {
+      throw new WebmailRefusedError(`A message can go to at most ${String(limits.recipientsPerMessage)} people.`);
+    }
+    await this.#holdCheck(
+      check.rcptTo,
+      [...(externalHeld(theirTier) ? [want] : []), ...(externalHeld(myTier) ? [via] : [])],
+      via,
+      req,
+    );
     const who = { mailboxId: d.mailboxId, granteeUserId: d.granteeUserId, via: d.via };
     const refused = async (): Promise<never> => {
       await this.#dropDelegated(sessionId, new Set([entry.username]));
@@ -3071,16 +3113,65 @@ export class WebmailService {
     return ((r.get("g")?.list ?? []) as StoredDraft[])[0] ?? null;
   }
 
-  /** Refuses (403 `billing_restricted`) when billing stops this mailbox sending; a failed check refuses too. */
-  async #billingAllowsSend(address: string): Promise<void> {
-    let block: "restricted" | "held" | null;
+  /** The mailbox's standing now (uncached); a failed read refuses (503, fail closed). */
+  async #readStanding(address: string): Promise<SendingStanding | null> {
     try {
-      block = await this.#d.billingSendBlock(address);
+      return await this.#d.trust.standing(address);
     } catch (err) {
-      log.warn("webmail billing send check unavailable", { component: "webmail", err });
+      log.warn("webmail sending standing unavailable", { component: "webmail", err });
       throw new WebmailUnavailableError("sending is unavailable right now");
     }
-    if (block) throw new WebmailBillingRestrictedError(block);
+  }
+
+  /**
+   * The mailbox's effective tier for a send, read now: refuses first (403 `billing_restricted`) when billing stops it.
+   * An address the control plane doesn't hold reads `restricted` (never looser than what we know).
+   */
+  async #standing(address: string): Promise<TrustTier> {
+    const st = await this.#readStanding(address);
+    if (st?.billingBlock) throw new WebmailBillingRestrictedError(st.billingBlock);
+    return st?.tier ?? "restricted";
+  }
+
+  /**
+   * A mailbox's effective trust tier now (uncached; ADR-0034), for its settings: automatic replies and forwarding. Billing
+   * isn't asked (a billing block keeps both, ADR-0029 SA60-03). Unknown address → `restricted`; a failed read → 503.
+   */
+  async sendingTier(address: string): Promise<TrustTier> {
+    return (await this.#readStanding(address))?.tier ?? "restricted";
+  }
+
+  /** The addresses outside the ones we host (lowercased); a failed check → 503 (fail closed). */
+  async outsideOf(addresses: readonly string[]): Promise<string[]> {
+    if (addresses.length === 0) return [];
+    try {
+      return await this.#d.trust.outside(addresses);
+    } catch (err) {
+      log.warn("webmail hosted-domain check unavailable", { component: "webmail", err });
+      throw new WebmailUnavailableError("sending is unavailable right now");
+    }
+  }
+
+  /**
+   * The external hold (ADR-0034 §3): with any mailbox in `held` (tier `new`) and any recipient outside the addresses we
+   * host, records `trust.send_held` for each held mailbox (a count only, throttled by core) and refuses (403
+   * `sending_held`). A failed record is logged and the send is still refused.
+   */
+  async #holdCheck(rcpt: readonly string[], held: readonly string[], actorAddress: string, req: RequestMeta) {
+    if (held.length === 0) return;
+    const outside = await this.outsideOf(rcpt);
+    if (outside.length === 0) return;
+    for (const address of new Set(held)) {
+      try {
+        await this.#d.trust.held({ address, actorAddress, externalRecipients: outside.length }, req);
+      } catch (err) {
+        log.error("webmail held send not audited", {
+          component: "webmail",
+          error: err instanceof Error ? err.name : "unknown",
+        });
+      }
+    }
+    throw new WebmailSendingRefusedError("held");
   }
 
   /**
@@ -3097,6 +3188,8 @@ export class WebmailService {
      * `#sendDelegated`. `req` is for the audit; `beforeOpen` runs before a delegated entry is minted for it.
      */
     delegated?: { from: string; req: RequestMeta; beforeOpen?: () => Promise<void> },
+    /** The request, for the audit of a held send (`trust.send_held`). */
+    req: RequestMeta = delegated?.req ?? NO_REQUEST,
   ): Promise<SendResult> {
     if (delegated) {
       return this.#sendDelegated(
@@ -3113,8 +3206,10 @@ export class WebmailService {
     // refuses if the active mailbox changes meanwhile.
     const s = await this.#pin(sessionId, shown);
     const account = s.accountId;
-    await this.#billingAllowsSend(s.username);
-    const limits = sendingLimits(s.username);
+    // Read now, uncached (ADR-0034 §3): billing's block, then the tier — restricted sends nothing.
+    const tier = await this.#standing(s.username);
+    if (tier === "restricted") throw new WebmailSendingRefusedError("paused");
+    const limits = tierLimits(tier);
     const chosen = await this.#d.holdSeconds(s.username).catch(() => UNDO_SECONDS);
     // Within what the server's hold supports and the app offers; anything else falls back to the default.
     const hold = Number.isInteger(chosen) && chosen >= 1 && chosen <= 60 ? chosen : UNDO_SECONDS;
@@ -3145,6 +3240,8 @@ export class WebmailService {
     if (!draft) throw new WebmailRefusedError("Only a saved draft can be sent.");
     const check = sendCheck(draft, identity, drafts, limits);
     if (!check.ok) throw new WebmailRefusedError(check.message);
+    // New accounts send only to addresses we host: refused before anything is charged.
+    if (externalHeld(tier)) await this.#holdCheck(check.rcptTo, [s.username], s.username, req);
 
     // Published trust-tier limits, per hour and per day, per mailbox and per session, one unit per recipient.
     // A quota store failure refuses (fail closed, rule 27).
@@ -4005,9 +4102,11 @@ export class WebmailService {
     const mailboxDomain = s.username.slice(s.username.lastIndexOf("@") + 1).toLowerCase() || null;
     // The account's list only matters to the trusted-only rule (a person's own Blocked senders win over it).
     const accountSafe = full.junk.trustedOnly ? await this.#d.accountSafeSenders(s.username) : [];
-    // A rule's "forward" goes only to the confirmed forwarding address, and not while the mailbox's trust tier is
-    // `restricted` (as Forwarding; a billing send-block keeps both, ADR-0029 SA60-03, ADR-0032 Consequences).
-    const ruleForwardTo = sendingTier(s.username) === "restricted" ? null : confirmed;
+    // A rule's "forward" goes only to the confirmed forwarding address. What the mailbox's trust tier doesn't allow is
+    // paused in the script below, not left out, so lifting the tier brings it back (a billing send-block keeps both,
+    // ADR-0029 SA60-03, ADR-0032 Consequences).
+    const ruleForwardTo = confirmed;
+    const tier = await this.sendingTier(s.username);
     const base = buildScript(full, {
       identities,
       contacts: [],
@@ -4025,7 +4124,11 @@ export class WebmailService {
       // Each contact can appear twice (trusted senders and the automatic-reply test).
       contacts = fitContacts(addresses, Math.floor((MAX_SCRIPT_BYTES - Buffer.byteLength(base)) / 2));
     }
-    const script = buildScript(full, { identities, contacts, authservIds, mailboxDomain, accountSafe, ruleForwardTo });
+    const built = buildScript(full, { identities, contacts, authservIds, mailboxDomain, accountSafe, ruleForwardTo });
+    // Restricted: every redirect and automatic reply paused; new: redirects outside the addresses we host (ADR-0034).
+    const mode = pauseModeFor(tier);
+    const outside = new Set(mode === "external" ? await this.outsideOf(redirectTargets(built)) : []);
+    const script = applySendingPause(built, mode, (a) => outside.has(a));
     if (new TextEncoder().encode(script).length > MAX_SCRIPT_BYTES) {
       throw new WebmailRefusedError(MAILBOX_RULES_LIMIT_MESSAGE);
     }

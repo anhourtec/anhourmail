@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { MemoryUnitOfWork } from "@anhourmail/adapters/memory";
 import { DelegatedMailboxRefusedError, type Deps } from "@anhourmail/core";
-import { billingSendBlock, defaultBilling } from "@anhourmail/core/billing";
+import { defaultBilling } from "@anhourmail/core/billing";
+import { outsideAddresses, recordSendHeld, sendingStanding } from "@anhourmail/core/trust";
 import type { DelegationRight } from "@anhourmail/core/delegation";
 import type { Mailbox } from "@anhourmail/core/mailboxes";
 import {
@@ -25,8 +26,9 @@ import { createKeyRing } from "@anhourmail/server/keyring";
 import { setLogSinkForTests } from "@anhourmail/server/log";
 import type { QuotaWindow, SlidingQuotaStore } from "@anhourmail/server/rate-limit";
 import { PUBLIC_PLATFORM } from "@anhourmail/shared/platform";
+import type { TrustTier } from "@anhourmail/shared/sending";
 
-import { COMPOSED_KEYWORD, delegatedSendingLimits, stricterLimits } from "./compose";
+import { COMPOSED_KEYWORD, delegatedLimits, stricterLimits } from "./compose";
 import { webmailErrorResponse } from "./http";
 import { checkJmapRequest } from "./jmap-policy";
 import { PinnedMailboxMissingError, withPinnedMailbox } from "./pin";
@@ -297,6 +299,24 @@ function setup(opts: { key?: string | null; rotate?: boolean } = {}) {
   const s = uow.state;
   const deps: Deps = { uow, clock: { now: () => new Date(now) }, platform: PUBLIC_PLATFORM };
   s.accounts.push({ id: ACCOUNT_A, name: "A", plan: "plus" }, { id: ACCOUNT_B, name: "B", plan: "plus" });
+  /** Sets an account's trust tier (both start `standard`, as paying accounts are). */
+  const tier = (accountId: string, t: TrustTier) => {
+    s.trust = [
+      ...s.trust.filter((x) => x.accountId !== accountId),
+      {
+        accountId,
+        tier: t,
+        since: new Date(0),
+        source: "staff",
+        reason: null,
+        note: null,
+        setBy: null,
+        lastRestrictedAt: null,
+      },
+    ];
+  };
+  tier(ACCOUNT_A, "standard");
+  tier(ACCOUNT_B, "standard");
   for (const [uid, accountId] of [
     ["kim", ACCOUNT_A],
     ["lee", ACCOUNT_A],
@@ -414,7 +434,13 @@ function setup(opts: { key?: string | null; rotate?: boolean } = {}) {
       stalwartUrl: "http://stalwart:8080",
       access,
       quota,
-      billingSendBlock: (address) => billingSendBlock(deps, address),
+      trust: {
+        standing: (address) => sendingStanding(deps, address),
+        outside: (addresses) => outsideAddresses(deps, addresses),
+        held: async (input, r) => {
+          await recordSendHeld(deps, input, r);
+        },
+      },
       sieve: { read: async () => null, write: async () => true },
       confirmedForward: async () => null,
       fetch: server.fetchImpl,
@@ -445,6 +471,7 @@ function setup(opts: { key?: string | null; rotate?: boolean } = {}) {
     ).id;
   return {
     svc,
+    tier,
     another: make,
     store,
     s,
@@ -993,12 +1020,43 @@ describe("sending from a mailbox shared with the person (ADR-0026 §6, §8; slic
     const a = { messagesPerDay: 100, messagesPerHour: 10, recipientsPerMessage: 50 };
     const b = { messagesPerDay: 0, messagesPerHour: 20, recipientsPerMessage: 5 };
     expect(stricterLimits(a, b)).toEqual({ messagesPerDay: 0, messagesPerHour: 10, recipientsPerMessage: 5 });
-    expect(delegatedSendingLimits("desk@family.test", "kim@family.test")).toEqual(
-      stricterLimits(
-        delegatedSendingLimits("desk@family.test", "desk@family.test"),
-        delegatedSendingLimits("kim@family.test", "kim@family.test"),
-      ),
+    expect(delegatedLimits("standard", "new")).toEqual(
+      stricterLimits(delegatedLimits("standard", "standard"), delegatedLimits("new", "new")),
     );
+  });
+
+  it("uses the real tiers: held when either mailbox is new and a recipient is outside (403), recorded per held mailbox", async () => {
+    const t = setup();
+    t.grant(DESK, "send_as");
+    const { sessionId } = await t.svc.signIn("kim@family.test", "right");
+    const draftId = await t.draft(sessionId);
+    const send = () => t.svc.send(sessionId, draftId, KIM_ID, "acc-kim@family.test", { from: "desk@family.test", req });
+    // The shared mailbox's own restriction (staff): paused, whoever sends from it.
+    t.s.mailboxRestrictions.push({ mailboxId: DESK, at: new Date(0), reason: "spam", note: null, byUserId: null });
+    const paused = await send().catch((e: unknown) => e);
+    expect(paused).toMatchObject({ name: "WebmailSendingRefusedError", reason: "paused" });
+    expect(((await webmailErrorResponse(paused)?.json()) as { error: { code: string } }).error.code).toBe(
+      "sending_paused",
+    );
+    t.s.mailboxRestrictions = [];
+    // A new account: the recipients (example.org) are outside, so the send is held and recorded once.
+    t.tier(ACCOUNT_A, "new");
+    const held = await send().catch((e: unknown) => e);
+    expect(held).toMatchObject({ name: "WebmailSendingRefusedError", reason: "held" });
+    const res = webmailErrorResponse(held);
+    expect(res?.status).toBe(403);
+    expect(((await res?.json()) as { error: { code: string } }).error.code).toBe("sending_held");
+    const entries = t.s.audit.filter((e) => e.action === "trust.send_held");
+    // Both mailboxes are the same account's and new: one entry each, the person's own mailbox the actor.
+    expect(entries.map((e) => e.target.label).sort()).toEqual(["desk@family.test", "kim@family.test"]);
+    expect(entries.every((e) => e.actor.email === "kim@family.test" && e.meta.externalRecipients === 2)).toBe(true);
+    expect(JSON.stringify(entries)).not.toContain("example.org");
+    // At most once per mailbox per hour.
+    await expect(send()).rejects.toMatchObject({ reason: "held" });
+    expect(t.s.audit.filter((e) => e.action === "trust.send_held")).toHaveLength(2);
+    expect(t.server.box("desk@family.test").submissions).toEqual([]);
+    expect(t.sendAudits()).toEqual([]);
+    expect(t.charged).toEqual([]);
   });
 
   it("removes both copies when the submission request fails with a method error, recorded as failed", async () => {

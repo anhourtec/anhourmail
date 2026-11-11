@@ -24,6 +24,7 @@ import {
 } from "./service";
 import { isSessionId, memoryKv, type WebmailSession, WebmailSessionStore } from "./session-store";
 import { buildMessageView, isJmapId, type JmapEmail, safeFilename } from "./view";
+import { fixedTrust } from "./__tests__/trust";
 
 const ring = () => createKeyRing([{ id: "k1", key: randomBytes(32) }]);
 const MAIL = "urn:ietf:params:jmap:mail";
@@ -430,6 +431,7 @@ function setup(
     stalwartUrl: "http://stalwart:8080/",
     access: { state: async (a) => opts.state?.(a) ?? (allowed(a) ? "ok" : "suspended") },
     quota: memorySlidingQuota(),
+    trust: fixedTrust(),
     sieve: { read: async () => null, write: async () => true },
     confirmedForward: async () => null,
     fetch: fetchImpl,

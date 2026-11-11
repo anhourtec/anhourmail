@@ -20,6 +20,7 @@ import {
   WebmailNotFoundError,
   WebmailQuotaError,
   WebmailSendUnconfirmedError,
+  WebmailSendingRefusedError,
   WebmailRefusedError,
   WebmailSenderBlockedError,
   WebmailSignedOutError,
@@ -121,8 +122,12 @@ export function webmailErrorResponse(err: unknown): Response | null {
   if (err instanceof WebmailBillingRestrictedError) {
     return body("billing_restricted", BILLING_SEND_NOTICES[err.reason], 403);
   }
+  // The mailbox's trust tier (ADR-0034 §5): new accounts held to addresses we host; restricted ones paused.
+  if (err instanceof WebmailSendingRefusedError) {
+    return body(err.reason === "held" ? "sending_held" : "sending_paused", err.message, 403);
+  }
   if (err instanceof WebmailNotFoundError) return body("not_found", "Nothing to show for this message.", 404);
-  if (err instanceof WebmailQuotaError) return body("rate_limited", err.message, 429);
+  if (err instanceof WebmailQuotaError) return body("sending_limit", err.message, 429);
   if (err instanceof WebmailSendUnconfirmedError) {
     return body(
       "send_unconfirmed",

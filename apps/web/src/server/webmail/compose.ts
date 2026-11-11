@@ -13,23 +13,18 @@ import { MAX_OUTGOING_HTML, outgoingText, sanitizeOutgoingHtml } from "./outgoin
  */
 
 /**
- * The trust tier whose published limits apply to a mailbox's webmail sending (CLAUDE.md rule 27). Tiers aren't
- * stored per account yet, so every mailbox gets `new` — the strictest sending tier — until they are; wire the stored
- * tier in here (one place). `restricted` refuses sending entirely.
+ * The published limits of a mailbox's effective trust tier (CLAUDE.md rule 27, ADR-0034 §4). The tier is read from the
+ * control plane for every send (`sendingStanding`, uncached); `restricted` has zero limits and refuses sending.
  */
-export function sendingTier(_mailbox: string): TrustTier {
-  return "new";
-}
-
-export const sendingLimits = (mailbox: string): SendLimits => TRUST_TIERS[sendingTier(mailbox)].limits;
+export const tierLimits = (tier: TrustTier): SendLimits => TRUST_TIERS[tier].limits;
 
 /**
  * The limits of a send from a mailbox shared with the person (ADR-0026 §6): the stricter of the shared mailbox's tier
  * and the sender's own mailbox's tier, field by field — a `restricted` sender can't send through a shared mailbox, and
  * a shared mailbox's tier is never loosened by who sends from it.
  */
-export function delegatedSendingLimits(mailbox: string, sender: string): SendLimits {
-  return stricterLimits(sendingLimits(mailbox), sendingLimits(sender));
+export function delegatedLimits(mailbox: TrustTier, sender: TrustTier): SendLimits {
+  return stricterLimits(tierLimits(mailbox), tierLimits(sender));
 }
 
 /** Field by field, the lower of two sets of limits. */
@@ -43,6 +38,16 @@ export function stricterLimits(a: SendLimits, b: SendLimits): SendLimits {
 
 /** The most recipients any tier allows on one message (input validation; the tier check is stricter). */
 export const MAX_RECIPIENTS = Math.max(...Object.values(TRUST_TIERS).map((t) => t.limits.recipientsPerMessage));
+
+/**
+ * Limits that only shape-check a draft (`sendCheck` before the tier is known, e.g. before a delegated send's grant is
+ * confirmed): the input ceiling on recipients and nothing paused. Never charged; the tier's limits are checked after.
+ */
+export const SHAPE_LIMITS: SendLimits = {
+  messagesPerDay: Number.MAX_SAFE_INTEGER,
+  messagesPerHour: Number.MAX_SAFE_INTEGER,
+  recipientsPerMessage: MAX_RECIPIENTS,
+};
 
 /**
  * The sliding windows one send is charged to: per hour and per day (rolling), per mailbox and per webmail session.

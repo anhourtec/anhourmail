@@ -18,6 +18,7 @@ import {
   WebmailUnavailableError,
 } from "./service";
 import { memoryKv, type MailboxTokens, type WebmailSession, WebmailSessionStore } from "./session-store";
+import { fixedTrust } from "./__tests__/trust";
 
 const entry = (username: string, accountId: string): MailboxTokens => ({
   username,
@@ -38,6 +39,7 @@ function setup() {
     stalwartUrl: "http://stalwart:8080",
     access: { state: async () => "ok" as const },
     quota: memorySlidingQuota(),
+    trust: fixedTrust(),
     sieve: { read: async () => null, write: async () => true },
     confirmedForward: async () => null,
   });
