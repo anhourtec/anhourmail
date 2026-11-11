@@ -141,6 +141,8 @@ export const AUDIT_ACTIONS = [
   "trust.tier_changed",
   "trust.limits_changed",
   "trust.restricted",
+  // the webmail held a new-tier mailbox's send to an outside address (ADR-0034 §3); the promotion job counts them
+  "trust.send_held",
   "trust.suspended",
   "trust.unsuspended",
   "abuse.report_received",

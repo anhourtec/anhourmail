@@ -167,6 +167,7 @@ const EXPLICIT: Partial<Record<AuditAction, string>> = {
   "trust.tier_changed": "Trust tier changed",
   "trust.limits_changed": "Sending limits changed",
   "trust.restricted": "Account restricted",
+  "trust.send_held": "Send to an outside address held (new account)",
   "trust.suspended": "Suspended by Anhourtec",
   "trust.unsuspended": "Suspension lifted by Anhourtec",
   "abuse.report_received": "Abuse report received",
