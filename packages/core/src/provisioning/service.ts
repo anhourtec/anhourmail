@@ -580,6 +580,11 @@ export type DriftReport = {
    * the credential can't read it, or the adapter doesn't check it.
    */
   relayHoldMismatch: { missing: string[]; extra: string[]; policyInPlace: boolean } | null;
+  /**
+   * Whether the relay hold's list was reloaded before it was compared (`reloadRelayHold`): false when the reload
+   * failed (drift: a key stored but not loaded doesn't hold), null when not attempted (no hold credential).
+   */
+  relayHoldReloaded: boolean | null;
   clean: boolean;
 };
 
@@ -596,6 +601,9 @@ export async function reconcile(
 ): Promise<DriftReport> {
   const ignore = new Set(opts.ignoreDomains ?? []);
   const domainOf = (address: string) => address.split("@")[1] ?? "";
+  // First, load the relay hold's list as stored: a key a failed reload left unloaded (or a lookup another process's
+  // reload caught) is then in force, and what `relayHoldState` reads below is what holds (ADR-0034 security review F3).
+  const relayHoldReloaded = mail.reloadRelayHold ? await mail.reloadRelayHold() : null;
   const [desired, domains, mailboxes] = await Promise.all([
     deps.uow.run((r) => r.directory.desired()),
     mail.listDomains(),
@@ -646,6 +654,7 @@ export async function reconcile(
     accessMismatch: [],
     sendingPolicyMismatch: null,
     relayHoldMismatch: null,
+    relayHoldReloaded,
     clean: true,
   };
   // Settled states only: a provisioning or failed mailbox has a job (or an error) of its own.
@@ -745,7 +754,8 @@ export async function reconcile(
         ? report.relayHoldMismatch.missing.length +
           report.relayHoldMismatch.extra.length +
           (report.relayHoldMismatch.policyInPlace ? 0 : 1)
-        : 0) ===
+        : 0) +
+      (report.relayHoldReloaded === false ? 1 : 0) ===
     0;
 
   if (!report.clean) {
@@ -779,6 +789,7 @@ export async function reconcile(
             relayHoldMissing: report.relayHoldMismatch?.missing.length ?? 0,
             relayHoldExtra: report.relayHoldMismatch?.extra.length ?? 0,
             relayHoldPolicyMissing: report.relayHoldMismatch?.policyInPlace === false ? 1 : 0,
+            relayHoldReloadFailed: report.relayHoldReloaded === false ? 1 : 0,
             requeued: requeue.length,
           },
         };

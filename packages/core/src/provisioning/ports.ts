@@ -192,6 +192,12 @@ export type MailServer = {
    * is exactly the hold's. Null when this credential can't read it. Absent on fakes that don't model it.
    */
   relayHoldState?(): Promise<{ listed: string[]; policyInPlace: boolean } | null>;
+  /**
+   * Loads the relay hold's list as stored (the reconciler, before it compares): a key stored but never loaded holds
+   * nothing and is invisible to `relayHoldState`, which reads what is stored. False when the reload failed or was
+   * refused; null without the hold credential. Absent on fakes that don't model it.
+   */
+  reloadRelayHold?(): Promise<boolean | null>;
 };
 
 /** A mailbox's access as the mail server holds it (`accessOf` in `@anhourmail/stalwart-client`). */

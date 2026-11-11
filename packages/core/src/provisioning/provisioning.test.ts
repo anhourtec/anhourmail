@@ -837,6 +837,39 @@ describe("sending access and the sending ceiling on the mail server (ADR-0034 §
     expect((await reconcile(d, mail)).relayHoldMismatch).toBeNull();
   });
 
+  it("reloads the relay hold's list before anything else, and counts a failed reload as drift", async () => {
+    const { d } = setup();
+    const { mail } = accessServer();
+    await mail.ensureDomain("example.test");
+    const order: string[] = [];
+    let reloaded: boolean | null = true;
+    mail.reloadRelayHold = async () => {
+      order.push("reload");
+      return reloaded;
+    };
+    const list = mail.listMailboxes.bind(mail);
+    mail.listMailboxes = async () => {
+      order.push("list");
+      return list();
+    };
+    mail.relayHoldState = async () => {
+      order.push("hold");
+      return { listed: [], policyInPlace: true };
+    };
+    const first = await reconcile(d, mail);
+    expect(order).toEqual(["reload", "list", "hold"]);
+    expect(first.relayHoldReloaded).toBe(true);
+    expect(first.clean).toBe(true);
+    reloaded = false;
+    const failed = await reconcile(d, mail);
+    expect(failed.relayHoldReloaded).toBe(false);
+    expect(failed.clean).toBe(false);
+    expect(d.uow.state.audit.at(-1)?.meta).toMatchObject({ relayHoldReloadFailed: 1 });
+    // No hold credential: not attempted, not counted.
+    reloaded = null;
+    expect(await reconcile(d, mail)).toMatchObject({ relayHoldReloaded: null, clean: true });
+  });
+
   it("reports the ceiling's drift by name (report only, nothing re-queued); unreadable is not counted", async () => {
     const { d } = setup();
     let answer: string[] | null = ["throttle-hour-missing", "max-recipients-changed"];

@@ -40,6 +40,7 @@ l.at(report.clean ? "info" : "warn", "reconcile finished", {
         missing: report.relayHoldMismatch.missing.length,
         extra: report.relayHoldMismatch.extra.length,
         policyInPlace: report.relayHoldMismatch.policyInPlace,
+        reloaded: report.relayHoldReloaded,
       }
     : "not checked",
 });
