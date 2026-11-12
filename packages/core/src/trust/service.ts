@@ -11,7 +11,7 @@
  *   Unknown accounts and mailboxes of another account are 404. `automatic: true` (only `new` or `standard`) leaves the
  *   job and billing free to move the account again; otherwise the staff source freezes it.
  * - **The system** promotes `new` → `standard`: the hourly job for established accounts in good standing (source
- *   `automatic`), and billing when the account enters `active` or pays (source `billing`). Neither touches a staff-set
+ *   `automatic`), and billing when an `active` account pays real money for its plan (source `billing`). Neither touches a staff-set
  *   tier, a `restricted` account or an account ever restricted. Billing takes its own promotion back on a refund, a
  *   dispute, or a plan that ends inside the refund window (`revokeBillingPromotion`).
  *
@@ -415,16 +415,18 @@ const systemMayPromote = (t: AccountTrust): boolean =>
   t.tier === "new" && t.source !== "staff" && t.lastRestrictedAt === null;
 
 /**
- * Billing's promotion (ADR-0034 §2): inside the caller's unit of work, under the account lock it holds, a `new`
- * account that pays (billing state `active`) becomes `standard` with source `billing`, and its mailboxes are queued so
- * the mail server follows. Only an `active` (not suspended) account; nothing here lowers a tier. Returns the audit
- * entry for the caller to record with its own (`recordSystemChanges`, or a person's own entry for a staff grant or a
- * code redemption); none when nothing changed.
+ * Billing's promotion (ADR-0034 §2): inside the billing sync's unit of work, under the account lock it holds, a `new`
+ * account whose billing state is `active` and that paid real money for its plan (`tierAfterBilling` in
+ * `billing/sync.ts`: a charged, non-zero first or renewal invoice, `realChargePaid`) becomes `standard` with source
+ * `billing`, and its mailboxes are queued so the mail server follows. The sync is the only caller: a comp, a staff
+ * grant, a 100 %-off code, a credit-paid invoice, an add-on or a trial never promotes (staff give `standard` with
+ * `platform.trust.manage` instead). Only an `active` (not suspended) account; nothing here lowers a tier. Returns the
+ * `trust.tier_changed` entry for the sync to record as the system (`recordSystemChanges`); none when nothing changed.
  */
 export async function promoteForPayment(deps: Deps, r: Repositories, accountId: string): Promise<SystemChange[]> {
   const account = await r.accounts.get(accountId);
   const current = account ? await r.trust.get(accountId) : null;
-  // A suspended account isn't promoted by paying (nor by a comp or a grant) while suspended.
+  // A suspended account isn't promoted by paying while suspended.
   if (account?.status !== "active" || !current || !systemMayPromote(current)) return [];
   return promote(deps, r, current, "billing");
 }
