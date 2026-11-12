@@ -22,8 +22,8 @@ const Restrict = z.object({
  * Staff: restrict or lift one mailbox's sending (`platform.trust.manage`, ADR-0034 §6): `{ restricted, reason, note }`.
  * The same step-up, act-as and reason rules as the account's tier; a mailbox that isn't this account's is 404; already
  * in that state 409. Afterwards the mailbox's managed script follows (redirects and replies paused or back), and a
- * restriction emails the account's Owners and administrators (at most one a day per account). The body is never
- * logged. `staffTrust` tier (fail closed).
+ * restriction emails the account's Owners and administrators (at most one mailbox notice a day per account; sent
+ * after answering, retried, a give-up audited). The body is never logged. `staffTrust` tier (fail closed).
  */
 export const PUT = route(
   async ({ req, meta }, params) => {
@@ -42,9 +42,12 @@ export const PUT = route(
     );
     scheduleSendingPause(accountId);
     // Restricted now: the account's Owners and administrators are told (at most once a day; the service decides who).
-    await sendRestrictionNotices(
+    // Sent after answering, with retries; it never throws and records a give-up itself.
+    void sendRestrictionNotices(
+      out.notice,
       out.notify.map((n) => n.email),
-      { restricted: "mailbox", address: out.address, reason: out.reason },
+      { address: out.address, reason: out.reason },
+      meta,
     );
     return ok({ address: out.address, restricted: out.restricted, reason: out.reason });
   },

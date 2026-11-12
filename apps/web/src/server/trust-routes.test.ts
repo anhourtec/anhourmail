@@ -20,6 +20,7 @@ import { GET as staffTrustRoute, PUT as setTierRoute } from "@/app/api/platform/
 
 import { setContainerForTests } from "./container";
 import { resetEnvForTests } from "./env";
+import { setRestrictionNoticeRetryForTests } from "./mail/restriction-email";
 
 const ACCOUNT = "11111111-1111-4111-8111-111111111111";
 const OTHER = "22222222-2222-4222-8222-222222222222";
@@ -252,45 +253,117 @@ describe("the restriction notice (ADR-0034 build slice 19)", () => {
       { userId: "member-1", accountId: ACCOUNT, role: "member" },
     );
     uow.state.userEmails["member-1"] = "member-1@example.test";
+    setRestrictionNoticeRetryForTests([1, 1]);
   });
+  afterEach(() => {
+    setRestrictionNoticeRetryForTests(null);
+  });
+
+  /** The notice goes out after the answer: give the background send a moment. */
+  const settle = () => new Promise((r) => setTimeout(r, 30));
+  const failures = () => uow.state.audit.filter((e) => e.action === "trust.restriction_notice_failed");
 
   it("restricting the account emails its Owner the reason and the appeal address, never the note; once a day", async () => {
     expect((await setTier({ tier: "restricted", reason: "spam", note: NOTE })).status).toBe(200);
-    expect(mailer.sent.map((m) => m.to)).toEqual(["owner-1@example.test"]);
+    await vi.waitFor(() => {
+      expect(mailer.sent.map((m) => m.to)).toEqual(["owner-1@example.test"]);
+    });
     const mail = mailer.sent[0];
     expect(mail?.subject).toBe("Sending from your AnhourMail account is paused");
     expect(mail?.text).toContain('Reason: "Sending spam"');
     expect(mail?.text).toContain("support@");
     expect(`${mail?.text ?? ""}${mail?.html ?? ""}`).not.toContain("abuse ticket");
     expect(uow.state.audit.filter((e) => e.action === "trust.restriction_notice_sent")).toHaveLength(1);
-    // Lifted and restricted again the same day, or a mailbox restricted: nobody is emailed again.
+    // Lifted and restricted again the same day: nobody is emailed again.
     expect((await setTier({ tier: "standard", reason: "other", note: NOTE })).status).toBe(200);
     expect((await setTier({ tier: "restricted", reason: "spam", note: NOTE })).status).toBe(200);
-    expect((await restrict({ restricted: true, reason: "abuse", note: NOTE })).status).toBe(200);
+    await settle();
     expect(mailer.sent).toHaveLength(1);
+    expect(failures()).toEqual([]);
+  });
+
+  it("a mailbox restriction after the account's is still emailed (each kind has its own daily cap)", async () => {
+    expect((await setTier({ tier: "restricted", reason: "spam", note: NOTE })).status).toBe(200);
+    expect((await restrict({ restricted: true, reason: "abuse", note: NOTE })).status).toBe(200);
+    await vi.waitFor(() => {
+      expect(mailer.sent.map((m) => m.subject)).toEqual([
+        "Sending from your AnhourMail account is paused",
+        "Sending from one of your mailboxes is paused",
+      ]);
+    });
   });
 
   it("restricting one mailbox emails the Owner which mailbox and why; lifting it emails nobody", async () => {
     expect((await restrict({ restricted: true, reason: "abuse", note: NOTE })).status).toBe(200);
-    expect(mailer.sent.map((m) => [m.to, m.subject])).toEqual([
-      ["owner-1@example.test", "Sending from one of your mailboxes is paused"],
-    ]);
+    await vi.waitFor(() => {
+      expect(mailer.sent.map((m) => [m.to, m.subject])).toEqual([
+        ["owner-1@example.test", "Sending from one of your mailboxes is paused"],
+      ]);
+    });
     expect(mailer.sent[0]?.text).toContain('Mailbox: "me@acme.test"');
     expect((await restrict({ restricted: false, reason: "other", note: NOTE })).status).toBe(200);
+    await settle();
     expect(mailer.sent).toHaveLength(1);
   });
 
-  it("a refused change emails nobody, and a mail failure still answers 200 (logged by error name only)", async () => {
+  it("a refused change emails nobody", async () => {
     actor = support;
     expect((await setTier({ tier: "restricted", reason: "spam", note: NOTE })).status).toBe(403);
+    await settle();
     expect(mailer.sent).toEqual([]);
-    actor = trustSafety;
+  });
+
+  it("a mail server that refuses for a moment: retried, delivered, nothing recorded as failed", async () => {
     const logged: string[] = [];
     setLogSinkForTests((line) => logged.push(line));
-    mailer.send = () => Promise.reject(new TypeError("smtp down"));
+    const send = mailer.send.bind(mailer);
+    let refusals = 1;
+    mailer.send = (m) => (refusals-- > 0 ? Promise.reject(new TypeError("smtp down")) : send(m));
     expect((await setTier({ tier: "restricted", reason: "spam", note: NOTE })).status).toBe(200);
+    await vi.waitFor(() => {
+      expect(mailer.sent.map((m) => m.to)).toEqual(["owner-1@example.test"]);
+    });
+    await settle();
+    expect(failures()).toEqual([]);
+    expect(logged.join("\n")).toContain("restriction notice retrying");
+    expect(logged.join("\n")).not.toContain("owner-1@");
+  });
+
+  it("a mailer outage: 200 at once, three tries, the give-up audited, and the next restriction that day emails again", async () => {
+    const logged: string[] = [];
+    setLogSinkForTests((line) => logged.push(line));
+    const send = mailer.send.bind(mailer);
+    let tries = 0;
+    mailer.send = () => {
+      tries += 1;
+      return Promise.reject(new TypeError("smtp down"));
+    };
+    expect((await setTier({ tier: "restricted", reason: "spam", note: NOTE })).status).toBe(200);
+    await vi.waitFor(() => {
+      expect(failures()).toHaveLength(1);
+    });
+    expect(tries).toBe(3);
+    const sent = uow.state.audit.find((e) => e.action === "trust.restriction_notice_sent");
+    expect(failures()[0]).toMatchObject({
+      scope: `account:${ACCOUNT}`,
+      actor: { type: "system" },
+      target: { type: "account", id: ACCOUNT },
+      requestId: sent?.requestId,
+      meta: { noticeId: sent?.meta.noticeId, restricted: "account", notified: 1, delivered: 0 },
+    });
+    expect(JSON.stringify(failures())).not.toContain("owner-1@");
     expect(logged.join("\n")).toContain("restriction notice failed");
     expect(logged.join("\n")).not.toContain("owner-1@");
+
+    // The mailer is back; lifted and restricted again the same day: the undelivered notice didn't count.
+    mailer.send = send;
+    expect((await setTier({ tier: "standard", reason: "other", note: NOTE })).status).toBe(200);
+    expect((await setTier({ tier: "restricted", reason: "spam", note: NOTE })).status).toBe(200);
+    await vi.waitFor(() => {
+      expect(mailer.sent.map((m) => m.to)).toEqual(["owner-1@example.test"]);
+    });
+    await settle();
+    expect(failures()).toHaveLength(1);
   });
 });
 

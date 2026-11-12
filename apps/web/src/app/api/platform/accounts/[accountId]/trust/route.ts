@@ -34,7 +34,8 @@ export const GET = route(async ({ req }, params) => {
  * never while acting as someone (403); a reason category to restrict and to move off `restricted`; a note always;
  * `trusted` is 422 `tier_unavailable`; unknown accounts 404; the same tier and source 409. Afterwards each mailbox's
  * managed script follows the new tier (redirects and replies paused or back), and a restriction emails the account's
- * Owners and administrators the reason category and the appeal address (never the note; at most one a day). The body
+ * Owners and administrators the reason category and the appeal address (never the note; at most one account notice a
+ * day; sent after answering, retried, a give-up audited). The body
  * is never logged: the note is staff-only. `staffTrust` tier (fail closed).
  */
 export const PUT = route(
@@ -52,11 +53,14 @@ export const PUT = route(
       meta,
     );
     scheduleSendingPause(accountId);
-    // Restricted now: its Owners and administrators are told (at most once a day; the service decides who).
+    // Restricted now: its Owners and administrators are told (at most once a day; the service decides who). Sent
+    // after answering, with retries; it never throws and records a give-up itself.
     if (out.reason !== null) {
-      await sendRestrictionNotices(
+      void sendRestrictionNotices(
+        out.notice,
         out.notify.map((n) => n.email),
-        { restricted: "account", reason: out.reason },
+        { reason: out.reason },
+        meta,
       );
     }
     return ok({
