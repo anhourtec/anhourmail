@@ -403,7 +403,9 @@ class PgProvisioningRepository implements ProvisioningRepository {
             select 1 from provisioning_job r
             where r.subject_id = j.subject_id and r.id <> j.id and r.status = 'running' and r.locked_at >= ${stale}
           )
-        order by j.run_after
+        -- Oldest due first; jobs due at the same moment in the order they were enqueued (created_at, each enqueue's
+        -- transaction time: a domain's job before its mailbox's), never in whatever order the rows sit in the table.
+        order by j.run_after, j.created_at, j.id
         limit 1
         for update skip locked
       )

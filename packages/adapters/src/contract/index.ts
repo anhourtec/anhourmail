@@ -672,6 +672,32 @@ export function describeAdapterContract(name: string, factory: AdapterFactory): 
       }
     });
 
+    it("provisioning: jobs due at the same moment are claimed in the order they were enqueued", async () => {
+      const { uow, cleanup } = await factory();
+      try {
+        // A domain and then its mailbox, both due at once (as a caller with one clock reading enqueues them): the
+        // domain must reach the mail server first, so the mailbox never fails on a domain that isn't there yet.
+        const runAfter = new Date(Date.UTC(1990, 0, 1));
+        const now = new Date(Date.UTC(1990, 0, 2));
+        const ids: string[] = [];
+        for (let i = 0; i < 6; i++) {
+          const kind = i % 2 === 0 ? "domain.ensure" : "mailbox.ensure";
+          ids.push((await uow.run((r) => r.provisioning.enqueue({ kind, subjectId: randomUUID(), runAfter }))).id);
+        }
+        const ours = new Set(ids);
+        const claimed: string[] = [];
+        for (let i = 0; i < 50 && claimed.length < ids.length; i++) {
+          const j = await uow.run((r) => r.provisioning.claimNext(now));
+          if (!j) break;
+          if (ours.has(j.id)) claimed.push(j.id);
+          await uow.run((r) => r.provisioning.complete(j, new Date()));
+        }
+        expect(claimed).toEqual(ids);
+      } finally {
+        await cleanup();
+      }
+    });
+
     it("provisioning: never claims a job whose subject already has a job running", async () => {
       const { uow, cleanup } = await factory();
       try {
