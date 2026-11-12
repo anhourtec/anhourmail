@@ -113,11 +113,15 @@ afterAll(async () => {
   await pool.end();
 });
 
-/** Runs queued jobs until none is left for this subject (other suites share the queue). */
+/**
+ * Runs queued jobs until none is left for this subject (other suites share the queue). The test's clock stands still,
+ * so a job of this subject that failed and waits for its retry would never come due: when nothing else can run, the
+ * clock moves on to that retry, as a worker's would while it waits out the backoff. The retry still has to succeed.
+ */
 async function drain(subjectId: string): Promise<void> {
   for (let i = 0; i < 40; i++) {
     const open = await db
-      .select({ id: schema.provisioningJob.id })
+      .select({ status: schema.provisioningJob.status, runAfter: schema.provisioningJob.runAfter })
       .from(schema.provisioningJob)
       .where(
         and(
@@ -126,9 +130,25 @@ async function drain(subjectId: string): Promise<void> {
         ),
       );
     if (open.length === 0) return;
-    if (!(await runNextJob(base, mail))) await new Promise((r) => setTimeout(r, 100));
+    if (await runNextJob(base, mail)) continue;
+    const retryAt = Math.min(...open.filter((j) => j.status === "queued").map((j) => j.runAfter.getTime()));
+    if (Number.isFinite(retryAt) && retryAt > now.t) now.t = retryAt;
+    else await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error(`jobs for ${subjectId} did not finish`);
+  const left = await db
+    .select({
+      kind: schema.provisioningJob.kind,
+      attempts: schema.provisioningJob.attempts,
+      lastError: schema.provisioningJob.lastError,
+    })
+    .from(schema.provisioningJob)
+    .where(
+      and(
+        eq(schema.provisioningJob.subjectId, subjectId),
+        sql`${schema.provisioningJob.status} in ('queued', 'running')`,
+      ),
+    );
+  throw new Error(`jobs for ${subjectId} did not finish: ${JSON.stringify(left)}`);
 }
 
 const sessionStatus = async () =>
