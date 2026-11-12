@@ -593,12 +593,25 @@ export class StalwartManagement {
     await this.transport.set(object, { destroy: [id] });
   }
 
-  /** Destroys a domain after its DKIM keys (Stalwart refuses otherwise). Accounts must already be gone. */
+  /**
+   * Destroys a domain after its DKIM keys (Stalwart refuses otherwise). Accounts must already be gone. Stalwart can
+   * add a key between the list and the destroy, so a refusal that names only DKIM keys as still linked destroys
+   * those and tries again, a bounded number of times.
+   */
   async destroyDomain(id: string): Promise<void> {
     const keys = await this.transport.getAll<{ id: string; domainId: string }>("x:DkimSignature", ["domainId"]);
     const mine = keys.filter((k) => k.domainId === id).map((k) => k.id);
     if (mine.length > 0) await this.transport.set("x:DkimSignature", { destroy: mine });
-    await this.destroy("x:Domain", id);
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await this.destroy("x:Domain", id);
+        return;
+      } catch (err) {
+        const linked = linkedDkimKeys(err, id);
+        if (linked === null || attempt >= DESTROY_DOMAIN_ATTEMPTS) throw err;
+        await this.transport.set("x:DkimSignature", { destroy: linked });
+      }
+    }
   }
 
   /** Partial update of a singleton object (e.g. `x:SpamPyzor`, `x:SystemSettings`). */
@@ -1050,3 +1063,25 @@ export class StalwartManagement {
 }
 
 const SIEVE_USING = ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:sieve"] as const;
+
+/** How many times `destroyDomain` tries the domain itself when only DKIM keys are still linked to it. */
+const DESTROY_DOMAIN_ATTEMPTS = 3;
+
+/**
+ * The DKIM key ids a refused `x:Domain/set` destroy names as still linked to domain `id`, or null when the refusal is
+ * anything else (another object type linked, another error), so only that one race is retried.
+ */
+export function linkedDkimKeys(err: unknown, id: string): string[] | null {
+  if (!(err instanceof StalwartError) || err.kind !== "set") return null;
+  const detail = err.detail as Record<string, unknown> | undefined;
+  const entry = detail?.[id] as { type?: unknown; linkedObjects?: unknown } | undefined;
+  if (entry?.type !== "objectIsLinked" || !Array.isArray(entry.linkedObjects) || entry.linkedObjects.length === 0) {
+    return null;
+  }
+  const ids: string[] = [];
+  for (const o of entry.linkedObjects as { object?: unknown; id?: unknown }[]) {
+    if (o.object !== "DkimSignature" || typeof o.id !== "string") return null;
+    ids.push(o.id);
+  }
+  return ids;
+}
