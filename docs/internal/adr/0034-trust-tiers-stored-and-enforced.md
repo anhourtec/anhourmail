@@ -697,7 +697,7 @@ inline, and the worker's jobs send their own), so the send stays in the web app:
 - `sendRestrictionNotices` runs after the route answers and retries each address with bounded backoff
   (`RESTRICTION_NOTICE_RETRY_MS`: three tries over about 35 s). It never throws; it logs counts and error names only.
 - When it gives up on any address it records `trust.restriction_notice_failed` (`recordRestrictionNoticeFailed`, the
-  system actor `restriction-notice`, the restriction's request id; meta `noticeId`, `restricted`, `notified`,
+  system actor `restriction-notice`, the restriction's request id but no IP or user agent; meta `noticeId`, `restricted`, `notified`,
   `delivered`). Each notice has an id (`noticeId` in both entries). A notice nobody received (`delivered` 0) no longer
   counts toward the cap, so the next restriction that day emails again; one that reached somebody still counts.
 - The action keeps its name `trust.restriction_notice_sent` (the queue path, which would have renamed it

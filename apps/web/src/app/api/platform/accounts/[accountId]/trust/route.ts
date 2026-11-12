@@ -35,8 +35,8 @@ export const GET = route(async ({ req }, params) => {
  * `trusted` is 422 `tier_unavailable`; unknown accounts 404; the same tier and source 409. Afterwards each mailbox's
  * managed script follows the new tier (redirects and replies paused or back), and a restriction emails the account's
  * Owners and administrators the reason category and the appeal address (never the note; at most one account notice a
- * day; sent after answering, retried, a give-up audited). The body
- * is never logged: the note is staff-only. `staffTrust` tier (fail closed).
+ * day; sent after answering, retried, a give-up audited). The body is never logged: the note is staff-only.
+ * `staffTrust` tier (fail closed).
  */
 export const PUT = route(
   async ({ req, meta }, params) => {

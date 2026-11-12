@@ -114,7 +114,7 @@ export async function sendRestrictionNotices(
   const failed = to.length - delivered;
   if (failed > 0) {
     try {
-      await recordRestrictionNoticeFailed(container().deps, notice, { notified: to.length, delivered }, req);
+      await recordRestrictionNoticeFailed(container().deps, notice, { notified: to.length, delivered }, req.requestId);
     } catch (err) {
       l.error("restriction notice failure not recorded", { errorName: err instanceof Error ? err.name : "unknown" });
     }

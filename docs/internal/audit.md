@@ -530,7 +530,7 @@ everywhere as mail headers (ADR-0034 §2 named them `from` / `to`).
   each address with bounded backoff (`RESTRICTION_NOTICE_RETRY_MS`); the email carries the reason category and the
   appeal address, never the note.
 - `trust.restriction_notice_failed` — the sender gave up on some of a notice's emails after its retries (a mailer
-  outage). Recorded by the system (actor `restriction-notice`, the restriction's request id) in the account's log, in
+  outage). Recorded by the system (actor `restriction-notice`, the restriction's request id, no IP or user agent) in the account's log, in
   its own unit of work; target as the notice's. Meta `noticeId`, `restricted`, `notified` and `delivered` (counts
   only, never an address). With `delivered` 0 the notice stops counting toward the day's cap, so the next restriction
   of that kind emails again; with someone told, the cap holds.

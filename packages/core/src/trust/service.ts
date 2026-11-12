@@ -223,15 +223,17 @@ const NOTICE_SENDER = { kind: "system", name: "restriction-notice" } as const;
 /**
  * The sender gave up on some of a notice's emails (after its retries): records `trust.restriction_notice_failed` in
  * the account's log as the system, with the notice id, the kind, and how many people were to be told (`notified`) and
- * how many were (`delivered`) — counts only, never an address. When nobody received it, the notice no longer counts
+ * how many were (`delivered`) — counts only, never an address. It carries the restriction's request id only: the
+ * system acted, so not the staff member's address or browser. When nobody received it, the notice no longer counts
  * toward the day's cap, so the next restriction of that kind emails again.
  */
 export async function recordRestrictionNoticeFailed(
   deps: Deps,
   notice: RestrictionNotice,
   counts: { notified: number; delivered: number },
-  req: RequestMeta,
+  requestId: string,
 ): Promise<void> {
+  const req: RequestMeta = { requestId, ip: null, userAgent: null };
   const { notified, delivered } = counts;
   if (!Number.isInteger(notified) || !Number.isInteger(delivered) || delivered < 0 || delivered >= notified) {
     throw new ValidationError("A failed notice needs fewer deliveries than people to tell.");

@@ -423,7 +423,7 @@ describe("the restriction notice (ADR-0034 §5, build slice 19)", () => {
       const d = Object.assign(world(), { clock: fixedClock() });
       const first = await restrictAccount(d);
       if (!first.notice) throw new Error("no notice");
-      await recordRestrictionNoticeFailed(d, first.notice, { notified: 2, delivered: 0 }, req);
+      await recordRestrictionNoticeFailed(d, first.notice, { notified: 2, delivered: 0 }, req.requestId);
       const [f, ...more] = failures(d);
       expect(more).toEqual([]);
       expect(f).toMatchObject({
@@ -432,6 +432,10 @@ describe("the restriction notice (ADR-0034 §5, build slice 19)", () => {
         target: { type: "account", id: ACCOUNT_A },
         meta: { noticeId: first.notice.id, restricted: "account", notified: 2, delivered: 0 },
       });
+      // The restriction's request id, not the staff member's address or browser (the system acted).
+      expect(f?.requestId).toBe(req.requestId);
+      expect(f?.ip).toBeNull();
+      expect(f?.userAgent).toBeNull();
       expect(JSON.stringify(f)).not.toMatch(/owner-a@|admin-a@|ticket 42/);
       // Lifted and restricted again the same day: the undelivered notice doesn't count, so this one is emailed.
       await lift(d);
@@ -447,7 +451,7 @@ describe("the restriction notice (ADR-0034 §5, build slice 19)", () => {
       const d = Object.assign(world(), { clock: fixedClock() });
       const first = await restrictAccount(d);
       if (!first.notice) throw new Error("no notice");
-      await recordRestrictionNoticeFailed(d, first.notice, { notified: 2, delivered: 1 }, req);
+      await recordRestrictionNoticeFailed(d, first.notice, { notified: 2, delivered: 1 }, req.requestId);
       expect(failures(d)[0]?.meta).toMatchObject({ notified: 2, delivered: 1 });
       await lift(d);
       expect((await restrictAccount(d)).notify).toEqual([]);
@@ -458,7 +462,7 @@ describe("the restriction notice (ADR-0034 §5, build slice 19)", () => {
       await restrictAccount(d);
       const box = await restrictMailbox(d);
       if (!box.notice) throw new Error("no notice");
-      await recordRestrictionNoticeFailed(d, box.notice, { notified: 2, delivered: 0 }, req);
+      await recordRestrictionNoticeFailed(d, box.notice, { notified: 2, delivered: 0 }, req.requestId);
       await lift(d);
       expect((await restrictAccount(d)).notify).toEqual([]);
       await liftMailbox(d);
@@ -474,7 +478,7 @@ describe("the restriction notice (ADR-0034 §5, build slice 19)", () => {
         { notified: 2, delivered: -1 },
         { notified: 1.5, delivered: 0 },
       ]) {
-        await expect(recordRestrictionNoticeFailed(d, out.notice, counts, req)).rejects.toMatchObject({
+        await expect(recordRestrictionNoticeFailed(d, out.notice, counts, req.requestId)).rejects.toMatchObject({
           code: "bad_request",
         });
       }

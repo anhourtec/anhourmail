@@ -349,6 +349,8 @@ describe("the restriction notice (ADR-0034 build slice 19)", () => {
       actor: { type: "system" },
       target: { type: "account", id: ACCOUNT },
       requestId: sent?.requestId,
+      ip: null,
+      userAgent: null,
       meta: { noticeId: sent?.meta.noticeId, restricted: "account", notified: 1, delivered: 0 },
     });
     expect(JSON.stringify(failures())).not.toContain("owner-1@");
