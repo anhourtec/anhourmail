@@ -686,3 +686,39 @@ paused too, and the appeal address (`SUPPORT_EMAIL`). Never the staff note, a th
 follows; the staff restrictions appear in each account's own log; `credentials.md` lists every state. The Trust &
 Safety Administrator was already seeded (`trust@anhourtec.test`). Before this, a fresh `dev:reset` left every demo
 account at `new` (only migration 0044's backfill had made the existing ones `standard`).
+
+## Update 2026-11-11: final review follow-ups (the notice's outage case, its cap, accepted gaps)
+
+**The restriction notice is no longer lost to a mailer outage.** `trust.restriction_notice_sent` is written with the
+restriction, before the email goes out, so a send that failed (only logged) still counted toward the daily cap and
+suppressed the email for 24 hours. There is no web-to-worker queue for transactional mail (every web email is sent
+inline, and the worker's jobs send their own), so the send stays in the web app:
+
+- `sendRestrictionNotices` runs after the route answers and retries each address with bounded backoff
+  (`RESTRICTION_NOTICE_RETRY_MS`: three tries over about 35 s). It never throws; it logs counts and error names only.
+- When it gives up on any address it records `trust.restriction_notice_failed` (`recordRestrictionNoticeFailed`, the
+  system actor `restriction-notice`, the restriction's request id; meta `noticeId`, `restricted`, `notified`,
+  `delivered`). Each notice has an id (`noticeId` in both entries). A notice nobody received (`delivered` 0) no longer
+  counts toward the cap, so the next restriction that day emails again; one that reached somebody still counts.
+- The action keeps its name `trust.restriction_notice_sent` (the queue path, which would have renamed it
+  `trust.restriction_notice_queued`, doesn't exist); `audit.md` says it records the decision to send.
+- Known edge, accepted: a second restriction of the same kind made while the first notice is still retrying sees it
+  as counted; if that notice then fails, nobody is told for that restriction until the next one.
+
+**The cap is per account and kind.** The once-a-day check now reads the notices of the same kind only (`restricted`:
+`account` or `mailbox`), so an account-wide restriction after a mailbox one, or the other way round, still notifies.
+
+**Accepted, not fixed (maintainer decision through the coordinator):**
+
+- A staff-made deep-discount coupon (a 1-cent charge) still promotes: the invoice took real money (`chargedMinor > 0`).
+  Checkout never allows customer promotion codes (the processor's default, never turned on in the adapter), so only
+  staff can make such a coupon, and staff can give `standard` directly anyway.
+- A late or out-of-order create invoice fails closed: `realChargePaid` needs the subscription's latest invoice to be
+  the newly paid `subscription_create` or `subscription_cycle` one, so a payer whose create invoice is overtaken stays
+  `new` until the next renewal pays or the hourly job promotes it as established. Never the other way (no early
+  promotion).
+
+Also in this batch: `promoteForPayment`'s comment now says only the sync promotes, on real money (comps, grants and
+codes don't); the webmail's `sieve.ts` no longer claims a person's own script is included; and an integration
+assertion (`app-passwords.int.test.ts`) pins that the mailbox password and an app password of each scope are refused
+every `SieveScript/set` and `VacationResponse/set`, with the managed script unchanged (07-security.md).
