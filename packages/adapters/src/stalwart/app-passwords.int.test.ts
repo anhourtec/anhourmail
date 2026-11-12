@@ -2,10 +2,11 @@
 /**
  * App passwords end to end against the real Stalwart (compose stack): the core service issues them through the
  * management API on the mailbox's account, mail apps sign in over IMAP and SMTP with them, their limits hold
- * (protocol scopes, no self-service, no webmail sign-in), suspension blocks them, and revoking (a provisioning job)
- * takes them off the mail server. The code under test runs with the production credentials (ADR-0020 "Credential
- * split"): provisioning jobs, revocation and the inventory with the provisioning key, issuing with the operations key,
- * the managed-script check with the audit key. The dev admin only sets things up and plays "someone else".
+ * (protocol scopes, no self-service, no webmail sign-in, no Sieve or vacation writes with them or the mailbox password),
+ * suspension blocks them, and revoking (a provisioning job) takes them off the mail server. The code under test runs
+ * with the production credentials (ADR-0020 "Credential split"): provisioning jobs, revocation and the inventory with
+ * the provisioning key, issuing with the operations key, the managed-script check with the audit key. The dev admin
+ * only sets things up and plays "someone else".
  *
  * Mail ports reach Stalwart through the shared dev forwarder, and Stalwart bans an address after 100 failed sign-ins a
  * day (`x:Security.authBanRate`), which would cut every dev client off. Refusals for a missing permission (a suspended
@@ -712,6 +713,75 @@ describe("app passwords on Stalwart", () => {
       ]),
     ).toEqual(["error:forbidden", "error:forbidden", "error:forbidden"]);
 
+    // The managed script can't be switched off by the mailbox's own credentials (07-security.md "Mailbox app
+    // passwords", "Mail rules"): the password and an app password of each scope are refused every `SieveScript/set`
+    // (create, update, deactivate, destroy) and `VacationResponse/set` (which would activate the server's own script),
+    // so a mail app can't undo a paused forward or reply (ADR-0034 §3). The script stays ours and active.
+    const sieveCaps = ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:sieve"];
+    const vacationCaps = [
+      "urn:ietf:params:jmap:core",
+      "urn:ietf:params:jmap:mail",
+      "urn:ietf:params:jmap:vacationresponse",
+    ];
+    // As the web app writes it (operations key): here a script that keeps mail and forwards nothing.
+    await keys.operations.putSieveScript(stalwartId, MANAGED_SIEVE_SCRIPT, 'require ["fileinto"];\nkeep;\n');
+    const managedBefore = await mgmt.getSieveScript(stalwartId, MANAGED_SIEVE_SCRIPT);
+    expect(managedBefore).toMatchObject({ active: true });
+    const scriptList = await mgmt.transport.rawCall(sieveCaps, [
+      ["SieveScript/get", { accountId: stalwartId, properties: ["name"] }, "g"],
+    ]);
+    const managedId =
+      ((scriptList.get("g")?.list ?? []) as { id: string; name: string }[]).find((s) => s.name === MANAGED_SIEVE_SCRIPT)
+        ?.id ?? "";
+    expect(managedId).not.toBe("");
+    // A user blob upload works (attachments need it); the script made from it must still be refused.
+    const ownScript = (await (
+      await fetch(`${stalwartUrl}/jmap/upload/${stalwartId}/`, {
+        method: "POST",
+        headers: {
+          Authorization: basic(mailboxPassword),
+          "Content-Type": "application/sieve",
+          "X-Forwarded-For": clientAddress,
+        },
+        body: 'require ["copy"];\nredirect :copy "elsewhere@example.test";\n',
+      })
+    ).json()) as { blobId: string };
+    /**
+     * A refusal: the method is `forbidden`; for a credential without JMAP (`overHttp` false) also a refused request.
+     * The password and the JMAP scope reach the methods, so theirs must be the method's own `forbidden`.
+     */
+    const tryToSwitchOff = async (label: string, secret: string, overHttp: boolean) => {
+      const refused = (answer: string[]) =>
+        answer.length === 1 &&
+        (overHttp ? /^error:forbidden$/ : /^(error:forbidden|HTTP 40[13])$/).test(answer[0] ?? "");
+      const auth = basic(secret);
+      const sieveSets = [
+        { create: { s: { name: "mine", blobId: ownScript.blobId } }, onSuccessActivateScript: "#s" },
+        { update: { [managedId]: { blobId: ownScript.blobId } } },
+        { onSuccessDeactivateScript: true },
+        { destroy: [managedId] },
+      ];
+      for (const args of sieveSets) {
+        const answer = await call(auth, sieveCaps, [["SieveScript/set", { accountId: stalwartId, ...args }, "s"]]);
+        expect({ label, args, answer, refused: refused(answer) }).toMatchObject({ refused: true });
+      }
+      const vacation = await call(auth, vacationCaps, [
+        ["VacationResponse/set", { accountId: stalwartId, update: { singleton: { isEnabled: true } } }, "v"],
+      ]);
+      expect({ label, vacation, refused: refused(vacation) }).toMatchObject({ refused: true });
+    };
+    await tryToSwitchOff("mailbox password", mailboxPassword, true);
+    await tryToSwitchOff("smtp", printer.secret, false);
+    await tryToSwitchOff("jmap", mailApp.secret, true);
+    // One at a time (at most five app passwords per mailbox): made, tried, revoked.
+    for (const scope of ["imap", "pop3", "dav"]) {
+      const only = await create(`Only ${scope}`, [scope]);
+      await tryToSwitchOff(scope, only.secret, false);
+      await revokeAppPasswords(deps, actor, accountId, m.id, only.appPassword.id, meta);
+      await drain(m.id);
+    }
+    expect(await mgmt.getSieveScript(stalwartId, MANAGED_SIEVE_SCRIPT)).toEqual(managedBefore);
+
     // Suspended: refused over IMAP and HTTP; resumed: works again (the app password itself is kept).
     await suspendMailbox(deps, actor, accountId, m.id, meta);
     await drain(m.id);
@@ -784,6 +854,10 @@ describe("app passwords on Stalwart", () => {
       "auth.app_password_created:success",
       "auth.app_password_created:success",
       "auth.app_password_created:success",
+      ...["imap", "pop3", "dav"].flatMap(() => [
+        "auth.app_password_created:success",
+        "auth.app_password_revoked:success",
+      ]),
       "mailbox.suspended:success",
       "mailbox.unsuspended:success",
       "auth.app_password_revoked:success",
