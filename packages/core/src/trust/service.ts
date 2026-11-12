@@ -18,6 +18,8 @@
  * The staff note is staff-only: never in an audit entry, a log line or anything a customer reads (`accountSending`).
  * Every entry is in the account's own log (rule 49) with a copy in the platform log; the reason is shown in plain words.
  */
+import { randomUUID } from "node:crypto";
+
 import { isSuspensionReason, SUSPENSION_REASONS, type SuspensionReason } from "@anhourmail/shared/platform";
 import type { AccountRole } from "@anhourmail/shared/rbac";
 import {
@@ -40,7 +42,14 @@ import {
   ValidationError,
 } from "../errors";
 import type { MailboxStatus } from "../mailboxes/entity";
-import { type AuditAlso, authorizeAudited, mutation, type MutationOutcome, type SystemChange } from "../mutation";
+import {
+  type AuditAlso,
+  authorizeAudited,
+  mutation,
+  type MutationOutcome,
+  recordSystemChanges,
+  type SystemChange,
+} from "../mutation";
 import type { Deps, Repositories, RequestMeta } from "../ports";
 
 import type { AccountTrust, MailboxSendingRestriction, PromotionCriteria } from "./entity";
@@ -124,44 +133,119 @@ async function notifyList(r: Repositories, accountId: string): Promise<{ email: 
     .map((m) => ({ email: m.email }));
 }
 
-/** How often an account's owners get a restriction notice, at most (ADR-0034 §5, build slice 19). */
+/** How often an account's owners get a restriction notice of one kind (account or mailbox), at most (ADR-0034 §5). */
 export const RESTRICTION_NOTICE_EVERY_MS = 86_400_000;
+
+/** What a restriction notice is about: the account's sending, or one mailbox's. Each kind has its own daily cap. */
+export type RestrictionNoticeKind = "account" | "mailbox";
+
+/**
+ * A restriction notice to send after the commit. `id` ties the `trust.restriction_notice_failed` entry the sender
+ * records when it gives up (`recordRestrictionNoticeFailed`) to the `trust.restriction_notice_sent` entry written here.
+ */
+export type RestrictionNotice = {
+  id: string;
+  accountId: string;
+  restricted: RestrictionNoticeKind;
+  target: { type: RestrictionNoticeKind; id: string };
+};
+
+const NOTICE_LOOKBACK = 50;
+
+/**
+ * Whether the account had a notice of this kind in the window that still counts: every `trust.restriction_notice_sent`
+ * of the kind, unless a `trust.restriction_notice_failed` for the same notice says nobody received it (`delivered`
+ * 0), so a mailer outage never suppresses the next restriction's email. An entry without a notice id counts.
+ */
+async function noticeCounted(r: Repositories, accountId: string, kind: RestrictionNoticeKind, since: Date) {
+  const scope = `account:${accountId}` as const;
+  const sent = (
+    await r.audit.list({ scope, action: "trust.restriction_notice_sent", from: since, limit: NOTICE_LOOKBACK })
+  ).filter((e) => e.meta.restricted === kind);
+  if (sent.length === 0) return false;
+  const undelivered = new Set(
+    (await r.audit.list({ scope, action: "trust.restriction_notice_failed", from: since, limit: NOTICE_LOOKBACK }))
+      .filter((e) => e.meta.delivered === 0)
+      .map((e) => e.meta.noticeId),
+  );
+  return sent.some((e) => typeof e.meta.noticeId !== "string" || !undelivered.has(e.meta.noticeId));
+}
 
 /**
  * Who to email about a restriction made now, and the `trust.restriction_notice_sent` entry to record with it, inside
- * the restriction's unit of work under the account lock: nobody (and no entry) when the account already had a notice in
- * the last day, or has nobody to tell. The entry carries what was restricted, the reason category and how many people
- * are told (`notified`) — never an address or the staff note (rules 24, 48; not `subject` or `recipients`, which the
- * redaction list hides as mail headers). The route sends the email after the commit.
+ * the restriction's unit of work under the account lock: nobody (and no entry) when the account already had a notice
+ * of the same kind in the last day (an account restriction after a mailbox one is still told, and the other way
+ * round), or has nobody to tell. The entry carries the notice id, what was restricted, the reason category and how
+ * many people are told (`notified`) — never an address or the staff note (rules 24, 48; not `subject` or
+ * `recipients`, which the redaction list hides as mail headers). The route sends the email after the commit, with
+ * retries; when it gives up it records `trust.restriction_notice_failed`, which frees the day's cap if nobody got it.
  */
 async function restrictionNotice(
   deps: Deps,
   r: Repositories,
   accountId: string,
-  what: "account" | "mailbox",
+  kind: RestrictionNoticeKind,
   reason: SuspensionReason,
-  target: { type: "account" | "mailbox"; id: string },
-): Promise<{ notify: { email: string }[]; also: AuditAlso[] }> {
+  targetId: string,
+): Promise<{ notify: { email: string }[]; notice: RestrictionNotice | null; also: AuditAlso[] }> {
+  const none = { notify: [], notice: null, also: [] };
   const since = new Date(deps.clock.now().getTime() - RESTRICTION_NOTICE_EVERY_MS);
-  const recent = await r.audit.list({
-    scope: `account:${accountId}`,
-    action: "trust.restriction_notice_sent",
-    from: since,
-    limit: 1,
-  });
-  if (recent.length > 0) return { notify: [], also: [] };
+  if (await noticeCounted(r, accountId, kind, since)) return none;
   const notify = await notifyList(r, accountId);
-  if (notify.length === 0) return { notify, also: [] };
+  if (notify.length === 0) return none;
+  const notice: RestrictionNotice = {
+    id: randomUUID(),
+    accountId,
+    restricted: kind,
+    target: { type: kind, id: targetId },
+  };
   return {
     notify,
+    notice,
     also: [
       {
         action: "trust.restriction_notice_sent",
-        target,
-        meta: { restricted: what, reason: SUSPENSION_REASONS[reason], reasonCategory: reason, notified: notify.length },
+        target: notice.target,
+        meta: {
+          noticeId: notice.id,
+          restricted: kind,
+          reason: SUSPENSION_REASONS[reason],
+          reasonCategory: reason,
+          notified: notify.length,
+        },
       },
     ],
   };
+}
+
+const NOTICE_SENDER = { kind: "system", name: "restriction-notice" } as const;
+
+/**
+ * The sender gave up on some of a notice's emails (after its retries): records `trust.restriction_notice_failed` in
+ * the account's log as the system, with the notice id, the kind, and how many people were to be told (`notified`) and
+ * how many were (`delivered`) — counts only, never an address. When nobody received it, the notice no longer counts
+ * toward the day's cap, so the next restriction of that kind emails again.
+ */
+export async function recordRestrictionNoticeFailed(
+  deps: Deps,
+  notice: RestrictionNotice,
+  counts: { notified: number; delivered: number },
+  req: RequestMeta,
+): Promise<void> {
+  const { notified, delivered } = counts;
+  if (!Number.isInteger(notified) || !Number.isInteger(delivered) || delivered < 0 || delivered >= notified) {
+    throw new ValidationError("A failed notice needs fewer deliveries than people to tell.");
+  }
+  await deps.uow.run((r) =>
+    recordSystemChanges(deps, r, NOTICE_SENDER, req, [
+      {
+        action: "trust.restriction_notice_failed",
+        accountId: notice.accountId,
+        target: notice.target,
+        meta: { noticeId: notice.id, restricted: notice.restricted, notified, delivered },
+      },
+    ]),
+  );
 }
 
 /** The audit action for a move between tiers (ADR-0034 §2 "Audit"). */
@@ -217,9 +301,11 @@ export type SetTierResult = {
   mailboxesQueued: number;
   /**
    * Owners and administrators to email when the account was restricted now (empty otherwise, and when the account had
-   * a restriction notice in the last day: `RESTRICTION_NOTICE_EVERY_MS`).
+   * an account restriction notice in the last day: `RESTRICTION_NOTICE_EVERY_MS`).
    */
   notify: { email: string }[];
+  /** The notice to send to `notify` (null when nobody is emailed). */
+  notice: RestrictionNotice | null;
 };
 
 /** Staff set an account's tier (see the module comment). 409 when it already has that tier from that source. */
@@ -291,8 +377,8 @@ export async function setAccountTier(
       const restrictedNow = asked === "restricted" && current.tier !== "restricted";
       const notice =
         restrictedNow && reason
-          ? await restrictionNotice(deps, repos, accountId, "account", reason, { type: "account", id: accountId })
-          : { notify: [], also: [] };
+          ? await restrictionNotice(deps, repos, accountId, "account", reason, accountId)
+          : { notify: [], notice: null, also: [] };
       return {
         result: {
           accountName: known.account.name,
@@ -302,6 +388,7 @@ export async function setAccountTier(
           reason,
           mailboxesQueued,
           notify: notice.notify,
+          notice: notice.notice,
         },
         meta,
         // Staff see every trust change in the platform log too; neither entry carries the note.
@@ -323,9 +410,11 @@ export type MailboxRestrictionResult = {
   reason: SuspensionReason;
   /**
    * Owners and administrators to email when the mailbox was restricted now (empty when lifted, and when the account had
-   * a restriction notice in the last day).
+   * a mailbox restriction notice in the last day).
    */
   notify: { email: string }[];
+  /** The notice to send to `notify` (null when nobody is emailed). */
+  notice: RestrictionNotice | null;
 };
 
 /**
@@ -390,8 +479,8 @@ export async function setMailboxRestriction(
       await repos.provisioning.enqueue({ kind: "mailbox.ensure", subjectId: mailboxId, runAfter: now });
       const meta = { reason: SUSPENSION_REASONS[reason], reasonCategory: reason };
       const notice = restricted
-        ? await restrictionNotice(deps, repos, accountId, "mailbox", reason, { type: "mailbox", id: mailboxId })
-        : { notify: [], also: [] };
+        ? await restrictionNotice(deps, repos, accountId, "mailbox", reason, mailboxId)
+        : { notify: [], notice: null, also: [] };
       return {
         result: {
           accountName: known.account.name,
@@ -399,6 +488,7 @@ export async function setMailboxRestriction(
           restricted,
           reason,
           notify: notice.notify,
+          notice: notice.notice,
         },
         meta,
         copies: [{ accountId: null, meta: { ...meta, accountId } }],

@@ -12,6 +12,7 @@ import {
   parseTrustNote,
   promoteEstablished,
   promoteForPayment,
+  recordRestrictionNoticeFailed,
   RESTRICTION_NOTICE_EVERY_MS,
   revokeBillingPromotion,
   setAccountTier,
@@ -340,25 +341,35 @@ describe("the restriction notice (ADR-0034 §5, build slice 19)", () => {
     expect(n?.requestId).toBe(restricted?.requestId);
   });
 
-  it("at most one a day per account: a second restriction that day, of the account or a mailbox, emails nobody", async () => {
+  const restrictMailbox = (d: World) =>
+    setMailboxRestriction(
+      d,
+      TS,
+      ACCOUNT_A,
+      M_ACTIVE,
+      { restricted: true, reason: "abuse", note: NOTE },
+      TS_SESSION,
+      req,
+    );
+  const liftMailbox = (d: World) =>
+    setMailboxRestriction(
+      d,
+      TS,
+      ACCOUNT_A,
+      M_ACTIVE,
+      { restricted: false, reason: "other", note: NOTE },
+      TS_SESSION,
+      req,
+    );
+
+  it("at most one a day per account and kind: a second account restriction that day emails nobody", async () => {
     const clock = fixedClock();
     const d = Object.assign(world(), { clock });
     await restrictAccount(d);
     await lift(d);
-    expect((await restrictAccount(d)).notify).toEqual([]);
-    expect(
-      (
-        await setMailboxRestriction(
-          d,
-          TS,
-          ACCOUNT_A,
-          M_ACTIVE,
-          { restricted: true, reason: "abuse", note: NOTE },
-          TS_SESSION,
-          req,
-        )
-      ).notify,
-    ).toEqual([]);
+    const again = await restrictAccount(d);
+    expect(again.notify).toEqual([]);
+    expect(again.notice).toBeNull();
     expect(notices(d)).toHaveLength(1);
     // A day later, a new restriction is emailed again.
     await lift(d);
@@ -370,6 +381,105 @@ describe("the restriction notice (ADR-0034 §5, build slice 19)", () => {
     });
     expect((await restrictAccount(d)).notify).toHaveLength(2);
     expect(notices(d)).toHaveLength(2);
+  });
+
+  it("the kinds are capped apart: a mailbox restriction after an account one is emailed, and the other way round", async () => {
+    const d = Object.assign(world(), { clock: fixedClock() });
+    expect((await restrictAccount(d)).notify).toHaveLength(2);
+    const box = await restrictMailbox(d);
+    expect(box.notify).toHaveLength(2);
+    expect(box.notice).toMatchObject({ restricted: "mailbox", target: { type: "mailbox", id: M_ACTIVE } });
+    // A second of each kind that day emails nobody.
+    await liftMailbox(d);
+    expect((await restrictMailbox(d)).notify).toEqual([]);
+    await lift(d);
+    expect((await restrictAccount(d)).notify).toEqual([]);
+    expect(notices(d).map((n) => n.meta.restricted)).toEqual(["account", "mailbox"]);
+
+    // Mailbox first, then the account: both told.
+    const d2 = Object.assign(world(), { clock: fixedClock() });
+    expect((await restrictMailbox(d2)).notify).toHaveLength(2);
+    expect((await restrictAccount(d2)).notify).toHaveLength(2);
+  });
+
+  it("each notice has its own id, in the sent entry and the result", async () => {
+    const d = world();
+    const out = await restrictAccount(d);
+    expect(out.notice).toMatchObject({
+      accountId: ACCOUNT_A,
+      restricted: "account",
+      target: { type: "account", id: ACCOUNT_A },
+    });
+    expect(out.notice?.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(notices(d)[0]?.meta.noticeId).toBe(out.notice?.id);
+    expect((await restrictMailbox(d)).notice?.id).not.toBe(out.notice?.id);
+  });
+
+  describe("a mailer outage (the sender gave up)", () => {
+    const failures = (d: World) =>
+      entries(d, "trust.restriction_notice_failed").filter((x) => x.scope === `account:${ACCOUNT_A}`);
+
+    it("nobody received it: recorded by the system with counts only, and the next restriction that day emails again", async () => {
+      const d = Object.assign(world(), { clock: fixedClock() });
+      const first = await restrictAccount(d);
+      if (!first.notice) throw new Error("no notice");
+      await recordRestrictionNoticeFailed(d, first.notice, { notified: 2, delivered: 0 }, req);
+      const [f, ...more] = failures(d);
+      expect(more).toEqual([]);
+      expect(f).toMatchObject({
+        result: "success",
+        actor: { type: "system" },
+        target: { type: "account", id: ACCOUNT_A },
+        meta: { noticeId: first.notice.id, restricted: "account", notified: 2, delivered: 0 },
+      });
+      expect(JSON.stringify(f)).not.toMatch(/owner-a@|admin-a@|ticket 42/);
+      // Lifted and restricted again the same day: the undelivered notice doesn't count, so this one is emailed.
+      await lift(d);
+      const second = await restrictAccount(d);
+      expect(second.notify).toHaveLength(2);
+      expect(notices(d)).toHaveLength(2);
+      // That one was delivered: the day's cap holds again.
+      await lift(d);
+      expect((await restrictAccount(d)).notify).toEqual([]);
+    });
+
+    it("someone received it: recorded, and the day's cap holds", async () => {
+      const d = Object.assign(world(), { clock: fixedClock() });
+      const first = await restrictAccount(d);
+      if (!first.notice) throw new Error("no notice");
+      await recordRestrictionNoticeFailed(d, first.notice, { notified: 2, delivered: 1 }, req);
+      expect(failures(d)[0]?.meta).toMatchObject({ notified: 2, delivered: 1 });
+      await lift(d);
+      expect((await restrictAccount(d)).notify).toEqual([]);
+    });
+
+    it("frees only its own kind: an undelivered mailbox notice leaves the account notice counted", async () => {
+      const d = Object.assign(world(), { clock: fixedClock() });
+      await restrictAccount(d);
+      const box = await restrictMailbox(d);
+      if (!box.notice) throw new Error("no notice");
+      await recordRestrictionNoticeFailed(d, box.notice, { notified: 2, delivered: 0 }, req);
+      await lift(d);
+      expect((await restrictAccount(d)).notify).toEqual([]);
+      await liftMailbox(d);
+      expect((await restrictMailbox(d)).notify).toHaveLength(2);
+    });
+
+    it("refuses counts that aren't a failure", async () => {
+      const d = world();
+      const out = await restrictAccount(d);
+      if (!out.notice) throw new Error("no notice");
+      for (const counts of [
+        { notified: 2, delivered: 2 },
+        { notified: 2, delivered: -1 },
+        { notified: 1.5, delivered: 0 },
+      ]) {
+        await expect(recordRestrictionNoticeFailed(d, out.notice, counts, req)).rejects.toMatchObject({
+          code: "bad_request",
+        });
+      }
+      expect(failures(d)).toEqual([]);
+    });
   });
 
   it("a mailbox restriction is emailed with its subject; lifting it, or the account, emails nobody", async () => {

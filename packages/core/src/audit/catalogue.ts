@@ -147,8 +147,10 @@ export const AUDIT_ACTIONS = [
   "trust.mailbox_unrestricted",
   // the webmail held a new-tier mailbox's send to an outside address (ADR-0034 §3); the promotion job counts them
   "trust.send_held",
-  // the restriction notice to the account's owners and administrators (ADR-0034 §5; at most one per account per day)
+  // the restriction notice to the account's owners and administrators (ADR-0034 §5; at most one per account and kind
+  // per day), and the sender giving up on it after its retries (frees the day's cap when nobody received it)
   "trust.restriction_notice_sent",
+  "trust.restriction_notice_failed",
   "trust.suspended",
   "trust.unsuspended",
   "abuse.report_received",
