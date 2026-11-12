@@ -9,8 +9,9 @@ import { MANAGED_SIEVE_SCRIPT, MANAGED_SIEVE_SETTINGS_PREFIX } from "@anhourmail
 /**
  * The mail-flow settings the webmail manages in the mail server (docs/internal/05-webmail.md "Settings"):
  * automatic replies, forwarding and junk rules, compiled into ONE Sieve script we own (`MANAGED_SCRIPT`) in the
- * mailbox's own account. A Sieve script the person already had active (from a mail app) is kept and run after ours
- * with `include :personal :optional`, so nothing they set up elsewhere is lost.
+ * mailbox's own account, written with management credentials. Customer mailboxes can't write Sieve or VacationResponse
+ * themselves (`CUSTOMER_PERMISSIONS`; docs/internal/07-security.md "Mail rules"), so ours is the only script and it
+ * includes nothing: the write path always stores `include: null`, and the field is only read from older scripts.
  *
  * Why Sieve and not JMAP VacationResponse: on Stalwart v0.16.27 enabling VacationResponse installs and activates
  * its own "vacation" script, which deactivates every other script (only one can be active) — forwarding and junk
